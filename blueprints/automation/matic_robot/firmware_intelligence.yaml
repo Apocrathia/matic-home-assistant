@@ -77,13 +77,18 @@ actions:
   - variables:
       acknowledge_action: "{{ 'MATIC_FW_ACK|' ~ notification_key ~ '|' ~ report.id ~ '|' ~ report.revision }}"
       recheck_action: "{{ 'MATIC_FW_CHECK|' ~ notification_key ~ '|' ~ report.id ~ '|' ~ report.revision }}"
-      mobile_action: "{{ trigger.event.data.get('action', '') if trigger.id == 'mobile' else '' }}"
+      mobile_action: "{{ trigger.event.data.get('action', '') if trigger.get('id', '') == 'mobile' else '' }}"
       research: "{{ report.get('investigation', {}) }}"
+      consumed_revision: "{{ [report.get('delivered_revision', 0), report.get('acknowledged_revision', 0)] | max }}"
       research_actionable: >-
         {{ research.get('status') == 'complete'
-           and research.get('disposition') in ['integration_opportunity', 'compatibility_issue'] }}
+           and research.get('disposition') in ['integration_opportunity', 'compatibility_issue']
+           and consumed_revision < research.get('notification_revision', 0) <= report.revision }}
       actionable_report: >-
-        {% set failures = report.get('findings', []) | selectattr('kind', 'eq', 'read_failure') | list %}
+        {% set failures = report.get('findings', []) | selectattr('kind', 'eq', 'read_failure')
+           | selectattr('notification_revision', 'defined')
+           | selectattr('notification_revision', 'gt', consumed_revision)
+           | selectattr('notification_revision', 'le', report.revision) | list %}
         {% set confirmed = failures | selectattr('status', 'eq', 'observed_again') | list %}
         {% set recovered = failures | selectattr('status', 'eq', 'recovered')
            | selectattr('observation_count', 'defined') | selectattr('observation_count', 'ge', 2) | list %}
@@ -116,7 +121,7 @@ actions:
               report_id: "{{ report.id }}"
               revision: "{{ report.revision }}"
               action: recheck
-      - conditions: "{{ trigger.id != 'mobile' and report.get('notification_pending', false) and actionable_report }}"
+      - conditions: "{{ trigger.get('id', '') != 'mobile' and report.get('notification_pending', false) and actionable_report }}"
         sequence:
           - variables:
               title: >-

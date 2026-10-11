@@ -265,6 +265,8 @@ async def test_diagnostic_report_excludes_untrusted_research(hass) -> None:
     summary = tracker.summary("entry")
     assert summary["firmware_report"] == {
         "revision": 2,
+        "delivered_revision": 2,
+        "acknowledged_revision": 2,
         "evidence_revision": 1,
         "scan_count": 3,
         "failed_endpoints": 0,

@@ -15,11 +15,14 @@ eligibility check even if an older producer marks an unknown candidate pending.
 The sensor projection supplies only allowlisted kind/status/count and research
 disposition metadata, retaining diagnostic privacy boundaries.
 
-Eleven added cases cover quiet first/repeated/recovered unknown observations,
+Twenty-six added cases cover quiet first/repeated/recovered unknown observations,
 completed research, correctly labeled read warnings and recovery, and the real
-producer-to-sensor-to-blueprint delivery path. The initial alert regressions
-failed before the fix. The full suite passes 4,394 tests with 100% coverage of
-17,746 statements. Final-head regular review and hosted release checks apply
+producer-to-sensor-to-blueprint delivery path. Per-transition revision tokens
+prevent unrelated observations from replaying old warnings or recovery, while
+preserving retries and fresh failure-to-recovery notices. Legacy reports without
+a transition token stay quiet. The initial alert regressions
+failed before the fix. The full suite passes 4,409 tests with 100% coverage of
+17,767 statements. Final-head regular review and hosted release checks apply
 before merge; HACS installation and live notification readback apply afterward.
 
 ## Existing candidate evidence

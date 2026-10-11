@@ -1257,4 +1257,131 @@ def test_only_completed_actionable_research_requests_notification(disposition) -
     investigation.update(status="pending", disposition=disposition)
     assert reports.public_report(robot)["notification_pending"] is False
     investigation["status"] = "complete"
+    investigation["notification_revision"] = robot["firmware_report"]["revision"]
     assert reports.public_report(robot)["notification_pending"] is True
+
+
+@pytest.mark.parametrize("receipt", ["delivered_revision", "acknowledged_revision"])
+@pytest.mark.parametrize("terminal", ["observed_again", "recovered"])
+def test_unrelated_revision_does_not_replay_actionable_read_notice(receipt, terminal):
+    robot = start_robot()
+    for minutes in (15, 30):
+        sample = snapshot(status="error", captured=NOW + timedelta(minutes=minutes))
+        reports.prepare_release(robot, sample)
+        reports.update_report(robot, sample, NOW + timedelta(minutes=minutes))
+    if terminal == "recovered":
+        sample = snapshot(paths=["1:2"], captured=NOW + timedelta(minutes=31))
+        reports.prepare_release(robot, sample)
+        reports.update_report(robot, sample, NOW + timedelta(minutes=31))
+    report = robot["firmware_report"]
+    assert reports.public_report(robot)["notification_pending"] is True
+    report[receipt] = report["revision"]
+    unrelated = snapshot(paths=["1:2", "3:2"], captured=NOW + timedelta(minutes=45))
+    if terminal == "observed_again":
+        unrelated["endpoints"].append(
+            {"name": "child_lock_enabled_state", "status": "error", "entries": []}
+        )
+        unrelated["endpoints"][0]["status"] = "error"
+    reports.prepare_release(robot, unrelated)
+    reports.update_report(robot, unrelated, NOW + timedelta(minutes=45))
+    assert report["revision"] > report[receipt]
+    assert reports.public_report(robot)["notification_pending"] is False
+
+
+def test_legacy_recovery_is_quiet_after_unrelated_revision_and_reload():
+    robot = start_robot()
+    for minutes, status in ((15, "error"), (30, "error"), (31, "empty")):
+        sample = snapshot(status=status, captured=NOW + timedelta(minutes=minutes))
+        reports.prepare_release(robot, sample)
+        reports.update_report(robot, sample, NOW + timedelta(minutes=minutes))
+    report = robot["firmware_report"]
+    for item in report["findings"].values():
+        item.pop("notification_revision", None)
+    report["delivered_revision"] = report["revision"]
+    sample = snapshot(paths=["1:2", "3:2"], captured=NOW + timedelta(minutes=45))
+    reports.prepare_release(robot, sample)
+    reports.update_report(robot, sample, NOW + timedelta(minutes=45))
+    assert reports.public_report(deepcopy(robot))["notification_pending"] is False
+
+
+def test_unrelated_evidence_preserves_undelivered_recovery_retry():
+    robot = start_robot()
+    for minutes, status in ((15, "error"), (30, "error"), (31, "empty")):
+        sample = snapshot(status=status, captured=NOW + timedelta(minutes=minutes))
+        reports.prepare_release(robot, sample)
+        reports.update_report(robot, sample, NOW + timedelta(minutes=minutes))
+    sample = snapshot(paths=["1:2", "3:2"], captured=NOW + timedelta(minutes=45))
+    reports.prepare_release(robot, sample)
+    reports.update_report(robot, sample, NOW + timedelta(minutes=45))
+    assert reports.public_report(deepcopy(robot))["notification_pending"] is True
+
+
+def test_recovery_after_delivered_failure_has_new_transition_token():
+    robot = start_robot()
+    for minutes in (15, 30):
+        sample = snapshot(status="error", captured=NOW + timedelta(minutes=minutes))
+        reports.prepare_release(robot, sample)
+        reports.update_report(robot, sample, NOW + timedelta(minutes=minutes))
+    report = robot["firmware_report"]
+    report["delivered_revision"] = report["revision"]
+    sample = snapshot(captured=NOW + timedelta(minutes=31))
+    reports.prepare_release(robot, sample)
+    reports.update_report(robot, sample, NOW + timedelta(minutes=31))
+    assert (
+        finding(robot, "read_failure", "current_version")["notification_revision"]
+        > report["delivered_revision"]
+    )
+    assert reports.public_report(robot)["notification_pending"] is True
+
+
+def test_new_unconfirmed_failure_clears_old_recovery_delivery_token():
+    robot = start_robot()
+    for minutes, status in ((15, "error"), (30, "error"), (31, "empty")):
+        sample = snapshot(status=status, captured=NOW + timedelta(minutes=minutes))
+        reports.prepare_release(robot, sample)
+        reports.update_report(robot, sample, NOW + timedelta(minutes=minutes))
+    item = finding(robot, "read_failure", "current_version")
+    assert "notification_revision" in item
+    for minutes in (45, 60):
+        sample = snapshot(status="error", captured=NOW + timedelta(minutes=minutes))
+        reports.prepare_release(robot, sample)
+        reports.update_report(robot, sample, NOW + timedelta(minutes=minutes))
+        assert reports.public_report(robot)["notification_pending"] is (minutes == 60)
+        assert ("notification_revision" in item) is (minutes == 60)
+
+
+@pytest.mark.parametrize("status", ["observed_again", "recovered"])
+def test_legacy_actionable_findings_without_transition_token_stay_quiet(status):
+    robot = start_robot()
+    for minutes in (15, 30):
+        sample = snapshot(status="error", captured=NOW + timedelta(minutes=minutes))
+        reports.prepare_release(robot, sample)
+        reports.update_report(robot, sample, NOW + timedelta(minutes=minutes))
+    item = finding(robot, "read_failure", "current_version")
+    item["status"] = status
+    item.pop("notification_revision")
+    assert reports.public_report(robot)["notification_pending"] is False
+
+
+@pytest.mark.parametrize(
+    "disposition", ["integration_opportunity", "compatibility_issue"]
+)
+def test_research_completion_binds_delivery_and_unrelated_evidence_resets_it(
+    disposition,
+):
+    robot = start_robot()
+    reports.configure_investigator(robot, "researcher")
+    args = _lease_args(robot)
+    claimed = reports.claim_report(robot, *args, "synthetic-token", NOW)
+    reports.complete_report(
+        robot, *args, claimed["token"], disposition, "Synthetic assessment", [], NOW
+    )
+    report = robot["firmware_report"]
+    assert report["investigation"]["notification_revision"] == report["revision"]
+    assert reports.public_report(robot)["notification_pending"] is True
+    report["delivered_revision"] = report["revision"]
+    sample = snapshot(paths=["1:2", "3:2"], captured=NOW + timedelta(minutes=15))
+    reports.prepare_release(robot, sample)
+    reports.update_report(robot, sample, NOW + timedelta(minutes=15))
+    assert report["investigation"] == {"status": "pending"}
+    assert reports.public_report(robot)["notification_pending"] is False

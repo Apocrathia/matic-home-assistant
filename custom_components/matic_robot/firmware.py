@@ -519,6 +519,8 @@ class FirmwareTracker:
                 "failed_endpoints",
                 "reachable_endpoints",
                 "endpoint_count",
+                "delivered_revision",
+                "acknowledged_revision",
             )
             if isinstance(value := report.get(key), int)
             and not isinstance(value, bool)
@@ -556,6 +558,13 @@ class FirmwareTracker:
                             "observation_count": count,
                         }
                     )
+                    token = finding.get("notification_revision")
+                    if (
+                        isinstance(token, int)
+                        and not isinstance(token, bool)
+                        and token > 0
+                    ):
+                        report_summary["findings"][-1]["notification_revision"] = token
             status = report["investigation"].get("status")
             report_summary["investigation"] = {
                 "status": status
@@ -568,6 +577,9 @@ class FirmwareTracker:
                 "compatibility_issue",
             ):
                 report_summary["investigation"]["disposition"] = disposition
+                token = report["investigation"].get("notification_revision")
+                if isinstance(token, int) and not isinstance(token, bool) and token > 0:
+                    report_summary["investigation"]["notification_revision"] = token
         return {
             "observed_version": robot.get("observed_version"),
             "observed_protocol": robot.get("observed_protocol"),

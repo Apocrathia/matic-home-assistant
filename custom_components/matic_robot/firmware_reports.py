@@ -304,6 +304,9 @@ def update_report(
             "investigation": {"status": "pending"},
         }
     old_signature = _evidence_signature(report)
+    old_notifications = {
+        key: _notification_state(item) for key, item in report["findings"].items()
+    }
     report["firmware_version"] = release["key"][0]
     report["protocol_version"] = release["key"][1]
     report["analysis_version"] = release["key"][2]
@@ -396,6 +399,13 @@ def update_report(
         report["revision"] += 1
         report["evidence_revision"] += 1
         _reset_investigation(report)
+        for key, item in findings.items():
+            notification_state = _notification_state(item)
+            if notification_state != old_notifications.get(key):
+                if notification_state is None:
+                    item.pop("notification_revision", None)
+                else:
+                    item["notification_revision"] = report["revision"]
     if not failing:
         report["failure_scan_count"] = 0
     elif accepted_sample:
@@ -525,25 +535,42 @@ def public_report(robot: dict[str, Any]) -> dict[str, Any]:
     report["investigator"] = robot.get("investigator", "manual")
     report["routing_revision"] = robot.get("routing_revision", 0)
     report["next_check_at"] = robot.get("next_firmware_scan_at")
+    consumed = max(report["delivered_revision"], report["acknowledged_revision"])
     actionable = any(
-        item["kind"] == "read_failure"
-        and (
-            item["status"] == "observed_again"
-            or (item["status"] == "recovered" and item["observation_count"] >= 2)
-        )
+        _notification_state(item) is not None
+        and _pending_notification(item, consumed, report["revision"])
         for item in report["findings"]
     ) or (
         investigation.get("status") == "complete"
         and investigation.get("disposition")
         in ("integration_opportunity", "compatibility_issue")
+        and _pending_notification(investigation, consumed, report["revision"])
     )
-    report["notification_pending"] = (
-        report["revision"]
-        > max(report["delivered_revision"], report["acknowledged_revision"])
-        and actionable
-    )
+    report["notification_pending"] = actionable
     report["research_is_untrusted"] = True
     return report
+
+
+def _notification_state(finding: dict[str, Any]) -> str | None:
+    """Separate new actionable transitions from unrelated report revisions."""
+    return (
+        finding["status"]
+        if finding["kind"] == "read_failure"
+        and (
+            finding["status"] == "observed_again"
+            or (finding["status"] == "recovered" and finding["observation_count"] >= 2)
+        )
+        else None
+    )
+
+
+def _pending_notification(item: dict[str, Any], consumed: int, revision: int) -> bool:
+    token = item.get("notification_revision", 0)
+    return (
+        isinstance(token, int)
+        and not isinstance(token, bool)
+        and consumed < token <= revision
+    )
 
 
 def configure_investigator(robot: dict[str, Any], provider: str) -> None:
@@ -672,6 +699,8 @@ def complete_report(
         "sources": list(sources),
     }
     report["revision"] += 1
+    if disposition in ("integration_opportunity", "compatibility_issue"):
+        report["investigation"]["notification_revision"] = report["revision"]
 
 
 def _public_source_host(host: str) -> bool:
