@@ -48,6 +48,7 @@ def report(
         "findings": [{"kind": "new_field", "status": "observed", "value": "x"}],
         "investigation": {
             "status": "complete",
+            "disposition": "integration_opportunity",
             "summary": "Synthetic review.",
             "summary_markdown": "Synthetic review\\.",
         },
@@ -510,3 +511,81 @@ async def test_report_identity_change_triggers_without_reconciliation(
         assert len(calls) == 3
     finally:
         remove_trigger()
+
+
+@pytest.mark.parametrize("status", ["first_observed", "observed_again"])
+async def test_unsupported_candidate_is_quiet_even_with_stale_pending_flag(
+    hass, status
+):
+    """The consumer also fails closed if an older producer marks candidates pending."""
+    current = report()
+    current["attention_required"] = False
+    current["investigation"] = {"status": "pending"}
+    current["findings"] = [
+        {
+            "kind": "new_field",
+            "status": status,
+            "observation_count": 2,
+            "meaning": "unknown",
+            "supported_capability": False,
+        }
+    ]
+    calls = await install_services(hass, lambda _name, _data: None)
+    script = await make_script(hass, current)
+    await run_script(script, trigger_id="report")
+    assert calls == []
+
+
+@pytest.mark.parametrize("status", ["observed_again", "recovered"])
+async def test_read_failure_alert_is_not_mislabeled_as_unknown_protocol_field(
+    hass, status
+):
+    current = report()
+    current["attention_required"] = status == "observed_again"
+    current["investigation"] = {"status": "pending"}
+    current["findings"] += [
+        {"kind": "read_failure", "status": status, "observation_count": 2}
+    ]
+    calls = await install_services(hass, lambda _name, _data: None)
+    script = await make_script(hass, current)
+    await run_script(script, trigger_id="reconcile")
+    mobile = next(data for name, data in calls if name == NOTIFY)
+    assert mobile["title"] == (
+        "Matic firmware checks need attention"
+        if status == "observed_again"
+        else "Matic firmware reads recovered"
+    )
+    assert "newly observed" not in mobile["message"]
+    assert calls[-1][0] == "matic_robot.firmware_notification"
+
+
+@pytest.mark.parametrize("status", ["observed_again", "recovered"])
+async def test_sensor_projection_keeps_safe_read_failure_delivery_metadata(
+    hass, status
+):
+    current = report()
+    current["attention_required"] = status == "observed_again"
+    current["investigation"] = {"status": "pending"}
+    current["findings"] = {
+        "synthetic": {
+            "kind": "read_failure",
+            "status": status,
+            "observation_count": 2,
+            "endpoint": "private-endpoint",
+            "value": "synthetic-secret",
+        }
+    }
+    current["delivered_revision"] = 0
+    current["acknowledged_revision"] = 0
+    tracker = FirmwareTracker(hass)
+    tracker._data = {"robots": {"entry": {"firmware_report": current}}}
+    projected = tracker.summary("entry")["firmware_report"]
+    assert projected["findings"] == [
+        {"kind": "read_failure", "status": status, "observation_count": 2}
+    ]
+    assert "private-endpoint" not in repr(projected) and "synthetic-secret" not in repr(
+        projected
+    )
+    calls = await install_services(hass, lambda _name, _data: None)
+    await run_script(await make_script(hass, projected), trigger_id="report")
+    assert calls[-1][0] == "matic_robot.firmware_notification"

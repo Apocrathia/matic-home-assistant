@@ -1230,3 +1230,31 @@ def test_untrusted_research_is_plain_text_in_notification_projection() -> None:
     assert "<img" not in research["summary_markdown"]
     assert "&lt;img" in research["summary_markdown"]
     assert r"\*claim\*" in research["summary_markdown"]
+
+
+@pytest.mark.parametrize("status", ["first_observed", "observed_again", "recovered"])
+def test_unknown_protocol_fields_do_not_request_notifications(status) -> None:
+    """Operating-state wire shapes stay observable without paging the owner."""
+    robot = start_robot()
+    expanded = snapshot(paths=["1:2", "2:2"], captured=NOW + timedelta(minutes=15))
+    reports.prepare_release(robot, expanded)
+    reports.update_report(robot, expanded, NOW + timedelta(minutes=15))
+    item = finding(robot, "new_field", "current_version", "2:2")
+    item["status"] = status
+    item["observation_count"] = 2
+    assert item["meaning"] == "unknown" and item["supported_capability"] is False
+    public = reports.public_report(robot)
+    assert public["findings"]
+    assert public["notification_pending"] is False
+
+
+@pytest.mark.parametrize(
+    "disposition", ["integration_opportunity", "compatibility_issue"]
+)
+def test_only_completed_actionable_research_requests_notification(disposition) -> None:
+    robot = start_robot()
+    investigation = robot["firmware_report"]["investigation"]
+    investigation.update(status="pending", disposition=disposition)
+    assert reports.public_report(robot)["notification_pending"] is False
+    investigation["status"] = "complete"
+    assert reports.public_report(robot)["notification_pending"] is True

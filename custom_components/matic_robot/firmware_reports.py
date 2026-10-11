@@ -526,13 +526,16 @@ def public_report(robot: dict[str, Any]) -> dict[str, Any]:
     report["routing_revision"] = robot.get("routing_revision", 0)
     report["next_check_at"] = robot.get("next_firmware_scan_at")
     actionable = any(
-        item["kind"] == "new_field"
-        or item["status"] == "observed_again"
-        or (item["status"] == "recovered" and item["observation_count"] >= 2)
+        item["kind"] == "read_failure"
+        and (
+            item["status"] == "observed_again"
+            or (item["status"] == "recovered" and item["observation_count"] >= 2)
+        )
         for item in report["findings"]
-    ) or investigation.get("disposition") in (
-        "integration_opportunity",
-        "compatibility_issue",
+    ) or (
+        investigation.get("status") == "complete"
+        and investigation.get("disposition")
+        in ("integration_opportunity", "compatibility_issue")
     )
     report["notification_pending"] = (
         report["revision"]
