@@ -1045,6 +1045,9 @@
     },
     "unsupported_command": {
       "message": "That Matic command is not supported. Use start, clean_all, clean_rooms, clean_segments, pause, resume, stop, dock, or return_home."
+    },
+    "managed_run_changed": {
+      "message": "The managed cleaning run has changed. Stop was not sent."
     }
   },
   "issues": {
@@ -1197,6 +1200,10 @@
         "include_unmanaged": {
           "name": "Also stop other cleaning",
           "description": "If no managed plan is running, stop one-time or externally started cleaning and return to the dock. Active plans always use their saved stop policy."
+        },
+        "expected_run_id": {
+          "name": "Expected run ID",
+          "description": "Optional run ID from plan diagnostics. Stop is rejected if that managed run is no longer active."
         }
       }
     },

@@ -3796,7 +3796,7 @@ class CleaningPlanManager:
         await self._async_save_and_notify(serial_number)
 
     async def async_checkpoint_stop_intent(
-        self, serial_number: str, behavior: str
+        self, serial_number: str, behavior: str, *, run_id: str | None
     ) -> None:
         """Do not lose a user's stop request if HA restarts before completion."""
 
@@ -3806,7 +3806,12 @@ class CleaningPlanManager:
                 checkpoint = (
                     run.get("recovery_checkpoint") if isinstance(run, dict) else None
                 )
-                if not isinstance(checkpoint, dict):
+                if (
+                    run_id is None
+                    or not isinstance(run, dict)
+                    or run.get("run_id") != run_id
+                    or not isinstance(checkpoint, dict)
+                ):
                     return False
                 checkpoint["stop_intent"] = behavior
                 await self._store.async_save(self._data)

@@ -926,7 +926,7 @@ async def test_recovery_storage_ignores_retired_run_and_preserves_stop_intent(
     manager, entry, checkpoint, _ = recovery_state
     await manager.async_set_recovery_checkpoint("serial", "different-run", {})
     assert manager.recovery_run("serial")["recovery_checkpoint"] == checkpoint
-    await manager.async_checkpoint_stop_intent("serial", "after_room")
+    await manager.async_checkpoint_stop_intent("serial", "after_room", run_id="run")
     await manager.async_set_recovery_checkpoint("serial", "run", checkpoint)
     assert (
         manager.recovery_run("serial")["recovery_checkpoint"]["stop_intent"]

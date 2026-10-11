@@ -210,7 +210,10 @@ CLEAN_ROOM_SEQUENCE_SCHEMA = cv.make_entity_service_schema(
 PREVIEW_ROOM_SEQUENCE_SCHEMA = cv.make_entity_service_schema(_ROOM_SEQUENCE_FIELDS)
 
 PLAN_TARGET_SCHEMA = cv.make_entity_service_schema(
-    {vol.Optional("include_unmanaged", default=False): cv.boolean}
+    {
+        vol.Optional("include_unmanaged", default=False): cv.boolean,
+        vol.Optional("expected_run_id"): vol.All(cv.string, vol.Length(min=1, max=128)),
+    }
 )
 
 RESET_PLAN_HISTORY_SCHEMA = cv.make_entity_service_schema(
@@ -1002,10 +1005,27 @@ async def async_register_services(hass: HomeAssistant) -> None:
         )
         will_dispatch = False
         async with manager.external_command(serial_number):
+            run_id = manager.active_run_id(serial_number)
+            if (
+                "expected_run_id" in call.data
+                and call.data["expected_run_id"] != run_id
+            ):
+                raise _validation_error(
+                    "The managed cleaning run has changed; Stop was not sent",
+                    "managed_run_changed",
+                )
             decision = manager.request_stop(serial_number)
-            await manager.async_checkpoint_stop_intent(serial_number, decision.behavior)
             expected_generation = manager.motion_generation(serial_number)
             expected_stop_generation = manager.stop_request_generation(serial_number)
+            await manager.async_checkpoint_stop_intent(
+                serial_number, decision.behavior, run_id=run_id
+            )
+            if (
+                manager.motion_generation(serial_number) != expected_generation
+                or manager.stop_request_generation(serial_number)
+                != expected_stop_generation
+            ):
+                return
             will_dispatch = decision.behavior != "after_room" and (
                 decision.behavior != "not_running"
                 or bool(call.data.get("include_unmanaged"))

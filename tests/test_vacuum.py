@@ -668,10 +668,10 @@ async def test_unload_drains_accepted_stop_before_closing_metadata(hass) -> None
     client = entry.runtime_data.coordinator.client
     checkpoint = manager.async_checkpoint_stop_intent
 
-    async def delayed_checkpoint(serial_number: str, behavior: str) -> None:
+    async def delayed_checkpoint(serial_number: str, behavior: str, **kwargs) -> None:
         checkpoint_started.set()
         await release_checkpoint.wait()
-        await checkpoint(serial_number, behavior)
+        await checkpoint(serial_number, behavior, **kwargs)
 
     manager.async_checkpoint_stop_intent = delayed_checkpoint
 
@@ -741,10 +741,10 @@ async def test_stop_retains_run_id_when_run_finishes_during_checkpoint(hass) -> 
     checkpoint_started = asyncio.Event()
     release_checkpoint = asyncio.Event()
 
-    async def delayed_checkpoint(serial: str, behavior: str) -> None:
+    async def delayed_checkpoint(serial: str, behavior: str, **kwargs) -> None:
         checkpoint_started.set()
         await release_checkpoint.wait()
-        await checkpoint(serial, behavior)
+        await checkpoint(serial, behavior, **kwargs)
 
     manager.async_checkpoint_stop_intent = delayed_checkpoint
     with patch.object(vacuum, "schedule_dock_after_stop") as schedule_dock:
@@ -826,7 +826,7 @@ async def test_after_room_stop_keeps_managed_owner(hass) -> None:
         await entity.async_stop()
 
     request_stop.assert_called_once_with(serial_number)
-    checkpoint.assert_awaited_once_with(serial_number, "after_room")
+    checkpoint.assert_awaited_once_with(serial_number, "after_room", run_id=None)
     assert manager.managed_motion_is_current(serial_number, token)
     entry.runtime_data.coordinator.client.async_send_user_command.assert_not_awaited()
 
