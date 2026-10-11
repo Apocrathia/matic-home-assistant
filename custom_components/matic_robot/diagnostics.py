@@ -2,28 +2,57 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 
 from . import MaticConfigEntry
 from .const import CONF_HERMES_CREDENTIAL
+from .runtime_code import capture_runtime_code
 
 
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, entry: MaticConfigEntry
 ) -> dict[str, Any]:
     """Return redacted diagnostics."""
-    state = entry.runtime_data.coordinator.data
+    runtime = entry.runtime_data
+    binding_names = (
+        "client",
+        "coordinator",
+        "cleaning_plans",
+        "firmware_tracker",
+        "slam_map",
+        "slam_history",
+    )
+    bindings = tuple(getattr(runtime, name, None) for name in binding_names)
+    snapshot = await hass.async_add_executor_job(
+        capture_runtime_code,
+        Path(__file__).parent,
+        __package__,
+        (type(runtime), *(type(value) for value in bindings)),
+    )
+    code = snapshot.report
+    code["bindings_changed_during_capture"] = not snapshot.bindings_unchanged()
+    if code["bindings_changed_during_capture"]:
+        code["observed_code_matches_installed_source"] = False
+    code["runtime_changed_during_capture"] = entry.runtime_data is not runtime or any(
+        getattr(runtime, name, None) is not value
+        for name, value in zip(binding_names, bindings, strict=True)
+    )
+    if code["runtime_changed_during_capture"]:
+        code["observed_code_matches_installed_source"] = False
+    state = runtime.coordinator.data
     info = state.info
     operational = state.operational
     telemetry = state.telemetry
     floor_plan = getattr(state, "floor_plan", None)
-    endpoint_health = entry.runtime_data.client.endpoint_health
-    command_health = entry.runtime_data.client.command_health
-    bag_observation = getattr(entry.runtime_data.coordinator, "bag_observation", None)
+    endpoint_health = runtime.client.endpoint_health
+    command_health = runtime.client.command_health
+    bag_observation = getattr(runtime.coordinator, "bag_observation", None)
     return {
-        "activity_observations": entry.runtime_data.client.activity_journal.snapshot,
+        "runtime_code": code,
+        "activity_observations": runtime.client.activity_journal.snapshot,
         "entry": {
             "port": entry.data.get("port"),
             "credential_configured": CONF_HERMES_CREDENTIAL in entry.data,
@@ -101,8 +130,6 @@ async def async_get_config_entry_diagnostics(
                 if status != "acknowledged"
             },
         },
-        "firmware_tracking": entry.runtime_data.firmware_tracker.summary(
-            entry.entry_id
-        ),
-        "last_update_success": entry.runtime_data.coordinator.last_update_success,
+        "firmware_tracking": runtime.firmware_tracker.summary(entry.entry_id),
+        "last_update_success": runtime.coordinator.last_update_success,
     }

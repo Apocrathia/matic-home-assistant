@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from custom_components.matic_robot.client.models import (
     RobotInfo,
     RobotOperationalState,
@@ -14,7 +16,7 @@ from custom_components.matic_robot.diagnostics import (
 )
 
 
-async def test_diagnostics_redact_access_material_but_keep_local_context() -> None:
+def diagnostic_entry() -> SimpleNamespace:
     info = RobotInfo(
         serial_number="private-serial",
         name="Private robot name",
@@ -71,7 +73,12 @@ async def test_diagnostics_redact_access_material_but_keep_local_context() -> No
         ),
     )
 
-    diagnostics = await async_get_config_entry_diagnostics(None, entry)
+    return entry
+
+
+async def test_diagnostics_redact_access_material_but_keep_local_context(hass) -> None:
+    entry = diagnostic_entry()
+    diagnostics = await async_get_config_entry_diagnostics(hass, entry)
     rendered = repr(diagnostics)
 
     for private_value in (
@@ -96,3 +103,52 @@ async def test_diagnostics_redact_access_material_but_keep_local_context() -> No
         "failures": {"voice_enabled_command": "unacknowledged"},
     }
     assert diagnostics["firmware_tracking"]["observed_version"] == "test-version"
+
+
+@pytest.mark.parametrize("replace_runtime", [True, False])
+async def test_runtime_change_during_executor_capture_cannot_report_a_match(
+    hass, monkeypatch, replace_runtime
+):
+    entry = diagnostic_entry()
+
+    def replacing(_root, _package, _classes):
+        if replace_runtime:
+            entry.runtime_data = SimpleNamespace()
+        else:
+            entry.runtime_data.client = SimpleNamespace(
+                **vars(entry.runtime_data.client)
+            )
+        return SimpleNamespace(
+            report={"observed_code_matches_installed_source": True},
+            bindings_unchanged=lambda: True,
+        )
+
+    monkeypatch.setattr(
+        "custom_components.matic_robot.diagnostics.capture_runtime_code", replacing
+    )
+    diagnostics = await async_get_config_entry_diagnostics(hass, entry)
+    assert diagnostics["runtime_code"]["runtime_changed_during_capture"] is True
+    assert (
+        diagnostics["runtime_code"]["observed_code_matches_installed_source"] is False
+    )
+
+
+async def test_runtime_code_bindings_changed_after_executor_fail_closed(
+    hass, monkeypatch
+):
+    entry = diagnostic_entry()
+
+    def changed(_root, _package, _classes):
+        return SimpleNamespace(
+            report={"observed_code_matches_installed_source": True},
+            bindings_unchanged=lambda: False,
+        )
+
+    monkeypatch.setattr(
+        "custom_components.matic_robot.diagnostics.capture_runtime_code", changed
+    )
+    diagnostics = await async_get_config_entry_diagnostics(hass, entry)
+    assert diagnostics["runtime_code"]["bindings_changed_during_capture"] is True
+    assert (
+        diagnostics["runtime_code"]["observed_code_matches_installed_source"] is False
+    )
