@@ -1199,3 +1199,20 @@ async def test_post_dispatch_dock_confirmation_preserves_replacement_or_unload(
     assert manager.stop_pending("serial")
     expected = {**record, "run_id": "run-new"} if replacement == "new_run" else record
     assert manager.snapshot("serial")["last_run"] == expected
+
+
+async def test_idle_native_inactivity_does_not_clear_ownerless_dock_fence(hass) -> None:
+    hass.states.async_set(ENTITY, "idle", {})
+    manager = SimpleNamespace(
+        stop_fence_token=MagicMock(return_value=7),
+        async_clear_stop_pending_if_token=AsyncMock(return_value=True),
+    )
+    assert not await async_clear_ownerless_stop_if_settled(
+        hass,
+        native_active=AsyncMock(return_value=False),
+        manager=manager,
+        serial_number="serial",
+        entity_id=ENTITY,
+    )
+    manager.async_clear_stop_pending_if_token.assert_not_awaited()
+    assert manager.stop_fence_token("serial") == 7

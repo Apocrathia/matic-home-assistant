@@ -379,6 +379,10 @@ async def async_request_bluetooth_credential(
                 _LOGGER.debug("Requesting a Bluetooth credential with OS pairing")
                 async with asyncio.timeout(BLUETOOTH_PAIRING_TIMEOUT_SECONDS):
                     bluez_device_path = _bluez_device_path(discovery)
+                    if bluez_session is not None:
+                        await bluez_session.async_require_connection_agent(
+                            bluez_device_path
+                        )
                     pair_with_bleak = bluez_session is None or bluez_device_path is None
                     failure_stage = "Bluetooth connection"
                     _stage("connecting")

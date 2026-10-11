@@ -461,3 +461,48 @@ class Agent(ServiceInterface):
         wrapped.__dict__["__DBUS_METHOD"].fn = lambda: None
     assert snapshot.bindings_unchanged() is False
     assert capture(root, PACKAGE)["observed_code_matches_installed_source"] is False
+
+
+def test_entry_runtime_class_defined_in_package_root_is_valid():
+    from custom_components.matic_robot import MaticRuntimeData
+
+    report = capture(
+        Path(runtime_code.__file__).parent,
+        runtime_code.__package__,
+        (MaticRuntimeData,),
+    )
+    assert report["observed_code_matches_installed_source"] is True, report
+
+
+def test_identity_failure_reports_source_location_without_private_metadata(
+    tmp_path, monkeypatch
+):
+    root, _path, module = load_source(tmp_path, monkeypatch)
+    module.calculate.__module__ = "synthetic-private-metadata"
+    report = capture(root, PACKAGE)
+    assert report["observed_code_matches_installed_source"] is False
+    assert report["identity_failures"] == [
+        {
+            "reason": "function_metadata",
+            "source_file": "sample.py",
+            "source_line": 13,
+            "runtime_class_index": None,
+        }
+    ]
+    assert "synthetic-private-metadata" not in repr(report)
+    assert str(root) not in repr(report)
+
+
+def test_identity_failure_details_are_bounded_without_hiding_the_error_count(
+    tmp_path, monkeypatch
+):
+    root, _path, _module = load_source(tmp_path, monkeypatch)
+    monkeypatch.setattr(runtime_code, "MAX_IDENTITY_FAILURES", 1)
+    report = capture(root, PACKAGE, (ModuleType, str))
+    assert report["observed_code_matches_installed_source"] is False
+    assert report["identity_errors"] == 3
+    assert len(report["identity_failures"]) == 1
+    assert report["identity_failures_omitted"] == 2
+    assert report["identity_failures"][0]["reason"] == "runtime_class_binding"
+    assert report["identity_failures"][0]["source_file"] is None
+    assert report["identity_failures"][0]["runtime_class_index"] == 0

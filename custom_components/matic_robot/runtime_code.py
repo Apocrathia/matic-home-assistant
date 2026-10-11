@@ -23,6 +23,7 @@ MAX_TOTAL_SOURCE_BYTES = 8 * 1024 * 1024
 MAX_MODULES = 128
 MAX_TREE_ENTRIES = 512
 MAX_TREE_DEPTH = 16
+MAX_IDENTITY_FAILURES = 16
 _GENERATED_METHODS = frozenset(
     {
         "__init__",
@@ -134,9 +135,9 @@ def _compiled_codes(code: CodeType) -> dict[str, set[str]]:
     return result
 
 
-def _source_bindings_match(
+def _source_binding_error(
     module: ModuleType, tree: ast.Module, expected: dict[str, set[str]]
-) -> bool:
+) -> tuple[str, int] | None:
     """Missing/replaced declared bindings must not disappear from the sample."""
     pending: list[tuple[Any, str, list[ast.stmt]]] = [(module, "", tree.body)]
     while pending:
@@ -154,7 +155,7 @@ def _source_bindings_match(
                     or value.__module__ != module.__name__
                     or value.__qualname__ != qualified
                 ):
-                    return False
+                    return "class_binding", node.lineno
                 pending.append((value, qualified + ".", node.body))
                 continue
             descriptors = {
@@ -174,7 +175,7 @@ def _source_bindings_match(
                 ("classmethod", classmethod),
             ):
                 if (kind in descriptors) != isinstance(value, descriptor):
-                    return False
+                    return "descriptor_binding", node.lineno
             if isinstance(value, (staticmethod, classmethod)):
                 value = value.__func__
             if isinstance(value, property):
@@ -198,18 +199,18 @@ def _source_bindings_match(
             if not isinstance(value, FunctionType) or (
                 value.__module__ != module.__name__ or value.__qualname__ != qualified
             ):
-                return False
+                return "function_metadata", node.lineno
             while isinstance(value, FunctionType) and isinstance(
                 wrapped := vars(value).get("__wrapped__"), FunctionType
             ):
                 if id(value) in seen:
-                    return False
+                    return "wrapper_cycle", node.lineno
                 seen.add(id(value))
                 if (
                     value.__code__.co_qualname in expected
                     and value.__code__.co_filename != module.__file__
                 ):
-                    return False
+                    return "wrapper_origin", node.lineno
                 value = wrapped
             first_line = (
                 node.decorator_list[0].lineno if node.decorator_list else node.lineno
@@ -222,8 +223,8 @@ def _source_bindings_match(
                 or _code_hash(value.__code__)
                 not in expected.get(f"{qualified}:{first_line}", set())
             ):
-                return False
-    return True
+                return "declared_function", node.lineno
+    return None
 
 
 def _active_codes(
@@ -356,6 +357,8 @@ def capture_runtime_code(
         "mismatched_functions": 0,
         "source_errors": 0,
         "identity_errors": 0,
+        "identity_failures": [],
+        "identity_failures_omitted": 0,
         "excluded_generated_or_wrapper_functions": 0,
         "exclusions": [
             "module initialization",
@@ -375,36 +378,62 @@ def capture_runtime_code(
     module_guards: list[tuple[str, ModuleType, Any, Any, Any]] = []
     class_guards: list[tuple[type, str, str]] = []
     total_bytes = 0
-    for cls in runtime_classes:
-        owner = sys.modules.get(cls.__module__)
-        value: Any = owner
-        for part in cls.__qualname__.split("."):
-            value = (
-                vars(value).get(part) if isinstance(value, (ModuleType, type)) else None
-            )
-        if not cls.__module__.startswith(package + ".") or value is not cls:
-            result["identity_errors"] += 1
+
+    def identity_failure(
+        reason: str,
+        source_file: str | None = None,
+        source_line: int | None = None,
+        runtime_class_index: int | None = None,
+    ) -> None:
+        result["identity_errors"] += 1
+        if len(result["identity_failures"]) >= MAX_IDENTITY_FAILURES:
+            result["identity_failures_omitted"] += 1
+            return
+        result["identity_failures"].append(
+            {
+                "reason": reason,
+                "source_file": source_file,
+                "source_line": source_line,
+                "runtime_class_index": runtime_class_index,
+            }
+        )
+
     try:
         paths = _source_paths(root)
     except OSError, ValueError:
         result["source_errors"] = 1
         paths = []
     catalog = {
-        ".".join((package, *(p.relative_to(root).parts[:-1])))
-        if p.name == "__init__.py"
-        else package + "." + ".".join(p.relative_to(root).with_suffix("").parts)
+        (
+            ".".join((package, *(p.relative_to(root).parts[:-1])))
+            if p.name == "__init__.py"
+            else package + "." + ".".join(p.relative_to(root).with_suffix("").parts)
+        ): p.relative_to(root).as_posix()
         for p in paths
     }
+    for index, cls in enumerate(runtime_classes):
+        owner = sys.modules.get(cls.__module__)
+        value: Any = owner
+        for part in cls.__qualname__.split("."):
+            value = (
+                vars(value).get(part) if isinstance(value, (ModuleType, type)) else None
+            )
+        if (
+            cls.__module__ != package and not cls.__module__.startswith(package + ".")
+        ) or value is not cls:
+            identity_failure(
+                "runtime_class_binding", catalog.get(cls.__module__), None, index
+            )
     loaded_names = {
         name: module
         for name, module in tuple(sys.modules.items())
         if (name == package or name.startswith(package + "."))
         and "proto" not in name.split(".")
     }
-    if loaded_names.keys() - catalog or any(
+    if loaded_names.keys() - catalog.keys() or any(
         cls.__module__ not in catalog for cls in runtime_classes
     ):
-        result["identity_errors"] += 1
+        identity_failure("source_catalog")
     for path in paths:
         relative = path.relative_to(root)
         parts = relative.with_suffix("").parts
@@ -426,7 +455,7 @@ def capture_runtime_code(
                 for parent in (path, *path.parents[: len(relative.parts)])
             )
         ):
-            result["identity_errors"] += 1
+            identity_failure("module_identity", relative.as_posix())
             continue
         try:
             with path.open("rb") as stream:
@@ -461,15 +490,15 @@ def capture_runtime_code(
         )
         module_guards.append((name, module, spec, module.__file__, spec.origin))
         result["excluded_generated_or_wrapper_functions"] += excluded
-        result["identity_errors"] += int(unsupported)
+        if unsupported:
+            identity_failure("generated_or_wrapper", relative.as_posix())
         codes = [(fn, fn.__code__) for fn in functions]
         for fn, code in codes:
             function_guards.append(
                 (fn, code, fn.__module__, fn.__qualname__, vars(fn).get("__wrapped__"))
             )
-        result["identity_errors"] += int(
-            not _source_bindings_match(module, syntax, expected)
-        )
+        if error := _source_binding_error(module, syntax, expected):
+            identity_failure(error[0], relative.as_posix(), error[1])
         observed[name] = []
         for fn, code in codes:
             fingerprint = _code_hash(code)
@@ -479,7 +508,7 @@ def capture_runtime_code(
             )
             observed[name].append((code.co_qualname, fingerprint))
             if fn.__code__ is not code:
-                result["identity_errors"] += 1
+                identity_failure("function_changed", relative.as_posix())
         observed[name].sort()
 
     def bindings_unchanged() -> bool:
@@ -517,7 +546,8 @@ def capture_runtime_code(
             )
         )
 
-    result["identity_errors"] += int(not bindings_unchanged())
+    if not bindings_unchanged():
+        identity_failure("bindings_changed")
     result["runtime_code_sha256"] = hashlib.sha256(
         json.dumps(observed, sort_keys=True).encode()
     ).hexdigest()

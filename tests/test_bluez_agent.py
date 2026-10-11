@@ -311,6 +311,10 @@ async def test_pairing_agent_keeps_session_when_default_request_fails(
 
     async with async_bluez_pairing_agent(TEST_ADDRESS) as session:
         assert isinstance(session, BlueZPairingSession)
+        with pytest.raises(
+            bluez_agent.BluetoothAdapterUnavailableError, match="scoped"
+        ):
+            await session.async_require_connection_agent(None)
 
     members = [request.args[0].member for request in bus.call.await_args_list]
     assert members == ["RegisterAgent", "RequestDefaultAgent", "UnregisterAgent"]
@@ -404,3 +408,34 @@ async def test_pairing_agent_keeps_an_unrequested_passkey_prompt_for_retry(
         await exchange.async_wait_until_requested()
         exchange.submit(123456)
         assert await request == 123456
+
+
+@pytest.mark.parametrize(
+    "path,paired",
+    [
+        (None, False),
+        ("/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF", False),
+        ("/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF", True),
+    ],
+)
+async def test_connection_requires_scoped_default_agent_or_verified_bond(path, paired):
+    from custom_components.matic_robot.bluetooth_pairing import (
+        BluetoothAdapterUnavailableError,
+    )
+
+    bus = MagicMock()
+    bus.call = AsyncMock(return_value=_paired(paired))
+    session = BlueZPairingSession(bus, default_agent_ready=False)
+    if paired:
+        await session.async_require_connection_agent(path)
+    else:
+        with pytest.raises(BluetoothAdapterUnavailableError, match="scoped"):
+            await session.async_require_connection_agent(path)
+    assert bus.call.await_count == (0 if path is None else 1)
+
+
+async def test_ready_connection_agent_needs_no_bond_property_read():
+    bus = MagicMock()
+    session = BlueZPairingSession(bus)
+    await session.async_require_connection_agent(None)
+    bus.call.assert_not_called()

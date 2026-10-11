@@ -14,6 +14,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 from .models import FloorPlan, RobotPose, Room
 from .wire import (
+    WireFieldBudget,
     bytes_fields,
     decode_fields,
     first_bytes,
@@ -49,6 +50,8 @@ MAX_ROOM_BOUNDARY_POINTS = 4096
 MAX_FLOOR_PLAN_BOUNDARY_POINTS = 65536
 MAX_ROOM_NAME_BYTES = 256
 MAX_MAP_COORDINATE = 10_000.0
+MAX_FLOOR_PLAN_FIELDS = MAX_FLOOR_PLAN_BOUNDARY_POINTS * 4
+_FLOOR_MESSAGE_MAX_FIELDS = 64
 
 _Point = tuple[float, float]
 _Box = tuple[int, int, int, int]
@@ -85,7 +88,13 @@ def decode_floor_plans(payload: bytes) -> tuple[FloorPlan, ...]:
     """Decode every bounded standard partition in a multi-floor payload."""
     if len(payload) > MAX_FLOOR_PLAN_PAYLOAD_BYTES:
         raise DecodeError("coverage plan exceeds the byte limit")
-    partitions = bytes_fields(payload, 10)
+    budget = WireFieldBudget(MAX_FLOOR_PLAN_FIELDS)
+    partitions = bytes_fields(
+        payload,
+        10,
+        max_fields=MAX_FLOOR_PLANS + _FLOOR_MESSAGE_MAX_FIELDS,
+        field_budget=budget,
+    )
     if not partitions:
         raise DecodeError("coverage plan has no standard partition")
     if len(partitions) > MAX_FLOOR_PLANS:
@@ -95,7 +104,9 @@ def decode_floor_plans(payload: bytes) -> tuple[FloorPlan, ...]:
     total_boundary_points = 0
     mission_ids: set[int] = set()
     for partition_map_entry in partitions:
-        floor_plan, boundary_points = _decode_floor_plan_entry(partition_map_entry)
+        floor_plan, boundary_points = _decode_floor_plan_entry(
+            partition_map_entry, budget
+        )
         if floor_plan.mission_id in mission_ids:
             raise DecodeError("coverage plan repeats a mapped floor")
         mission_ids.add(floor_plan.mission_id)
@@ -106,14 +117,35 @@ def decode_floor_plans(payload: bytes) -> tuple[FloorPlan, ...]:
     return tuple(floor_plans)
 
 
-def _decode_floor_plan_entry(partition_map_entry: bytes) -> tuple[FloorPlan, int]:
+def _decode_floor_plan_entry(
+    partition_map_entry: bytes, budget: WireFieldBudget
+) -> tuple[FloorPlan, int]:
     """Decode one mission-scoped standard partition entry."""
-    mission_id = first_varint(partition_map_entry, 1)
-    partition = first_bytes(partition_map_entry, 2)
-    partition_id_wire = first_bytes(partition, 1)
-    region_collection = first_bytes(partition, 3)
+    mission_id = first_varint(
+        partition_map_entry,
+        1,
+        max_fields=_FLOOR_MESSAGE_MAX_FIELDS,
+        field_budget=budget,
+    )
+    partition = first_bytes(
+        partition_map_entry,
+        2,
+        max_fields=_FLOOR_MESSAGE_MAX_FIELDS,
+        field_budget=budget,
+    )
+    partition_id_wire = first_bytes(
+        partition, 1, max_fields=_FLOOR_MESSAGE_MAX_FIELDS, field_budget=budget
+    )
+    region_collection = first_bytes(
+        partition, 3, max_fields=_FLOOR_MESSAGE_MAX_FIELDS, field_budget=budget
+    )
 
-    region_wires = bytes_fields(region_collection, 1)
+    region_wires = bytes_fields(
+        region_collection,
+        1,
+        max_fields=MAX_FLOOR_PLAN_ROOMS + _FLOOR_MESSAGE_MAX_FIELDS,
+        field_budget=budget,
+    )
     if len(region_wires) > MAX_FLOOR_PLAN_ROOMS:
         raise DecodeError("coverage plan has too many rooms")
 
@@ -121,24 +153,49 @@ def _decode_floor_plan_entry(partition_map_entry: bytes) -> tuple[FloorPlan, int
     room_protocol_ids: set[str] = set()
     total_boundary_points = 0
     for region_wire in region_wires:
-        region_id_wire = first_bytes(region_wire, 1)
-        protocol_id = uuid_string(region_id_wire)
+        region_id_wire = first_bytes(
+            region_wire, 1, max_fields=_FLOOR_MESSAGE_MAX_FIELDS, field_budget=budget
+        )
+        protocol_id = uuid_string(
+            region_id_wire, max_fields=_FLOOR_MESSAGE_MAX_FIELDS, field_budget=budget
+        )
         if protocol_id in room_protocol_ids:
             raise DecodeError("coverage plan repeats a room identity")
         room_protocol_ids.add(protocol_id)
-        region = first_bytes(region_wire, 2)
-        names = bytes_fields(region, 9)
+        region = first_bytes(
+            region_wire, 2, max_fields=_FLOOR_MESSAGE_MAX_FIELDS, field_budget=budget
+        )
+        names = bytes_fields(
+            region, 9, max_fields=_FLOOR_MESSAGE_MAX_FIELDS, field_budget=budget
+        )
         name_bytes = names[0] if names else b""
         if len(name_bytes) > MAX_ROOM_NAME_BYTES:
             raise DecodeError("coverage plan room name exceeds the byte limit")
         name = name_bytes.decode("utf-8", errors="replace").strip()
-        border = first_bytes(first_bytes(region, 10), 1)
-        walk = first_bytes(border, 2)
-        boundary_wires = bytes_fields(walk, 1)
+        border = first_bytes(
+            first_bytes(
+                region, 10, max_fields=_FLOOR_MESSAGE_MAX_FIELDS, field_budget=budget
+            ),
+            1,
+            max_fields=_FLOOR_MESSAGE_MAX_FIELDS,
+            field_budget=budget,
+        )
+        walk = first_bytes(
+            border, 2, max_fields=_FLOOR_MESSAGE_MAX_FIELDS, field_budget=budget
+        )
+        boundary_wires = bytes_fields(
+            walk,
+            1,
+            max_fields=MAX_ROOM_BOUNDARY_POINTS + _FLOOR_MESSAGE_MAX_FIELDS,
+            field_budget=budget,
+        )
         if len(boundary_wires) > MAX_ROOM_BOUNDARY_POINTS:
             raise DecodeError("coverage plan room has too many boundary points")
         total_boundary_points += len(boundary_wires)
-        boundary = tuple(point(value) for value in boundary_wires)
+        boundary = tuple(
+            point(value, max_fields=_FLOOR_MESSAGE_MAX_FIELDS, field_budget=budget)
+            for value in boundary_wires
+        )
         if any(
             not math.isfinite(coordinate) or abs(coordinate) > MAX_MAP_COORDINATE
             for boundary_point in boundary
@@ -159,7 +216,11 @@ def _decode_floor_plan_entry(partition_map_entry: bytes) -> tuple[FloorPlan, int
     return (
         FloorPlan(
             mission_id=mission_id,
-            partition_protocol_id=uuid_string(partition_id_wire),
+            partition_protocol_id=uuid_string(
+                partition_id_wire,
+                max_fields=_FLOOR_MESSAGE_MAX_FIELDS,
+                field_budget=budget,
+            ),
             partition_id_wire=partition_id_wire,
             rooms=tuple(rooms),
         ),

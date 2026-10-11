@@ -88,6 +88,7 @@ def _state(
         floor_plan=floor_plan,
         pose=RobotPose(1, 2, 0),
         telemetry=RobotTelemetry(
+            active_cleaning_session=not idle,
             software_version="v-test",
             software_profile="test-profile",
             protocol_version=25,
@@ -2320,3 +2321,24 @@ async def test_idle_map_pages_do_not_toggle_floor_bound_buttons(
         assert sorted(writes) == [(index, False) for index in range(4)]
         assert not any(entity.available for entity in buttons)
     await store.async_shutdown()
+
+
+@pytest.mark.parametrize("native", [True, False, None])
+def test_active_session_sensor_preserves_native_uncertainty_when_returning(
+    native,
+) -> None:
+    entry = _entry()
+    data = entry.runtime_data.coordinator.data
+    entry.runtime_data.coordinator.data = replace(
+        data,
+        operational=replace(
+            data.operational, cleaning=False, paused=False, returning=True
+        ),
+        telemetry=replace(data.telemetry, active_cleaning_session=native),
+    )
+    description = next(
+        value
+        for value in binary_sensor.DESCRIPTIONS
+        if value.key == "active_cleaning_session"
+    )
+    assert binary_sensor.MaticBinarySensor(entry, description).is_on is native

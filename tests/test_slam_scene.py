@@ -2883,3 +2883,132 @@ async def test_area_workspace_preserves_perimeter_and_rejects_excess_coverage() 
     )
     assert response.status == HTTPStatus.BAD_REQUEST
     runtime.cleaning_plans.async_save_area.assert_not_awaited()
+
+
+async def test_pose_cache_does_not_relabel_previous_floor_position() -> None:
+    runtime = _runtime()
+    runtime.client.async_get_pose.side_effect = [
+        RobotPose(0.1, 0.2, 0.0),
+        RobotPose(0.2, 0.3, 0.0),
+    ]
+    hass = _hass(_entry(runtime))
+    view = MaticSlamPoseView()
+    with patch("custom_components.matic_robot.slam_scene.monotonic", return_value=10.0):
+        first = await view.get(_request(hass), "entry")
+        runtime.coordinator.data.floor_plan = replace(
+            runtime.coordinator.data.floor_plan,
+            partition_id_wire=b"synthetic-second-frame",
+        )
+        second = await view.get(_request(hass), "entry")
+    assert first.status == second.status == HTTPStatus.OK
+    assert runtime.client.async_get_pose.await_count == 2
+    assert json.loads(second.body)["position"] == [0.2, 0.3]
+    assert json.loads(second.body)["pose_revision"] == 2
+    assert (
+        json.loads(first.body)["map_session_key"]
+        != json.loads(second.body)["map_session_key"]
+    )
+
+
+@pytest.mark.parametrize("same_key", [False, True])
+async def test_pose_read_cannot_cross_floor_or_revocation_generation(same_key) -> None:
+    runtime = _runtime()
+    runtime.coordinator.floor_read_generation = 0
+    hass = _hass(_entry(runtime))
+    view = MaticSlamPoseView()
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def delayed():
+        started.set()
+        await release.wait()
+        return RobotPose(0.1, 0.2, 0.0)
+
+    runtime.client.async_get_pose.side_effect = delayed
+    task = asyncio.create_task(view.get(_request(hass), "entry"))
+    await started.wait()
+    original = runtime.coordinator.data.floor_plan
+    runtime.coordinator.data.floor_plan = replace(
+        original, partition_id_wire=b"synthetic-second-frame"
+    )
+    runtime.coordinator.floor_read_generation += 1
+    if same_key:
+        runtime.coordinator.data.floor_plan = original
+        runtime.coordinator.floor_read_generation += 1
+    release.set()
+    response = await task
+    assert response.status == HTTPStatus.OK
+    payload = json.loads(response.body)
+    assert payload["position"] is None and payload["source"] == "unavailable"
+    assert payload["map_floor_coherent"] is False
+    assert payload["map_session_key"] is None
+    assert payload["pose_freshness"] == "coordinator_fallback"
+    assert (
+        response.headers["Cache-Control"] == PRIVATE_NO_STORE_HEADERS["Cache-Control"]
+    )
+    assert view._cache == {}
+
+
+@pytest.mark.parametrize("invalidation", ["unload", "runtime", "history"])
+async def test_history_scene_read_rechecks_entry_runtime_and_store(
+    invalidation,
+) -> None:
+    runtime = _runtime()
+    snapshot = SimpleNamespace(
+        snapshot_id="0123456789abcdef01234567",
+        mission_token=runtime.slam_map.mission_identity.mission_token,
+    )
+    runtime.slam_history.catalog.return_value = (snapshot,)
+    entry = _entry(runtime)
+    hass = _hass(entry)
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def delayed(*args, **kwargs):
+        started.set()
+        await release.wait()
+        return b"synthetic-private-scene"
+
+    runtime.slam_history.async_scene.side_effect = delayed
+    task = asyncio.create_task(
+        MaticSlamHistorySceneView().get(_request(hass), "entry", snapshot.snapshot_id)
+    )
+    await started.wait()
+    if invalidation == "unload":
+        entry.state = ConfigEntryState.NOT_LOADED
+    elif invalidation == "runtime":
+        entry.runtime_data = _runtime()
+    else:
+        runtime.slam_history = _runtime().slam_history
+    release.set()
+    response = await task
+    assert response.status == HTTPStatus.NOT_FOUND
+    assert (
+        response.headers["Cache-Control"] == PRIVATE_NO_STORE_HEADERS["Cache-Control"]
+    )
+    assert response.body != b"synthetic-private-scene"
+
+
+async def test_pose_waiter_rejects_revoked_floor_before_second_rpc():
+    runtime = _runtime()
+    runtime.coordinator.floor_read_generation = 0
+    hass = _hass(_entry(runtime))
+    view = MaticSlamPoseView()
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def delayed():
+        started.set()
+        await release.wait()
+        return RobotPose(0.1, 0.2, 0.0)
+
+    runtime.client.async_get_pose.side_effect = delayed
+    first = asyncio.create_task(view.get(_request(hass), "entry"))
+    await started.wait()
+    second = asyncio.create_task(view.get(_request(hass), "entry"))
+    await asyncio.sleep(0)
+    runtime.coordinator.floor_read_generation += 1
+    release.set()
+    responses = await asyncio.gather(first, second)
+    assert [r.status for r in responses] == [HTTPStatus.OK] * 2
+    assert all(json.loads(r.body)["map_floor_coherent"] is False for r in responses)
+    assert all(json.loads(r.body)["map_session_key"] is None for r in responses)
+    runtime.client.async_get_pose.assert_awaited_once()
+    assert view._cache == {}

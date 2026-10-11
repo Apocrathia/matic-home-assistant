@@ -107,3 +107,23 @@ def test_wire_shape_fails_closed_for_invalid_large_or_complex_values() -> None:
     assert wire_shape(b"\x0a\x01\x80", nested_message_paths=((1,),)) == ("1:2",)
     assert wire_shape(b"x" * (MAX_WIRE_SHAPE_BYTES + 1)) is None
     assert wire_shape(b"\x08\x01" * (MAX_WIRE_SHAPE_FIELDS + 1)) is None
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_wire_shape_bounds_field_allocations_before_materializing(monkeypatch, nested):
+    from custom_components.matic_robot.client import wire
+    from tests.wire_builders import _field
+
+    allocations = 0
+    original = wire.WireField
+
+    def counted(*args):
+        nonlocal allocations
+        allocations += 1
+        return original(*args)
+
+    monkeypatch.setattr(wire, "WireField", counted)
+    dense = b"\x08\x00" * (MAX_WIRE_SHAPE_FIELDS + 1000)
+    payload = _field(1, dense) if nested else dense
+    assert wire_shape(payload, nested_message_paths=((1,),)) is None
+    assert allocations <= MAX_WIRE_SHAPE_FIELDS

@@ -560,3 +560,71 @@ def test_large_sparse_room_label_layout_has_bounded_runtime() -> None:
     mask = Image.new("L", (1024, 1024), 0)
     ImageDraw.Draw(mask).polygon(l_shaped_hallway, fill=255)
     assert _box_inside_mask(layouts[0].box, mask)
+
+
+@pytest.mark.parametrize(
+    "stage",
+    ["root", "entry", "partition", "rooms", "region", "border", "walk", "point"],
+)
+def test_floor_plan_dense_messages_stop_before_unbounded_field_allocation(
+    monkeypatch, stage
+) -> None:
+    from custom_components.matic_robot.client import wire as wire_module
+
+    count = 0
+    original = wire_module.WireField
+
+    def capture(*args, **kwargs):
+        nonlocal count
+        count += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(wire_module, "WireField", capture)
+    dense = b"\x08\x00" * 5000
+    point = _fixed32(1, 0.0) + _fixed32(2, 0.0)
+    if stage == "point":
+        point = _fixed32(1, 0.0) * 5000
+    walk = _field(1, point) * 3
+    if stage == "walk":
+        walk = _field(1, point) * (floor_plan_module.MAX_ROOM_BOUNDARY_POINTS * 2)
+    border = _field(1, _field(2, walk)) + (dense if stage == "border" else b"")
+    region = (
+        _field(9, b"Test room")
+        + _field(10, border)
+        + (dense if stage == "region" else b"")
+    )
+    region_wire = _field(1, _field(2, _uuid(REGION_ID))) + _field(2, region)
+    rooms = _field(1, region_wire) * (5000 if stage == "rooms" else 1)
+    partition = (
+        _field(1, _uuid(PARTITION_ID))
+        + _field(3, rooms)
+        + (dense if stage == "partition" else b"")
+    )
+    entry = (
+        _varint_field(1, 42)
+        + _field(2, partition)
+        + (dense if stage == "entry" else b"")
+    )
+    payload = _field(10, entry) if stage != "root" else b"\x52\x00" * 5000
+    with pytest.raises(DecodeError):
+        decode_floor_plans(payload)
+    bound = floor_plan_module.MAX_ROOM_BOUNDARY_POINTS + 256 if stage == "walk" else 500
+    assert count <= bound
+
+
+def test_floor_plan_shared_budget_bounds_total_nested_allocations(monkeypatch) -> None:
+    from custom_components.matic_robot.client import wire as wire_module
+
+    count = 0
+    original = wire_module.WireField
+
+    def capture(*args, **kwargs):
+        nonlocal count
+        count += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(wire_module, "WireField", capture)
+    monkeypatch.setattr(floor_plan_module, "MAX_FLOOR_PLAN_FIELDS", 32)
+    with pytest.raises(DecodeError, match="aggregate field budget"):
+        decode_floor_plans(_floor_plan_payload())
+    assert count == 32

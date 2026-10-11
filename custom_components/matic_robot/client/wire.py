@@ -111,18 +111,17 @@ def wire_shape(
         if path and len(path) <= MAX_WIRE_SHAPE_DEPTH
     }
     shapes: set[WireShapePath] = set()
-    field_count = 0
+    budget = WireFieldBudget(MAX_WIRE_SHAPE_FIELDS)
 
     def visit(
         message: bytes,
         number_path: tuple[int, ...],
         shape_path: WireShapePath,
     ) -> None:
-        nonlocal field_count
-        fields = decode_fields(message)
-        field_count += len(fields)
-        if field_count > MAX_WIRE_SHAPE_FIELDS:
-            raise _WireShapeLimitError
+        try:
+            fields = decode_fields(message, field_budget=budget)
+        except WireFieldBudgetExceeded as err:
+            raise _WireShapeLimitError from err
         for field in fields:
             child_numbers = (*number_path, field.number)
             child_shape = (*shape_path, (field.number, field.wire_type))
@@ -149,28 +148,52 @@ def wire_shape(
     )
 
 
-def bytes_fields(payload: bytes, number: int) -> tuple[bytes, ...]:
+def bytes_fields(
+    payload: bytes,
+    number: int,
+    *,
+    max_fields: int | None = None,
+    field_budget: WireFieldBudget | None = None,
+) -> tuple[bytes, ...]:
     """Return all length-delimited values for a field."""
     return tuple(
         field.value
-        for field in decode_fields(payload)
+        for field in decode_fields(
+            payload, max_fields=max_fields, field_budget=field_budget
+        )
         if field.number == number
         and field.wire_type == 2
         and isinstance(field.value, bytes)
     )
 
 
-def first_bytes(payload: bytes, number: int) -> bytes:
+def first_bytes(
+    payload: bytes,
+    number: int,
+    *,
+    max_fields: int | None = None,
+    field_budget: WireFieldBudget | None = None,
+) -> bytes:
     """Return the first length-delimited value for a field."""
-    values = bytes_fields(payload, number)
+    values = bytes_fields(
+        payload, number, max_fields=max_fields, field_budget=field_budget
+    )
     if not values:
         raise DecodeError(f"missing protobuf field {number}")
     return values[0]
 
 
-def first_varint(payload: bytes, number: int) -> int:
+def first_varint(
+    payload: bytes,
+    number: int,
+    *,
+    max_fields: int | None = None,
+    field_budget: WireFieldBudget | None = None,
+) -> int:
     """Return the first varint value for a field."""
-    for field in decode_fields(payload):
+    for field in decode_fields(
+        payload, max_fields=max_fields, field_budget=field_budget
+    ):
         if field.number == number and field.wire_type == 0:
             assert isinstance(field.value, int)
             return field.value
@@ -184,11 +207,18 @@ def packed_floats(payload: bytes, count: int) -> tuple[float, ...]:
     return struct.unpack(f"<{count}f", payload)
 
 
-def point(payload: bytes) -> tuple[float, float]:
+def point(
+    payload: bytes,
+    *,
+    max_fields: int | None = None,
+    field_budget: WireFieldBudget | None = None,
+) -> tuple[float, float]:
     """Decode Matic's protobuf Point message."""
     coordinates = {1: 0.0, 2: 0.0}
     found = False
-    for field in decode_fields(payload):
+    for field in decode_fields(
+        payload, max_fields=max_fields, field_budget=field_budget
+    ):
         if (
             field.number in coordinates
             and field.wire_type == 5
