@@ -5047,6 +5047,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     let poseSessionKey = "a".repeat(64);
     let posePosition = [10, 12];
     let poseFreshness = "live";
+    let poseFloorCoherent = true;
     let poseRequests = 0;
     let failNextPose = false;
     let holdDeltaRecoveryScene = false;
@@ -5154,7 +5155,7 @@ test.describe("Map Studio v0.4 foundation", () => {
           source: posePosition ? "latest_pose" : "current_area",
           revision: catalogRevision + 100,
           pose_revision: poseRequests,
-          map_floor_coherent: true,
+          map_floor_coherent: poseFloorCoherent,
           pose_freshness: poseFreshness,
           map_session_key: poseSessionKey,
         }),
@@ -5316,6 +5317,18 @@ test.describe("Map Studio v0.4 foundation", () => {
       .toBeGreaterThan(requestsBeforeSessionChange);
     await expect.poll(async () => page.evaluate(() =>
       window.__deltaPanel.getWorkspaceSnapshot().map.exactPose), { timeout: 5_000 }).toBe(false);
+    // Return to the same catalog key, then consume the backend's typed
+    // frame-revoked response: it must clear the old verified marker.
+    poseSessionKey = "a".repeat(64);
+    posePosition = [11, 13];
+    await expect.poll(() => page.evaluate(() => window.__deltaPanel.getWorkspaceSnapshot().map.exactPose)).toBe(true);
+    poseFloorCoherent = false;
+    poseSessionKey = null;
+    posePosition = null;
+    await expect.poll(() => page.evaluate(() => {
+      const state = window.__deltaPanel.getWorkspaceSnapshot();
+      return { exactPose: state.map.exactPose, pose: state.resources.pose.value };
+    })).toEqual({ exactPose: false, pose: null });
     await page.evaluate(() => window.__deltaPanel.remove());
   });
 

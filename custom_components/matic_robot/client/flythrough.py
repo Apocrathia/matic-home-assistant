@@ -10,7 +10,7 @@ from typing import cast
 
 from google.protobuf.message import DecodeError
 
-from .wire import decode_fields
+from .wire import WireField, WireFieldLimitExceeded, decode_fields
 
 MAX_FLYTHROUGH_PAYLOAD_BYTES = 1024 * 1024
 MAX_FLYTHROUGH_POSES = 10_000
@@ -33,6 +33,14 @@ class Flythrough:
     poses: tuple[FlythroughPose, ...]
 
 
+def _shape_fields(payload: bytes, limit: int, label: str) -> tuple[WireField, ...]:
+    """Retain typed shape errors while rejecting before dense allocation."""
+    try:
+        return decode_fields(payload, max_fields=limit)
+    except WireFieldLimitExceeded as err:
+        raise DecodeError(f"flythrough {label} has an invalid shape") from err
+
+
 def decode_flythrough(payload: bytes, *, expected_mission_token: str) -> Flythrough:
     """Decode a verified native map flythrough for the expected SLAM mission."""
     if not payload:
@@ -40,7 +48,7 @@ def decode_flythrough(payload: bytes, *, expected_mission_token: str) -> Flythro
     if len(payload) > MAX_FLYTHROUGH_PAYLOAD_BYTES:
         raise DecodeError("flythrough payload exceeds the size limit")
 
-    fields = decode_fields(payload)
+    fields = _shape_fields(payload, MAX_FLYTHROUGH_POSES + 1, "envelope")
     if (
         len(fields) < 2
         or len(fields) > MAX_FLYTHROUGH_POSES + 1
@@ -68,7 +76,7 @@ def decode_flythrough(payload: bytes, *, expected_mission_token: str) -> Flythro
 
 
 def _decode_mission(payload: bytes) -> bytes:
-    fields = decode_fields(payload)
+    fields = _shape_fields(payload, 1, "mission")
     if (
         len(fields) != 1
         or fields[0].number != 2
@@ -80,7 +88,7 @@ def _decode_mission(payload: bytes) -> bytes:
 
 
 def _decode_pose(payload: bytes) -> FlythroughPose:
-    fields = decode_fields(payload)
+    fields = _shape_fields(payload, 2, "pose")
     if tuple((field.number, field.wire_type) for field in fields) != (
         (1, 2),
         (2, 2),
@@ -92,7 +100,7 @@ def _decode_pose(payload: bytes) -> FlythroughPose:
 
 
 def _decode_vector(payload: bytes, *, require_z: bool) -> tuple[float, float, float]:
-    fields = decode_fields(payload)
+    fields = _shape_fields(payload, 3, "vector")
     expected = ((1, 5), (2, 5), (3, 5)) if require_z else ((1, 5), (2, 5))
     shape = tuple((field.number, field.wire_type) for field in fields)
     if shape not in (expected, ((1, 5), (2, 5), (3, 5))):

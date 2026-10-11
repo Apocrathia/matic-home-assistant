@@ -92,7 +92,7 @@ async def async_clear_ownerless_stop_if_settled(
         hass,
         native_active,
         entity_id,
-        allowed_states=frozenset({"docked", "charging", "idle"}),
+        allowed_states=DOCKED_STATES,
     ):
         return False
     return await manager.async_clear_stop_pending_if_token(

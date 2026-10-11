@@ -538,6 +538,11 @@ class MaticCoordinator(DataUpdateCoordinator[RobotState]):
         self._bag_previous_full = False
 
     @property
+    def floor_read_generation(self) -> int:
+        """Return the admission epoch for asynchronous floor-scoped reads."""
+        return self._floor_read_generation
+
+    @property
     def bag_observation(self) -> dict[str, object]:
         """Return read-only bag observations for verification tooling."""
         operational = self.data.operational if self.data is not None else None

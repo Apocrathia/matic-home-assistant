@@ -14,6 +14,7 @@ from custom_components.matic_robot.client.flythrough import (
     MAX_FLYTHROUGH_POSES,
     decode_flythrough,
 )
+from tests.wire_builders import _field
 
 MISSION = bytes((2 << 3 | 5,)) + struct.pack("<I", 0x1234ABCD)
 MISSION_TOKEN = hashlib.sha256(MISSION).hexdigest()
@@ -131,3 +132,34 @@ def test_decode_flythrough_rejects_invalid_vectors(vector: bytes) -> None:
             _payload(_pose(location=vector)),
             expected_mission_token=MISSION_TOKEN,
         )
+
+
+@pytest.mark.parametrize("stage", ["envelope", "mission", "pose", "vector"])
+def test_flythrough_dense_messages_are_rejected_before_materialization(
+    monkeypatch, stage
+) -> None:
+    from custom_components.matic_robot.client import wire as wire_module
+
+    count = 0
+    original = wire_module.WireField
+
+    def capture(*args, **kwargs):
+        nonlocal count
+        count += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(wire_module, "WireField", capture)
+    dense = b"\x08\x00" * 5000
+    if stage == "envelope":
+        payload = b"\x0a\x00" * (MAX_FLYTHROUGH_POSES * 2) + _bytes_field(2, MISSION)
+    elif stage == "mission":
+        payload = _field(1, _pose()) + _field(2, MISSION + dense)
+    elif stage == "pose":
+        payload = _field(1, dense) + _field(2, MISSION)
+    else:
+        vector = _fixed32_field(1, 0.0) * 5000
+        pose = _field(1, vector) + _field(2, _vector(0, 0))
+        payload = _field(1, pose) + _field(2, MISSION)
+    with pytest.raises(DecodeError):
+        decode_flythrough(payload, expected_mission_token=MISSION_TOKEN)
+    assert count <= (MAX_FLYTHROUGH_POSES + 1 if stage == "envelope" else 100)

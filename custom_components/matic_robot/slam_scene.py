@@ -97,6 +97,17 @@ def _map_session_key(runtime: MaticRuntimeData) -> str | None:
     ).hexdigest()
 
 
+def _pose_frame_key(
+    runtime: MaticRuntimeData,
+) -> tuple[SlamMapIdentity | None, str | None, int]:
+    """Bind pose reads to a coordinate frame and its revocation epoch."""
+    return (
+        runtime.slam_map.mission_identity,
+        _map_session_key(runtime),
+        getattr(runtime.coordinator, "floor_read_generation", 0),
+    )
+
+
 def scene_api_url(entry_id: str) -> str:
     """Return the authenticated scene URL for one config entry."""
     return SCENE_API_URL.format(entry_id=entry_id)
@@ -275,6 +286,7 @@ class _CachedPose:
     fetched_at: float
     revision: int
     freshness: str
+    frame_key: tuple[SlamMapIdentity | None, str | None, int]
 
 
 class MaticSlamSceneView(HomeAssistantView):
@@ -770,7 +782,8 @@ class MaticSlamHistorySceneView(HomeAssistantView):
         self, request: web.Request, entry_id: str, snapshot_id: str
     ) -> web.Response:
         """Return an immutable historical scene without public caching."""
-        runtime = _runtime_for_entry(request.app[KEY_HASS], entry_id)
+        hass = request.app[KEY_HASS]
+        runtime = _runtime_for_entry(hass, entry_id)
         if runtime is None:
             return web.Response(
                 status=HTTPStatus.NOT_FOUND, headers=PRIVATE_NO_STORE_HEADERS
@@ -788,10 +801,15 @@ class MaticSlamHistorySceneView(HomeAssistantView):
             return web.Response(
                 status=HTTPStatus.NOT_FOUND, headers=PRIVATE_NO_STORE_HEADERS
             )
-        scene = await runtime.slam_history.async_scene(
+        history = runtime.slam_history
+        scene = await history.async_scene(
             snapshot_id, mission_token=snapshot.mission_token
         )
-        if scene is None:
+        if (
+            scene is None
+            or _runtime_for_entry(hass, entry_id) is not runtime
+            or runtime.slam_history is not history
+        ):
             return web.Response(
                 status=HTTPStatus.NOT_FOUND, headers=PRIVATE_NO_STORE_HEADERS
             )
@@ -832,11 +850,13 @@ class MaticSlamPoseView(HomeAssistantView):
                 status=HTTPStatus.NOT_FOUND, headers=PRIVATE_NO_STORE_HEADERS
             )
         epoch = self._epochs.get(entry_id, 0)
+        frame_key = _pose_frame_key(runtime)
         cached = self._cache.get(entry_id)
         now = monotonic()
         if (
             cached is None
             or cached.runtime_id != id(runtime)
+            or cached.frame_key != frame_key
             or now - cached.fetched_at >= POSE_CACHE_SECONDS
         ):
             lock = self._locks.setdefault(entry_id, asyncio.Lock())
@@ -846,11 +866,14 @@ class MaticSlamPoseView(HomeAssistantView):
                         status=HTTPStatus.NOT_FOUND,
                         headers=PRIVATE_NO_STORE_HEADERS,
                     )
+                if _pose_frame_key(runtime) != frame_key:
+                    return self._unavailable_frame(runtime)
                 cached = self._cache.get(entry_id)
                 now = monotonic()
                 if (
                     cached is None
                     or cached.runtime_id != id(runtime)
+                    or cached.frame_key != frame_key
                     or now - cached.fetched_at >= POSE_CACHE_SECONDS
                 ):
                     pose: RobotPose | None
@@ -868,6 +891,8 @@ class MaticSlamPoseView(HomeAssistantView):
                             status=HTTPStatus.NOT_FOUND,
                             headers=PRIVATE_NO_STORE_HEADERS,
                         )
+                    if _pose_frame_key(runtime) != frame_key:
+                        return self._unavailable_frame(runtime)
                     previous_revision = (
                         cached.revision
                         if cached is not None and cached.runtime_id == id(runtime)
@@ -879,6 +904,7 @@ class MaticSlamPoseView(HomeAssistantView):
                         monotonic(),
                         previous_revision + 1,
                         freshness,
+                        frame_key,
                     )
                     self._cache[entry_id] = cached
         data = runtime.coordinator.data
@@ -909,6 +935,22 @@ class MaticSlamPoseView(HomeAssistantView):
                 "map_session_key": (
                     _map_session_key(runtime) if floor_plan_coherent else None
                 ),
+            },
+            headers=PRIVATE_NO_STORE_HEADERS,
+        )
+
+    def _unavailable_frame(self, runtime: MaticRuntimeData) -> web.Response:
+        """Clear a previously displayed marker after a coordinate-frame revocation."""
+        return self.json(
+            {
+                "position": None,
+                "source": "unavailable",
+                "revision": runtime.slam_map.revision,
+                "map_floor_coherent": False,
+                "pose_revision": 0,
+                "pose_age_seconds": 0.0,
+                "pose_freshness": "coordinator_fallback",
+                "map_session_key": None,
             },
             headers=PRIVATE_NO_STORE_HEADERS,
         )

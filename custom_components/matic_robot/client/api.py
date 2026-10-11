@@ -1012,7 +1012,11 @@ class MaticHermesClient(AbstractAsyncContextManager["MaticHermesClient"]):
                 raise CannotConnectError("Hermes property exceeds its value byte limit")
             self._endpoint_health[name] = "ok"
             return value
-        except (AuthenticationRequiredError, CannotConnectError) as err:
+        except (
+            AuthenticationRequiredError,
+            CannotConnectError,
+            EndpointUnsupportedError,
+        ) as err:
             self._endpoint_health[name] = type(err).__name__
             return None
 
@@ -1022,7 +1026,11 @@ class MaticHermesClient(AbstractAsyncContextManager["MaticHermesClient"]):
             value = await self.async_get_collection_count(name)
             self._endpoint_health[name] = "ok"
             return value
-        except (AuthenticationRequiredError, CannotConnectError) as err:
+        except (
+            AuthenticationRequiredError,
+            CannotConnectError,
+            EndpointUnsupportedError,
+        ) as err:
             self._endpoint_health[name] = type(err).__name__
             return None
 
@@ -1040,7 +1048,11 @@ class MaticHermesClient(AbstractAsyncContextManager["MaticHermesClient"]):
                 value = await self.async_get_collection_entries(name, limit=limit)
             self._endpoint_health[name] = "ok"
             return value
-        except (AuthenticationRequiredError, CannotConnectError) as err:
+        except (
+            AuthenticationRequiredError,
+            CannotConnectError,
+            EndpointUnsupportedError,
+        ) as err:
             self._endpoint_health[name] = type(err).__name__
             return None
 

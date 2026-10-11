@@ -596,7 +596,7 @@ async def test_floor_watcher_revokes_verified_map_after_same_mission_signature_c
     assert coordinator._displayed_floor_mission_id == 42
     assert coordinator._displayed_floor_signature == (new_floor,)
     assert coordinator._verified_floor_mission_id is None
-    assert coordinator._floor_read_generation == generation + 1
+    assert coordinator.floor_read_generation == generation + 1
     assert coordinator.data.floor_plan is None
     coordinator.async_request_refresh.assert_awaited_once_with()
 
@@ -738,7 +738,7 @@ async def test_repeated_displayed_mission_revokes_conflicting_verified_read(
 
     assert coordinator._verified_floor_mission_id is None
     assert coordinator.expected_floor_mission_id == 42
-    assert coordinator._floor_read_generation == generation + 1
+    assert coordinator.floor_read_generation == generation + 1
     coordinator.async_request_refresh.assert_awaited_once_with()
     release_read.set()
 

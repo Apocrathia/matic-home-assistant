@@ -2675,3 +2675,35 @@ def test_client_retirement_is_distinct_from_reusable_close() -> None:
     assert not client.retired
     client.retire()
     assert client.retired
+
+
+async def test_unsupported_optional_endpoints_preserve_other_telemetry() -> None:
+    client = MaticHermesClient("robot.invalid", 16320)
+
+    async def property_value(name):
+        if name == "wifi_status":
+            raise EndpointUnsupportedError("synthetic unsupported")
+        return b""
+
+    client.async_get_property = AsyncMock(side_effect=property_value)
+    client.async_get_collection_count = AsyncMock(return_value=7)
+    client.async_get_collection_entries = AsyncMock(return_value=())
+    client.async_get_tracked_collection_entries = AsyncMock(return_value=())
+    telemetry = await client.async_get_telemetry()
+    assert telemetry.wifi_state is None
+    assert telemetry.dock_detections == 7
+    assert telemetry.sink_summon_locations == 7
+    assert client.endpoint_health["wifi_status"] == "EndpointUnsupportedError"
+
+
+async def test_optional_unsupported_collection_readers_are_isolated() -> None:
+    client = MaticHermesClient("robot.invalid", 16320)
+    client.async_get_collection_count = AsyncMock(
+        side_effect=EndpointUnsupportedError("synthetic unsupported")
+    )
+    client.async_get_collection_entries = AsyncMock(
+        side_effect=EndpointUnsupportedError("synthetic unsupported")
+    )
+    assert await client._async_optional_collection_count("optional") is None
+    assert await client._async_optional_collection("optional", limit=1) is None
+    assert client.endpoint_health["optional"] == "EndpointUnsupportedError"

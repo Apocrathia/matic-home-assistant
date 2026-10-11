@@ -15,6 +15,7 @@ from dbus_fast.annotations import DBusSignature
 from dbus_fast.service import ServiceInterface, method
 
 from .bluetooth_pairing import (
+    BluetoothAdapterUnavailableError,
     BluetoothPairingResetError,
     BluetoothPasskeyCancelledError,
 )
@@ -156,9 +157,24 @@ class MaticPairingAgent(ServiceInterface):
 class BlueZPairingSession:
     """Pair a device through the connection that owns its scoped agent."""
 
-    def __init__(self, bus: MessageBus) -> None:
+    def __init__(self, bus: MessageBus, *, default_agent_ready: bool = True) -> None:
         self._bus = bus
+        self._default_agent_ready = default_agent_ready
         self.reused_existing_bond = False
+
+    async def async_require_connection_agent(self, device_path: str | None) -> None:
+        """Require the scoped agent for robot-initiated security on connection."""
+        if self._default_agent_ready:
+            return
+        if device_path is not None and await self._async_is_paired(device_path):
+            return
+        # Explicit Device1.Pair uses this bus's registered agent. Matic can
+        # initiate security before that call, during the separate GATT
+        # connection, which requires the scoped default agent or an existing
+        # verified bond. Do not connect an unbonded robot with another agent.
+        raise BluetoothAdapterUnavailableError(
+            "The scoped Bluetooth pairing agent is unavailable for connection"
+        )
 
     async def _async_is_paired(self, device_path: str) -> bool:
         """Return BlueZ's current Device1.Paired state for the device."""
@@ -257,6 +273,7 @@ async def async_bluez_pairing_agent(
     ).connect()
     bus.export(_AGENT_PATH, MaticPairingAgent(address, passkey_exchange))
     registered = False
+    default_agent_ready = False
     try:
         try:
             reply = await bus.call(
@@ -282,10 +299,15 @@ async def async_bluez_pairing_agent(
                 )
             )
             assert_reply(reply)
+            default_agent_ready = True
             _LOGGER.debug("Registered a temporary BlueZ pairing agent")
         except Exception:
             _LOGGER.debug("Could not register the BlueZ pairing agent", exc_info=True)
-        yield BlueZPairingSession(bus) if registered else None
+        yield (
+            BlueZPairingSession(bus, default_agent_ready=default_agent_ready)
+            if registered
+            else None
+        )
     finally:
         if passkey_exchange is not None and passkey_exchange.requested:
             passkey_exchange.cancel()

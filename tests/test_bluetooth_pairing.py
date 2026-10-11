@@ -54,7 +54,9 @@ async def test_stale_bond_recovery_is_scoped_and_bounded(
     other = SimpleNamespace(device=SimpleNamespace(address=OTHER_ADDRESS))
     discover = AsyncMock(return_value=[candidate, other])
     monkeypatch.setattr(bluetooth_pairing, "_async_matic_discoveries", discover)
-    session = SimpleNamespace(reused_existing_bond=True)
+    session = SimpleNamespace(
+        reused_existing_bond=True, async_require_connection_agent=AsyncMock()
+    )
 
     async def remove(device_path):
         assert device_path == path
@@ -145,6 +147,7 @@ async def test_unrelated_protocol_errors_do_not_reset_bonds(
     monkeypatch, code, reused, budget, native
 ) -> None:
     session = SimpleNamespace(
+        async_require_connection_agent=AsyncMock(),
         reused_existing_bond=reused,
         async_pair=AsyncMock(),
         async_remove_bond=AsyncMock(),
@@ -228,6 +231,7 @@ async def test_multiple_robots_require_selection_only_if_all_fail(
     @asynccontextmanager
     async def agent(*args):
         session = SimpleNamespace(
+            async_require_connection_agent=AsyncMock(),
             reused_existing_bond=True,
             async_pair=AsyncMock(),
             async_remove_bond=AsyncMock(),
@@ -545,9 +549,10 @@ async def test_requests_and_validates_bluetooth_credential(monkeypatch) -> None:
     pairing_agent_addresses = []
     pairing_events = []
     pairing_session = SimpleNamespace(
+        async_require_connection_agent=AsyncMock(),
         async_pair=AsyncMock(
             side_effect=lambda _path, **_kwargs: pairing_events.append("pair")
-        )
+        ),
     )
     monkeypatch.setattr(bluetooth_pairing.sys, "platform", "linux")
 
@@ -1293,3 +1298,37 @@ async def test_missing_token_characteristic_clears_stale_service_cache(
         )
 
     client.clear_cache.assert_awaited_once()
+
+
+async def test_missing_connection_agent_blocks_gatt_connection(monkeypatch):
+    guard = AsyncMock(
+        side_effect=BluetoothAdapterUnavailableError("scoped agent unavailable")
+    )
+    session = SimpleNamespace(async_require_connection_agent=guard)
+
+    @asynccontextmanager
+    async def agent(*args):
+        yield session
+
+    monkeypatch.setattr(bluetooth_pairing, "_async_bluez_pairing_agent", agent)
+    monkeypatch.setattr(
+        bluetooth_pairing,
+        "_async_matic_discoveries",
+        AsyncMock(
+            return_value=[
+                SimpleNamespace(
+                    device=SimpleNamespace(
+                        address=TEST_ADDRESS,
+                        details={"path": "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF"},
+                    )
+                )
+            ]
+        ),
+    )
+    connection = AsyncMock()
+    monkeypatch.setattr(bluetooth_pairing, "establish_connection", connection)
+    with pytest.raises(BluetoothAdapterUnavailableError, match="scoped"):
+        await async_request_bluetooth_credential(
+            object(), "40dd38c5-0492-49de-b333-41f16f67471e"
+        )
+    connection.assert_not_awaited()

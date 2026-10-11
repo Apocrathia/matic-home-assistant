@@ -1,4 +1,4 @@
-# RC22 root runtime-class qualification
+# RC22 source and runtime qualification
 
 October 11, 2026, Pacific time.
 
@@ -24,9 +24,22 @@ function names, object representations, exception text, values or absolute paths
 The [RC21 scope and exclusions](verification-0.5-rc21.md) remain binding; this is
 not whole-process attestation.
 
+## Independent source review
+
+A complete review of the handwritten integration/client Python, Map Studio
+TypeScript, icon provider, metadata, translations, automation blueprints and
+build route covered the frozen initial candidate `c8d266834f5e0c86f71dedd10f7965827bd0c034`.
+Generated protobufs and compiled bundles were excluded from manual source scope;
+packaging and generated-bundle parity remain automated gates. The review found
+no P0/P1 issues and seven P2 issues. [The repair record](review-0.5-product.md)
+tracks their source evidence and re-review. All changed shards passed complete
+re-review with no unresolved finding; the typed revoked-pose response also
+cleared the existing marker in Chromium and WebKit. This does not qualify runtime,
+physical, device, performance or owner acceptance.
+
 ## Qualification scope
 
-The full local suite passes 4,465 tests with 100% coverage of 18,041 statements;
+The full local suite passes 4,498 tests with 100% coverage of 18,075 statements;
 Ruff, formatting, strict mypy and privacy checks pass. Regular review and hosted
 CI apply before merge.
 RC22 installation and a fresh actual in-process identity verdict apply afterward.
