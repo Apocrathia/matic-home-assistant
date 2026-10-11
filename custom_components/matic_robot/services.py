@@ -1006,9 +1006,9 @@ async def async_register_services(hass: HomeAssistant) -> None:
         will_dispatch = False
         async with manager.external_command(serial_number):
             run_id = manager.active_run_id(serial_number)
-            if (
-                "expected_run_id" in call.data
-                and call.data["expected_run_id"] != run_id
+            if "expected_run_id" in call.data and (
+                call.data["expected_run_id"] != run_id
+                or manager.cancellation_reason(serial_number) == "motion_replaced"
             ):
                 raise _validation_error(
                     "The managed cleaning run has changed; Stop was not sent",

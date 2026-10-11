@@ -17,10 +17,11 @@ after persistence before dispatch. Return Home also rechecks the generation
 after replacement persistence. An optional `expected_run_id` rejects stale
 observer requests before any Stop mutation, including unmanaged fallback.
 
-Six new regression cases cover replacement during both persistence waits and
-stale/absent run matches. The checkpoint and mismatch cases failed on RC18;
+Seven new regression cases cover replacement during both persistence waits and
+stale/absent run matches, including a direct replacement while the old run
+still appears running. The checkpoint and mismatch cases failed on RC18;
 the second persistence regression also failed before its dispatch recheck.
-The repaired suite passes 4,382 tests with 100% coverage of 17,738 statements.
+The repaired suite passes 4,383 tests with 100% coverage of 17,738 statements.
 Ruff, formatting, strict types and the public-tree privacy check pass.
 Release metadata is aligned with RC19; release packaging checks are separate.
 Required complete regular review and hosted checks still apply to the final head.

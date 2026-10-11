@@ -6402,7 +6402,7 @@ async def test_stop_checkpoint_does_not_target_replacement_run(
     schedule_dock.assert_not_called()
 
 
-@pytest.mark.parametrize("active_run", [None, "replacement-run"])
+@pytest.mark.parametrize("active_run", [None, "replacement-run", "motion-replaced"])
 async def test_stop_expected_run_mismatch_has_no_effect(hass, active_run) -> None:
     """A stale observer cannot Stop a newer run or unmanaged cleaning."""
     manager = CleaningPlanManager(hass)
@@ -6411,11 +6411,19 @@ async def test_stop_expected_run_mismatch_has_no_effect(hass, active_run) -> Non
         await manager.async_begin_run(
             "serial",
             "plan",
-            active_run,
+            "old-run" if active_run == "motion-replaced" else active_run,
             1,
             trigger="user",
             service="run_selected_plan",
         )
+    lock = None
+    if active_run == "motion-replaced":
+        lock = manager.lock("serial")
+        await lock.acquire()
+        manager.begin_managed_motion("serial")
+        await manager.async_replace_managed_motion("serial")
+        assert manager.active_run_id("serial") == "old-run"
+        assert manager.cancellation_reason("serial") == "motion_replaced"
     services = await _registered_services(hass, manager)
     from tests.test_entities import _entry as entity_entry
 
@@ -6430,22 +6438,26 @@ async def test_stop_expected_run_mismatch_has_no_effect(hass, active_run) -> Non
             "include_unmanaged": True,
         },
     )
-    generation = manager.motion_generation("serial")
-    with (
-        patch(
-            "custom_components.matic_robot.services._saved_plan_context",
-            return_value=("vacuum.test", entry, "serial", {}),
-        ),
-        patch.object(
-            manager, "request_stop", wraps=manager.request_stop
-        ) as request_stop,
-        patch.object(
-            manager, "async_checkpoint_stop_intent", new_callable=AsyncMock
-        ) as checkpoint,
-        pytest.raises(ServiceValidationError, match="run has changed"),
-    ):
-        await _registered_handler(services, "stop_intelligent_cleaning")(stop)
-    request_stop.assert_not_called()
-    checkpoint.assert_not_awaited()
-    services.async_call.assert_not_awaited()
-    assert manager.motion_generation("serial") == generation
+    try:
+        generation = manager.motion_generation("serial")
+        with (
+            patch(
+                "custom_components.matic_robot.services._saved_plan_context",
+                return_value=("vacuum.test", entry, "serial", {}),
+            ),
+            patch.object(
+                manager, "request_stop", wraps=manager.request_stop
+            ) as request_stop,
+            patch.object(
+                manager, "async_checkpoint_stop_intent", new_callable=AsyncMock
+            ) as checkpoint,
+            pytest.raises(ServiceValidationError, match="run has changed"),
+        ):
+            await _registered_handler(services, "stop_intelligent_cleaning")(stop)
+        request_stop.assert_not_called()
+        checkpoint.assert_not_awaited()
+        services.async_call.assert_not_awaited()
+        assert manager.motion_generation("serial") == generation
+    finally:
+        if lock is not None and lock.locked():
+            lock.release()
