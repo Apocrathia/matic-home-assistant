@@ -1,6 +1,6 @@
 # Final 0.5 candidate acceptance
 
-Historical installed evidence below was reconciled October 8, 2026, Pacific time. [Current RC19 source qualification and prior installed evidence](verification-0.5-rc19.md) track the later candidate; device, cadence and owner gates remain separate.
+Historical installed evidence below was reconciled October 8, 2026, Pacific time. [Current RC20 alert qualification and RC19 installed/active Stop evidence](verification-0.5-rc20.md) track the later candidates; device, cadence and owner gates remain separate.
 
 ## Composition and review
 

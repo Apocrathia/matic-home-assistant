@@ -35,8 +35,9 @@ then select the robot, its Firmware compatibility sensor and your Companion app
 notification action. Replace an older firmware alert automation to avoid two
 independent notification senders. Use a unique notification identifier per HA server.
 
-Discovery notifications are passive on iOS. Repeated read failures use normal
-attention. Notifications include **View details**, **Check again**, and
+Unverified field observations stay quiet. Notifications cover repeated read
+failures, their recovery, and completed actionable research. Passive research
+notifications stay quiet on iOS; repeated read failures use normal attention. Notifications include **View details**, **Check again**, and
 **Acknowledge**. Recheck requests respect a 15-minute scan floor. Old notification
 buttons cannot act on a newer report. Research is displayed as untrusted text.
 
@@ -44,7 +45,8 @@ Home Assistant saves pending delivery before emitting a report hint. The
 blueprint reconciles after restart and every 30 minutes; it marks a revision
 delivered only after both notification services accept it. Stable IDs replace
 existing notifications on retry. Service acceptance is not proof a phone showed
-the push; acknowledgement is tracked separately. Unchanged findings stay quiet.
+the push; acknowledgement is tracked separately. Each actionable transition has its own durable revision; unrelated observations
+do not replay a delivered or acknowledged warning. Unchanged findings stay quiet.
 
 ## Choose or switch the investigator
 
