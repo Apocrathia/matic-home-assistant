@@ -71,3 +71,8 @@ user-visible changes. Keep test logs and development diaries out of user docs.
 
 If a candidate fails, fix it and publish the next candidate. Group related fixes
 into one release.
+
+Keep only the current RC in the public release/tag list. After publishing a new
+RC, remove superseded RC GitHub releases and remote/local tags. Record prior
+reviewed commit IDs in qualification receipts and preserve rollback copies. When
+publishing stable, retire its RC release/tag; keep stable releases and tags.
