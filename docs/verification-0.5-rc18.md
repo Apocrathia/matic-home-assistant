@@ -3,7 +3,8 @@
 October 10, 2026, Pacific time. RC18 corrects the plan picker's one-room wording
 and advances release metadata. Robot execution code is unchanged from RC17.
 The regenerated frontend passes TypeScript and 16 focused Chromium/WebKit
-picker checks; 34 release-metadata/public-tree tests and the privacy check pass.
+picker checks; all 61 release-metadata/packaging/public-tree tests and the privacy
+check pass. The pinned packaging expectation is aligned with RC18.
 
 ## Qualified RC17 scope
 
