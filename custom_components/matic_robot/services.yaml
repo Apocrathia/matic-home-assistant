@@ -111,6 +111,9 @@ preview_plan:
 stop_intelligent_cleaning:
   target: *vacuum_target
   fields:
+    expected_run_id:
+      selector:
+        text:
     include_unmanaged:
       default: false
       selector:

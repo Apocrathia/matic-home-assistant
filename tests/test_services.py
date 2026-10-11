@@ -6264,3 +6264,200 @@ async def test_firmware_reports_replay_waits_for_home_assistant_started(hass):
     await hass.async_block_till_done()
     tracker.replay_reports.assert_called_once_with()
     assert callback_threads == [loop_thread]
+
+
+@pytest.mark.parametrize("route", ["service", "vacuum"])
+@pytest.mark.parametrize("wait_stage", ["checkpoint", "replacement"])
+async def test_stop_checkpoint_does_not_target_replacement_run(
+    hass, route, wait_stage
+) -> None:
+    """Replacing the owner during persistence cannot inherit a pending Stop."""
+    from custom_components.matic_robot import vacuum as vacuum_platform
+    from tests.test_entities import _entry as entity_entry
+
+    serial = "synthetic-serial"
+    manager = CleaningPlanManager(hass)
+    manager._store = SimpleNamespace(async_save=AsyncMock())
+    entry = entity_entry()
+    entry.runtime_data.cleaning_plans = manager
+    entity = vacuum_platform.MaticVacuum(entry)
+    entity.hass = hass
+    entity.entity_id = "vacuum.test"
+    await manager.async_begin_run(
+        serial,
+        "plan",
+        "old-run",
+        1,
+        trigger="user",
+        service="run_selected_plan",
+        finish_current_room=False,
+    )
+    await manager.async_set_recovery_checkpoint(
+        serial, "old-run", {"phase": "accepted"}
+    )
+    await manager.async_mark_started(
+        serial,
+        "plan",
+        CleaningRoom("room-2", "Study", "vacuum", "quick"),
+        run_id="old-run",
+    )
+    lock = manager.lock(serial)
+    await lock.acquire()
+    manager.begin_managed_motion(serial)
+    checkpoint = manager.async_checkpoint_stop_intent
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def delayed_checkpoint(*args, **kwargs):
+        if wait_stage == "checkpoint":
+            entered.set()
+            await release.wait()
+        await checkpoint(*args, **kwargs)
+
+    persist_replacement = manager._async_persist_reconciliation_removal
+
+    async def delayed_replacement(*args, **kwargs):
+        if wait_stage == "replacement":
+            entered.set()
+            await release.wait()
+        await persist_replacement(*args, **kwargs)
+
+    manager._async_persist_reconciliation_removal = delayed_replacement
+
+    services = await _registered_services(hass, manager)
+
+    async def return_to_base(*_args, **_kwargs):
+        await asyncio.create_task(entity.async_return_to_base())
+
+    services.async_call.side_effect = return_to_base
+    manager.async_checkpoint_stop_intent = delayed_checkpoint
+    stop = ServiceCall(
+        hass,
+        DOMAIN,
+        "stop_intelligent_cleaning",
+        {"entity_id": ["vacuum.test"], "expected_run_id": "old-run"},
+    )
+    with (
+        patch.object(entity, "_schedule_dock_after_stop") as schedule_dock,
+        patch(
+            "custom_components.matic_robot.services._saved_plan_context",
+            return_value=("vacuum.test", entry, serial, {}),
+        ),
+    ):
+        task = asyncio.create_task(
+            _registered_handler(services, "stop_intelligent_cleaning")(stop)
+            if route == "service"
+            else entity.async_stop()
+        )
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=1)
+            assert await manager.async_finish_run(
+                serial,
+                "old-run",
+                "cancelled",
+                "managed_stop",
+                0,
+            )
+            lock.release()
+            await lock.acquire()
+            manager.prepare_run(serial)
+            replacement_generation = manager.begin_managed_motion(serial)
+            await manager.async_begin_run(
+                serial,
+                "plan",
+                "new-run",
+                1,
+                trigger="user",
+                service="run_selected_plan",
+                finish_current_room=False,
+            )
+            await manager.async_set_recovery_checkpoint(
+                serial, "new-run", {"phase": "accepted"}
+            )
+            await manager.async_mark_started(
+                serial,
+                "plan",
+                CleaningRoom("room-2", "Study", "vacuum", "quick"),
+                run_id="new-run",
+            )
+            release.set()
+            if wait_stage == "replacement":
+                with pytest.raises(ServiceValidationError, match="superseded"):
+                    await task
+            else:
+                await task
+        finally:
+            release.set()
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            if lock.locked():
+                lock.release()
+
+    assert manager.active_run_id(serial) == "new-run"
+    assert manager.managed_motion_is_current(serial, replacement_generation)
+    assert not manager.cancellation_event(serial).is_set()
+    assert "stop_intent" not in manager.recovery_run(serial)["recovery_checkpoint"]
+    entry.runtime_data.coordinator.client.async_send_user_command.assert_not_awaited()
+    schedule_dock.assert_not_called()
+
+
+@pytest.mark.parametrize("active_run", [None, "replacement-run", "motion-replaced"])
+async def test_stop_expected_run_mismatch_has_no_effect(hass, active_run) -> None:
+    """A stale observer cannot Stop a newer run or unmanaged cleaning."""
+    manager = CleaningPlanManager(hass)
+    manager._store = SimpleNamespace(async_save=AsyncMock())
+    if active_run:
+        await manager.async_begin_run(
+            "serial",
+            "plan",
+            "old-run" if active_run == "motion-replaced" else active_run,
+            1,
+            trigger="user",
+            service="run_selected_plan",
+        )
+    lock = None
+    if active_run == "motion-replaced":
+        lock = manager.lock("serial")
+        await lock.acquire()
+        manager.begin_managed_motion("serial")
+        await manager.async_replace_managed_motion("serial")
+        assert manager.active_run_id("serial") == "old-run"
+        assert manager.cancellation_reason("serial") == "motion_replaced"
+    services = await _registered_services(hass, manager)
+    from tests.test_entities import _entry as entity_entry
+
+    entry = entity_entry()
+    stop = ServiceCall(
+        hass,
+        DOMAIN,
+        "stop_intelligent_cleaning",
+        {
+            "entity_id": ["vacuum.test"],
+            "expected_run_id": "old-run",
+            "include_unmanaged": True,
+        },
+    )
+    try:
+        generation = manager.motion_generation("serial")
+        with (
+            patch(
+                "custom_components.matic_robot.services._saved_plan_context",
+                return_value=("vacuum.test", entry, "serial", {}),
+            ),
+            patch.object(
+                manager, "request_stop", wraps=manager.request_stop
+            ) as request_stop,
+            patch.object(
+                manager, "async_checkpoint_stop_intent", new_callable=AsyncMock
+            ) as checkpoint,
+            pytest.raises(ServiceValidationError, match="run has changed"),
+        ):
+            await _registered_handler(services, "stop_intelligent_cleaning")(stop)
+        request_stop.assert_not_called()
+        checkpoint.assert_not_awaited()
+        services.async_call.assert_not_awaited()
+        assert manager.motion_generation("serial") == generation
+    finally:
+        if lock is not None and lock.locked():
+            lock.release()

@@ -446,14 +446,28 @@ class MaticVacuum(MaticEntity, StateVacuumEntity):
             active_run_id = getattr(self._plans, "active_run_id", None)
             run_id = active_run_id(serial_number) if callable(active_run_id) else None
             decision = self._plans.request_stop(serial_number)
-            await self._plans.async_checkpoint_stop_intent(
-                serial_number, decision.behavior
+            expected_generation = self._plans.motion_generation(serial_number)
+            expected_stop_generation = self._plans.stop_request_generation(
+                serial_number
             )
-            if decision.behavior == "after_room":
+            await self._plans.async_checkpoint_stop_intent(
+                serial_number, decision.behavior, run_id=run_id
+            )
+            if decision.behavior == "after_room" or (
+                self._plans.motion_generation(serial_number) != expected_generation
+                or self._plans.stop_request_generation(serial_number)
+                != expected_stop_generation
+            ):
                 return
-            self.coordinator.async_discard_current_room()
             with self._plans.managed_stop_dispatch(serial_number):
-                await self._plans.async_replace_managed_motion(serial_number)
+                generation = await self._plans.async_replace_managed_motion(
+                    serial_number
+                )
+            self._require_motion_generation(serial_number, generation)
+            self._require_stop_request_generation(
+                serial_number, expected_stop_generation
+            )
+            self.coordinator.async_discard_current_room()
             await self._async_dispatch_admitted_command(UserCommand.STOP, run_id=run_id)
         self._schedule_dock_after_stop(serial_number, run_id=run_id)
 
@@ -503,6 +517,7 @@ class MaticVacuum(MaticEntity, StateVacuumEntity):
                     )
                     self._require_motion_generation(serial_number, expected_generation)
                 return
+            self._require_motion_generation(serial_number, generation)
             self._require_stop_request_generation(
                 serial_number, stop_request_generation
             )
