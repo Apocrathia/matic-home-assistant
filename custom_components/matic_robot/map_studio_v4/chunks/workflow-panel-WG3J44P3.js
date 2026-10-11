@@ -208,7 +208,7 @@ line-height: var(--ms-lh-snug);
         ${(e.value?.plans||[]).map(s=>o`
           <button class="ms-row ms-row--card" type="button" @click=${()=>this.#t({type:"select-plan",planId:s.id})}>
             <span class="ms-row__body"><strong>${s.name}</strong>
-              <small>${this.#e("v4_plan_room_count","{count} rooms",{count:s.rooms.length})}${s.enabled?"":` \xB7 ${this.#e("v4_paused","paused")}`}</small>
+              <small>${s.rooms.length===1?this.#e("v4_plan_room_count_one","1 room"):this.#e("v4_plan_room_count","{count} rooms",{count:s.rooms.length})}${s.enabled?"":` \xB7 ${this.#e("v4_paused","paused")}`}</small>
             </span>
             <span class="ms-row__trail">${this.#e("v4_edit_plan","Edit plan")}</span>
           </button>

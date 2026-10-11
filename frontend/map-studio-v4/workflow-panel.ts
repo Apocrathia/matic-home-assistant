@@ -588,7 +588,9 @@ line-height: var(--ms-lh-snug);
         ${(resource.value?.plans || []).map((plan) => html`
           <button class="ms-row ms-row--card" type="button" @click=${() => this.#intent({ type: "select-plan", planId: plan.id })}>
             <span class="ms-row__body"><strong>${plan.name}</strong>
-              <small>${this.#t("v4_plan_room_count", "{count} rooms", { count: plan.rooms.length })}${plan.enabled ? "" : ` · ${this.#t("v4_paused", "paused")}`}</small>
+              <small>${plan.rooms.length === 1
+                ? this.#t("v4_plan_room_count_one", "1 room")
+                : this.#t("v4_plan_room_count", "{count} rooms", { count: plan.rooms.length })}${plan.enabled ? "" : ` · ${this.#t("v4_paused", "paused")}`}</small>
             </span>
             <span class="ms-row__trail">${this.#t("v4_edit_plan", "Edit plan")}</span>
           </button>

@@ -372,6 +372,7 @@
     "v4_edit_plan": "Edit plan",
     "v4_back_to_plans": "Back to plans",
     "v4_plan_room_count": "{count} rooms",
+    "v4_plan_room_count_one": "1 room",
     "v4_create_plan": "Create a plan",
     "v4_custom_areas": "Clean a custom area",
     "v4_room_colours": "Floor plan",
