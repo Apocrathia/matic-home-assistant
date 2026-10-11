@@ -9,8 +9,8 @@ Historical RC5 receipt: `v0.5.0-rc5` at `699a1bb` was installed through HACS. It
 
 ## Review-process migration — 2026-10-06
 
-October 11 reconciliation: [RC21 qualification](verification-0.5-rc21.md) records
-the runtime-code scope, RC20 alert installation and scoped RC19 active Stop evidence; the [final-candidate receipt](verification-0.5-final-candidate.md)
+October 11 reconciliation: [RC22 qualification](verification-0.5-rc22.md) records
+the runtime identity repair, RC21 installation and scoped RC19 active Stop evidence; the [final-candidate receipt](verification-0.5-final-candidate.md)
 retains installed RC16 and earlier evidence. PR #138 is merged; its old hold is retired. The
 owner has also retired the request coordinator. Complete exact-head regular
 review and CI remain required. The owner authorized bounded physical acceptance
