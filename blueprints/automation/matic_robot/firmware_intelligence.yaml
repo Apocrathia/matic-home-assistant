@@ -2,10 +2,10 @@ blueprint:
   name: 'Matic: Send firmware alerts'
   description: >-
     Sends a phone notification when the robot's firmware checks keep failing,
-    when they recover and when firmware research finishes, with buttons to
-    check again or acknowledge. Notifications that were not delivered are sent
-    after Home Assistant restarts, and the action Advanced: Choose firmware
-    investigator sets who researches.
+    when they recover and when firmware research finds something to act on,
+    with buttons to check again or acknowledge. Notifications that were not
+    delivered are sent after Home Assistant restarts, and the action Advanced:
+    Choose firmware investigator sets who researches.
   domain: automation
   source_url: https://github.com/ProspectOre/matic-home-assistant/blob/main/blueprints/automation/matic_robot/firmware_intelligence.yaml
   input:
