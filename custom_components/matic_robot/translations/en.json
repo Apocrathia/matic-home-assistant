@@ -1123,7 +1123,7 @@
   "issues": {
     "firmware_regression": {
       "title": "Matic firmware checks need attention",
-      "description": "Home Assistant repeatedly could not read some robot data on firmware {current} ({count} checks failing), and the saved comparison is from firmware version {previous}. A read failure does not prove a firmware problem, so open the Firmware check status sensor to see which checks failed and whether the robot has recovered."
+      "description": "Home Assistant repeatedly could not read some robot data on firmware {current} (failing checks: {count}), and the saved comparison is from firmware version {previous}. A read failure does not prove a firmware problem, so open the Firmware check status sensor to see which checks failed and whether the robot has recovered."
     },
     "robot_identity_changed": {
       "title": "Can't confirm this is your robot",

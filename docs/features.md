@@ -8,7 +8,7 @@ These are the integration's main additions:
 | Feature | What you can do |
 | --- | --- |
 | Intelligent rotation | Give rooms that have waited longest the first cleaning opportunity on your next run. |
-| Per-room plans | Save a room order with individual vacuum/mop modes and coverage settings; preview the next run. |
+| Per-room plans | Save a room order with individual cleaning modes and vacuum coverage; preview the next run. |
 | Live map updates (0.5 development) | Use **Configure → Live map updates** to opt in for this robot, or turn it off to return to periodic updates. Experimental and off by default; installed recovery and resource qualification remain open. |
 | Room schedules (0.5 development) | Configure private/shared periodic mopping and vacuum rotation plus tracked one-time room cleans. A vacuum rotation requires matching native dispatch and completion receipts; missing setting evidence keeps it due. [Guide](room-schedules.md). |
 | Finish-current-room stopping | Stop immediately or finish the active room when its estimated progress reaches your chosen threshold. |
