@@ -485,7 +485,7 @@ def test_user_copy_matches_pairing_and_plan_behavior() -> None:
         assert "payload-free compatibility record" in firmware_snapshot
         assert "value-free wire-shape changes" in firmware_snapshot
         assert (
-            "Open the Firmware compatibility sensor"
+            "so open the Firmware compatibility sensor"
             in translations["issues"]["firmware_regression"]["description"]
         )
 
