@@ -274,15 +274,6 @@ def test_every_options_flow_field_has_inline_guidance() -> None:
             ), f"{filename}: {step_name}"
 
 
-def test_options_use_clear_scheduler_language() -> None:
-    """Keep room selection direct and the intelligent behavior understandable."""
-    forbidden = ("profile", "mission", "section", "round-robin")
-    for filename in ("strings.json", "translations/en.json"):
-        translations = json.loads((INTEGRATION / filename).read_text())
-        rendered = json.dumps(translations["options"]).casefold()
-        assert all(term not in rendered for term in forbidden)
-
-
 # docs/copy-style-0.5.md denylist table, verbatim
 _DENYLIST = tuple(
     "mission|leg|dock visit|generation|profile|section|round-robin|session|managed"
@@ -322,8 +313,15 @@ def _common(*modules: str) -> Copy:
         yield f"common.{key}", common[key]
 
 
+def _strings() -> dict:
+    return json.loads((INTEGRATION / "strings.json").read_text())
+
+
 _COPY_SURFACES: dict[str, Callable[[], Copy]] = {
     "strings:common": _common,
+    "strings:config": lambda: _texts(_strings()["config"], "config"),
+    "strings:options": lambda: _texts(_strings()["options"], "options"),
+    "strings:issues": lambda: _texts(_strings()["issues"], "issues"),
 }
 
 
@@ -361,7 +359,7 @@ def test_options_flow_directs_editing_to_the_single_map_workspace() -> None:
             "confirm_reset_history",
             "workspace_transport",
         }
-        assert "Map Studio at /matic-map" in steps["init"]["description"]
+        assert "[Matic Map](/matic-map)" in steps["init"]["description"]
         assert "actions that do not name a plan" in steps["default_plan"]["description"]
         assert "{plan_name}" in steps["confirm_reset_history"]["description"]
         assert (
@@ -404,7 +402,7 @@ def test_user_copy_matches_pairing_and_plan_behavior() -> None:
         assert "without a new code" not in pairing
 
         options = translations["options"]
-        assert "choose the default plan" in options["step"]["init"]["description"]
+        assert "Choosing a default plan" in options["step"]["init"]["description"]
         assert (
             "Reset history for every plan"
             == options["step"]["confirm_reset_history"]["data"]["all_plans"]
