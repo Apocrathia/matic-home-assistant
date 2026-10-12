@@ -361,6 +361,26 @@ def _blueprints() -> Copy:
                 yield found_path, text
 
 
+def _llm() -> Copy:
+    tree = ast.parse((INTEGRATION / "llm.py").read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+            getattr(t, "id", "") in {"LLM_API_NAME", "_ADMIN_ERROR", "description"}
+            for t in node.targets
+        ):
+            yield f"llm:{node.lineno}", ast.literal_eval(node.value)
+        elif isinstance(node, ast.keyword) and node.arg == "api_prompt":
+            yield f"llm:{node.value.lineno}", ast.literal_eval(node.value)
+        elif (
+            isinstance(node, ast.Call)
+            and getattr(node.func, "id", "") == "HomeAssistantError"
+        ):
+            for arg in node.args:
+                for part in ast.walk(arg):
+                    if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                        yield f"llm:{part.lineno}", part.value
+
+
 _COPY_SURFACES: dict[str, Callable[[], Copy]] = {
     "strings:common": _common,
     "strings:config": lambda: _texts(_strings()["config"], "config"),
@@ -368,9 +388,11 @@ _COPY_SURFACES: dict[str, Callable[[], Copy]] = {
     "strings:issues": lambda: _texts(_strings()["issues"], "issues"),
     "strings:entity": lambda: _texts(_strings()["entity"], "entity"),
     "strings:selector": lambda: _texts(_strings()["selector"], "selector"),
+    "strings:exceptions": lambda: _texts(_strings()["exceptions"], "exceptions"),
     "strings:services": _services,
     "services.yaml": _services_yaml,
     "blueprints": _blueprints,
+    "llm": _llm,
 }
 
 
@@ -402,6 +424,64 @@ def test_blueprint_scanner_reads_every_blueprint() -> None:
             key for key, spec in meta["input"].items() if "description" not in spec
         ]
         assert missing == [], f"{blueprint.name}: {missing}"
+
+
+def _raised_keys() -> Iterator[tuple[str, int, str, frozenset[str] | None]]:
+    """Literal exception keys at every *Error(...) / _validation_error(...) call."""
+    for path in sorted(INTEGRATION.rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text())):
+            name = getattr(node, "func", None) and (
+                getattr(node.func, "id", None) or getattr(node.func, "attr", "")
+            )
+            if not isinstance(node, ast.Call) or not (
+                name.endswith("Error") or name == "_validation_error"
+            ):
+                continue
+            words = {k.arg: k.value for k in node.keywords}
+            if name == "_validation_error" and len(node.args) >= 2:
+                key, holders = (
+                    node.args[1],
+                    node.args[2] if len(node.args) > 2 else words.get("placeholders"),
+                )
+            else:
+                key, holders = (
+                    words.get("translation_key"),
+                    words.get("translation_placeholders"),
+                )
+            # Dynamic keys (err.reason_code) are covered by their enum test.
+            if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+                continue
+            supplied = (
+                frozenset(k.value for k in holders.keys if isinstance(k, ast.Constant))
+                if isinstance(holders, ast.Dict)
+                else frozenset()
+                if holders is None
+                else None
+            )
+            yield path.name, node.lineno, key.value, supplied
+
+
+def test_every_raised_exception_key_exists_with_its_placeholders() -> None:
+    exceptions = _strings()["exceptions"]
+    for file, line, key, supplied in _raised_keys():
+        assert key in exceptions, f"{file}:{line} {key}"
+        needed = frozenset(re.findall(r"\{([a-z_]+)\}", exceptions[key]["message"]))
+        assert supplied is None or needed <= supplied, (
+            f"{file}:{line} {key} lacks {sorted(needed - supplied)}"
+        )
+
+
+def test_coverage_guard_text_matches_everywhere() -> None:
+    from custom_components.matic_robot.client.exceptions import _COVERAGE_GUARD_MESSAGES
+
+    effects = (ROOT / "frontend/map-studio-v4/effects.ts").read_text()
+    for reason, text in _COVERAGE_GUARD_MESSAGES.items():
+        assert _strings()["exceptions"][reason.value]["message"] == text
+        assert re.search(
+            rf'{reason.value}: notice\("error", "v4_notice_coverage_\w+", '
+            rf'"{re.escape(text)}"',
+            effects,
+        )
 
 
 def test_advanced_actions_are_exactly_the_four_named() -> None:

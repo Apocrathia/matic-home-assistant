@@ -307,16 +307,16 @@ async def test_api_registration_event_capture_and_admin_gate() -> None:
     ]
 
     missing_context = _context(None)
-    with pytest.raises(HomeAssistantError, match="Administrator"):
+    with pytest.raises(HomeAssistantError, match="administrator"):
         await api.async_get_api_instance(missing_context)
     no_user_context = _context()
     no_user_context.context = Context()
-    with pytest.raises(HomeAssistantError, match="Administrator"):
+    with pytest.raises(HomeAssistantError, match="administrator"):
         await api.async_get_api_instance(no_user_context)
 
     hass.auth.async_get_user.side_effect = [None, SimpleNamespace(is_admin=False)]
     for _ in range(2):
-        with pytest.raises(HomeAssistantError, match="Administrator"):
+        with pytest.raises(HomeAssistantError, match="administrator"):
             await api.async_get_api_instance(_context())
 
     hass.auth.async_get_user.side_effect = None
@@ -405,16 +405,16 @@ async def test_get_firmware_reads_cached_tracker_without_robot_io() -> None:
 async def test_firmware_research_tool_requires_current_admin() -> None:
     hass = _hass(_entry(), user=SimpleNamespace(is_admin=False))
     tool = MaticGetFirmwareTool(MaticOperationsAPI(hass))
-    with pytest.raises(HomeAssistantError, match="Administrator"):
+    with pytest.raises(HomeAssistantError, match="administrator"):
         await tool.async_call(hass, llm.ToolInput(tool.name, {}), _context())
 
     no_user = _context(None)
-    with pytest.raises(HomeAssistantError, match="Administrator"):
+    with pytest.raises(HomeAssistantError, match="administrator"):
         await tool.async_call(hass, llm.ToolInput(tool.name, {}), no_user)
 
     removed_user = _context("deleted-user")
     hass.auth.async_get_user.return_value = None
-    with pytest.raises(HomeAssistantError, match="Administrator"):
+    with pytest.raises(HomeAssistantError, match="administrator"):
         await tool.async_call(hass, llm.ToolInput(tool.name, {}), removed_user)
     hass.auth.async_get_user.assert_awaited_with("deleted-user")
 
@@ -440,7 +440,7 @@ async def test_retained_operations_tools_recheck_admin_after_demotion(
     instance = await MaticOperationsAPI(hass).async_get_api_instance(_context())
     tool = next(tool for tool in instance.tools if tool.name == tool_name)
 
-    with pytest.raises(HomeAssistantError, match="Administrator"):
+    with pytest.raises(HomeAssistantError, match="administrator"):
         await tool.async_call(hass, llm.ToolInput(tool_name, {}), _context())
 
     assert hass.auth.async_get_user.await_count == 2
@@ -571,7 +571,7 @@ async def test_robot_resolution_variants() -> None:
     hass = _hass(named, fallback)
 
     assert _resolve_entry(_hass(named), None) is named
-    with pytest.raises(HomeAssistantError, match="Specify one"):
+    with pytest.raises(HomeAssistantError, match="Name the robot"):
         _resolve_entry(hass, None)
     assert _resolve_entry(hass, "ENTRY-ONE") is named
     assert _resolve_entry(hass, "matic FALLBACK") is named
@@ -579,11 +579,11 @@ async def test_robot_resolution_variants() -> None:
     duplicate_name = _entry(entry_id="entry-three")
     duplicate_hass = _hass(named, duplicate_name)
     assert _resolve_entry(duplicate_hass, "ENTRY-ONE") is named
-    with pytest.raises(HomeAssistantError, match="share that name"):
+    with pytest.raises(HomeAssistantError, match="has that name"):
         _resolve_entry(duplicate_hass, "Synthetic Robot")
-    with pytest.raises(HomeAssistantError, match="Unknown Matic robot"):
+    with pytest.raises(HomeAssistantError, match="No robot named"):
         _resolve_entry(hass, "missing")
-    with pytest.raises(HomeAssistantError, match="No loaded"):
+    with pytest.raises(HomeAssistantError, match="No robot is loaded"):
         _loaded_entries(_hass())
 
 
@@ -759,7 +759,7 @@ async def test_plan_tool_projects_the_manager_preview_for_intelligent_and_saved_
         hass, llm.ToolInput(tool.name, {"plan": "first-id"}), _context()
     )
     assert by_id["plan"]["id"] == "first-id"
-    with pytest.raises(HomeAssistantError, match="plan is unavailable"):
+    with pytest.raises(HomeAssistantError, match="plan isn't available"):
         await tool.async_call(
             hass, llm.ToolInput(tool.name, {"plan": "missing"}), _context()
         )
@@ -769,7 +769,7 @@ async def test_plan_tool_projects_the_manager_preview_for_intelligent_and_saved_
         await MaticGetPlanTool(MaticOperationsAPI(no_map_hass)).async_call(
             no_map_hass, llm.ToolInput(tool.name, {}), _context()
         )
-    with pytest.raises(HomeAssistantError, match="share the name"):
+    with pytest.raises(HomeAssistantError, match="is named"):
         await tool.async_call(
             hass, llm.ToolInput(tool.name, {"plan": "Shared name"}), _context()
         )
@@ -837,7 +837,7 @@ async def test_plan_tool_projects_real_manager_cadence_preview(hass) -> None:
     assert projected_room["cadence"] == expected["rooms"][0]["cadence"]
 
     entry.runtime_data.slam_map.floor_plan_is_current.return_value = False
-    with pytest.raises(HomeAssistantError, match="room map is being rechecked"):
+    with pytest.raises(HomeAssistantError, match="room map is still loading"):
         await MaticGetPlanTool(MaticOperationsAPI(hass)).async_call(
             hass, llm.ToolInput("MaticGetPlan", {}), _context()
         )
@@ -846,7 +846,7 @@ async def test_plan_tool_projects_real_manager_cadence_preview(hass) -> None:
     manager._robot("synthetic-serial")["plans"]["home"]["rooms"][0]["cadence"][
         "mop_every_n"
     ] = True
-    with pytest.raises(HomeAssistantError, match="plan is unavailable"):
+    with pytest.raises(HomeAssistantError, match="plan isn't available"):
         await MaticGetPlanTool(MaticOperationsAPI(hass)).async_call(
             hass, llm.ToolInput("MaticGetPlan", {}), _context()
         )
@@ -939,7 +939,7 @@ async def test_native_history_is_bounded_sanitized_and_failure_safe() -> None:
     entry.runtime_data.client.async_get_cleaning_session_records.side_effect = (
         CannotConnectError("synthetic outage")
     )
-    with pytest.raises(HomeAssistantError, match="history is unavailable"):
+    with pytest.raises(HomeAssistantError, match="history isn't available"):
         await tool.async_call(hass, llm.ToolInput(tool.name, {}), _context())
     with pytest.raises(vol.Invalid):
         await tool.async_call(
@@ -1095,7 +1095,9 @@ async def test_activity_journal_pagination_filtering_and_restart_guards() -> Non
     assert not (
         await read(before_sequence=1, observation_session=result["observation_session"])
     )["observations"]
-    with pytest.raises(HomeAssistantError, match="requires observation_session"):
+    with pytest.raises(
+        HomeAssistantError, match="observation_session with before_sequence"
+    ):
         await read(before_sequence=8)
     entry.runtime_data.client.activity_journal = ActivityJournal()
     with pytest.raises(HomeAssistantError, match="restarted"):

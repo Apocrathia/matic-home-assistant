@@ -1003,16 +1003,16 @@
       "message": "The robot did not confirm the setting change. Check the robot's current setting before trying again."
     },
     "invalid_area": {
-      "message": "The saved custom area is invalid: {error}"
+      "message": "This custom area can't be used because its saved data is damaged. Open Matic Map and redraw it."
     },
     "area_map_changed": {
-      "message": "This custom area was saved for a different room map. Open Configure and redraw it on the current map before cleaning."
+      "message": "This custom area was drawn on a different map. Open Matic Map, redraw it on the current map, then try again."
     },
     "ambiguous_room_name": {
-      "message": "Rename duplicate mapped rooms named {room} before using managed plans so completion can be verified safely."
+      "message": "More than one room on the map is named {room}. Rename them in the Matic app so each has a different name, then run the plan again."
     },
     "invalid_cleaning_option": {
-      "message": "The cleaning option is invalid: {error}"
+      "message": "A cleaning option isn't valid: {error} Fix it and try again."
     },
     "no_robot_target": {
       "message": "Select at least one loaded Matic vacuum."
@@ -1024,55 +1024,55 @@
       "message": "Clean in order must be true or false."
     },
     "plan_already_running": {
-      "message": "A managed Matic cleaning plan is already running."
+      "message": "A cleaning plan is already running. Wait for it to finish or stop it, then try again."
     },
     "plan_not_running": {
-      "message": "No managed Matic cleaning plan is running."
+      "message": "No cleaning plan is running."
     },
     "invalid_plan": {
-      "message": "The cleaning request is invalid: {error}"
+      "message": "This request can't run. Check the plan, then try again. Details: {error}"
     },
     "plan_limit_reached": {
       "message": "This robot has reached the saved-plan limit. Delete an existing plan before creating another one."
     },
     "plan_timeout": {
-      "message": "Timed out while cleaning {room}."
+      "message": "{room} took longer than the plan's room completion timeout. Check the robot, then try again."
     },
     "plan_start_timeout": {
-      "message": "The robot did not begin cleaning {room} before the start timeout."
+      "message": "The robot didn't start cleaning {room} in time. Check the robot, then try again."
     },
     "robot_unavailable": {
-      "message": "The selected Matic robot is unavailable."
+      "message": "Home Assistant can't reach the robot right now. Check that it is powered on and online, then try again."
     },
     "robot_error": {
-      "message": "The selected Matic robot reported an error."
+      "message": "The robot reported an error. Check the robot, clear the problem, then try again."
     },
     "coverage_identity_unavailable": {
-      "message": "Could not verify the current cleaning task. Check the robot status, then try again."
+      "message": "Home Assistant can't confirm the current clean, so check the robot first."
     },
     "coverage_activity_unavailable": {
-      "message": "Could not verify whether the robot is cleaning. Check the robot status, then try again."
+      "message": "Home Assistant can't confirm whether the robot is cleaning, so check it first."
     },
     "coverage_native_session_active": {
-      "message": "The robot already has a cleaning task. Wait for it to finish before starting another cleaning task."
+      "message": "The robot is already cleaning, so wait for it to finish."
     },
     "coverage_identity_changed": {
-      "message": "The cleaning task changed during setup. Check the robot status, then try again."
+      "message": "The clean changed while starting, so check the robot first."
     },
     "robot_stop_pending": {
-      "message": "Matic is stopping; wait until it docks before resuming."
+      "message": "The robot is stopping. Wait until it docks, then try again."
     },
     "robot_command_failed": {
-      "message": "The robot could not complete the requested command."
+      "message": "The robot couldn't do that. Check the robot, then try again."
     },
     "room_interrupted": {
-      "message": "Cleaning in {room} ended without verified completion."
+      "message": "Cleaning in {room} stopped before the robot confirmed it was done. The room stays due for the next run. Check the robot, then start the plan again."
     },
     "room_taken_over": {
-      "message": "The original cleaning task in {room} could no longer be verified. The plan was interrupted."
+      "message": "Home Assistant could no longer confirm that the cleaning in {room} was the one it started, so the plan stopped. Check the robot, then start the plan again."
     },
     "room_plan_unavailable": {
-      "message": "The robot's room map is unavailable."
+      "message": "Home Assistant doesn't have the robot's room map right now. Check that the robot is online and has a current map, then try again."
     },
     "single_robot_required": {
       "message": "Select exactly one Matic robot."
@@ -1081,22 +1081,46 @@
       "message": "Rooms must be a list of room names or IDs."
     },
     "unknown_rooms": {
-      "message": "Unknown Matic rooms: {rooms}"
+      "message": "These rooms aren't on the robot's map: {rooms}. Check the spelling, or choose rooms from the list."
     },
     "room_sequence_limit": {
-      "message": "Room sequences are limited to {limit} rooms."
+      "message": "A clean can include up to {limit} rooms. Remove some rooms and try again."
     },
     "unknown_plan": {
-      "message": "Unknown Matic cleaning plan: {plan}"
+      "message": "No saved plan matches {plan}. Check the name, or choose from your saved plans."
     },
     "unknown_area": {
-      "message": "Unknown Matic custom area: {area}"
+      "message": "No custom area matches {area}. Check the name, or choose from your custom areas."
     },
     "unsupported_command": {
       "message": "That Matic command is not supported. Use start, clean_all, clean_rooms, clean_segments, pause, resume, stop, dock, or return_home."
     },
     "managed_run_changed": {
-      "message": "The managed cleaning run has changed. Stop was not sent."
+      "message": "The cleaning plan changed before Stop could be sent, so Stop was not sent. Check the robot and press Stop again if it is still cleaning."
+    },
+    "invalid_plan_command": {
+      "message": "Home Assistant rejected an internal plan command. Start the plan again."
+    },
+    "cadence_reset_blocked": {
+      "message": "This room schedule can't be reset right now: {error}"
+    },
+    "plan_locked": {
+      "message": "This plan can't be deleted while it is running or while the robot is still confirming a finished room. Stop it or wait, then try again."
+    },
+    "command_superseded": {
+      "message": "A newer command replaced this one before it ran. Send it again if you still want it."
+    },
+    "mixed_coverage_needs_plan": {
+      "message": "Rooms with different vacuum coverage settings can only be cleaned in order, from a saved plan with settings for each room."
+    },
+    "coverage_stopped_before_start": {
+      "message": "Cleaning was stopped before it started."
+    },
+    "coverage_start_unconfirmed": {
+      "message": "The robot didn't confirm that the clean started. Check the robot, then try again."
+    },
+    "invalid_room_setting": {
+      "message": "A room's cleaning setting isn't valid. Check each room's cleaning mode and coverage setting."
     }
   },
   "issues": {
