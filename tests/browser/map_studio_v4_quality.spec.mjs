@@ -527,7 +527,7 @@ for (const kind of ["plan", "area"]) {
     // A failed read proves nothing: the dialog still names the item, and the
     // plan view behind it shows the problem (area review lists no catalog).
     expect(result.failed, "after a reload that fails").toEqual(kind === "plan"
-      ? { status: "error", problem: "Rooms and plans are unavailable right now. Try again shortly.", dialog, detail, sameButton: false }
+      ? { status: "error", problem: "Home Assistant couldn't load rooms and plans. Try again shortly.", dialog, detail, sameButton: false }
       : { status: "error", problem: null, dialog, detail, sameButton: true });
     expect(result.removed, "a ready catalog without the item closes the dialog").toEqual({ dialog: null });
   });

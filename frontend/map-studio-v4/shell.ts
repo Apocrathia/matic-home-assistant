@@ -1569,7 +1569,7 @@ export class MaticMapShellV4 extends LitElement {
     const workflow = workflowCopy(state, this.localize);
     let line = workflow.title;
     if (state.workflow === "rooms" && state.selection.roomIds.length) {
-      line = this.#t("v4_rooms_selected_names", "Rooms selected: {count} · {rooms}", {
+      line = this.#t("v4_rooms_selected_names", "{count} selected · {rooms}", {
         count: state.selection.roomIds.length,
         rooms: this.#rooms(state),
       });

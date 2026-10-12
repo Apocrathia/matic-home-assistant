@@ -578,7 +578,7 @@ export class MaticMapCanvasV4 extends LitElement {
               type="button"
               aria-pressed=${String(state.appearance === "rooms")}
               @click=${() => this.#intent({ type: "set-appearance", appearance: "rooms" })}
-            >${this.#t("map_style_room_colours", "Floor plan")}</button>
+            >${this.#t("map_style_room_colours", "Room colors")}</button>
           </div>
         ` : nothing}
 

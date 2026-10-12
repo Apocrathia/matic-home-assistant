@@ -331,6 +331,7 @@ _COPY_SURFACES: dict[str, Callable[[], Copy]] = {
         "lazy-chunk.ts",
         "effects.ts",
     ),
+    "strings:common@workflow": lambda: _common("workflow-panel.ts"),
 }
 
 

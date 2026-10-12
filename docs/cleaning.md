@@ -77,7 +77,7 @@ The map panel requires a Home Assistant administrator. For a dashboard, add
 ## One-time cleaning
 
 Choose **Clean rooms**, select rooms, and pick vacuum, mop, or both.
-Vacuum coverage choices are **Quick**, **Optimal**, and **Heavy Duty**. They do
+Vacuum coverage choices are **Quick**, **Optimal**, and **Heavy duty**. They do
 not change mopping; use the robot's **Double-pass mopping** setting for an extra
 mop pass. Start the run from its summary; use the active cleaning controls to pause, resume, or stop.
 

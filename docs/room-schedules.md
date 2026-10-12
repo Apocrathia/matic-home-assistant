@@ -12,7 +12,7 @@ For each room, you can independently enable:
 
 - Mopping: vacuum normally, then vacuum and mop every N verified cleans.
 - Vacuum coverage: use the normal vacuum coverage, then the chosen periodic
-  vacuum coverage every N verified cleans. Quick, Optimal, and Heavy Duty can
+  vacuum coverage every N verified cleans. Quick, Optimal, and Heavy duty can
   be used in any pairing for Vacuum and Vacuum + mop. Mop-only rooms cannot
   use this rule. Existing incompatible rules remain visible for repair; choose
   a vacuum mode or clear the room rule. Clearing it leaves shared schedules
@@ -28,8 +28,8 @@ keeps coverage due. A completed-looking run alone does not clear it.
 
 ## Choose where progress is shared
 
-**This plan** keeps settings and progress private to that plan.
-**Shared for this room** lets participating plans and tracked Map Studio room
+**In this plan only** keeps settings and progress private to that plan.
+**Across all plans (recommended)** lets participating plans and tracked Map Studio room
 cleans use the same schedule and progress.
 
 Creating a schedule starts at zero. Joining an existing shared schedule adopts

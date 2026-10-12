@@ -303,7 +303,7 @@ import{C as Ne,O as S,a as xe,b as Ce,c as Me,l as Pe,m as Se,n as Ee,o as Re,p 
               type="button"
               aria-pressed=${String(i.appearance==="rooms")}
               @click=${()=>this.#u({type:"set-appearance",appearance:"rooms"})}
-            >${this.#e("map_style_room_colours","Floor plan")}</button>
+            >${this.#e("map_style_room_colours","Room colors")}</button>
           </div>
         `:g}
 

@@ -561,7 +561,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(inspector.getByRole("button", { name: "Reset vacuum rotation progress for Kitchen" })).toBeVisible();
   });
 
-  test("previews next-run order, effective settings, cadence reasons, and mission boundaries", async ({ page }) => {
+  test("previews next-run order, effective settings, cadence reasons, and part breaks", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "ready" });
     await page.evaluate((tag) => {
       const element = document.querySelector(tag);
@@ -588,7 +588,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await gallery.getByRole("button", { name: /^Run a plan/ }).click();
     await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
     const preview = gallery.locator("section[aria-labelledby='next-run-preview-heading']");
-    await expect(preview.getByRole("list", { name: "Next-run room order and effective settings" })).toHaveText(/1\. Living room.*Vacuum \+ mop · Heavy Duty.*Vacuum and mop are due.*Mission 2.*2\. Kitchen.*Vacuum · Quick.*Periodic coverage is due/s);
+    await expect(preview.getByRole("list", { name: "Next-run room order and effective settings" })).toHaveText(/1\. Living room.*Vacuum \+ mop · Heavy duty.*Vacuum and mop are due.*Part 2.*2\. Kitchen.*Vacuum · Quick.*Periodic coverage is due/s);
     await expect(gallery.getByRole("button", { name: "Run plan", exact: true })).toBeEnabled();
   });
 
@@ -625,7 +625,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await choices.nth(99).check();
     await expect(choices.nth(99)).toBeChecked();
     await expect(choices.nth(100)).toBeDisabled();
-    await expect(gallery.getByRole("status").filter({ hasText: "Up to 100 rooms can be included" })).toBeVisible();
+    await expect(gallery.getByRole("status").filter({ hasText: "Up to 100 rooms fit" })).toBeVisible();
     await expect(rooms.locator('input[type="checkbox"]:checked')).toHaveCount(100);
 
     await page.evaluate((tag) => {
@@ -647,7 +647,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await planChoices.nth(99).check();
     await expect(planChoices.nth(99)).toBeChecked();
     await expect(planChoices.nth(100)).toBeDisabled();
-    await expect(gallery.getByRole("status").filter({ hasText: "Up to 100 rooms can be included" })).toBeVisible();
+    await expect(gallery.getByRole("status").filter({ hasText: "Up to 100 rooms fit" })).toBeVisible();
   });
 
   test("blocks an oversized legacy plan with a clear recovery action", async ({ page }) => {
@@ -2377,7 +2377,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), command: "pending" });
     }, GALLERY_TAG);
     await expect(gallery.getByRole("textbox", { name: "Plan name" })).toBeDisabled();
-    await expect(gallery.getByRole("combobox", { name: "Cleaning system for Kitchen", exact: true })).toBeDisabled();
+    await expect(gallery.getByRole("combobox", { name: "Cleaning mode for Kitchen", exact: true })).toBeDisabled();
   });
   test("preserves plan edits after a failed or blocked save and allows retry", async ({ page }) => {
     await loadEffectHarness(page);
@@ -3450,7 +3450,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     }, GALLERY_TAG);
 
     await gallery.getByRole("button", { name: "2D", exact: true }).click();
-    await gallery.getByRole("button", { name: "Floor plan", exact: true }).click();
+    await gallery.getByRole("button", { name: "Room colors", exact: true }).click();
     await gallery.getByRole("button", { name: "Room names", exact: true }).click();
     // Double-click the scene itself: the map root now also hosts the control
     // rail and dock, so its centre is not guaranteed to be bare map.
@@ -4126,13 +4126,13 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(inspector.getByLabel("Room order and settings")).toHaveCount(0);
     await expect(list.locator(".room")).toHaveCount(4);
     await expect(list.locator('.room[data-selected="true"]')).toHaveCount(3);
-    await expect(list.getByLabel("Cleaning system")).toHaveCount(3);
+    await expect(list.getByLabel("Cleaning mode")).toHaveCount(3);
     const cadenceSettings = list.locator("details");
     await expect(cadenceSettings).toHaveCount(3);
     await expect(cadenceSettings.first().locator("summary")).toHaveText("Room schedule for Kitchen");
     await cadenceSettings.first().locator("summary").click();
-    await expect(cadenceSettings.first().getByLabel(/Vacuum and mop interval for .* from 1 to 100/)).toHaveAttribute("min", "1");
-    await expect(cadenceSettings.first().getByLabel(/Periodic vacuum coverage interval for .* from 1 to 100/)).toHaveAttribute("max", "100");
+    await expect(cadenceSettings.first().getByLabel(/How often to mop .*, every 1 to 100 cleans/)).toHaveAttribute("min", "1");
+    await expect(cadenceSettings.first().getByLabel(/How often to add vacuum coverage in .*, every 1 to 100 cleans/)).toHaveAttribute("max", "100");
     // Completion options now FOLLOW the room list: choose what to clean first,
     // then how the run should end.
     await expect(inspector.getByRole("heading", { name: "When a run ends", level: 3 })).toBeVisible();
@@ -4176,10 +4176,10 @@ test.describe("Map Studio v0.4 foundation", () => {
       await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
       const cadence = gallery.getByLabel("Rooms in this plan").locator("details").first();
       await cadence.locator("summary").click();
-      await expect(cadence.getByText("Periodic coverage is credited only after the robot confirms the requested vacuum coverage and completed clean. If those settings cannot be verified, coverage stays due for the next clean.")).toBeVisible();
-      const scope = cadence.getByLabel("Schedule scope for Kitchen");
-      const mopInterval = cadence.getByLabel("Vacuum and mop interval for Kitchen, from 1 to 100");
-      const coverageInterval = cadence.getByLabel("Periodic vacuum coverage interval for Kitchen, from 1 to 100");
+      await expect(cadence.getByText("Periodic coverage counts only after the robot confirms the vacuum coverage and that the clean finished. If it can't confirm, coverage stays due for the next clean.")).toBeVisible();
+      const scope = cadence.getByLabel("Count cleans for Kitchen");
+      const mopInterval = cadence.getByLabel("How often to mop Kitchen, every 1 to 100 cleans");
+      const coverageInterval = cadence.getByLabel("How often to add vacuum coverage in Kitchen, every 1 to 100 cleans");
       const coverage = cadence.getByLabel("Periodic vacuum coverage setting for Kitchen");
       const layout = await cadence.locator(".cadence-fields").evaluate((settings) => {
         const bounds = settings.getBoundingClientRect();
@@ -4637,10 +4637,10 @@ test.describe("Map Studio v0.4 foundation", () => {
       .getByRole("button", { name: /^Clean rooms Choose rooms for this run/ }).click();
     await gallery.getByRole("button", { name: "2D", exact: true }).click();
     const appearance = gallery.getByRole("group", { name: "Map style" });
-    await expect(appearance.getByRole("button")).toHaveText(["Photo", "Floor plan"]);
-    await appearance.getByRole("button", { name: "Floor plan", exact: true }).click();
+    await expect(appearance.getByRole("button")).toHaveText(["Photo", "Room colors"]);
+    await appearance.getByRole("button", { name: "Room colors", exact: true }).click();
     await expect.poll(async () => (await snapshot(page)).appearance).toBe("rooms");
-    await expect(appearance.getByRole("button", { name: "Floor plan" })).toHaveAttribute("aria-pressed", "true");
+    await expect(appearance.getByRole("button", { name: "Room colors" })).toHaveAttribute("aria-pressed", "true");
 
     const options = gallery.getByRole("button", { name: "Map options" });
     await expect(options).toHaveAttribute("aria-controls", "map-options");
@@ -5159,15 +5159,15 @@ test.describe("Map Studio v0.4 foundation", () => {
     await gallery.evaluate((element) => element.setScenario("rooms"));
     await expect.poll(async () => (await snapshot(page)).workflow).toBe("rooms");
     const inspector = gallery.locator(".inspector");
-    await expect(inspector.getByLabel(/^Cleaning system for /)).toHaveCount(0);
+    await expect(inspector.getByLabel(/^Cleaning mode for /)).toHaveCount(0);
     await inspector.getByRole("checkbox", { name: "Kitchen" }).check();
-    await expect(inspector.getByLabel(/^Cleaning system for /)).toBeVisible();
-    await expect(inspector.getByLabel(/^Cleaning system for /)).toHaveValue("vacuum");
+    await expect(inspector.getByLabel(/^Cleaning mode for /)).toBeVisible();
+    await expect(inspector.getByLabel(/^Cleaning mode for /)).toHaveValue("vacuum");
     const mode = inspector.getByLabel(/^Vacuum coverage for /);
     await expect(mode).toHaveValue("standard");
-    await expect(mode.locator("option")).toHaveText(["Quick", "Optimal", "Heavy Duty"]);
+    await expect(mode.locator("option")).toHaveText(["Quick", "Optimal", "Heavy duty"]);
     await mode.selectOption("heavy_duty");
-    const cleaningSystem = inspector.getByLabel(/^Cleaning system for /);
+    const cleaningSystem = inspector.getByLabel(/^Cleaning mode for /);
     await cleaningSystem.selectOption("mop");
     await expect(mode).toBeDisabled();
     await expect(inspector.getByText("Vacuum coverage applies only when vacuuming.", { exact: false })).toBeVisible();
@@ -6959,9 +6959,9 @@ for (const ordered of [false, true]) {
         ],
       } });
     }, { tag: GALLERY_TAG, ordered });
-    await expect(gallery.locator(".plan-transition-hint")).toContainText("separate missions and dock visits");
+    await expect(gallery.locator(".plan-transition-hint")).toContainText("may be cleaned in separate parts");
     await expect(gallery.locator(".plan-transition-hint")).toContainText(ordered
-      ? "Placing rooms with matching settings together" : "Intelligent rotation determines the room order");
+      ? "Placing rooms with matching settings together" : "Longest-waiting rooms first, rechecked when you run the plan");
     expect((await snapshot(page)).planDraft.rooms.map((room) => room.roomId)).toEqual(["room-one", "room-two"]);
   });
 }
@@ -7090,7 +7090,7 @@ for (const width of [1024, 1100]) {
           }
           expect(helpBox.height).toBeGreaterThan(44);
           if (!three) {
-            await gallery.getByRole("button", { name: "Floor plan", exact: true }).click();
+            await gallery.getByRole("button", { name: "Room colors", exact: true }).click();
             await expect.poll(async () => (await snapshot(page)).appearance).toBe("rooms");
           } else {
             await gallery.getByRole("button", { name: "Rotate right" }).click();
