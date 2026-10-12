@@ -15,8 +15,7 @@ Replace example entity IDs with those shown on your robot's device page.
 - [Matic: Clean on a schedule](../blueprints/automation/matic_robot/room_rotation.yaml)
 - [Matic: Send firmware alerts](../blueprints/automation/matic_robot/firmware_intelligence.yaml)
 
-The away blueprint rechecks presence after its delay before cleaning and starts only
-when Matic is docked or idle.
+The away blueprint checks presence again after its delay before cleaning and starts only when the robot is docked or idle.
 
 ## Complete cleaning action
 

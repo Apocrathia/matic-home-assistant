@@ -493,7 +493,7 @@ export class MaticMapCanvasV4 extends LitElement {
       return { title: this.#t("v4_admin_required", "Administrator access required"), detail: this.#t("v4_private_map_hidden", "Private map data is hidden.") };
     }
     if (this.state.host.robotCount === 0) {
-      return { title: this.#t("v4_no_robot", "No Matic robot set up"), detail: this.#t("v4_no_robot_detail", "Set up a robot before opening its map.") };
+      return { title: this.#t("v4_no_robot", "No robot set up"), detail: this.#t("v4_no_robot_detail", "Set up a robot before opening its map.") };
     }
     const notice = this.state.notice;
     if (this.state.dataMode === "live" && this.state.floor.readOnly

@@ -155,11 +155,11 @@
     "v4_needs_attention": "Needs attention",
     "v4_no": "No",
     "v4_no_plans_hint": "Save a plan to repeat a set of rooms",
-    "v4_no_robot": "No Matic robot set up",
+    "v4_no_robot": "No robot set up",
     "v4_no_robot_body": "Add the Matic (Unofficial) integration to see a map here.",
     "v4_no_robot_detail": "Set up a robot before opening its map.",
     "v4_no_robot_short": "No robot",
-    "v4_no_robot_title": "No Matic robot set up",
+    "v4_no_robot_title": "No robot set up",
     "v4_no_rooms_reason": "Can't clean rooms until you name them in the Matic app.",
     "v4_no_map_history": "No saved map snapshots yet.",
     "v4_no_rooms_plans": "This floor has no rooms yet. Name rooms in the Matic app to see them here.",
@@ -172,12 +172,12 @@
     "v4_hide_workspace": "Hide cleaning panel",
     "v4_paused": "Paused",
     "v4_task_in_progress": "Run in progress",
-    "v4_task_map_unavailable": "The live map is unavailable; the current task remains in progress.",
-    "v4_task_docked": "Robot docked; the cleaning task has not finished.",
-    "v4_task_waiting": "Waiting for the cleaning task to continue or finish.",
+    "v4_task_map_unavailable": "The live map is unavailable; the current clean continues.",
+    "v4_task_docked": "Robot docked; the clean has not finished.",
+    "v4_task_waiting": "Waiting for the clean to continue or finish.",
     "v4_plan_mixed_settings": "Rooms with different cleaning settings may be cleaned in separate parts, and the robot may briefly touch the dock between parts.",
     "v4_plan_group_settings": "Placing rooms with matching settings together can reduce transitions.",
-    "v4_plan_rotation_settings": "Longest-waiting rooms first, rechecked when you run the plan.",
+    "v4_plan_rotation_settings": "Longest-waiting rooms first, checked again when you run the plan.",
     "v4_plan_detail": "Review rooms and cleaning settings.",
     "v4_preview_cadence_progress_unverified": "Can't run this plan until you reset the room schedule progress Home Assistant can't confirm.",
     "v4_preview_room_limit": "Can't run this plan until it has 100 rooms or fewer.",
@@ -237,7 +237,7 @@
     "v4_saved_routines": "{count} saved plans",
     "v4_seen": "Seen",
     "v4_session_verified": "Map ready",
-    "v4_set_up_robot": "Set up a Matic robot",
+    "v4_set_up_robot": "Set up a robot",
     "v4_show_less": "Collapse panel",
     "v4_show_more": "Expand panel",
     "v4_show_workspace": "Show cleaning panel",
@@ -323,12 +323,12 @@
     "v4_mop_coverage_hint": "Vacuum coverage applies only when vacuuming. Use the robot's Double-pass mopping setting for an extra mop pass.",
     "v4_cadence_coverage_requires_vacuum": "The vacuum rotation needs a cleaning mode that includes vacuuming, so change the mode or turn the rotation off.",
     "v4_cadence_clear_room_coverage": "Turn off",
-    "v4_cadence_coverage_interval": "Use periodic vacuum coverage every N cleans",
-    "v4_cadence_coverage_interval_named": "How often to add vacuum coverage in {room}, every 1 to 100 cleans",
-    "v4_cadence_periodic_coverage": "Periodic vacuum coverage setting",
-    "v4_cadence_periodic_coverage_named": "Periodic vacuum coverage setting for {room}",
-    "v4_cadence_do_coverage_next_named": "Use periodic vacuum coverage on the next clean for {room}",
-    "v4_cadence_do_coverage_next": "Use periodic vacuum coverage on the next clean",
+    "v4_cadence_coverage_interval": "Vacuum rotation every N cleans",
+    "v4_cadence_coverage_interval_named": "How often to add a vacuum rotation in {room}, every 1 to 100 cleans",
+    "v4_cadence_periodic_coverage": "Vacuum rotation level",
+    "v4_cadence_periodic_coverage_named": "Vacuum rotation level for {room}",
+    "v4_cadence_do_coverage_next_named": "Add a vacuum rotation on the next clean for {room}",
+    "v4_cadence_do_coverage_next": "Add a vacuum rotation on the next clean",
     "v4_cadence_coverage_available_modes": "Can't add a vacuum rotation until this room's cleaning mode includes vacuuming.",
     "v4_notice_stop_unconfirmed": "Home Assistant can't confirm the robot stopped, so press Stop again if it's still moving.",
     "v4_notice_action_unconfirmed": "Home Assistant can't confirm that command, so check the robot before trying again.",
@@ -394,7 +394,7 @@
     "v4_reason_room_preview_loading": "Waiting for the room settings check.",
     "v4_reason_run_plan_preview": "Can't run this plan until you retry its next-run preview.",
     "v4_cadence_mop_due_reason": "Vacuum and mop are due",
-    "v4_cadence_coverage_due_reason": "Periodic coverage is due",
+    "v4_cadence_coverage_due_reason": "Vacuum rotation is due",
     "v4_cadence_due_unknown_reason": "Schedule setting due",
     "v4_preview_plan_disabled": "This plan is paused. Enable it to preview and run.",
     "v4_preview_shared_unavailable": "The shared room schedule doesn't match this map. Review the schedule's settings.",
@@ -402,7 +402,7 @@
     "v4_preview_no_rooms": "Can't run this plan until it has at least one room.",
     "v4_preview_invalid": "Can't run this plan until you open Edit and save it again.",
     "v4_override_room_schedule": "Override shared schedule settings",
-    "v4_override_room_schedule_hint": "By default, this clean follows the shared schedule. Turn this on to use the settings you chose here instead. Anything due stays due, and cleans that match a schedule still count toward its progress.",
+    "v4_override_room_schedule_hint": "This clean follows the shared schedule unless you turn this on to use the settings chosen here. Anything due stays due, and matching cleans still count toward the schedule.",
     "v4_room_preview_loading": "Checking settings…",
     "v4_room_preview_unavailable": "Home Assistant couldn't check the room settings.",
     "v4_effective_room_preview": "Effective cleaning preview",
@@ -418,8 +418,8 @@
     "v4_cadence_not_enabled": "No recurring room schedule is enabled.",
     "v4_cadence_mop_due": "Vacuum and mop is due on this clean.",
     "v4_cadence_mop_progress": "Mop every {interval} cleans; {completed} counted since the last mop.",
-    "v4_cadence_coverage_due": "{coverage} periodic coverage is due on this clean.",
-    "v4_cadence_coverage_progress": "Periodic coverage every {interval} cleans; {completed} counted so far.",
+    "v4_cadence_coverage_due": "{coverage} vacuum rotation is due on this clean.",
+    "v4_cadence_coverage_progress": "Vacuum rotation every {interval} cleans; {completed} counted so far.",
     "v4_cadence_shared_join_effect": "Saving shares this room's progress with every plan that uses it, picking up any progress already counted.",
     "v4_cadence_shared_leave_effect": "Saving starts new progress for this plan only, and other plans keep the shared schedule.",
     "v4_cadence_new_shared_effect": "Saving creates a schedule shared by every plan that uses this room, starting from zero.",
@@ -438,7 +438,7 @@
     "v4_cadence_next_actions_named": "Next clean options for {room}",
     "v4_cadence_do_mop_next_named": "Do vacuum and mop on the next clean for {room}",
     "v4_cadence_do_mop_next": "Do vacuum and mop on the next clean",
-    "v4_cadence_coverage_verification_hint": "Periodic coverage counts only after the robot confirms the vacuum coverage and that the clean finished. If it can't confirm, coverage stays due for the next clean.",
+    "v4_cadence_coverage_verification_hint": "A vacuum rotation counts only after the robot confirms the vacuum coverage and that the clean finished. If it can't confirm, the rotation stays due for the next clean.",
     "v4_reset_mop_cadence_button_named": "Reset mopping progress for {room}",
     "v4_reset_mop_cadence_button": "Reset mopping",
     "v4_reset_coverage_cadence_button_named": "Reset vacuum rotation progress for {room}",
@@ -473,7 +473,7 @@
   "config": {
     "abort": {
       "already_configured": "This robot is already set up.",
-      "already_in_progress": "Setup is already running — return to the open dialog.",
+      "already_in_progress": "Setup is already running. Return to the open dialog.",
       "bluetooth_unavailable": "Home Assistant can't use a Bluetooth adapter on this device, or it can only reach the robot through a Bluetooth proxy. Pairing needs an adapter attached directly to Home Assistant: attach one, fix any Bluetooth issue under Settings > System > Repairs, then start setup again.",
       "cannot_connect": "Could not connect to the robot. Check that it is powered on and on the same network, then start setup again.",
       "invalid_certificate": "Home Assistant can't confirm this is your robot, so it did not connect. Check that the address belongs to your robot, then start setup again.",
@@ -521,7 +521,7 @@
         "title": "Enter the robot's address"
       },
       "pair": {
-        "description": "Put Home Assistant's local Bluetooth adapter within a few feet of Matic. In the Matic app, go to Settings → Connectivity → Add another user and turn on Pairing mode. Confirm below only after the pairing window is open. The robot will display a six-digit code and Home Assistant will ask for it.",
+        "description": "Put the Home Assistant Bluetooth adapter within a few feet of the robot. In the Matic app, go to Settings > Connectivity > Add another user and turn on Pairing mode, then confirm below while the pairing window is open. The robot shows a six-digit code and Home Assistant asks for it.",
         "data": {
           "pairing_mode_enabled": "Pairing mode is on"
         },
@@ -611,17 +611,17 @@
           "plan": "Plan"
         },
         "data_description": {
-          "plan": "Choose the plan whose rotation history you want to reset."
+          "plan": "Choose the plan whose cleaning history you want to reset."
         }
       },
       "confirm_reset_history": {
         "title": "Confirm cleaning history reset",
-        "description": "Submitting clears rotation history for {plan_name}. Saved plans and their settings remain. Turn on the option below to reset history for every plan.",
+        "description": "This clears which rooms {plan_name} has already cleaned, so the next run starts over. Your plans and their settings are kept.",
         "data": {
           "all_plans": "Reset history for every plan"
         },
         "data_description": {
-          "all_plans": "Off resets only {plan_name}. On resets all plan rotation history."
+          "all_plans": "Off resets only {plan_name}. On resets the cleaning history of every plan."
         }
       },
       "workspace_transport": {
@@ -758,7 +758,7 @@
         "name": "Stop cleaning"
       },
       "clean_selected_area": {
-        "name": "Clean selected area"
+        "name": "Clean custom area"
       }
     },
     "camera": {
@@ -1012,7 +1012,7 @@
       "message": "More than one room on the map is named {room}. Rename them in the Matic app so each has a different name, then run the plan again."
     },
     "invalid_cleaning_option": {
-      "message": "A cleaning option isn't valid: {error} Fix it and try again."
+      "message": "This cleaning option can't be used. Check the cleaning mode and vacuum coverage, then try again.\nDetails: {error}"
     },
     "no_robot_target": {
       "message": "Select at least one loaded Matic vacuum."
@@ -1072,7 +1072,7 @@
       "message": "Home Assistant doesn't have the robot's room map right now. Check that the robot is online and has a current map, then try again."
     },
     "single_robot_required": {
-      "message": "Select exactly one Matic robot."
+      "message": "Select exactly one robot."
     },
     "rooms_must_be_list": {
       "message": "Rooms must be a list of room names or IDs."
@@ -1117,13 +1117,13 @@
       "message": "The robot didn't confirm that the clean started. Check the robot, then try again."
     },
     "invalid_room_setting": {
-      "message": "A room's cleaning setting isn't valid. Check each room's cleaning mode and coverage setting."
+      "message": "A room's cleaning setting can't be used. Check each room's cleaning mode and vacuum coverage, then try again."
     }
   },
   "issues": {
     "firmware_regression": {
       "title": "Matic firmware checks need attention",
-      "description": "Home Assistant repeatedly could not read {count} items from the robot on firmware {current}, and the saved comparison is from firmware {previous}. A read failure does not prove a firmware problem, so open the Firmware check status sensor to see which items failed and whether the robot has recovered."
+      "description": "Home Assistant repeatedly could not read some robot data on firmware {current} ({count} checks failing), and the saved comparison is from firmware version {previous}. A read failure does not prove a firmware problem, so open the Firmware check status sensor to see which checks failed and whether the robot has recovered."
     },
     "robot_identity_changed": {
       "title": "Can't confirm this is your robot",
@@ -1198,7 +1198,7 @@
       }
     },
     "clean": {
-      "name": "Clean",
+      "name": "Start cleaning",
       "description": "Starts a cleaning run with the selected rooms, mode, coverage, and order.",
       "fields": {
         "rooms": {
@@ -1225,7 +1225,7 @@
       "fields": {
         "plan": {
           "name": "Cleaning plan",
-          "description": "Plan name or ID. Leave empty to use the default plan. Find IDs with List cleaning plans."
+          "description": "Plan name or ID, or empty for the default plan. Find IDs with List cleaning plans."
         }
       }
     },
@@ -1235,7 +1235,7 @@
       "fields": {
         "plan": {
           "name": "Cleaning plan",
-          "description": "Plan name or ID. Leave empty to use the default plan. Find IDs with List cleaning plans."
+          "description": "Plan name or ID, or empty for the default plan. Find IDs with List cleaning plans."
         }
       }
     },
@@ -1245,7 +1245,7 @@
       "fields": {
         "plan": {
           "name": "Cleaning plan",
-          "description": "Plan name or ID. Leave empty to use the default plan. Find IDs with List cleaning plans."
+          "description": "Plan name or ID, or empty for the default plan. Find IDs with List cleaning plans."
         },
         "preview_token": {
           "name": "Preview ID",
@@ -1259,13 +1259,13 @@
       "fields": {
         "plan": {
           "name": "Cleaning plan",
-          "description": "Plan name or ID. Leave empty to use the default plan. Find IDs with List cleaning plans."
+          "description": "Plan name or ID, or empty for the default plan. Find IDs with List cleaning plans."
         }
       }
     },
     "stop_intelligent_cleaning": {
       "name": "Stop cleaning",
-      "description": "Stops the running plan and sends the robot to its dock. If the plan is set to finish the current room, the robot finishes that room first once enough of it is done. It never starts another room.",
+      "description": "Stops the running plan and sends the robot to its dock. If the plan is set to finish the current room, the robot finishes that room first once enough of it is done, and never starts another.",
       "fields": {
         "include_unmanaged": {
           "name": "Also stop other cleaning",
@@ -1273,7 +1273,7 @@
         },
         "expected_run_id": {
           "name": "Expected run ID",
-          "description": "Optional. A run ID from plan diagnostics. Stop is refused if that run is no longer the one running."
+          "description": "A run ID from plan diagnostics, if you want the stop refused when another run has started."
         }
       }
     },
@@ -1283,7 +1283,7 @@
       "fields": {
         "plan": {
           "name": "Cleaning plan",
-          "description": "Plan name or ID. Leave empty to use the default plan. Find IDs with List cleaning plans."
+          "description": "Plan name or ID, or empty for the default plan. Find IDs with List cleaning plans."
         },
         "all_plans": {
           "name": "Reset history for every plan",
@@ -1293,7 +1293,7 @@
     },
     "reset_room_cadence": {
       "name": "Reset room schedule progress",
-      "description": "Resets room schedule progress (mopping, coverage, or both) and any 'do it next clean' settings, without changing cleaning history.",
+      "description": "Resets room schedule progress (mopping, vacuum rotation, or both) and any 'do it next clean' settings, without changing cleaning history.",
       "fields": {
         "plan": {
           "name": "Cleaning plan",
@@ -1305,7 +1305,7 @@
         },
         "modes": {
           "name": "Schedule types",
-          "description": "Reset mopping, coverage, or both. Omit this field to reset both."
+          "description": "Reset mopping, vacuum rotation, or both. Omit this field to reset both."
         }
       }
     },
@@ -1336,11 +1336,11 @@
         },
         "rooms": {
           "name": "Rooms and settings",
-          "description": "Ordered mapped rooms with individual cleaning mode and coverage settings."
+          "description": "Ordered mapped rooms, each with its cleaning mode and vacuum coverage."
         },
         "return_to_base": {
           "name": "Return to dock when finished",
-          "description": "Send the robot to its dock after all selected rooms finish successfully."
+          "description": "Send the robot to its dock after all selected rooms finish."
         },
         "finish_current_room": {
           "name": "Finish the current room when stopping",
@@ -1394,7 +1394,7 @@
         },
         "room": {
           "name": "Room and settings",
-          "description": "Mapped room name or room ID, with its cleaning mode and coverage setting. If a value matches both an ID and a name, the ID wins."
+          "description": "Mapped room name or room ID, with its cleaning mode and vacuum coverage. If a value matches both an ID and a name, the ID wins."
         }
       }
     },

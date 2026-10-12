@@ -20,7 +20,7 @@ plus two opt-in statistics sensors per mapped room.
 | Saved cleaning plan | Select the default plan |
 | Custom cleaning area | Select a saved custom area |
 | Plan buttons | Run plan, Run intelligent rotation, Run saved order, or Stop cleaning |
-| Clean selected area | Run the selected custom area |
+| Clean custom area | Run the selected custom area |
 | Setting switches | Child lock, pet-waste avoidance, Cues voice assistant, double-pass mopping |
 | Water flow | Adjust the robot's water-flow setting |
 

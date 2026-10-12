@@ -1067,18 +1067,22 @@ export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction | NoBu
   }
   if (state.workflow === "areaReview") {
     if (state.areaDraft.dirty || state.draw.dirty || !state.areaDraft.id || state.areaDraft.canRebind) {
-      const valid = canEditCoordinates(state)
-        && state.areaDraft.name.trim().length > 0
-        && state.draw.circles.length > 0;
+      const editable = canEditCoordinates(state);
+      const drawn = state.draw.circles.length > 0;
+      const named = state.areaDraft.name.trim().length > 0;
       return {
         id: "save-area",
         label: "Save area",
         labelKey: "v4_action_save_area",
         kind: "primary",
-        enabled: valid,
-        ...(valid
-          ? {}
-          : { reason: "Can't save until you name the area.", reasonKey: "v4_reason_save_area_details" }),
+        enabled: editable && drawn && named,
+        ...(!editable
+          ? { reason: "Can't save until Home Assistant can confirm this map.", reasonKey: "v4_reason_save_area_map" }
+          : !drawn
+            ? { reason: "Can't save until you draw the area.", reasonKey: "v4_reason_save_area_draw" }
+            : !named
+              ? { reason: "Can't save until you name the area.", reasonKey: "v4_reason_save_area_details" }
+              : {}),
       };
     }
     const current = state.areaDraft.status === "current";

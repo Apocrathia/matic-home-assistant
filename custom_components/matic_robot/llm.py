@@ -218,7 +218,7 @@ class MaticOperationsAPI(llm.API):
             api_prompt=(
                 "Answer in plain words (robot, room, plan, cleaning run) and do not "
                 "repeat internal terms. Use these tools only to read the state of "
-                "Matic robots and their cleaning plans. They never issue a robot "
+                "robots and their cleaning plans. They never issue a robot "
                 "command or change a plan. Dust bag fields are read-only observations; "
                 "Home Assistant does not show dust bag entities yet. Rooms with the "
                 "same settings are cleaned in one part without docking; when settings "
@@ -327,10 +327,10 @@ class MaticClaimFirmwareInvestigationTool(_MaticTool):
     name = "MaticClaimFirmwareInvestigation"
     description = (
         "Claim a 30-minute firmware research hold for the configured investigator. "
-        "Pass entry_id as robot, plus the exact report_id, evidence_revision and "
-        "routing_revision from MaticGetFirmware. Changes only research records and "
-        "sends no robot commands. Keep the returned claim value private and pass it "
-        "only to MaticCompleteFirmwareInvestigation."
+        "Pass `entry_id` as `robot`, plus the exact `report_id`, `evidence_revision` "
+        "and `routing_revision` from `MaticGetFirmware`. Changes only research records "
+        "and sends no robot commands. Keep the returned claim value private and pass "
+        "it only to `MaticCompleteFirmwareInvestigation`."
     )
     parameters = llm.Tool.parameters.extend(_FIRMWARE_CLAIM_FIELDS)
 
@@ -402,7 +402,7 @@ class MaticGetOperationsTool(_MaticTool):
 
     name = "MaticGetOperations"
     description = (
-        "Inspect every loaded Matic robot: live activity, whether a plan is running, "
+        "Inspect every loaded robot: live activity, whether a plan is running, "
         "the active room, the selected plan, and read-only dust-bag observations."
     )
 
@@ -428,8 +428,8 @@ class MaticGetPlanTool(_MaticTool):
 
     name = "MaticGetPlan"
     description = (
-        "Inspect the selected or a named saved plan and show its exact room order for "
-        "the next run, how it splits into parts, and where settings change."
+        "Read the selected or a named saved plan without changing it: its exact room "
+        "order for the next run, how it splits into parts, and where settings change."
     )
     parameters = llm.Tool.parameters.extend(
         {
@@ -453,7 +453,10 @@ class MaticGetPlanTool(_MaticTool):
         state = runtime.coordinator.data
         floor_plan = state.floor_plan
         if floor_plan is None or not floor_plan.rooms:
-            raise HomeAssistantError("The robot's room map isn't available right now.")
+            raise HomeAssistantError(
+                "The robot's room map isn't available right now. Wait for the robot "
+                "to come online, then try again."
+            )
         if not runtime.slam_map.floor_plan_is_current(floor_plan):
             raise HomeAssistantError(
                 "The robot's room map is still loading. Try again in a moment."
@@ -626,7 +629,8 @@ class MaticGetNativeHistoryTool(_MaticTool):
             )
         except MaticError as err:
             raise HomeAssistantError(
-                "The robot's cleaning history isn't available right now."
+                "The robot's cleaning history isn't available right now. Check that "
+                "the robot is online, then try again."
             ) from err
         ordered = sorted(
             records,
@@ -748,10 +752,10 @@ class MaticGetRecentEventsTool(_MaticTool):
 
     name = "MaticGetRecentEvents"
     description = (
-        "Inspect recent Matic room, cleaning, Cues, firmware and command events kept "
-        "since Home Assistant last started. Robot activity readings are left out by "
-        "default so frequent polling can't hide other events; use include_activity or "
-        "MaticGetActivity to see them."
+        "Read recent room, cleaning, Cues, firmware and command events kept since Home "
+        "Assistant last started, without changing anything. Robot activity readings "
+        "are left out by default so frequent polling can't hide other events; use "
+        "`include_activity` or `MaticGetActivity` to see them."
     )
     parameters = llm.Tool.parameters.extend(
         {
@@ -842,12 +846,13 @@ class MaticGetActivityTool(_MaticTool):
         session = last["observation_session"]
         if "before_sequence" in args and "observation_session" not in args:
             raise HomeAssistantError(
-                "Pass observation_session with before_sequence to read older entries."
+                "Pass `observation_session` with `before_sequence` to read older "
+                "entries. Use the values from the previous page."
             )
         if args.get("observation_session", session) != session:
             raise HomeAssistantError(
                 "The activity record restarted. Read again without "
-                "observation_session or before_sequence."
+                "`observation_session` or `before_sequence`."
             )
         kind = args["kind"]
         prefixes = {
@@ -943,7 +948,10 @@ def _loaded_entries(hass: HomeAssistant) -> list[ConfigEntry[Any]]:
     """Return loaded Matic entries or a useful operational error."""
     entries = hass.config_entries.async_loaded_entries(DOMAIN)
     if not entries:
-        raise HomeAssistantError("No robot is loaded in Home Assistant.")
+        raise HomeAssistantError(
+            "No robot is loaded in Home Assistant. Set up the integration, then try "
+            "again."
+        )
     return entries
 
 

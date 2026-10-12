@@ -129,7 +129,7 @@ actions:
               title: >-
                 {% if report.attention_required %}Matic firmware checks need attention
                 {% elif research_actionable %}Matic firmware investigation complete
-                {% else %}Matic firmware reads recovered{% endif %}
+                {% else %}Matic firmware checks recovered{% endif %}
               message: >-
                 Firmware {{ report.firmware_version }}.
                 {{ report.reachable_endpoints }} of {{ report.endpoint_count }} robot data checks succeeded.

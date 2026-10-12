@@ -50,7 +50,7 @@ do not replay a delivered or acknowledged warning. Unchanged findings stay quiet
 
 ## Choose or switch the investigator
 
-In **Developer tools → Actions**, run **Matic Robot: Advanced: Choose firmware investigator**:
+In **Developer tools → Actions**, run **Matic (Unofficial): Advanced: Choose firmware investigator**:
 
 ```yaml
 action: matic_robot.firmware_investigator

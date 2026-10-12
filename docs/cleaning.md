@@ -26,7 +26,7 @@ Create and edit plans and custom areas in Map Studio. The integration's
 an existing default plan or explicitly reset cleaning history.
 
 The 0.5 development branch adds optional [room schedules](room-schedules.md)
-for periodic mopping and coverage, with private or shared progress.
+for periodic mopping and vacuum rotation, with private or shared progress.
 
 ### Intelligent rotation
 

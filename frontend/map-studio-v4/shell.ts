@@ -89,7 +89,7 @@ const statusCopy = (state: WorkspaceState, localize?: Localize): StatusPresentat
     translate(localize, key, fallback, placeholders);
   if (!state.host.connected) return { title: t("v4_reconnecting", "Reconnecting"), detail: t("v4_ha_offline", "Home Assistant is offline"), icon: iconOffline, notable: true };
   if (!state.host.administrator) return { title: t("v4_access_required", "Access required"), detail: t("v4_admin_only", "Administrator only"), icon: iconOffline, notable: true };
-  if (state.host.robotCount === 0) return { title: t("v4_no_robot_short", "No robot"), detail: t("v4_set_up_robot", "Set up a Matic robot"), icon: iconOffline, notable: true };
+  if (state.host.robotCount === 0) return { title: t("v4_no_robot_short", "No robot"), detail: t("v4_set_up_robot", "Set up a robot"), icon: iconOffline, notable: true };
   if (isSelectedRobotUnavailable(state)) return { title: t("v4_selected_robot_unavailable", "Selected robot unavailable"), detail: t("v4_choose_another_robot", "Choose another robot to open its map."), icon: iconOffline, notable: true };
   if (!state.host.robotConnected) return { title: t("v4_robot_offline", "Robot offline"), detail: t("v4_last_map_read_only", "Last known map · read only"), icon: iconOffline, notable: true };
   if (state.activity === "problem") return { title: t("v4_needs_attention", "Needs attention"), detail: t("v4_check_robot", "Check the robot"), icon: iconOffline, notable: true };
@@ -118,10 +118,10 @@ const statusCopy = (state: WorkspaceState, localize?: Localize): StatusPresentat
     return {
       title: t("v4_task_in_progress", "Run in progress"),
       detail: state.coherence === "unavailable" || state.coherence === "blocked"
-        ? t("v4_task_map_unavailable", "The live map is unavailable; the current task remains in progress.")
+        ? t("v4_task_map_unavailable", "The live map is unavailable; the current clean continues.")
         : state.activity === "docked"
-        ? t("v4_task_docked", "Robot docked; the cleaning task has not finished.")
-        : t("v4_task_waiting", "Waiting for the cleaning task to continue or finish."),
+        ? t("v4_task_docked", "Robot docked; the clean has not finished.")
+        : t("v4_task_waiting", "Waiting for the clean to continue or finish."),
       icon: iconPlan,
       notable: true,
     };
@@ -1375,7 +1375,7 @@ export class MaticMapShellV4 extends LitElement {
     if (!host.administrator) return this.#hostState(t("v4_admin_title", "Administrator access required"), t("v4_admin_body", "Ask a Home Assistant administrator to open this map."));
     if (host.robotCount === 0) {
       return this.#hostState(
-        t("v4_no_robot_title", "No Matic robot set up"),
+        t("v4_no_robot_title", "No robot set up"),
         t("v4_no_robot_body", "Add the Matic (Unofficial) integration to see a map here."),
         html`<a class="ms-btn ms-btn--secondary" href="/config/integrations/integration/matic_robot">${t("v4_open_integration", "Open integration")}</a>`,
       );

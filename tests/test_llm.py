@@ -1096,7 +1096,7 @@ async def test_activity_journal_pagination_filtering_and_restart_guards() -> Non
         await read(before_sequence=1, observation_session=result["observation_session"])
     )["observations"]
     with pytest.raises(
-        HomeAssistantError, match="observation_session with before_sequence"
+        HomeAssistantError, match="`observation_session` with `before_sequence`"
     ):
         await read(before_sequence=8)
     entry.runtime_data.client.activity_journal = ActivityJournal()

@@ -71,7 +71,7 @@ areas affected by a changed map may need confirmation.
 Open **Matic Map** from the sidebar:
 
 - **Clean rooms** selects rooms for a single run.
-- **Create a plan** or **Run a plan** manages reusable room routines.
+- **Create a plan** or **Run a plan** manages saved room plans.
 - **Clean custom area** creates or selects a saved custom area.
 - **Map history** browses saved maps; saved floors are read-only.
 

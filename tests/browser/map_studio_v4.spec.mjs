@@ -188,7 +188,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       const gallery = await loadGallery(page, { scenario: "ready", narrow });
       await gallery.evaluate((element) => element.setScenario("draw"));
       const toolbar = gallery.getByRole("toolbar", { name: "Draw area tools" });
-      const loading = gallery.getByText("Loading…", { exact: true });
+      const loading = gallery.locator(".loading[role=status]", { hasText: "Loading…" });
       await expect(toolbar).toBeVisible();
       await expect(loading).toHaveCount(1);
       // A phone's draw sheet rests at peek: the line sits by the tools it is about.
@@ -222,7 +222,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       const failure = gallery.getByRole("alert").filter({ hasText: "The cleaning tools didn't load. Reload the page to try again." });
       await expect(failure).toHaveCount(1);
       await expect(failure).toBeInViewport();
-      await expect(gallery.getByText("Loading…", { exact: true })).toHaveCount(0);
+      await expect(gallery.locator(".loading[role=status]", { hasText: "Loading…" })).toHaveCount(0);
 
       await page.unroute(pattern);
       await Promise.all([
@@ -405,7 +405,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await gallery.evaluate((element) => {
       element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), workflow: "rooms" });
     });
-    const loading = gallery.getByText("Loading…", { exact: true });
+    const loading = gallery.locator(".loading[role=status]", { hasText: "Loading…" });
     await expect(loading).toHaveCount(1);
     await gallery.evaluate((element) => { window.__detached = element; element.remove(); });
     await page.clock.runFor(30_000);
@@ -424,12 +424,13 @@ test.describe("Map Studio v0.4 foundation", () => {
     await gallery.evaluate((element) => {
       element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), workflow: "rooms" });
     });
-    await expect(gallery.getByText("Loading…", { exact: true })).toHaveCount(1);
+    const loading = gallery.locator(".loading[role=status]", { hasText: "Loading…" });
+    await expect(loading).toHaveCount(1);
     await page.clock.runFor(19_000);
-    await expect(gallery.getByText("Loading…", { exact: true })).toHaveCount(1);
+    await expect(loading).toHaveCount(1);
     await page.clock.runFor(1_000);
     await expect(gallery.getByRole("alert").filter({ hasText: "The cleaning tools didn't load. Reload the page to try again." })).toHaveCount(1);
-    await expect(gallery.getByText("Loading…", { exact: true })).toHaveCount(0);
+    await expect(loading).toHaveCount(0);
   });
 
   // MS-KEY-01: a control that leaves while focused hands focus to the heading,
@@ -588,7 +589,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await gallery.getByRole("button", { name: /^Run a plan/ }).click();
     await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
     const preview = gallery.locator("section[aria-labelledby='next-run-preview-heading']");
-    await expect(preview.getByRole("list", { name: "Next-run room order and effective settings" })).toHaveText(/1\. Living room.*Vacuum \+ mop · Heavy duty.*Vacuum and mop are due.*Part 2.*2\. Kitchen.*Vacuum · Quick.*Periodic coverage is due/s);
+    await expect(preview.getByRole("list", { name: "Next-run room order and effective settings" })).toHaveText(/1\. Living room.*Vacuum \+ mop · Heavy duty.*Vacuum and mop are due.*Part 2.*2\. Kitchen.*Vacuum · Quick.*Vacuum rotation is due/s);
     await expect(gallery.getByRole("button", { name: "Run plan", exact: true })).toBeEnabled();
   });
 
@@ -1677,7 +1678,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     // shell.md §2: these rows have no footer button; the strip says the state.
     const gallery = await loadGallery(page, { scenario: "empty" });
     await expect(gallery.locator(".status-copy strong")).toHaveText("No robot");
-    await expect(gallery.locator(".action-bar")).not.toContainText("Set up a Matic robot");
+    await expect(gallery.locator(".action-bar")).not.toContainText("Set up a robot");
     await page.evaluate((tag) => document.querySelector(tag).setScenario("problem"), GALLERY_TAG);
     await expect(gallery.locator(".status-copy strong")).toHaveText("Needs attention");
     await expect(gallery.locator(".action-bar")).not.toContainText("Check the robot");
@@ -4132,7 +4133,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(cadenceSettings.first().locator("summary")).toHaveText("Room schedule for Kitchen");
     await cadenceSettings.first().locator("summary").click();
     await expect(cadenceSettings.first().getByLabel(/How often to mop .*, every 1 to 100 cleans/)).toHaveAttribute("min", "1");
-    await expect(cadenceSettings.first().getByLabel(/How often to add vacuum coverage in .*, every 1 to 100 cleans/)).toHaveAttribute("max", "100");
+    await expect(cadenceSettings.first().getByLabel(/How often to add a vacuum rotation in .*, every 1 to 100 cleans/)).toHaveAttribute("max", "100");
     // Completion options now FOLLOW the room list: choose what to clean first,
     // then how the run should end.
     await expect(inspector.getByRole("heading", { name: "When a run ends", level: 3 })).toBeVisible();
@@ -4176,11 +4177,11 @@ test.describe("Map Studio v0.4 foundation", () => {
       await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
       const cadence = gallery.getByLabel("Rooms in this plan").locator("details").first();
       await cadence.locator("summary").click();
-      await expect(cadence.getByText("Periodic coverage counts only after the robot confirms the vacuum coverage and that the clean finished. If it can't confirm, coverage stays due for the next clean.")).toBeVisible();
+      await expect(cadence.getByText("A vacuum rotation counts only after the robot confirms the vacuum coverage and that the clean finished. If it can't confirm, the rotation stays due for the next clean.")).toBeVisible();
       const scope = cadence.getByLabel("Count cleans for Kitchen");
       const mopInterval = cadence.getByLabel("How often to mop Kitchen, every 1 to 100 cleans");
-      const coverageInterval = cadence.getByLabel("How often to add vacuum coverage in Kitchen, every 1 to 100 cleans");
-      const coverage = cadence.getByLabel("Periodic vacuum coverage setting for Kitchen");
+      const coverageInterval = cadence.getByLabel("How often to add a vacuum rotation in Kitchen, every 1 to 100 cleans");
+      const coverage = cadence.getByLabel("Vacuum rotation level for Kitchen");
       const layout = await cadence.locator(".cadence-fields").evaluate((settings) => {
         const bounds = settings.getBoundingClientRect();
         const fields = [...settings.querySelectorAll("input[type=number], select")].map((control) => {
@@ -6940,7 +6941,7 @@ for (const activity of ["docked", "idle"]) {
       }, { tag: GALLERY_TAG, activity, betweenLegs });
       await expect(gallery.locator(".status-copy strong")).toHaveText("Run in progress");
       await expect(gallery.locator(".status-copy small")).toHaveText(activity === "docked"
-        ? "Robot docked; the cleaning task has not finished." : "Waiting for the cleaning task to continue or finish.");
+        ? "Robot docked; the clean has not finished." : "Waiting for the clean to continue or finish.");
       await expect(gallery.getByRole("button", { name: "Stop cleaning", exact: true }).first()).toBeEnabled();
     });
   }
@@ -6961,7 +6962,7 @@ for (const ordered of [false, true]) {
     }, { tag: GALLERY_TAG, ordered });
     await expect(gallery.locator(".plan-transition-hint")).toContainText("may be cleaned in separate parts");
     await expect(gallery.locator(".plan-transition-hint")).toContainText(ordered
-      ? "Placing rooms with matching settings together" : "Longest-waiting rooms first, rechecked when you run the plan");
+      ? "Placing rooms with matching settings together" : "Longest-waiting rooms first, checked again when you run the plan");
     expect((await snapshot(page)).planDraft.rooms.map((room) => room.roomId)).toEqual(["room-one", "room-two"]);
   });
 }
@@ -7440,6 +7441,22 @@ for (const flag of ["complete", "floorCoherent", "sessionVerified"]) test(`Name 
   }, flag);
   await expect(save).toBeDisabled();
   await expect(save).toHaveAccessibleDescription("Can't save until Home Assistant can confirm this map.");
+});
+
+for (const [missing, reason] of [
+  ["name", "Can't save until you name the area."],
+  ["circles", "Can't save until you draw the area."],
+]) test(`Save area names the missing ${missing} in its disabled reason`, async ({ page }) => {
+  const gallery = await loadGallery(page, { scenario: "ready" });
+  await gallery.evaluate((element, missing) => {
+    const state = element.getWorkspaceSnapshot();
+    element.replaceWorkspaceState({ ...state, workflow: "areaReview",
+      areaDraft: { ...state.areaDraft, id: null, name: missing === "name" ? "" : "Kitchen corner", dirty: true },
+      draw: { ...state.draw, circles: missing === "circles" ? [] : [{ x: 1, y: 1, radius: .2 }], dirty: true } });
+  }, missing);
+  const save = gallery.locator(".action-bar").getByRole("button", { name: "Save area", exact: true });
+  await expect(save).toBeDisabled();
+  await expect(save).toHaveAccessibleDescription(reason);
 });
 
 for (const change of ["revision", "floor", "session"]) test(`slow initial scene survives only a ${change} catalog update`, async ({ page }) => {
@@ -8134,7 +8151,7 @@ test("map taps select run and plan rooms in both views and clear old deletion no
 async function settleWorkspace(gallery) {
   const { workflow } = await gallery.evaluate((element) => element.getWorkspaceSnapshot());
   if (workflow !== "none") await expect(gallery.locator("matic-map-workflow-v4")).toBeAttached();
-  await expect(gallery.getByText("Loading…", { exact: true })).toHaveCount(0);
+  await expect(gallery.locator(".loading[role=status]", { hasText: "Loading…" })).toHaveCount(0);
   await gallery.evaluate(async (element) => {
     await element.updateComplete;
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));

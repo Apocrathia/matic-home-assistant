@@ -538,7 +538,7 @@ def test_options_flow_directs_editing_to_the_single_map_workspace() -> None:
         assert "actions that do not name a plan" in steps["default_plan"]["description"]
         assert "{plan_name}" in steps["confirm_reset_history"]["description"]
         assert (
-            "Saved plans and their settings remain"
+            "Your plans and their settings are kept"
             in steps["confirm_reset_history"]["description"]
         )
 
@@ -572,8 +572,8 @@ def test_user_copy_matches_pairing_and_plan_behavior() -> None:
             assert "enter the new code" in recovery
 
         pairing = translations["config"]["step"]["pair"]["description"]
-        assert "Confirm below only after the pairing window is open" in pairing
-        assert "will display a six-digit code" in pairing
+        assert "confirm below while the pairing window is open" in pairing
+        assert "The robot shows a six-digit code" in pairing
         assert "without a new code" not in pairing
 
         options = translations["options"]
@@ -617,7 +617,7 @@ def test_user_copy_matches_pairing_and_plan_behavior() -> None:
         }
         assert (
             translations["entity"]["button"]["clean_selected_area"]["name"]
-            == "Clean selected area"
+            == "Clean custom area"
         )
 
         services = translations["services"]
@@ -628,7 +628,7 @@ def test_user_copy_matches_pairing_and_plan_behavior() -> None:
         assert "top to bottom" in services["clean_entire_plan"]["description"]
         assert "the way it is saved" in services["run_selected_plan"]["description"]
         assert (
-            "after all selected rooms finish successfully"
+            "after all selected rooms finish."
             in services["save_plan"]["fields"]["return_to_base"]["description"]
         )
         clean_fields = services["clean"]["fields"]
@@ -677,7 +677,7 @@ def test_user_copy_matches_pairing_and_plan_behavior() -> None:
         for alias in ("start", "clean_segments", "dock"):
             assert alias in exceptions["unsupported_command"]["message"]
         assert exceptions["single_robot_required"]["message"] == (
-            "Select exactly one Matic robot."
+            "Select exactly one robot."
         )
         assert "room map" in exceptions["room_plan_unavailable"]["message"]
         assert "reported an error" in exceptions["robot_error"]["message"]

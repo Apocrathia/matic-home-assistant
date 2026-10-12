@@ -156,7 +156,7 @@ line-height: var(--ms-lh-snug);
 
   #cadenceReason(reason: string): string {
     if (reason === "mop_due") return this.#t("v4_cadence_mop_due_reason", "Vacuum and mop are due");
-    if (reason === "coverage_due") return this.#t("v4_cadence_coverage_due_reason", "Periodic coverage is due");
+    if (reason === "coverage_due") return this.#t("v4_cadence_coverage_due_reason", "Vacuum rotation is due");
     if (reason === "mop_progress_unverified") return this.#t("v4_cadence_mop_progress_unverified", "Can't run this schedule until you reset its mopping progress, which Home Assistant can't confirm.");
     if (reason === "coverage_progress_unverified") return this.#t("v4_cadence_coverage_progress_unverified", "Can't run this schedule until you reset its vacuum rotation progress, which Home Assistant can't confirm.");
     return this.#t("v4_cadence_due_unknown_reason", "Schedule setting due");
@@ -270,7 +270,7 @@ line-height: var(--ms-lh-snug);
           <input type="checkbox" .checked=${!this.state.selection.useRoomSchedule} @change=${(event: Event) => this.#intent({ type: "set-use-room-schedule", value: !eventChecked(event) })}>
           <span class="plan-option-copy">
             <strong>${this.#t("v4_override_room_schedule", "Override shared schedule settings")}</strong>
-            <small>${this.#t("v4_override_room_schedule_hint", "By default, this clean follows the shared schedule. Turn this on to use the settings you chose here instead. Anything due stays due, and cleans that match a schedule still count toward its progress.")}</small>
+            <small>${this.#t("v4_override_room_schedule_hint", "This clean follows the shared schedule unless you turn this on to use the settings chosen here. Anything due stays due, and matching cleans still count toward the schedule.")}</small>
           </span>
         </label>
         ${this.state.selection.roomIds.map((roomId) => {
@@ -409,10 +409,10 @@ line-height: var(--ms-lh-snug);
     }
     if (policy.coverageEveryN) {
       parts.push(coverageDue
-        ? this.#t("v4_cadence_coverage_due", "{coverage} periodic coverage is due on this clean.", {
+        ? this.#t("v4_cadence_coverage_due", "{coverage} vacuum rotation is due on this clean.", {
           coverage: this.#coverageLabel(policy.periodicCoverageSetting || "standard"),
         })
-        : this.#t("v4_cadence_coverage_progress", "Periodic coverage every {interval} cleans; {completed} counted so far.", {
+        : this.#t("v4_cadence_coverage_progress", "Vacuum rotation every {interval} cleans; {completed} counted so far.", {
           interval: policy.coverageEveryN,
           completed: progress?.coverageProgress ?? 0,
         }));
@@ -505,12 +505,12 @@ line-height: var(--ms-lh-snug);
           <label class="field ms-field">${this.#t("v4_cadence_mop_interval", "Vacuum and mop every N cleans")}
             <input type="number" min="1" max="100" step="1" inputmode="numeric" aria-label=${this.#t("v4_cadence_mop_interval_named", "How often to mop {room}, every 1 to 100 cleans", { room: label })} .value=${policy.mopEveryN?.toString() || ""} ?disabled=${room.cleaningMode !== "vacuum"} @change=${(event: Event) => this.#patchCadenceInterval(event, index, "mopEveryN")}>
           </label>
-          <label class="field ms-field">${this.#t("v4_cadence_coverage_interval", "Use periodic vacuum coverage every N cleans")}
-            <input type="number" min="1" max="100" step="1" inputmode="numeric" aria-label=${this.#t("v4_cadence_coverage_interval_named", "How often to add vacuum coverage in {room}, every 1 to 100 cleans", { room: label })} ?disabled=${room.cleaningMode === "mop"} .value=${policy.coverageEveryN?.toString() || ""} @change=${(event: Event) => this.#patchCadenceInterval(event, index, "coverageEveryN")}>
+          <label class="field ms-field">${this.#t("v4_cadence_coverage_interval", "Vacuum rotation every N cleans")}
+            <input type="number" min="1" max="100" step="1" inputmode="numeric" aria-label=${this.#t("v4_cadence_coverage_interval_named", "How often to add a vacuum rotation in {room}, every 1 to 100 cleans", { room: label })} ?disabled=${room.cleaningMode === "mop"} .value=${policy.coverageEveryN?.toString() || ""} @change=${(event: Event) => this.#patchCadenceInterval(event, index, "coverageEveryN")}>
           </label>
           ${policy.coverageEveryN ? html`
-            <label class="field ms-field">${this.#t("v4_cadence_periodic_coverage", "Periodic vacuum coverage setting")}
-              <select aria-label=${this.#t("v4_cadence_periodic_coverage_named", "Periodic vacuum coverage setting for {room}", { room: label })} ?disabled=${room.cleaningMode === "mop"} .value=${policy.periodicCoverageSetting || "standard"} @change=${(event: Event) => this.#patchPlanCadence(index, { periodicCoverageSetting: eventValue(event) as CoverageSetting })}>${coverage.map((option) => html`<option value=${option} ?selected=${option === policy.periodicCoverageSetting}>${this.#coverageLabel(option)}</option>`)}</select>
+            <label class="field ms-field">${this.#t("v4_cadence_periodic_coverage", "Vacuum rotation level")}
+              <select aria-label=${this.#t("v4_cadence_periodic_coverage_named", "Vacuum rotation level for {room}", { room: label })} ?disabled=${room.cleaningMode === "mop"} .value=${policy.periodicCoverageSetting || "standard"} @change=${(event: Event) => this.#patchPlanCadence(index, { periodicCoverageSetting: eventValue(event) as CoverageSetting })}>${coverage.map((option) => html`<option value=${option} ?selected=${option === policy.periodicCoverageSetting}>${this.#coverageLabel(option)}</option>`)}</select>
             </label>
           ` : nothing}
         </div>
@@ -525,9 +525,9 @@ line-height: var(--ms-lh-snug);
         ${policy.mopEveryN && room.cleaningMode === "vacuum" ? html`<p class="subtle">${this.#t("v4_cadence_clear_mop_to_change_normal", "Can't change the cleaning mode until the mop schedule is off.")}</p>` : nothing}
         <div class="plan-options" role="group" aria-label=${this.#t("v4_cadence_next_actions_named", "Next clean options for {room}", { room: label })}>
           <label class="plan-option"><input type="checkbox" aria-label=${this.#t("v4_cadence_do_mop_next_named", "Do vacuum and mop on the next clean for {room}", { room: label })} .checked=${policy.doMopNext} ?disabled=${!policy.mopEveryN} @change=${(event: Event) => this.#patchPlanCadence(index, { doMopNext: eventChecked(event) })}><span class="plan-option-copy"><strong>${this.#t("v4_cadence_do_mop_next", "Do vacuum and mop on the next clean")}</strong></span></label>
-          <label class="plan-option"><input type="checkbox" aria-label=${this.#t("v4_cadence_do_coverage_next_named", "Use periodic vacuum coverage on the next clean for {room}", { room: label })} .checked=${policy.doCoverageNext} ?disabled=${!policy.coverageEveryN || room.cleaningMode === "mop"} @change=${(event: Event) => this.#patchPlanCadence(index, { doCoverageNext: eventChecked(event) })}><span class="plan-option-copy"><strong>${this.#t("v4_cadence_do_coverage_next", "Use periodic vacuum coverage on the next clean")}</strong></span></label>
+          <label class="plan-option"><input type="checkbox" aria-label=${this.#t("v4_cadence_do_coverage_next_named", "Add a vacuum rotation on the next clean for {room}", { room: label })} .checked=${policy.doCoverageNext} ?disabled=${!policy.coverageEveryN || room.cleaningMode === "mop"} @change=${(event: Event) => this.#patchPlanCadence(index, { doCoverageNext: eventChecked(event) })}><span class="plan-option-copy"><strong>${this.#t("v4_cadence_do_coverage_next", "Add a vacuum rotation on the next clean")}</strong></span></label>
         </div>
-        ${policy.coverageEveryN ? html`<p class="subtle">${this.#t("v4_cadence_coverage_verification_hint", "Periodic coverage counts only after the robot confirms the vacuum coverage and that the clean finished. If it can't confirm, coverage stays due for the next clean.")}</p>` : nothing}
+        ${policy.coverageEveryN ? html`<p class="subtle">${this.#t("v4_cadence_coverage_verification_hint", "A vacuum rotation counts only after the robot confirms the vacuum coverage and that the clean finished. If it can't confirm, the rotation stays due for the next clean.")}</p>` : nothing}
         <p class="subtle" aria-live="polite">${this.#cadenceSummary(policy, progress, room.cadenceReasons)}</p>
         ${draft.id && (policy.mopEveryN || policy.coverageEveryN || hasMopProgress || hasCoverageProgress) ? html`
           <div class="toolbar">
@@ -672,7 +672,7 @@ line-height: var(--ms-lh-snug);
           <p class="subtle plan-transition-hint">${this.#t("v4_plan_mixed_settings", "Rooms with different cleaning settings may be cleaned in separate parts, and the robot may briefly touch the dock between parts.")}
             ${draft.runBehavior === "ordered"
               ? this.#t("v4_plan_group_settings", "Placing rooms with matching settings together can reduce transitions.")
-              : this.#t("v4_plan_rotation_settings", "Longest-waiting rooms first, rechecked when you run the plan.")}
+              : this.#t("v4_plan_rotation_settings", "Longest-waiting rooms first, checked again when you run the plan.")}
           </p>
         ` : nothing}
         <div class="list" role="group" aria-labelledby="plan-rooms-heading">
