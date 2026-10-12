@@ -621,7 +621,7 @@ export const reduceWorkspace = (
       // A saved plan's Edit steps back to its Run view; Run and a new plan's
       // Edit step back to the picker.
       if (state.workflow === "plan" && state.planView === "edit" && state.planDraft.id !== null) {
-        return { ...state, planView: "run", expandedRoom: null, precisionOpen: false };
+        return { ...state, planView: "run", expandedRoom: null };
       }
       if (state.workflow !== "none") {
         return {

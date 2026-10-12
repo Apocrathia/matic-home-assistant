@@ -8133,6 +8133,52 @@ test.describe("plan view state", () => {
       { type: "toggle-room", roomId: "room-a" },
       { type: "discard-draft" },
     ])).toMatchObject({ workflow: "plans", planView: "run", dialog: null, planId: null, draft: { id: null, dirty: false, rooms: [] } });
+    // A saved plan the catalog no longer holds has no Run view to return to.
+    expect(await page.evaluate(async () => {
+      const { WorkspaceStore, createGalleryState } = await import("/plan-recovery-test.js");
+      const state = createGalleryState("plan-dirty");
+      const store = new WorkspaceStore({ ...state, resources: { ...state.resources,
+        plans: { ...state.resources.plans, value: { ...state.resources.plans.value, plans: [] } } } });
+      store.dispatch({ type: "discard-draft" });
+      const { workflow, planView, selection, planDraft } = store.value;
+      return { workflow, planView, planId: selection.planId, id: planDraft.id, dirty: planDraft.dirty };
+    })).toEqual({ workflow: "plans", planView: "run", planId: null, id: null, dirty: false });
+  });
+
+  test("a reload without the open saved plan leaves a blank plan in Edit, never in Run", async ({ page }) => {
+    await loadEffectHarness(page);
+    const result = await page.evaluate(async () => {
+      const { EffectController, WorkspaceStore, createGalleryState, layerDepth } = await import("/plan-recovery-test.js");
+      const initial = createGalleryState("plans");
+      const store = new WorkspaceStore(initial);
+      const catalog = { deleted: false };
+      const aborted = async () => { throw new DOMException("Aborted", "AbortError"); };
+      const effects = new EffectController(store, {
+        catalog: async () => [initial.resources.entry], scene: aborted, pose: aborted,
+        history: async () => initial.resources.history.value,
+        plans: async () => {
+          const value = structuredClone(initial.resources.plans.value);
+          return catalog.deleted ? { ...value, plans: value.plans.filter((plan) => plan.id !== "daily") } : value;
+        },
+        areas: async () => initial.resources.areas.value,
+        dispose() {},
+      });
+      try {
+        effects.sync({ host: initial.host, activity: initial.activity, batteryPercent: 92, robotLabel: "Synthetic", robots: initial.robots, language: "en", userKey: "one", entryKey: initial.selection.entryId, vacuumEntityId: "vacuum.synthetic" });
+        await effects.refreshCatalog(true);
+        store.patch({ map: initial.map, coherence: "current" });
+        await effects.loadPlans({ force: true });
+        effects.selectPlan("daily");
+        const opened = { planView: store.value.planView, id: store.value.planDraft.id };
+        catalog.deleted = true;
+        await effects.loadPlans({ force: true });
+        const state = store.value;
+        return { opened, workflow: state.workflow, planView: state.planView, expandedRoom: state.expandedRoom,
+          id: state.planDraft.id, depth: layerDepth(state) };
+      } finally { effects.dispose(); }
+    });
+    expect(result).toEqual({ opened: { planView: "run", id: "daily" }, workflow: "plan", planView: "edit",
+      expandedRoom: null, id: null, depth: 2 });
   });
 
   test("dismissing steps Edit to Run, then Run or a new plan to the picker", async ({ page }) => {

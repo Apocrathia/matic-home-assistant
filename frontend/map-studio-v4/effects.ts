@@ -2098,6 +2098,9 @@ export class EffectController {
           parkedRooms: [],
           dirty: false,
         },
+        // A plan deleted elsewhere leaves a blank new plan, which only Edit
+        // shows; outside the plan workflow the store resets the view.
+        ...(plan ? {} : { planView: "edit" as const, expandedRoom: null }),
       });
       return plans;
     } catch (error) {

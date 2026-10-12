@@ -1,4 +1,4 @@
-import{N as C,O as L}from"./chunk-MOL7RSG7.js";var W=C`
+import{N as C,O as L}from"./chunk-LAEYENG5.js";var W=C`
 :host {
 --ms-safe-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
 --ms-safe-right: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
