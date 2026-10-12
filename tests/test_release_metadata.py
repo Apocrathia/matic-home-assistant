@@ -512,12 +512,26 @@ def test_user_copy_matches_pairing_and_plan_behavior() -> None:
             "intelligent_clean": "Run intelligent rotation",
             "clean_entire_plan": "Run saved order",
             "stop_intelligent_cleaning": "Stop cleaning",
-            "reset_plan_history": "Reset room cleaning history",
+            "reset_plan_history": "Reset cleaning history",
             "inspect_hermes_endpoint": "Advanced: Inspect robot data",
             "firmware_snapshot": "Advanced: Record firmware snapshot",
             "firmware_investigator": "Advanced: Choose firmware investigator",
             "firmware_notification": "Advanced: Update firmware notification",
         }
+        assert services["save_plan"]["fields"]["run_behavior"]["description"].endswith(
+            "Saved order cleans every selected room from top to bottom."
+        )
+        assert services["firmware_investigator"]["description"] == (
+            "Home Assistant assigns the connected agent that researches firmware "
+            "reports, and robot controls are unchanged. Switching agents ends any "
+            "research already claimed and keeps the evidence, and only "
+            "administrators can call this action."
+        )
+        assert services["firmware_notification"]["description"] == (
+            "Home Assistant records that the current firmware report was "
+            "acknowledged or that its notification was delivered, or asks for "
+            "another read-only check. The firmware alerts blueprint uses it."
+        )
         exceptions = translations["exceptions"]
         for alias in ("start", "clean_segments", "dock"):
             assert alias in exceptions["unsupported_command"]["message"]

@@ -589,7 +589,7 @@
         "description": "Edit plans and custom areas on the [Matic Map](/matic-map) page in the sidebar. Choosing a default plan or resetting room cleaning history needs a saved plan (saved plans: {plan_count}).",
         "menu_options": {
           "default_plan": "Choose the default plan",
-          "reset_history": "Reset room cleaning history",
+          "reset_history": "Reset cleaning history",
           "workspace_transport": "Matic Map live updates",
           "finish": "Done"
         }
@@ -605,7 +605,7 @@
         }
       },
       "reset_history": {
-        "title": "Reset room cleaning history",
+        "title": "Reset cleaning history",
         "description": "Choose the plan to reset. The next screen asks you to confirm.",
         "data": {
           "plan": "Plan"
@@ -1257,7 +1257,7 @@
       }
     },
     "reset_plan_history": {
-      "name": "Reset room cleaning history",
+      "name": "Reset cleaning history",
       "description": "Clears room completion history without deleting plans or room settings.",
       "fields": {
         "plan": {
@@ -1311,7 +1311,7 @@
         },
         "run_behavior": {
           "name": "Cleaning order",
-          "description": "Intelligent rotation cleans the rooms that have waited longest first; saved order breaks ties. Run all in saved order cleans every selected room from top to bottom."
+          "description": "Intelligent rotation cleans the rooms that have waited longest first; saved order breaks ties. Saved order cleans every selected room from top to bottom."
         },
         "rooms": {
           "name": "Rooms and settings",
@@ -1429,7 +1429,7 @@
     },
     "firmware_investigator": {
       "name": "Advanced: Choose firmware investigator",
-      "description": "Choose which connected agent researches firmware reports. This doesn't change any robot controls. Switching ends any research already claimed and keeps the evidence. Administrator access is required.",
+      "description": "Home Assistant assigns the connected agent that researches firmware reports, and robot controls are unchanged. Switching agents ends any research already claimed and keeps the evidence, and only administrators can call this action.",
       "fields": {
         "provider": {
           "name": "Investigator",
@@ -1439,7 +1439,7 @@
     },
     "firmware_notification": {
       "name": "Advanced: Update firmware notification",
-      "description": "Acknowledge the current firmware report, record that a notification was delivered, or ask for another read-only check. Used by the Firmware intelligence blueprint.",
+      "description": "Home Assistant records that the current firmware report was acknowledged or that its notification was delivered, or asks for another read-only check. The firmware alerts blueprint uses it.",
       "fields": {
         "report_id": {
           "name": "Report ID",
