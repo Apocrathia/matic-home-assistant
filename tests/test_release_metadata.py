@@ -322,6 +322,8 @@ _COPY_SURFACES: dict[str, Callable[[], Copy]] = {
     "strings:config": lambda: _texts(_strings()["config"], "config"),
     "strings:options": lambda: _texts(_strings()["options"], "options"),
     "strings:issues": lambda: _texts(_strings()["issues"], "issues"),
+    "strings:entity": lambda: _texts(_strings()["entity"], "entity"),
+    "strings:selector": lambda: _texts(_strings()["selector"], "selector"),
 }
 
 
@@ -409,8 +411,8 @@ def test_user_copy_matches_pairing_and_plan_behavior() -> None:
         )
 
         entities = translations["entity"]["binary_sensor"]
-        assert entities["diagnostic_upload"]["name"].startswith("Robot ")
-        assert entities["ssh_tunnel_permission"]["name"].startswith("Robot ")
+        assert entities["diagnostic_upload"]["name"] == "Diagnostic upload"
+        assert entities["ssh_tunnel_permission"]["name"] == "Support tunnel permission"
         assert entities["paused"]["state"] == {
             "off": "Not paused",
             "on": "Paused",
@@ -423,7 +425,7 @@ def test_user_copy_matches_pairing_and_plan_behavior() -> None:
             "Mopping water flow"
         )
         assert translations["entity"]["sensor"]["cleaning_history"]["name"] == (
-            "Plan room completions"
+            "Rooms cleaned by plans"
         )
         selects = translations["entity"]["select"]
         assert selects["cleaning_mode"]["name"] == "Default cleaning mode"
@@ -431,12 +433,12 @@ def test_user_copy_matches_pairing_and_plan_behavior() -> None:
         assert selects["saved_cleaning_plan"]["name"] == "Default cleaning plan"
         assert selects["custom_cleaning_area"]["name"] == "Custom cleaning area"
         assert translations["selector"]["coverage_setting"]["options"] == {
-            "heavy_duty": "Heavy Duty",
+            "heavy_duty": "Heavy duty",
             "quick": "Quick",
             "standard": "Optimal",
         }
         assert selects["coverage_setting"]["state"] == {
-            "heavy_duty": "Heavy Duty",
+            "heavy_duty": "Heavy duty",
             "quick": "Quick",
             "standard": "Optimal",
         }
@@ -485,7 +487,7 @@ def test_user_copy_matches_pairing_and_plan_behavior() -> None:
         assert "payload-free compatibility record" in firmware_snapshot
         assert "value-free wire-shape changes" in firmware_snapshot
         assert (
-            "so open the Firmware compatibility sensor"
+            "so open the Firmware check status sensor"
             in translations["issues"]["firmware_regression"]["description"]
         )
 

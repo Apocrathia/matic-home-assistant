@@ -639,8 +639,8 @@
   "selector": {
     "cadence_scope": {
       "options": {
-        "plan": "This plan",
-        "shared": "Shared for this room"
+        "plan": "In this plan only",
+        "shared": "Across all plans (recommended)"
       }
     },
     "cleaning_mode": {
@@ -652,15 +652,15 @@
     },
     "coverage_setting": {
       "options": {
-        "heavy_duty": "Heavy Duty",
+        "heavy_duty": "Heavy duty",
         "quick": "Quick",
         "standard": "Optimal"
       }
     },
     "run_behavior": {
       "options": {
-        "intelligent": "Intelligent rotation",
-        "ordered": "Run all in saved order"
+        "intelligent": "Intelligent rotation (longest-waiting rooms first)",
+        "ordered": "Saved order"
       }
     }
   },
@@ -710,17 +710,17 @@
         }
       },
       "active_cleaning_session": {
-        "name": "Active cleaning session"
+        "name": "Cleaning run in progress"
       },
       "diagnostic_upload": {
-        "name": "Robot diagnostic upload",
+        "name": "Diagnostic upload",
         "state": {
           "off": "Disabled",
           "on": "Enabled"
         }
       },
       "ssh_tunnel_permission": {
-        "name": "Robot SSH tunnel permission",
+        "name": "Support tunnel permission",
         "state": {
           "off": "Not allowed",
           "on": "Allowed"
@@ -746,16 +746,16 @@
     },
     "button": {
       "run_selected_plan": {
-        "name": "Start default plan"
+        "name": "Run plan"
       },
       "intelligent_clean": {
-        "name": "Start intelligent rotation"
+        "name": "Run intelligent rotation"
       },
       "clean_entire_plan": {
-        "name": "Clean all rooms in default plan"
+        "name": "Run saved order"
       },
       "stop_intelligent_cleaning": {
-        "name": "Stop plan and dock"
+        "name": "Stop cleaning"
       },
       "clean_selected_area": {
         "name": "Clean selected area"
@@ -786,7 +786,7 @@
       "coverage_setting": {
         "name": "Default vacuum coverage",
         "state": {
-          "heavy_duty": "Heavy Duty",
+          "heavy_duty": "Heavy duty",
           "quick": "Quick",
           "standard": "Optimal"
         }
@@ -818,20 +818,20 @@
         "name": "Active cleaning plan"
       },
       "cleaning_history": {
-        "name": "Plan room completions"
+        "name": "Rooms cleaned by plans"
       },
       "current_area": {
-        "name": "Current area"
+        "name": "Current room"
       },
       "cues_voice_status": {
         "name": "Cues voice status",
         "state": {
           "disabled": "Disabled",
           "listening_for_wake_word": "Ready for wake word",
-          "listening_for_intent": "Listening for intent",
-          "thinking_for_intent": "Processing intent",
-          "classified": "Intent classified",
-          "rejected": "Intent rejected"
+          "listening_for_intent": "Listening for a command",
+          "thinking_for_intent": "Working out the command",
+          "classified": "Command understood",
+          "rejected": "Command not understood"
         }
       },
       "cues_gesture_status": {
@@ -852,10 +852,10 @@
         "name": "Dock detections"
       },
       "hardware_revision": {
-        "name": "Hardware revision"
+        "name": "Hardware version"
       },
       "local_cleaning_sessions": {
-        "name": "Local cleaning sessions"
+        "name": "Robot cleaning runs"
       },
       "protocol_version": {
         "name": "Protocol version"
@@ -870,13 +870,13 @@
         "name": "Software version"
       },
       "firmware_compatibility": {
-        "name": "Firmware compatibility",
+        "name": "Firmware check status",
         "state": {
           "pending": "Checking",
-          "baseline": "Baseline recorded",
+          "baseline": "Checks recorded for comparison",
           "compatible": "Compatible",
-          "regression": "Read checks need attention",
-          "current": "Current"
+          "regression": "Some robot reads are failing",
+          "current": "Up to date"
         }
       },
       "sink_summon_locations": {
@@ -917,7 +917,7 @@
         "name": "{room} last cleaned"
       },
       "last_run_duration": {
-        "name": "Last run duration"
+        "name": "Last clean duration"
       },
       "wifi_signal": {
         "name": "Wi-Fi signal"
@@ -946,7 +946,7 @@
         "name": "Pet-waste avoidance"
       },
       "voice_assistant": {
-        "name": "Matic Cues"
+        "name": "Cues voice assistant"
       }
     },
     "event": {
@@ -958,9 +958,9 @@
               "disabled": "Disabled",
               "ready": "Ready",
               "wake_word_detected": "Wake word detected",
-              "intent_processing": "Processing intent",
-              "intent_classified": "Intent classified",
-              "intent_rejected": "Intent rejected",
+              "intent_processing": "Working out the command",
+              "intent_classified": "Command understood",
+              "intent_rejected": "Command not understood",
               "gesture_awaiting_pointed_target": "Waiting for pointed target",
               "gesture_pointed_target_accepted": "Pointed target accepted",
               "gesture_no_target_found": "No target found",
@@ -972,7 +972,7 @@
             }
           },
           "intent": {
-            "name": "Intent",
+            "name": "Command",
             "state": {
               "clean": "Clean",
               "clean_all": "Clean all",
@@ -1102,7 +1102,7 @@
   "issues": {
     "firmware_regression": {
       "title": "Matic firmware checks need attention",
-      "description": "Home Assistant repeatedly could not read {count} items from the robot on firmware {current}, and the saved comparison is from firmware {previous}. A read failure does not prove a firmware problem, so open the Firmware compatibility sensor to see which items failed and whether the robot has recovered."
+      "description": "Home Assistant repeatedly could not read {count} items from the robot on firmware {current}, and the saved comparison is from firmware {previous}. A read failure does not prove a firmware problem, so open the Firmware check status sensor to see which items failed and whether the robot has recovered."
     },
     "robot_identity_changed": {
       "title": "Can't confirm this is your robot",

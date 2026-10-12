@@ -35,7 +35,7 @@ when completion is verified. [How rotation works](cleaning.md#intelligent-rotati
 Map Studio brings live 2D/3D maps, room selection, plan editing, named custom
 areas, and saved map history into Home Assistant. Dashboard cameras and entities
 let you build your own view. Settings include water flow, double-pass mopping,
-child lock, pet-waste avoidance, and Matic Cues.
+child lock, pet-waste avoidance, and the Cues voice assistant.
 
 [Map and area guide](cleaning.md) · [Entity reference](entities.md)
 

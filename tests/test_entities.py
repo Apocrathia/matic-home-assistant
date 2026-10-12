@@ -357,6 +357,30 @@ async def test_platform_setups_create_the_full_entity_surface(hass) -> None:
     assert all(entity.device_info["manufacturer"] == "Matic" for entity in entities)
 
 
+async def test_renamed_entities_keep_their_entity_ids(hass) -> None:
+    entry, entities = _entry(), []
+    for platform in (button, sensor):
+        await platform.async_setup_entry(
+            hass, entry, lambda values: entities.extend(values)
+        )
+    by_key = {
+        e.unique_id.split("_", 1)[1]: e for e in entities
+    }  # unique_id is "<serial>_<key>"
+    for key in (
+        "run_selected_plan",
+        "intelligent_clean",
+        "clean_entire_plan",
+        "stop_intelligent_cleaning",
+        "current_area",
+        "cleaning_history",
+        "last_run_duration",
+        "local_cleaning_sessions",
+        "firmware_compatibility",
+    ):
+        # entity.py slugifies the key, never the translated name
+        assert by_key[key].suggested_object_id == key
+
+
 async def test_room_statistics_sensors_follow_floor_plan_growth(hass) -> None:
     entry = _entry()
     coordinator = entry.runtime_data.coordinator
