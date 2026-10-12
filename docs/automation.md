@@ -40,7 +40,7 @@ actions:
 ## Saved plans
 
 Create a plan in [Matic Map](cleaning.md#saved-plans), then call
-`matic_robot.run_selected_plan`. Use `plan` to choose a name or stable ID;
+`matic_robot.run_selected_plan`. Use `plan` to choose a name or ID;
 omit it to run the default plan. `matic_robot.preview_plan` returns the next
 room order and settings without starting a run.
 

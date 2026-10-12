@@ -317,6 +317,27 @@ def _strings() -> dict:
     return json.loads((INTEGRATION / "strings.json").read_text())
 
 
+def _advanced() -> set[str]:
+    return {
+        key
+        for key, value in _strings()["services"].items()
+        if value.get("name", "").startswith("Advanced: ")
+    }
+
+
+def _services() -> Copy:
+    for key, value in _strings()["services"].items():
+        if key not in _advanced():
+            yield from _texts(value, f"services.{key}")
+
+
+def _services_yaml() -> Copy:
+    data = yaml.safe_load((INTEGRATION / "services.yaml").read_text())
+    for key, value in data.items():
+        if key not in _advanced():
+            yield from _texts(value, f"services.yaml.{key}")
+
+
 _COPY_SURFACES: dict[str, Callable[[], Copy]] = {
     "strings:common": _common,
     "strings:config": lambda: _texts(_strings()["config"], "config"),
@@ -324,6 +345,8 @@ _COPY_SURFACES: dict[str, Callable[[], Copy]] = {
     "strings:issues": lambda: _texts(_strings()["issues"], "issues"),
     "strings:entity": lambda: _texts(_strings()["entity"], "entity"),
     "strings:selector": lambda: _texts(_strings()["selector"], "selector"),
+    "strings:services": _services,
+    "services.yaml": _services_yaml,
 }
 
 
@@ -335,6 +358,15 @@ def test_plan_ui_uses_clear_scheduler_language(surface: str) -> None:
         for path, text in _COPY_SURFACES[surface]()
     }
     assert {path: found for path, found in hits.items() if found} == {}
+
+
+def test_advanced_actions_are_exactly_the_four_named() -> None:
+    assert _advanced() == {
+        "inspect_hermes_endpoint",
+        "firmware_snapshot",
+        "firmware_investigator",
+        "firmware_notification",
+    }
 
 
 def test_denylist_scanner_matches_plurals_and_verify_family() -> None:
@@ -448,22 +480,12 @@ def test_user_copy_matches_pairing_and_plan_behavior() -> None:
         )
 
         services = translations["services"]
-        assert (
-            "least recently confirmed as the current cleaning area"
-            in services["intelligent_clean"]["description"]
-        )
-        assert "continues until stopped" in services["intelligent_clean"]["description"]
-        assert (
-            "rooms that started remain due"
-            in services["intelligent_clean"]["description"]
-        )
-        assert (
-            "Rejected commands and lingering prior-room state"
-            in (services["intelligent_clean"]["description"])
-        )
-        assert "without monopolizing" in services["intelligent_clean"]["description"]
+        intelligent = services["intelligent_clean"]["description"]
+        assert "starting with the ones that have waited longest" in intelligent
+        assert "keeps going until you stop it or every room is done" in intelligent
+        assert "stay due for the next run" in intelligent
         assert "top to bottom" in services["clean_entire_plan"]["description"]
-        assert "saved cleaning behavior" in services["run_selected_plan"]["description"]
+        assert "the way it is saved" in services["run_selected_plan"]["description"]
         assert (
             "after all selected rooms finish successfully"
             in services["save_plan"]["fields"]["return_to_base"]["description"]
@@ -472,6 +494,30 @@ def test_user_copy_matches_pairing_and_plan_behavior() -> None:
         assert "Omit this field" in clean_fields["rooms"]["description"]
         assert "Omit it" in clean_fields["cleaning_mode"]["description"]
         assert "Omit it" in clean_fields["coverage_setting"]["description"]
+        assert {
+            key: services[key]["name"]
+            for key in (
+                "run_selected_plan",
+                "intelligent_clean",
+                "clean_entire_plan",
+                "stop_intelligent_cleaning",
+                "reset_plan_history",
+                "inspect_hermes_endpoint",
+                "firmware_snapshot",
+                "firmware_investigator",
+                "firmware_notification",
+            )
+        } == {
+            "run_selected_plan": "Run plan",
+            "intelligent_clean": "Run intelligent rotation",
+            "clean_entire_plan": "Run saved order",
+            "stop_intelligent_cleaning": "Stop cleaning",
+            "reset_plan_history": "Reset room cleaning history",
+            "inspect_hermes_endpoint": "Advanced: Inspect robot data",
+            "firmware_snapshot": "Advanced: Record firmware snapshot",
+            "firmware_investigator": "Advanced: Choose firmware investigator",
+            "firmware_notification": "Advanced: Update firmware notification",
+        }
         exceptions = translations["exceptions"]
         for alias in ("start", "clean_segments", "dock"):
             assert alias in exceptions["unsupported_command"]["message"]
@@ -481,11 +527,10 @@ def test_user_copy_matches_pairing_and_plan_behavior() -> None:
         assert "room map" in exceptions["room_plan_unavailable"]["message"]
         assert "reported an error" in exceptions["robot_error"]["message"]
         inspection = services["inspect_hermes_endpoint"]
-        assert "payload-free" in inspection["description"]
+        assert "without reading its contents" in inspection["description"]
         assert set(inspection["fields"]) == {"endpoint", "limit"}
         firmware_snapshot = services["firmware_snapshot"]["description"]
-        assert "payload-free compatibility record" in firmware_snapshot
-        assert "value-free wire-shape changes" in firmware_snapshot
+        assert "saves a record without the data itself" in firmware_snapshot
         assert (
             "so open the Firmware check status sensor"
             in translations["issues"]["firmware_regression"]["description"]
