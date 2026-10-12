@@ -327,7 +327,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     });
     const failure = gallery.getByRole("alert").filter({ hasText: "The cleaning tools didn't load. Reload the page to try again." });
     const retry = failure.getByRole("button", { name: "Try again" });
-    const dialog = gallery.getByRole("dialog", { name: "Discard area changes?" });
+    const dialog = gallery.getByRole("dialog", { name: "Discard changes?" });
     await page.evaluate(() => { window.__samePage = true; });
 
     await retry.click();
@@ -374,9 +374,10 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect.poll(draft).toEqual({ workflow: "draw", dirty: true });
 
     await page.evaluate(() => history.back());
-    const dialog = panel.getByRole("dialog", { name: "Discard area changes?" });
+    const dialog = panel.getByRole("dialog", { name: "Discard changes?" });
     await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText("Your area changes have not been saved. Keep editing or discard them.");
+    // shell.md §5: a new area's draft says it is lost for good.
+    await expect(dialog).toContainText("This new area hasn't been saved, and discarding it can't be undone.");
     await expect(dialog.getByRole("button", { name: "Keep editing" })).toBeVisible();
     await dialog.getByRole("button", { name: "Discard" }).click();
     await expect(dialog).toHaveCount(0);
@@ -682,7 +683,8 @@ test.describe("Map Studio v0.4 foundation", () => {
     await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
     const preview = gallery.locator("section[aria-labelledby='next-run-preview-heading']");
     await expect(preview.getByRole("list", { name: "Next-run room order and effective settings" })).toHaveText(/1\. Living room.*Vacuum \+ mop · Heavy duty.*Vacuum and mop are due.*Part 2.*2\. Kitchen.*Vacuum · Quick.*Vacuum rotation is due/s);
-    await expect(gallery.getByRole("button", { name: "Run plan", exact: true })).toBeEnabled();
+    // plan.md §6 (v4_action_run_plan_named): Run plan is named with the plan.
+    await expect(gallery.getByRole("button", { name: "Run plan Daily clean", exact: true })).toBeEnabled();
   });
 
   test("keeps manual room choice within the service limit and explains the disabled choices", async ({ page }) => {
@@ -785,7 +787,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await gallery.getByRole("button", { name: /^Run a plan/ }).click();
     await gallery.getByRole("button", { name: /Legacy plan.*Edit plan/ }).click();
 
-    await expect(gallery.getByRole("button", { name: "Run plan", exact: true })).toBeDisabled();
+    await expect(gallery.getByRole("button", { name: "Run plan Legacy plan", exact: true })).toBeDisabled();
     // A saved plan opens in Run (plan.md §5 State); its rooms change in Edit.
     await page.evaluate((tag) => {
       document.querySelector(tag).shadowRoot.querySelector("matic-map-shell-v4").dispatchEvent(new CustomEvent("matic-workspace-intent", {
@@ -2462,7 +2464,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       const state = element.getWorkspaceSnapshot();
       element.replaceWorkspaceState({ ...state, workflow: "plan", planDraft: { ...state.planDraft, name: "Keep these edits", dirty: true } });
     }, GALLERY_TAG);
-    const dialog = gallery.getByRole("dialog", { name: "Discard plan changes?" });
+    const dialog = gallery.getByRole("dialog", { name: "Discard changes?" });
     await gallery.getByRole("button", { name: "Back to plans" }).click();
     await expect(dialog).toBeVisible();
     await dialog.getByRole("button", { name: "Keep editing" }).click();
@@ -2487,7 +2489,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       const { reduceWorkspace } = window.__galleryModule;
       element.replaceWorkspaceState(reduceWorkspace({ ...state, workflow: "plan", planDraft: { ...state.planDraft, dirty: true } }, { type: "dismiss-top-layer" }));
     }, GALLERY_TAG);
-    await expect(gallery.getByRole("dialog", { name: "Discard plan changes?" })).toBeVisible();
+    await expect(gallery.getByRole("dialog", { name: "Discard changes?" })).toBeVisible();
     await gallery.getByRole("button", { name: "Keep editing" }).click();
     await page.evaluate((tag) => {
       const element = document.querySelector(tag);
@@ -3966,6 +3968,12 @@ test.describe("Map Studio v0.4 foundation", () => {
       const module = window.__galleryModule;
       document.querySelector(tag).replaceWorkspaceState({ ...module.createGalleryState("ready"), workflow: "plan" });
     }, GALLERY_TAG);
+    // shell.md §5 Sheet: plan Run rests at half, Edit's long form at full.
+    await expect(sheet).toHaveAttribute("data-detent", "half");
+    await page.evaluate((tag) => {
+      const module = window.__galleryModule;
+      document.querySelector(tag).replaceWorkspaceState({ ...module.createGalleryState("ready"), workflow: "plan", planView: "edit" });
+    }, GALLERY_TAG);
     await expect(sheet).toHaveAttribute("data-detent", "full");
   });
 
@@ -4427,7 +4435,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     }, GALLERY_TAG);
     const target = gallery.getByRole("button", { name: "Other area Ready", exact: true });
     await target.click();
-    const dialog = gallery.getByRole("dialog", { name: "Discard area changes?" });
+    const dialog = gallery.getByRole("dialog", { name: "Discard changes?" });
     await expect(dialog).toBeVisible();
     expect(await snapshot(page)).toMatchObject({ workflow: "draw", selection: { areaId: "entryway" }, draw: { dirty: true } });
     await dialog.getByRole("button", { name: "Keep editing" }).click();
@@ -4446,15 +4454,15 @@ test.describe("Map Studio v0.4 foundation", () => {
     const floor = gallery.getByLabel("Choose floor", { exact: true });
     await floor.selectOption("saved-1");
 
-    await expect(gallery.getByRole("dialog", { name: "Discard area changes?" })).toBeVisible();
+    await expect(gallery.getByRole("dialog", { name: "Discard changes?" })).toBeVisible();
     expect(await snapshot(page)).toMatchObject({
       dataMode: "live",
       workflow: "draw",
       floor: { readOnly: false },
       draw: { dirty: true },
     });
-    await gallery.getByRole("dialog", { name: "Discard area changes?" }).press("Escape");
-    await expect(gallery.getByRole("dialog", { name: "Discard area changes?" })).toHaveCount(0);
+    await gallery.getByRole("dialog", { name: "Discard changes?" }).press("Escape");
+    await expect(gallery.getByRole("dialog", { name: "Discard changes?" })).toHaveCount(0);
     await expect(floor).toHaveValue("current");
     expect(await snapshot(page)).toMatchObject({
       dataMode: "live",
@@ -4475,7 +4483,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await gallery.getByRole("button", { name: "Redraw" }).click();
     await expect.poll(async () => (await snapshot(page)).workflow).toBe("draw");
     await floor.selectOption("saved-1");
-    await expect(gallery.getByRole("dialog", { name: "Discard area changes?" })).toBeVisible();
+    await expect(gallery.getByRole("dialog", { name: "Discard changes?" })).toBeVisible();
     await gallery.getByRole("button", { name: "Keep editing" }).click();
     await expect(floor).toHaveValue("current");
     expect(await snapshot(page)).toMatchObject({
@@ -4839,7 +4847,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(gallery.getByRole("heading", { name: "Map tools", level: 3 })).toBeVisible();
     await expect(gallery.locator(".shelf").getByRole("button", { name: /^Clean custom area Draw or choose a custom area/ })).toBeVisible();
     await expect(gallery.locator(".shelf").getByRole("button", { name: /^Map history Saved maps show one floor each\. They can't be edited and never show where the robot is now\./ })).toBeVisible();
-    await expect(gallery.getByRole("button", { name: "Run plan", exact: true })).toHaveCount(0);
+    await expect(gallery.getByRole("button", { name: /^Run plan/ })).toHaveCount(0);
     // The launcher and the Rooms strip action share "Clean rooms"; each view holds only one.
     await expect(gallery.getByRole("button", { name: /^Clean rooms/ })).toHaveCount(1);
 
@@ -7168,6 +7176,8 @@ test("short phone keeps plan footer reachable below the reserved map controls", 
   await gallery.locator(".stage").evaluate((stage) => { stage.style.minBlockSize = "0"; stage.style.blockSize = "568px"; });
   await gallery.getByRole("button", { name: /^Run a plan/ }).click();
   await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
+  // shell.md §5 Sheet: Run rests at half; Edit's long form opens at full.
+  await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
   await settleSheet(gallery);
   const sheet = gallery.locator(".mobile-sheet");
   await expect(sheet).toHaveAttribute("data-detent", "full");
@@ -8317,7 +8327,7 @@ test.describe("plan view state", () => {
         detail: { type: "set-plan-view", view: "run" }, bubbles: true, composed: true,
       }));
     }, GALLERY_TAG);
-    await expect(gallery.getByRole("dialog", { name: "Discard plan changes?" })).toBeVisible();
+    await expect(gallery.getByRole("dialog", { name: "Discard changes?" })).toBeVisible();
     const state = await snapshot(page);
     expect({ planView: state.planView, dirty: state.planDraft.dirty }).toEqual({ planView: "edit", dirty: true });
   });
@@ -8466,8 +8476,9 @@ test.describe("plan primary action", () => {
         detail: { type: "set-plan-view", view: "run" }, bubbles: true, composed: true,
       }));
     }, GALLERY_TAG);
+    // plan.md R3: the reason ends in the link that opens that room.
     await expect(gallery.locator(".action-reason")).toHaveText(
-      "Can't run this plan until you reset Kitchen's schedule progress, which Home Assistant can't confirm.",
+      "Can't run this plan until you reset Kitchen's schedule progress, which Home Assistant can't confirm. Review Kitchen",
     );
   });
 });
@@ -9042,6 +9053,285 @@ test("map taps select run and plan rooms in both views and clear old deletion no
     expect(result.remaining).toBe(0);
     expect(result.notice).toBeNull();
   }
+});
+
+// plan.md §3, §5 Navigation and focus, Dialogs; shell.md §5 discardDraft,
+// Sheet: the shell's heading, bar, dialogs, focus and detents for Run and Edit.
+test.describe("plan shell", () => {
+  const intent = (page, detail) => page.evaluate(({ tag, detail }) => {
+    document.querySelector(tag).shadowRoot.querySelector("matic-map-shell-v4").dispatchEvent(new CustomEvent("matic-workspace-intent", {
+      detail, bubbles: true, composed: true,
+    }));
+  }, { tag: GALLERY_TAG, detail });
+  // Replaces the gallery state with `values` over it, object values merged one level deep.
+  const patch = (page, values) => page.evaluate(({ tag, values }) => {
+    const element = document.querySelector(tag);
+    const state = element.getWorkspaceSnapshot();
+    element.replaceWorkspaceState({ ...state, ...Object.fromEntries(Object.entries(values).map(([key, value]) =>
+      [key, value && typeof value === "object" && key !== "notice" ? { ...state[key], ...value } : value])) });
+  }, { tag: GALLERY_TAG, values });
+  const wide = async (page, scenario) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    return loadGallery(page, { scenario });
+  };
+  const narrow = async (page, scenario) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    return loadGallery(page, { scenario, narrow: true });
+  };
+  const scenario = (gallery, name) => gallery.evaluate((element, name) => element.setScenario(name), name);
+  const catalog = () => ({
+    rooms: [{ room_id: "kitchen", name: "Kitchen", boundary: [[0, 0], [6, 0], [6, 5], [0, 5]] }],
+    selected_plan: "daily",
+    plans: [{
+      id: "daily", name: "Daily", enabled: true, run_behavior: "ordered",
+      rooms: [{ room_id: "kitchen", cleaning_mode: "vacuum", coverage_setting: "standard" }],
+      room_order: ["kitchen"], return_to_base: true, finish_current_room: false, finish_current_room_threshold: 50,
+    }],
+  });
+  const openPanelPlan = async (page) => {
+    const fixture = await installPanelFixture(page, { initialPlanCatalog: catalog() });
+    await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+    const panel = page.locator(fixture.panelTag);
+    await panel.getByRole("button", { name: /^Run a plan/ }).click();
+    await panel.getByRole("button", { name: /Daily.*Edit plan/ }).click();
+    await panel.getByRole("button", { name: "Edit Daily", exact: true }).click();
+    return { panel, fixture };
+  };
+
+  test("Run is titled with the plan's name, Edit with Edit plan or New plan and an unsaved chip", async ({ page }) => {
+    const gallery = await wide(page, "plan-saved-intelligent");
+    const heading = gallery.getByRole("heading", { level: 2 });
+    await expect(heading).toHaveText("Daily clean");
+    await expect(heading.locator("bdi")).toHaveText("Daily clean");
+    await expect(gallery.locator(".panel-description")).toHaveCount(0);
+    await intent(page, { type: "set-plan-view", view: "edit" });
+    await expect(heading).toHaveText("Edit plan");
+    await patch(page, { planDraft: { dirty: true } });
+    await expect(heading.locator(".ms-chip")).toHaveText("Unsaved changes");
+    await expect(heading).toHaveAccessibleName("Edit plan Unsaved changes");
+    await scenario(gallery, "plan-new");
+    await expect(heading).toHaveText("New plan");
+    await scenario(gallery, "plans");
+    await expect(gallery.locator(".panel-description")).toHaveText("Tap a plan to see its next run.");
+  });
+
+  test("Run goes back to the picker; Edit has no back button", async ({ page }) => {
+    const gallery = await wide(page, "plan-saved-intelligent");
+    await intent(page, { type: "set-plan-view", view: "edit" });
+    await expect(gallery.getByRole("heading", { level: 2 })).toHaveText("Edit plan");
+    await expect(gallery.getByRole("button", { name: /^Back to/ })).toHaveCount(0);
+    await intent(page, { type: "set-plan-view", view: "run" });
+    await gallery.getByRole("button", { name: "Back to plans", exact: true }).click();
+    expect((await snapshot(page)).workflow).toBe("plans");
+    await expect(gallery.getByRole("button", { name: "Back to all tasks", exact: true })).toBeVisible();
+  });
+
+  test("Run's Edit button opens Edit, names the plan, and waits while a save or check is pending", async ({ page }) => {
+    const gallery = await wide(page, "plan-saved-intelligent");
+    const edit = gallery.getByRole("button", { name: "Edit Daily clean", exact: true });
+    await expect(edit).toHaveText("Edit");
+    await edit.click();
+    expect((await snapshot(page)).planView).toBe("edit");
+    await expect(gallery.getByRole("heading", { level: 2 })).toBeFocused();
+    await gallery.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(edit).toBeFocused();
+    for (const [pendingAction, reason] of [
+      ["save-plan", "Waiting for Home Assistant to save the plan."],
+      ["run-plan", "Waiting for Home Assistant to check the next run."],
+    ]) {
+      await patch(page, { command: "pending", pendingAction });
+      await expect(edit).toHaveAttribute("aria-disabled", "true");
+      await expect(edit).toHaveAccessibleDescription(reason);
+      await edit.click({ force: true });
+      expect((await snapshot(page)).planView).toBe("run");
+    }
+  });
+
+  test("Edit's More actions menu holds Delete, which waits for unsaved changes", async ({ page }) => {
+    const gallery = await wide(page, "plan-saved-intelligent");
+    await intent(page, { type: "set-plan-view", view: "edit" });
+    const more = gallery.getByRole("button", { name: "More actions", exact: true });
+    const remove = gallery.getByRole("menu").getByRole("menuitem", { name: "Delete", exact: true });
+    await expect(more).toHaveAttribute("aria-haspopup", "menu");
+    await expect(more).toHaveAttribute("aria-expanded", "false");
+    await more.click();
+    await expect(more).toHaveAttribute("aria-expanded", "true");
+    await expect(remove).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(gallery.getByRole("menu")).toHaveCount(0);
+    await expect(more).toBeFocused();
+    expect((await snapshot(page)).planView).toBe("edit");
+    await more.click();
+    await remove.click();
+    const dialog = gallery.getByRole("dialog", { name: "Delete plan?" });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(more).toBeFocused();
+    await patch(page, { planDraft: { dirty: true } });
+    await more.click();
+    await expect(remove).toHaveAttribute("aria-disabled", "true");
+    await expect(remove).toHaveAccessibleDescription("Can't delete this plan until you save or cancel your changes.");
+    await remove.click({ force: true });
+    await expect(gallery.getByRole("dialog")).toHaveCount(0);
+    await scenario(gallery, "plan-new");
+    await expect(gallery.getByRole("heading", { level: 2 })).toHaveText("New plan");
+    await expect(more).toHaveCount(0);
+  });
+
+  test("Edit's bar puts Cancel before the primary; Cancel leaves for Run or the picker and asks first when edited", async ({ page }) => {
+    const gallery = await wide(page, "plan-saved-intelligent");
+    await intent(page, { type: "set-plan-view", view: "edit" });
+    const bar = gallery.locator(".workflow > .action-bar");
+    const cancel = bar.getByRole("button", { name: "Cancel", exact: true });
+    await expect(bar.getByRole("button")).toHaveText(["Cancel", "Done"]);
+    await cancel.click();
+    expect((await snapshot(page)).planView).toBe("run");
+    await scenario(gallery, "plan-new");
+    await cancel.click();
+    expect((await snapshot(page)).workflow).toBe("plans");
+    await scenario(gallery, "plan-dirty");
+    await expect(bar.getByRole("button")).toHaveText(["Cancel", "Save"]);
+    await cancel.click();
+    const dialog = gallery.getByRole("dialog", { name: "Discard changes?" });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Keep editing", exact: true }).click();
+    await expect(cancel).toBeFocused();
+    await patch(page, { command: "pending", pendingAction: "save-plan" });
+    await expect(cancel).toHaveAttribute("aria-disabled", "true");
+    await expect(cancel).toHaveAccessibleDescription("Waiting for Home Assistant to save the plan.");
+    await cancel.click({ force: true });
+    await expect(dialog).toHaveCount(0);
+    expect((await snapshot(page)).planView).toBe("edit");
+  });
+
+  test("while the robot works, Edit keeps Cancel beside Stop on a phone and says when it can save on wide", async ({ page }) => {
+    let gallery = await narrow(page, "plan-dirty");
+    await patch(page, { activity: "cleaning" });
+    await expect(gallery.locator(".mobile-sheet > .action-bar").getByRole("button")).toHaveText(["Cancel", "Stop"]);
+    gallery = await wide(page, "plan-dirty");
+    await patch(page, { activity: "cleaning" });
+    const bar = gallery.locator(".workflow > .action-bar");
+    await expect(bar.getByRole("button")).toHaveText(["Cancel"]);
+    await expect(bar).toContainText("You can save when the robot finishes.");
+    await expect(gallery.locator(".status-strip").getByRole("button", { name: "Stop cleaning" })).toBeVisible();
+  });
+
+  test("Run plan is named for its plan", async ({ page }) => {
+    const gallery = await wide(page, "plan-saved-intelligent");
+    await expect(gallery.locator(".workflow > .action-bar").getByRole("button", { name: "Run plan Daily clean", exact: true }))
+      .toHaveText("Run plan");
+  });
+
+  test("a blocked run links to the room its reason names", async ({ page }) => {
+    const gallery = await wide(page, "plan-cadence-blocked");
+    await intent(page, { type: "set-plan-view", view: "run" });
+    const reason = gallery.locator(".workflow > .action-bar .action-reason");
+    await expect(reason).toContainText("Can't run this plan until you reset Kitchen's schedule progress, which Home Assistant can't confirm.");
+    await expect(reason.locator("bdi").first()).toHaveText("Kitchen");
+    const review = reason.getByRole("button", { name: "Review Kitchen", exact: true });
+    await expect(review.locator("bdi")).toHaveText("Kitchen");
+    expect(await review.evaluate((element) => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
+    await review.click();
+    expect(await snapshot(page)).toMatchObject({ planView: "edit", expandedRoom: "room-a" });
+  });
+
+  test("the picker and Run open at half height and Edit at full, again on each view change", async ({ page }) => {
+    const gallery = await narrow(page, "plans");
+    const sheet = gallery.locator(".mobile-sheet");
+    await expect(sheet).toHaveAttribute("data-detent", "half");
+    await intent(page, { type: "select-plan", planId: (await snapshot(page)).resources.plans.value.plans[0].id });
+    await expect(gallery.getByRole("heading", { level: 2 })).toHaveText("Daily clean");
+    await expect(sheet).toHaveAttribute("data-detent", "half");
+    await intent(page, { type: "set-plan-view", view: "edit" });
+    await expect(sheet).toHaveAttribute("data-detent", "full");
+    await intent(page, { type: "set-plan-view", view: "run" });
+    await expect(sheet).toHaveAttribute("data-detent", "half");
+  });
+
+  test("Discard changes? names the saved plan or area, or says the new one is lost", async ({ page }) => {
+    const gallery = await wide(page, "plan-dirty");
+    const dialog = gallery.getByRole("dialog", { name: "Discard changes?" });
+    await gallery.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(dialog).toHaveAccessibleDescription("Your changes to \"Daily clean\" haven't been saved, and discarding them can't be undone.");
+    await expect(dialog.getByRole("button")).toHaveText(["Keep editing", "Save", "Discard"]);
+    await expect(dialog.getByRole("button", { name: "Keep editing", exact: true })).toBeFocused();
+    await scenario(gallery, "plan-new");
+    await patch(page, { planDraft: { name: "Evening", dirty: true } });
+    await gallery.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(dialog).toHaveAccessibleDescription("This new plan hasn't been saved, and discarding it can't be undone.");
+    await expect(dialog.getByRole("button"), "a plan with no rooms can't be saved").toHaveText(["Keep editing", "Discard"]);
+    await scenario(gallery, "area-review-new");
+    await gallery.getByRole("button", { name: "Back to all tasks", exact: true }).click();
+    await expect(dialog).toHaveAccessibleDescription("This new area hasn't been saved, and discarding it can't be undone.");
+    await scenario(gallery, "area-review-rebind");
+    await patch(page, { areaDraft: { dirty: true } });
+    await gallery.getByRole("button", { name: "Back to all tasks", exact: true }).click();
+    await expect(dialog).toHaveAccessibleDescription("Your changes to \"Entryway\" haven't been saved, and discarding them can't be undone.");
+  });
+
+  test("Save in Discard changes? waits while saving, then goes on, or keeps the draft after a failure", async ({ page }) => {
+    const gallery = await wide(page, "plan-dirty");
+    await page.evaluate((tag) => {
+      window.__actions = [];
+      document.querySelector(tag).addEventListener("matic-workspace-action", (event) => window.__actions.push(event.detail.id));
+    }, GALLERY_TAG);
+    const cancel = gallery.getByRole("button", { name: "Cancel", exact: true });
+    const dialog = gallery.getByRole("dialog", { name: "Discard changes?" });
+    const pending = { command: "pending", pendingAction: "save-plan" };
+    await cancel.click();
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    expect(await page.evaluate(() => window.__actions)).toEqual(["save-plan"]);
+    await patch(page, pending);
+    for (const name of ["Keep editing", "Save", "Discard"]) {
+      await expect(dialog.getByRole("button", { name, exact: true })).toHaveAttribute("aria-disabled", "true");
+    }
+    await expect(dialog.locator("#dialog-detail")).toContainText("Saving…");
+    await page.keyboard.press("Escape");
+    await dialog.getByRole("button", { name: "Discard", exact: true }).click({ force: true });
+    await expect(dialog).toBeVisible();
+    await patch(page, { command: "idle", notice: {
+      tone: "error", key: "v4_notice_plan_save_failed",
+      fallback: "Home Assistant can't confirm the plan was saved, so check your plans, then try again.",
+    } });
+    await expect(dialog).toHaveCount(0);
+    expect(await snapshot(page)).toMatchObject({ workflow: "plan", planView: "edit", planDraft: { dirty: true } });
+    await expect(cancel).toBeFocused();
+
+    await cancel.click();
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await patch(page, pending);
+    await patch(page, {
+      command: "idle", notice: { tone: "success", key: "v4_notice_plan_saved", fallback: "Plan saved" },
+      planDraft: { dirty: false, name: "Saved name" },
+    });
+    await expect(dialog).toHaveCount(0);
+    expect(await snapshot(page)).toMatchObject({ planView: "run", planDraft: { dirty: false, name: "Saved name" } });
+    expect(await page.evaluate(() => window.__actions)).toEqual(["save-plan", "save-plan"]);
+  });
+
+  test("Save in Discard changes? saves the plan and goes on to Run", async ({ page }) => {
+    const { panel } = await openPanelPlan(page);
+    await panel.getByRole("textbox", { name: "Plan name" }).fill("Daily tidy");
+    await panel.getByRole("button", { name: "Cancel", exact: true }).click();
+    await panel.getByRole("dialog", { name: "Discard changes?" }).getByRole("button", { name: "Save", exact: true }).click();
+    await expect(panel.getByRole("heading", { level: 2 })).toHaveText("Daily tidy");
+    await expect(panel.getByRole("dialog")).toHaveCount(0);
+    await expect(panel.locator("[data-notice-slot]")).toHaveText("Plan saved");
+    expect(await page.evaluate(() => window.__panelFixture.serviceCalls.map(({ service, data }) => [service, data.name])))
+      .toEqual([["save_plan", "Daily tidy"]]);
+  });
+
+  test("Delete from Edit lands on the picker with Plan deleted and focus on its heading", async ({ page }) => {
+    const { panel } = await openPanelPlan(page);
+    await panel.getByRole("button", { name: "More actions", exact: true }).click();
+    await panel.getByRole("menuitem", { name: "Delete", exact: true }).click();
+    await panel.getByRole("dialog", { name: "Delete plan?" }).getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(panel.getByRole("heading", { level: 2, name: "Your plans" })).toBeFocused();
+    await expect(panel.locator("[data-notice-slot]")).toHaveText("Plan deleted");
+    await expect(panel.locator("[data-notice-toast]")).toHaveText("Plan deleted");
+    expect(await page.evaluate(() => window.__panelFixture.serviceCalls.map(({ service, data }) => [service, data])))
+      .toEqual([["delete_plan", { plan: "daily" }]]);
+  });
 });
 
 // design-system.md §8 and shell.md §8: axe serious and critical findings are

@@ -92,7 +92,8 @@ const exerciseCadenceRoundtrip = async ({ page }) => {
   if ((page.viewportSize()?.width ?? Infinity) <= 600) {
     const sheet = panel.locator(".mobile-sheet");
     await expect(sheet).toBeVisible();
-    await expect(sheet).toHaveAttribute("data-detent", "full");
+    // shell.md §5 Sheet: a saved plan opens in Run, at half height.
+    await expect(sheet).toHaveAttribute("data-detent", "half");
     await expect(sheet.locator(".sheet-body")).toBeVisible();
   }
   await expectNoSeriousAccessibilityViolations(page, "plan cadence editor");
@@ -236,13 +237,16 @@ test("mop-only legacy vacuum rules stay visible and can leave shared participati
   const panel = page.locator(fixture.panelTag);
   await panel.getByRole("button", { name: /^Run a plan/ }).click();
   await panel.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
+  // shell.md §5 Sheet: Run opens at half, where the blocked bar's reason
+  // covers the first room; the schedule is read at full height.
+  await panel.getByRole("button", { name: "Expand panel", exact: true }).click();
   const schedule = panel.getByLabel("Rooms in this plan").locator("details").first();
   await schedule.locator("summary").click();
   await expect(schedule.getByLabel("How often to add a vacuum rotation in Kitchen, every 1 to 100 cleans")).toHaveValue("3");
   await expect(schedule.getByLabel("How often to add a vacuum rotation in Kitchen, every 1 to 100 cleans")).toBeDisabled();
   await expect(schedule.getByLabel("Vacuum rotation level for Kitchen")).toHaveValue("heavy_duty");
   await expect(schedule.getByLabel("Vacuum rotation level for Kitchen")).toBeDisabled();
-  await expect(panel.getByRole("button", { name: "Run plan", exact: true })).toBeDisabled();
+  await expect(panel.getByRole("button", { name: "Run plan Daily clean", exact: true })).toBeDisabled();
   await schedule.getByRole("button", { name: "Turn off", exact: true }).click();
   await expect(schedule.getByLabel("Count cleans for Kitchen")).toHaveValue("plan");
   await expect(schedule.getByLabel("How often to add a vacuum rotation in Kitchen, every 1 to 100 cleans")).toHaveValue("");

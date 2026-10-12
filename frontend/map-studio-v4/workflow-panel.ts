@@ -28,6 +28,9 @@ import { LazyChunk, chunkStatus } from "./lazy-chunk";
 // Draw's precision controls load with the other workflow tools; the shell
 // renders them only in the draw workflow.
 import "./precision-controls";
+// The plan heading's tools, which the shell renders once these views load,
+// and the shell's other plan-only pieces.
+export { actionReason, planCancel, planFocusTarget, planTitle, planTools } from "./plan-heading";
 
 // Dialogs that only these views' controls open carry their copy here.
 export { dialogCopy } from "./dialog-copy";
@@ -105,7 +108,6 @@ line-height: var(--ms-lh-snug);
 .timeline input[type="range"] { inline-size: 100%; min-block-size: var(--ms-control); }
 @media (max-width: 25rem) { .split { grid-template-columns: 1fr; } }
 @container (max-width: 38rem) { .plan-meta { grid-template-columns: 1fr; } }
-.ms-chip { display: inline-flex; align-items: center; block-size: 1.5rem; padding-inline: var(--ms-space-2); border: 1px solid var(--ms-line); border-radius: var(--ms-radius-pill); background: var(--ms-surface-sunken); color: var(--ms-text); font-size: var(--ms-t-xs); font-weight: var(--ms-w-regular); vertical-align: middle; }
 `];
 
   state: WorkspaceState = initialWorkspaceState();

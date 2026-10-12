@@ -253,6 +253,7 @@ transition: translate var(--ms-fast) var(--ms-ease);
 .ms-switch[aria-checked="true"]::before { forced-color-adjust: none; background: Highlight; border-color: Highlight; }
 .ms-switch[aria-checked="true"]::after { background: HighlightText; }
 }
+.ms-chip { display: inline-flex; align-items: center; block-size: 1.5rem; padding-inline: var(--ms-space-2); border: 1px solid var(--ms-line); border-radius: var(--ms-radius-pill); background: var(--ms-surface-sunken); color: var(--ms-text); font-size: var(--ms-t-xs); font-weight: var(--ms-w-regular); letter-spacing: normal; vertical-align: middle; }
 .ms-surface { --ms-local: var(--ms-surface-card); border: 1px solid var(--ms-line); border-radius: var(--ms-radius-lg); background: var(--ms-local); }
 .ms-surface--floating { box-shadow: var(--ms-shadow-2); }
 .ms-surface--overlay { border-radius: var(--ms-radius-md); box-shadow: var(--ms-shadow-3); }

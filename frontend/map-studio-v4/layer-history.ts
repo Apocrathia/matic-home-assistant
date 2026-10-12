@@ -38,7 +38,6 @@ export class LayerHistoryController {
   #depth = 0;
   #unsubscribe: (() => void) | null = null;
   #handlingPop = false;
-  #consumingDirectClose = false;
 
   constructor(store: WorkspaceStore) {
     this.#store = store;
@@ -60,14 +59,14 @@ export class LayerHistoryController {
     }
     // Effects can close a workflow while changing floors (for example when a
     // saved floor becomes read-only). The workflow's history marker still
-    // exists in the browser stack, so consume it before the next Back press;
-    // otherwise Back traverses a stale marker without changing the UI.
+    // exists in the browser stack, so step back over it (its pop then lands at
+    // the open layers and closes nothing); otherwise Back traverses a stale
+    // marker without changing the UI.
     if (next < this.#depth) {
       const marker = markerFrom(history.state);
       if (marker?.owner === this.#owner && marker.depth === this.#depth) {
         const delta = next - this.#depth;
         this.#depth = next;
-        this.#consumingDirectClose = true;
         history.go(delta);
         return;
       }
@@ -84,12 +83,13 @@ export class LayerHistoryController {
     this.#depth = next;
   }
 
+  // The browser now stands on the popped-to marker. A pop that lands at or
+  // above the open layers closes nothing: it is the trace of a close the page
+  // already made, by #stateChanged's go() or by an effect that closed layers
+  // while a Back was still in flight (Delete confirmed in a plan's Edit).
   readonly #popState = (): void => {
-    if (this.#consumingDirectClose) {
-      this.#consumingDirectClose = false;
-      return;
-    }
-    if (this.#depth < 1) return;
+    const marker = markerFrom(history.state);
+    if (layerDepth(this.#store.value) <= (marker?.owner === this.#owner ? marker.depth : 0)) return;
     if (needsDraftConfirmation(this.#store.value, { type: "dismiss-top-layer" })) {
       // Back already consumed the workflow marker. Restore it before opening
       // the confirmation, so a second Back closes only that dialog and never
@@ -119,7 +119,6 @@ export class LayerHistoryController {
     this.#unsubscribe = null;
     window.removeEventListener("popstate", this.#popState);
     this.#depth = 0;
-    this.#consumingDirectClose = false;
   }
 }
 

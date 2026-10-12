@@ -685,7 +685,8 @@ for (const way of ["Escape", "Cancel", "outside"]) {
     if (way === "outside") {
       await expect(page.getByRole("button", { name: "Outside the studio" }), "focus the user moved elsewhere stays there").toBeFocused();
     } else {
-      await expect(page.getByRole("heading", { name: "Edit plan" }), "focus lands on the panel heading").toBeFocused();
+      // plan.md §3: Run's heading is the plan's name.
+      await expect(page.getByRole("heading", { name: "Daily clean", level: 2 }), "focus lands on the panel heading").toBeFocused();
     }
     await page.evaluate(() => { window.__ux0Fix10.effects.dispose(); window.__ux0Fix10.shell.remove(); });
   });
@@ -931,7 +932,7 @@ for (const width of [320, 390, 820, 1280]) {
       await gallery.getByRole("button", { name: /^Run a plan/ }).click();
       await expect(gallery.getByRole("heading", { name: "Your plans", exact: true })).toBeVisible();
       await expect(gallery.getByRole("textbox", { name: "Plan name" })).toHaveCount(0);
-      await expect(gallery.getByRole("button", { name: "Run plan", exact: true })).toHaveCount(0);
+      await expect(gallery.getByRole("button", { name: /^Run plan/ })).toHaveCount(0);
       const create = gallery.getByRole("button", { name: "Create a plan", exact: true });
       const choice = gallery.getByRole("button", { name: /Evening routine.*Paused.*Edit plan/ });
       const appearance = await choice.evaluate((element) => {
@@ -964,7 +965,8 @@ for (const width of [320, 390, 820, 1280]) {
       }
       await page.screenshot({ path: testInfo.outputPath(`picker-${width}-${theme}.png`) });
       await choice.click();
-      await expect(gallery.getByRole("heading", { name: "Edit plan", exact: true })).toBeVisible();
+      // plan.md §3: a saved plan opens in Run, headed by its name.
+      await expect(gallery.getByRole("heading", { name: "Evening routine", level: 2 })).toBeVisible();
       await expect(gallery.getByRole("textbox", { name: "Plan name" })).toHaveValue("Evening routine");
       await gallery.getByRole("button", { name: "Back to plans", exact: true }).click();
       await create.click();
@@ -993,7 +995,8 @@ test("discarding plan edits through Escape returns to the plan, then the picker"
   await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
   await gallery.getByRole("textbox", { name: "Plan name" }).fill("Unsaved change");
   await page.keyboard.press("Escape");
-  const dialog = gallery.getByRole("dialog", { name: "Discard plan changes?" });
+  // shell.md §5: one title for every draft.
+  const dialog = gallery.getByRole("dialog", { name: "Discard changes?" });
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "Discard", exact: true }).click();
   await expect(gallery.getByRole("textbox", { name: "Plan name" })).toHaveValue("Daily clean");

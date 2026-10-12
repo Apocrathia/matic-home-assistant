@@ -137,11 +137,11 @@ def test_catalog_writes_ship_in_their_own_lazy_chunk() -> None:
         assert marker in writes
 
 
-def test_workflow_only_classes_ship_in_the_lazy_workflow_chunk() -> None:
-    """design-system.md: classes only workflow views use stay out of controls.ts."""
+def test_the_chip_ships_once_as_a_shared_control() -> None:
+    """plan.md §8: the shell's plan heading holds the chip, so it is shared."""
     modules = shipped_modules()
-    assert ".ms-chip" not in modules["controls.ts"]
-    assert ".ms-chip" in modules["workflow-panel.ts"]
+    assert ".ms-chip {" in modules["controls.ts"]
+    assert ".ms-chip" not in modules["workflow-panel.ts"]
 
 
 def test_v4_bundle_is_ascii_safe_for_home_assistant_file_editor() -> None:

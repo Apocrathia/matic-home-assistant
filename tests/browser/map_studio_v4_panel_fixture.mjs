@@ -256,6 +256,10 @@ export async function installPanelFixture(page, {
           if (domain === "matic_robot" && service === "save_plan") {
             applySavedPlan(data);
           }
+          if (domain === "matic_robot" && service === "delete_plan") {
+            planCatalog.plans = planCatalog.plans.filter((plan) => plan.id !== data.plan);
+            if (planCatalog.selected_plan === data.plan) planCatalog.selected_plan = planCatalog.plans[0]?.id ?? null;
+          }
         },
       };
       return panel;
