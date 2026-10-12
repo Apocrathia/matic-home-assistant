@@ -128,7 +128,7 @@ export class GestureController {
     if (!event.isPrimary && event.pointerType === "mouse") return;
     if (isInteractiveControl(event)) return;
     this.observeState(currentState);
-    this.#host.focus({ preventScroll: true });
+    this.#host.focus({ preventScroll: true, focusVisible: false });
     this.#cancelMotion();
     if (event.pointerType === "touch" && !event.isPrimary && this.#pointers.size === 0
       && this.#callbacks.state().draw.tool === "outline") this.#navigationUntilRelease = true;
@@ -434,7 +434,7 @@ export class GestureController {
   readonly #wheel = (event: WheelEvent): void => {
     if (this.#disposed || !this.#callbacks.state().pageActive || isInteractiveControl(event)) return;
     event.preventDefault();
-    this.#host.focus({ preventScroll: true });
+    this.#host.focus({ preventScroll: true, focusVisible: false });
     this.#cancelMotion();
     const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE
       ? 16
@@ -470,7 +470,7 @@ export class GestureController {
 
   readonly #gestureStart = (event: SafariGestureEvent): void => {
     if (this.#disposed || !this.#callbacks.state().pageActive || isInteractiveControl(event)) return;
-    this.#host.focus({ preventScroll: true });
+    this.#host.focus({ preventScroll: true, focusVisible: false });
     this.#cancelMotion();
     this.#host.classList.add("navigating");
     this.#gestureCamera = this.#renderer.camera;
