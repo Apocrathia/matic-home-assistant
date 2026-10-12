@@ -76,7 +76,7 @@ The map panel requires a Home Assistant administrator. For a dashboard, add
 
 ## One-time cleaning
 
-Choose **One-time clean**, select rooms, and pick vacuum, mop, or both.
+Choose **Clean rooms**, select rooms, and pick vacuum, mop, or both.
 Vacuum coverage choices are **Quick**, **Optimal**, and **Heavy Duty**. They do
 not change mopping; use the robot's **Double-pass mopping** setting for an extra
 mop pass. Start the run from its summary; use the active cleaning controls to pause, resume, or stop.
@@ -88,7 +88,7 @@ Mapped room names must be unique.
 
 ## Custom areas
 
-Choose **Clean a custom area** to create an area or select one already saved.
+Choose **Clean custom area** to create an area or select one already saved.
 
 1. Place points around the part of the map to clean. The outline closes automatically.
 2. Drag points to adjust the boundary; insert or delete points as needed.

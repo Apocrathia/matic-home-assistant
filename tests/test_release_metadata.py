@@ -6,10 +6,14 @@ import re
 import struct
 import sys
 import tomllib
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import homeassistant
+import pytest
 import yaml
+
+from tests.frontend_sources import common_strings, key_sites
 
 ROOT = Path(__file__).parents[1]
 INTEGRATION = ROOT / "custom_components" / "matic_robot"
@@ -270,13 +274,86 @@ def test_every_options_flow_field_has_inline_guidance() -> None:
             ), f"{filename}: {step_name}"
 
 
-def test_plan_ui_uses_clear_scheduler_language() -> None:
+def test_options_use_clear_scheduler_language() -> None:
     """Keep room selection direct and the intelligent behavior understandable."""
     forbidden = ("profile", "mission", "section", "round-robin")
     for filename in ("strings.json", "translations/en.json"):
         translations = json.loads((INTEGRATION / filename).read_text())
         rendered = json.dumps(translations["options"]).casefold()
         assert all(term not in rendered for term in forbidden)
+
+
+# docs/copy-style-0.5.md denylist table, verbatim
+_DENYLIST = tuple(
+    "mission|leg|dock visit|generation|profile|section|round-robin|session|managed"
+    "|managed run|identity|authoritative|cadence|interval|qualifying|schedule scope"
+    "|endpoint|payload|fingerprint|SHA-256|wire-shape|Hermes|token|revision|ledger"
+    "|epoch|goal ID|stable ID|native|OEM|coherence|reconciliation|runner lock"
+    "|opportunity|handoff|recheck|scene|credential|bond|local access|pinned"
+    "|certificate|TLS|workspace|Map Studio|routine|cleaning system|intent".split("|")
+)
+_DENIED = re.compile(
+    r"\b(?:" + "|".join(map(re.escape, _DENYLIST)) + r")(?:s|es)?\b|\bverif\w*",
+    re.IGNORECASE,
+)
+_TEMPLATE = re.compile(r"\{\{.*?\}\}|\{%.*?%\}|\{[a-z0-9_]+\}", re.DOTALL)
+Copy = Iterator[tuple[str, str]]
+
+
+def _texts(node: object, path: str) -> Copy:
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield from _texts(value, f"{path}.{key}")
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            yield from _texts(value, f"{path}.{index}")
+    elif isinstance(node, str):
+        yield path, node
+
+
+def _common(*modules: str) -> Copy:
+    common = common_strings()
+    # No modules: every stored key (test_every_common_key_is_referenced keeps
+    # each one referenced).
+    keys = (
+        {s.key for s in key_sites() if s.module in modules} if modules else set(common)
+    )
+    for key in sorted(keys & set(common)):
+        yield f"common.{key}", common[key]
+
+
+_COPY_SURFACES: dict[str, Callable[[], Copy]] = {
+    "strings:common@startup": lambda: _common(
+        "shell.ts",
+        "state.ts",
+        "map-canvas.ts",
+        "diagnostics-panel.ts",
+        "lazy-chunk.ts",
+        "effects.ts",
+    ),
+}
+
+
+@pytest.mark.parametrize("surface", sorted(_COPY_SURFACES))
+def test_plan_ui_uses_clear_scheduler_language(surface: str) -> None:
+    """User-facing copy avoids the docs/copy-style-0.5.md denylist."""
+    hits = {
+        path: _DENIED.findall(_TEMPLATE.sub("", text))
+        for path, text in _COPY_SURFACES[surface]()
+    }
+    assert {path: found for path, found in hits.items() if found} == {}
+
+
+def test_denylist_scanner_matches_plurals_and_verify_family() -> None:
+    assert _DENIED.findall("Missions, verified tokens; Map Studio") == [
+        "Missions",
+        "verified",
+        "tokens",
+        "Map Studio",
+    ]
+    harmless = _TEMPLATE.sub("", "legend sessionless preview_token {interval}")
+    assert _DENIED.findall(harmless) == []
+    assert _TEMPLATE.sub("", "Every {interval}{{ x.revision }}{% if a %}") == "Every "
 
 
 def test_options_flow_directs_editing_to_the_single_map_workspace() -> None:

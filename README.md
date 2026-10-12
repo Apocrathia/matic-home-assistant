@@ -70,9 +70,9 @@ areas affected by a changed map may need confirmation.
 
 Open **Matic Map** from the sidebar:
 
-- **One-time clean** selects rooms for a single run.
+- **Clean rooms** selects rooms for a single run.
 - **Create a plan** or **Run a plan** manages reusable room routines.
-- **Clean a custom area** creates or selects a saved custom area.
+- **Clean custom area** creates or selects a saved custom area.
 - **Map history** browses saved maps; saved floors are read-only.
 
 Use Home Assistant schedules and presence automations to decide when plans run.

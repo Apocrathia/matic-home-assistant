@@ -197,7 +197,7 @@ for (const colorScheme of ["light", "dark"]) {
       await page.emulateMedia({ colorScheme });
       await page.goto("/map-studio-v4-review");
       if (surface === "primary") {
-        await page.getByRole("button", { name: "Run a plan 1 saved routine", exact: true }).click();
+        await page.getByRole("button", { name: "Run a plan 1 saved plan", exact: true }).click();
         await page.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
       }
       else await page.getByRole("button", { name: "transition", exact: true }).click();
@@ -288,7 +288,7 @@ test("All tasks returns from area review to the task chooser", async ({ page }) 
     element.replaceWorkspaceState({ ...module.createGalleryState("ready"), workflow: "areaReview" });
   });
   await gallery.getByRole("button", { name: "Back to all tasks", exact: true }).click();
-  await expect(gallery.getByRole("button", { name: /^One-time clean/ })).toBeVisible();
+  await expect(gallery.getByRole("button", { name: /^Clean rooms/ })).toBeVisible();
 });
 
 
@@ -673,7 +673,7 @@ test("external Area deletion preserves a dirty draft and turns later save into a
     draft: { id: null, name: "Edited Entryway", cleaningMode: "mop", dirty: true },
     circles: result.expectedCircles,
     drawDirty: true,
-    notice: { tone: "warning", key: "v4_notice_area_removed", fallback: "This saved Area was removed elsewhere. Your edits are preserved as a new Area draft; saving will create a new Area." },
+    notice: { tone: "warning", key: "v4_notice_area_removed", fallback: "This saved area was removed elsewhere. Your edits are kept as a new draft; saving will create a new area." },
   });
   expect(result.areaReads).toBeGreaterThan(0);
   expect(result.deleteCalls).toBe(0);
@@ -841,7 +841,7 @@ for (const width of [320, 390, 820, 1280]) {
       await gallery.getByRole("button", { name: /^Run a plan/ }).click();
       await expect(gallery.getByRole("heading", { name: "Your plans", exact: true })).toBeVisible();
       await expect(gallery.getByRole("textbox", { name: "Plan name" })).toHaveCount(0);
-      await expect(gallery.getByRole("button", { name: "Run this plan", exact: true })).toHaveCount(0);
+      await expect(gallery.getByRole("button", { name: "Run plan", exact: true })).toHaveCount(0);
       const create = gallery.getByRole("button", { name: "Create a plan", exact: true });
       const choice = gallery.getByRole("button", { name: /Evening routine.*Paused.*Edit plan/ });
       const appearance = await choice.evaluate((element) => {

@@ -358,9 +358,9 @@ test("@mobile the sheet's status line names the selected rooms beside a paused r
     const element = document.querySelector(tag);
     element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), activity: "paused" });
   }, GALLERY_TAG);
-  await gallery.getByRole("button", { name: "Show less of the map workspace" }).click();
+  await gallery.getByRole("complementary", { name: "Cleaning panel" }).getByRole("button", { name: "Collapse panel", exact: true }).click();
 
-  await expect(gallery.getByRole("complementary", { name: "Map workspace" })).toContainText(`Paused · Räume gewählt: 2 · ${list}`);
+  await expect(gallery.getByRole("complementary", { name: "Cleaning panel" })).toContainText(`Paused · Räume gewählt: 2 · ${list}`);
   const status = await localizeCalls(page, "v4_rooms_selected_names");
   expect(status.at(-1).placeholders).toEqual({ count: 2, rooms: list });
 });
