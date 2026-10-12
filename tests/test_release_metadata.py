@@ -406,6 +406,15 @@ def test_plan_ui_uses_clear_scheduler_language(surface: str) -> None:
     assert {path: found for path, found in hits.items() if found} == {}
 
 
+def test_every_copy_surface_is_scanned() -> None:
+    expected = {f"strings:{category}" for category in _strings()} | {
+        "services.yaml",
+        "blueprints",
+        "llm",
+    }
+    assert set(_COPY_SURFACES) == expected
+
+
 def test_blueprint_scanner_reads_every_blueprint() -> None:
     texts = list(_blueprints())
     files = {
