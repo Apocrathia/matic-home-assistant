@@ -2,23 +2,23 @@ blueprint:
   name: 'Matic: Send firmware alerts'
   description: >-
     Sends a phone notification when the robot's firmware checks keep failing,
-    when they recover, and when firmware research finishes. Notifications let
-    you check again or acknowledge. Notifications that were not delivered are
-    sent after Home Assistant restarts. Choose who researches firmware
-    separately with the action Advanced: Choose firmware investigator.
+    when they recover and when firmware research finishes, with buttons to
+    check again or acknowledge. Notifications that were not delivered are sent
+    after Home Assistant restarts, and the action Advanced: Choose firmware
+    investigator sets who researches.
   domain: automation
   source_url: https://github.com/ProspectOre/matic-home-assistant/blob/main/blueprints/automation/matic_robot/firmware_intelligence.yaml
   input:
     vacuum:
       name: Robot
-      description: The robot to clean.
+      description: The robot whose firmware checks to watch.
       selector:
         entity:
           integration: matic_robot
           domain: vacuum
     firmware_sensor:
       name: Firmware check status sensor
-      description: Pick the Firmware check status sensor of the robot.
+      description: The robot's Firmware check status sensor.
       selector:
         entity:
           integration: matic_robot
@@ -30,7 +30,7 @@ blueprint:
         text:
     notification_namespace:
       name: Notification ID prefix
-      description: Use a different value on each Home Assistant server so notifications don't replace each other.
+      description: A prefix for the notification IDs, so notifications from different Home Assistant servers don't replace each other. Default matic_firmware; for example matic_firmware_cabin.
       default: matic_firmware
       selector:
         text:

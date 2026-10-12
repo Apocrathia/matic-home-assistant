@@ -16,7 +16,7 @@ blueprint:
           domain: vacuum
     pet_presence:
       name: Pet presence sensor
-      description: Pick the sensor that is on while a pet is in the area.
+      description: The sensor that is on while a pet is in the area, for example a pet door or camera sensor.
       selector:
         entity:
           domain: binary_sensor
@@ -27,7 +27,7 @@ blueprint:
         text:
     clear_time:
       name: Clear time before cleaning
-      description: How long the sensor must stay clear before cleaning starts.
+      description: How long the sensor must stay clear before cleaning starts. Default 10 minutes; for example 30 minutes for a pet that comes and goes.
       default:
         minutes: 10
       selector:

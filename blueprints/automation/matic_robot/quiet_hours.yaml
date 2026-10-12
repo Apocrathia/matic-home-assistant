@@ -16,7 +16,7 @@ blueprint:
           domain: vacuum
     battery:
       name: Battery sensor
-      description: Pick the robot's battery level sensor.
+      description: The robot's battery level sensor.
       selector:
         entity:
           integration: matic_robot
@@ -29,13 +29,13 @@ blueprint:
         text:
     run_time:
       name: Start time
-      description: The time of day the plan starts.
+      description: The time of day the plan starts. Default 01:00; for example 23:30 if the household goes to bed late.
       default: "01:00:00"
       selector:
         time:
     minimum_battery:
       name: Minimum battery
-      description: Skip cleaning when the battery is at or below this level.
+      description: The battery level at or below which cleaning is skipped. Default 40%; for example 60% for a long plan.
       default: 40
       selector:
         number:
