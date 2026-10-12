@@ -159,6 +159,12 @@ const GPU_UPLOAD_CHUNK_BYTES = 512 * 1024;
 const GPU_UPLOAD_FAIR_SHARE_BYTES = GPU_UPLOAD_CHUNK_BYTES / 2;
 const GPU_DELTA_BLOCK_BYTES = SCENE_DELTA_DIRTY_BLOCK_BYTES;
 const GPU_DELTA_MAX_BLOCKS = 256;
+// Touch-device qualification showed GPU/presentation delay despite short
+// JavaScript frames. Auto bounds the point workload and, because fill cost
+// grows with device pixels (150% zoom on a tablet: touch-to-present p95 86 ms
+// at full density, 74 ms within this budget), each canvas's backing store.
+const AUTO_TOUCH_POINT_LIMIT = 350_000;
+const AUTO_TOUCH_CANVAS_PIXELS = 1_100_000;
 
 const sameSceneTransform = (left: SceneModel, right: SceneModel): boolean =>
   left.metadata.metersPerCell === right.metadata.metersPerCell
@@ -370,10 +376,7 @@ export class RendererController {
   #lastFrameMs = 0;
   #slowFrames = 0;
   #qualityScale = 1;
-  // Touch-device qualification showed GPU/presentation delay despite short
-  // JavaScript frames. Bound Auto's point workload independently of CPU time.
-  readonly #autoTouchPointLimit = window.matchMedia("(any-pointer: coarse)").matches
-    ? 350_000 : Number.POSITIVE_INFINITY;
+  readonly #touch = window.matchMedia("(any-pointer: coarse)").matches;
   #viewport = { width: 1, height: 1, left: 0, top: 0 };
   #fitActive = true;
   #disposed = false;
@@ -1202,10 +1205,19 @@ export class RendererController {
     return this.#viewport;
   }
 
+  /** Device pixels per CSS pixel for both canvases; never below CSS
+   * resolution, so labels stay legible within the touch budget. */
+  #pixelRatio(): number {
+    const ratio = Math.min(window.devicePixelRatio || 1, 3);
+    if (!this.#touch || this.#state?.quality !== "auto") return ratio;
+    const area = Math.max(1, this.#viewport.width * this.#viewport.height);
+    return Math.min(ratio, Math.max(1, Math.sqrt(AUTO_TOUCH_CANVAS_PIXELS / area)));
+  }
+
   #resize(): void {
     let resized = false;
     const bounds = this.#measureViewport();
-    const ratio = Math.min(window.devicePixelRatio || 1, 3);
+    const ratio = this.#pixelRatio();
     const width = Math.max(1, Math.round(bounds.width * ratio));
     const height = Math.max(1, Math.round(bounds.height * ratio));
     for (const canvas of [this.#sceneCanvas, this.#overlayCanvas]) {
@@ -1287,15 +1299,15 @@ export class RendererController {
     gl.uniformMatrix4fv(this.#viewProjection, false, this.#matrix);
     gl.uniform2f(this.#center, (scene.metadata.span[0] - 1) / 2, (scene.metadata.span[1] - 1) / 2);
     gl.uniform1f(this.#meters, scene.metadata.metersPerCell);
-    const ratio = Math.min(window.devicePixelRatio || 1, 3);
+    const ratio = this.#pixelRatio();
     // The producer groups points by tile and then by floor/surface. Drawing
     // a prefix would crop later tiles and starve surfaces at lower quality.
     // Stride each range instead, using only its initialized upload frontier.
     const initializedPoints = Math.min(scene.total, this.#initializedPoints);
     const step = Math.max(
       Math.ceil(1 / this.#qualityScale),
-      this.#state?.quality === "auto"
-        ? Math.ceil(initializedPoints / this.#autoTouchPointLimit) : 1,
+      this.#touch && this.#state?.quality === "auto"
+        ? Math.ceil(initializedPoints / AUTO_TOUCH_POINT_LIMIT) : 1,
     );
     const floorAvailable = Math.min(scene.floorCount, initializedPoints);
     const surfaceAvailable = Math.min(
@@ -1381,7 +1393,7 @@ export class RendererController {
     const scene = this.#scene;
     const state = this.#state;
     if (!context) return;
-    const ratio = Math.min(window.devicePixelRatio || 1, 3);
+    const ratio = this.#pixelRatio();
     const bounds = this.#viewport;
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
     context.clearRect(0, 0, bounds.width, bounds.height);

@@ -96,9 +96,15 @@ export class MaticMapCanvasV4 extends LitElement {
     .map-root[data-workflow="draw"][data-draw-tool="pan"] { cursor: grab; }
     .map-root[data-workflow="draw"][data-draw-tool="pan"].navigating { cursor: grabbing; }
 
-    .map-root:focus-visible {
-      outline: 3px solid var(--ms-resolved-indicator, var(--ms-accent));
-      outline-offset: -3px;
+    /* An outline on .map-root repaints the whole page layer on every canvas
+       frame; a positioned overlay keeps the ring out of the frame path. */
+    .map-root:focus-visible::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 5;
+      border: 3px solid var(--ms-resolved-indicator, var(--ms-accent));
+      pointer-events: none;
     }
 
     /* Navigation has stable corners; only orbit controls follow the sheet. */
@@ -263,6 +269,7 @@ export class MaticMapCanvasV4 extends LitElement {
    which meant the map had no forced-colors treatment at all. */
 .scene-canvas, .overlay-canvas { forced-color-adjust: none; }
 .map-root { border: 1px solid CanvasText; }
+.map-root:focus-visible::after { border-color: Highlight; }
 }
   `];
 
