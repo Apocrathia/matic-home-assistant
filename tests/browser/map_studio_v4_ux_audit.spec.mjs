@@ -156,13 +156,16 @@ const DIALOG_BASES = {
   confirmDeletePlan: "plan-saved-intelligent",
   confirmDeleteArea: "area-review-rebind",
   confirmResetCadence: "plan-cadence-shared",
-  confirmStop: "cleaning",
-  error: "ready",
 };
 const NOTICE_BASES = [
   ["rooms", "rooms"],
   ["plan", "plan-saved-intelligent"],
   ["none", "ready"],
+  ["plans", "plans"],
+  ["draw", "draw"],
+  ["history", "history"],
+  ["support", "support"],
+  ["area-review", "area-review-new"],
 ];
 const HELP_BASES = ["ready", "plan-saved-intelligent"];
 // Scenarios whose collapsed "Room schedule" sections are the point of the state.
@@ -177,7 +180,7 @@ const ITEMS = [
   })),
   ...GALLERY_DIALOGS.map((kind) => ({
     id: `dialog-${kind}`,
-    scenario: DIALOG_BASES[kind] ?? "ready",
+    scenario: DIALOG_BASES[kind],
     variants: EXTRA_VARIANTS,
     patch: {
       dialog: kind,
@@ -190,7 +193,7 @@ const ITEMS = [
     id: `notice-${label}-${tone}`,
     scenario,
     variants: EXTRA_VARIANTS,
-    patch: { notice: { tone, text: SAMPLE_NOTICE } },
+    patch: { notice: { tone, key: "v4_notice_audit_sample", fallback: SAMPLE_NOTICE } },
   }))),
   ...HELP_BASES.map((scenario) => ({
     id: `help-${scenario}`,
@@ -292,8 +295,8 @@ async function settle(page) {
       const workflow = [...root.querySelectorAll("*")]
         .find((element) => element.localName.startsWith("matic-map-workflow-v4"));
       if (workflow) await workflow.updateComplete;
-      const loading = Boolean(root.querySelector(".workflow-loading"))
-        || (workflow?.shadowRoot?.querySelector(".loading")?.textContent ?? "").includes("Loading workspace tools");
+      const loading = [root, workflow?.shadowRoot]
+        .some((scope) => (scope?.querySelector(".loading")?.textContent ?? "").includes("Loading workspace tools"));
       if (!loading) break;
       await wait(50);
     }

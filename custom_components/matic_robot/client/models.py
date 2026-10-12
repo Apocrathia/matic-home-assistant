@@ -102,14 +102,20 @@ class RobotOperationalState:
     @property
     def activity(self) -> RobotActivity:
         """Return a conservative high-level state without inventing semantics."""
-        if self.paused and not self.error_codes:
+        # Pausing is an explicit user or robot action and outranks the dock and a
+        # latched warning: an error code beside a retained task or on the dock
+        # (see below), which stays visible through ``error_codes`` / ``problem``.
+        # A paused robot with an error code and neither is stopped by a real
+        # error, and reports ``ERROR``.
+        if self.paused and (self.cleaning or self.is_charging or not self.error_codes):
             return RobotActivity.PAUSED
         if self.returning:
             return RobotActivity.RETURNING
         # Firmware can retain task and warning flags while the robot is
         # physically docked, both during recharge-and-resume and ordinary
-        # charging.  Physical charging must win as the HA vacuum activity;
-        # raw warning evidence remains available through ``error_codes``.
+        # charging.  Unless the robot is paused or returning (checked above),
+        # physical charging wins as the HA vacuum activity; raw warning
+        # evidence remains available through ``error_codes``.
         if self.charging:
             return RobotActivity.CHARGING
         if self.charging_idle:

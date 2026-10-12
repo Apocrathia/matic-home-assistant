@@ -1,14 +1,14 @@
-import { OutlineEditor } from "./outline-editor";
 import { LitElement, css, html, nothing } from "lit";
 import { controls } from "./controls";
 import { renderDrawTools } from "./draw-tools";
 import { icon, iconFit, iconHelp, iconOrbitLeft, iconOrbitRight, iconRoomNames, iconTiltDown, iconTiltUp } from "./icons";
 import { RovingFocusController } from "./roving-focus";
-import { readCanvasPalette } from "./theme-probe";
+import { readCanvasPalette, watchTheme } from "./theme-probe";
 import { base, tokens } from "./tokens";
 import type { PropertyValues } from "lit";
 
-import type { Localize, WorkspaceIntent, WorkspaceState } from "./contracts";
+import type { DateFormat, Localize, NoticePlaceholders, WorkspaceIntent, WorkspaceState } from "./contracts";
+import type { OutlineEditor } from "./outline-editor";
 import { MAP_CANVAS_TAG } from "./element-tags";
 import { GestureController, isNativeSelectControl } from "./gesture-controller";
 import { RendererController, type RendererDiagnostics } from "./renderer-controller";
@@ -54,6 +54,10 @@ export class MaticMapCanvasV4 extends LitElement {
   static override properties = {
     state: { attribute: false },
     localize: { attribute: false },
+    // Home Assistant's date language and time zone, for a notice's date.
+    dates: { attribute: false },
+    // Draw's point editor, loaded and built by the shell (shell.ts #outline).
+    outlineEditor: { attribute: false },
     // Reflected so the stylesheet can anchor the rail with :host([narrow]).
     // On a phone the sheet owns the drawing tools, appearance switch, room
     // names and help; the map keeps only view and fit.
@@ -93,7 +97,7 @@ export class MaticMapCanvasV4 extends LitElement {
     .map-root[data-workflow="draw"][data-draw-tool="pan"].navigating { cursor: grabbing; }
 
     .map-root:focus-visible {
-      outline: 3px solid var(--primary-color, #03a9f4);
+      outline: 3px solid var(--ms-resolved-indicator, var(--ms-accent));
       outline-offset: -3px;
     }
 
@@ -149,20 +153,20 @@ export class MaticMapCanvasV4 extends LitElement {
       line-height: 1.45;
     }
     .navigation-help header { display: flex; align-items: center; justify-content: space-between; gap: var(--ms-space-2); margin-block-end: 0.5rem; }
-    .navigation-help h3 { margin: 0; font-size: var(--ms-t-sm); font-weight: var(--ms-w-bold); }
+    .navigation-help h2 { margin: 0; font-size: var(--ms-t-sm); font-weight: var(--ms-w-bold); }
     .navigation-help dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.35rem 0.65rem; margin: 0; }
     .navigation-help dt { font-weight: 750; }
     .navigation-help dd { margin: 0; color: var(--ms-text-quiet); }
 
     .zone-overlay { position: absolute; inset: 0; z-index: 4; pointer-events: none; overflow: hidden; }
     .zone-overlay svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
-    .zone-overlay path { stroke: var(--ms-accent); stroke-width: 2; fill-opacity: .08; }
+    .zone-overlay path { stroke: var(--ms-resolved-indicator, var(--ms-accent)); stroke-width: 2; fill-opacity: .08; }
     .zone-overlay path.invalid { stroke: var(--error-color, #b3261e); }
     .zone-point { position: absolute; translate: -50% -50%; width: 44px; height: 44px; border: 0; border-radius: 50%; background: transparent; color: var(--ms-accent); pointer-events: auto; touch-action: none; cursor: grab; font: 700 12px system-ui; isolation: isolate; }
-    .zone-point::before { content: ""; position: absolute; inset: 10px; z-index: -1; border-radius: 50%; background: var(--ms-surface-card); border: 2px solid var(--ms-accent); box-shadow: 0 1px 4px #0008; }
+    .zone-point::before { content: ""; position: absolute; inset: 10px; z-index: -1; border-radius: 50%; background: var(--ms-surface-card); border: 2px solid var(--ms-resolved-indicator, var(--ms-accent)); box-shadow: 0 1px 4px #0008; }
     .zone-point[data-selected="true"] { color: var(--ms-on-accent); }
     .zone-point[data-selected="true"]::before { background: var(--ms-accent); border-color: var(--ms-surface-card); }
-    .zone-point:focus-visible { outline: 3px solid var(--ms-accent); outline-offset: 0; }
+    .zone-point:focus-visible { outline: 3px solid var(--ms-resolved-indicator, var(--ms-accent)); outline-offset: 0; }
     .zone-midpoint { font-size: 18px; }
     .zone-midpoint::before { inset: 13px; background: var(--ms-surface-card); }
     .zone-midpoint { color: var(--ms-accent); }
@@ -173,7 +177,7 @@ export class MaticMapCanvasV4 extends LitElement {
     .zone-point-actions .ms-btn + .ms-btn { border-inline-start: 1px solid var(--ms-line); }
     .zone-guidance { padding: 6px 12px; gap: 8px; color: var(--ms-text-quiet); line-height: 1.4; }
     .zone-guidance .ms-btn { flex-shrink: 0; }
-    .zone-feedback { max-width: 100%; padding: 8px 12px; border-radius: 12px; color: var(--error-color, #b3261e); pointer-events: auto; }
+    .zone-feedback { max-width: 100%; padding: 8px 12px; border-radius: 12px; color: var(--ms-resolved-danger-text, var(--ms-danger)); pointer-events: auto; }
     .zone-feedback[hidden] { display: none; }
     .map-root[data-narrow="true"] .zone-help { bottom: 12px; }
     .keyboard-aim { display: none; position: absolute; z-index: 3; inset: 50% auto auto 50%; inline-size: 20px; block-size: 20px; translate: -50% -50%; border: 2px solid white; outline: 2px solid #111; border-radius: 50%; pointer-events: none; }
@@ -264,26 +268,21 @@ export class MaticMapCanvasV4 extends LitElement {
 
   state: WorkspaceState = initialWorkspaceState();
   localize?: Localize;
+  dates?: DateFormat;
+  outlineEditor?: OutlineEditor;
   narrow = false;
   #helpLauncher: HTMLElement | null = null;
   #renderer: RendererController | null = null;
   #gestures: GestureController | null = null;
   #navigationHelp = false;
   #focusHelpOnUpdate = false;
-  #themeObserver: MutationObserver | null = null;
-  #themeQueries: MediaQueryList[] = [];
+  #unwatchTheme: (() => void) | null = null;
   #paletteFrame: number | null = null;
   #paletteTimer: number | null = null;
   readonly #cancelSecondaryPointer = {
     capture: true,
-    handleEvent: (event: PointerEvent) => { if (event.pointerType === "touch" && !event.isPrimary) this.#outlineEditor.cancel(); },
+    handleEvent: (event: PointerEvent) => { if (event.pointerType === "touch" && !event.isPrimary) this.outlineEditor?.cancel(); },
   };
-  readonly #outlineEditor = new OutlineEditor(() => this.state, () => this.#renderer,
-    (intent) => this.#intent(intent), () => this.requestUpdate(), (key, fallback) => this.#t(key, fallback),
-    (index) => { void this.updateComplete.then(() => {
-      const target = this.renderRoot.querySelector<HTMLElement>(`[data-zone-index="${index}"]`) ?? this.renderRoot.querySelector<HTMLElement>(".map-root");
-      target?.focus({ preventScroll: true });
-    }); });
 
   constructor() {
     super();
@@ -297,13 +296,13 @@ export class MaticMapCanvasV4 extends LitElement {
     });
   }
 
-  #t(key: string, fallback: string, placeholders?: Record<string, string | number>): string {
-    return translate(this.localize, key, fallback, placeholders);
+  #t(key: string, fallback: string, placeholders?: NoticePlaceholders): string {
+    return translate(this.localize, key, fallback, placeholders, this.dates);
   }
 
   override connectedCallback(): void {
     super.connectedCallback();
-    this.#watchTheme();
+    this.#unwatchTheme ??= watchTheme(() => this.#schedulePalette());
     void this.updateComplete.then(() => this.#startControllers());
   }
 
@@ -318,7 +317,7 @@ export class MaticMapCanvasV4 extends LitElement {
     const overlay = this.renderRoot.querySelector<HTMLCanvasElement>(".overlay-canvas");
     if (!root || !scene || !overlay) return;
     this.#renderer = new RendererController(scene, overlay, {
-      onViewport: () => { this.#outlineEditor.cancel(); this.requestUpdate(); },
+      onViewport: () => { this.outlineEditor?.cancel(); this.requestUpdate(); },
       onCamera: (camera, zoomPercent, origin) => {
         this.#intent({
           type: "set-camera",
@@ -350,7 +349,9 @@ export class MaticMapCanvasV4 extends LitElement {
     });
     this.#gestures = new GestureController(root, this.#renderer, {
       state: () => this.state,
-      onOutlinePoint: (point, coordinateEdit) => this.#outlineEditor.addPoint(point, coordinateEdit),
+      onOutlinePoint: (point, coordinateEdit) => {
+        this.outlineEditor?.addPoint(point, coordinateEdit);
+      },
       onCircles: (circles, coordinateEdit) => this.#intent({
         type: "set-draft-circles",
         circles,
@@ -364,14 +365,19 @@ export class MaticMapCanvasV4 extends LitElement {
   }
 
   override disconnectedCallback(): void {
-    this.#unwatchTheme();
+    this.#unwatchTheme?.();
+    this.#unwatchTheme = null;
     this.#cancelScheduledPalette();
-    this.#outlineEditor.cancel();
+    this.outlineEditor?.cancel();
     this.#gestures?.dispose();
     this.#gestures = null;
     this.#renderer?.dispose();
     this.#renderer = null;
     super.disconnectedCallback();
+  }
+
+  protected override willUpdate(changed: PropertyValues<this>): void {
+    if (changed.has("outlineEditor")) this.outlineEditor?.attach(this, () => this.#renderer, (intent) => this.#intent(intent));
   }
 
   protected override updated(changed: PropertyValues<this>): void {
@@ -381,7 +387,7 @@ export class MaticMapCanvasV4 extends LitElement {
     }
     if (!changed.has("state")) return;
     this.#gestures?.observeState(this.state);
-    this.#outlineEditor.observeState(this.state);
+    this.outlineEditor?.observeState(this.state);
     this.#renderer?.setState(this.state);
   }
 
@@ -413,28 +419,6 @@ export class MaticMapCanvasV4 extends LitElement {
     if (this.#paletteTimer !== null) window.clearTimeout(this.#paletteTimer);
     this.#paletteFrame = null;
     this.#paletteTimer = null;
-  }
-
-  readonly #onThemeChange = (): void => { this.#schedulePalette(); };
-
-  #watchTheme(): void {
-    if (typeof document === "undefined" || this.#themeObserver) return;
-    this.#themeObserver = new MutationObserver(this.#onThemeChange);
-    this.#themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["style", "class"] });
-    if (typeof window.matchMedia !== "function") return;
-    this.#themeQueries = [
-      window.matchMedia("(prefers-color-scheme: dark)"),
-      window.matchMedia("(forced-colors: active)"),
-    ];
-    for (const query of this.#themeQueries) query.addEventListener("change", this.#onThemeChange);
-  }
-
-  #unwatchTheme(): void {
-    this.#cancelScheduledPalette();
-    this.#themeObserver?.disconnect();
-    this.#themeObserver = null;
-    for (const query of this.#themeQueries) query.removeEventListener("change", this.#onThemeChange);
-    this.#themeQueries = [];
   }
 
   #intent(intent: WorkspaceIntent): void {
@@ -511,9 +495,13 @@ export class MaticMapCanvasV4 extends LitElement {
     if (this.state.host.robotCount === 0) {
       return { title: this.#t("v4_no_robot", "No Matic robot set up"), detail: this.#t("v4_no_robot_detail", "Set up a robot before opening its map.") };
     }
+    const notice = this.state.notice;
     if (this.state.dataMode === "live" && this.state.floor.readOnly
-      && this.state.map.available && this.state.notice) {
-      return { title: this.#t("v4_saved_map_read_only_title", "Saved map is read only"), detail: this.state.notice.text };
+      && this.state.map.available && notice?.key === "v4_notice_saved_map") {
+      return {
+        title: this.#t("v4_saved_map_read_only_title", "Saved map is read only"),
+        detail: this.#t(notice.key, notice.fallback, notice.placeholders),
+      };
     }
     if (this.state.dataMode === "history") {
       if (!this.state.map.available && this.state.resources.scene.status === "loading") {
@@ -649,7 +637,7 @@ export class MaticMapCanvasV4 extends LitElement {
             aria-label=${helpTitle}
           >
             <header>
-              <h3>${helpTitle}</h3>
+              <h2>${helpTitle}</h2>
               <button class="ms-btn ms-btn--sm" type="button" @click=${() => this.#closeHelp()}>${this.#t("v4_close", "Close")}</button>
             </header>
             <dl>
@@ -675,7 +663,7 @@ export class MaticMapCanvasV4 extends LitElement {
           ${renderDrawTools(state, {
             intent: (intent) => this.#intent(intent),
             openBrush: () => this.#intent({ type: "set-precision-open", value: !state.precisionOpen }),
-            t: (key, fallback) => this.#t(key, fallback),
+            t: (key, fallback, placeholders) => this.#t(key, fallback, placeholders),
           }, "row")}
         </div>
       `;
@@ -687,7 +675,7 @@ export class MaticMapCanvasV4 extends LitElement {
       return html`
         <div class="map-dock ms-surface ms-surface--floating" data-map-control>
           <div class="selection-chip ms-surface ms-surface--floating" data-map-control>
-            <span>${this.#t("v4_rooms_selected", "Rooms selected: {count}").replace("{count}", String(count))}</span>
+            <span>${this.#t("v4_rooms_selected", "Rooms selected: {count}", { count })}</span>
             <button class="ms-btn ms-btn--sm" type="button" @click=${() => this.#clearSelection()}>${this.#t("v4_clear", "Clear")}</button>
           </div>
         </div>
@@ -729,13 +717,13 @@ export class MaticMapCanvasV4 extends LitElement {
           ${showDraw ? html`<span class="keyboard-aim" aria-hidden="true"></span>` : nothing}
           <canvas class="scene-canvas"></canvas>
           <canvas class="overlay-canvas"></canvas>
-          ${showDraw ? this.#outlineEditor.render() : nothing}
+          ${showDraw ? this.outlineEditor?.render() ?? nothing : nothing}
         </div>
 
         ${showDraw ? html`
           <p id="zone-keyboard-help" class="sr-only">${this.#t("v4_zone_keyboard_help", "Focus the map, aim with arrow keys, and press Enter to place points. The edges join automatically after three points. Keep adding points or Tab to a point; arrows move it, Delete removes it, and Escape cancels a drag.")}</p>
           <p id="keyboard-draw-help" class="sr-only">${this.#t("v4_keyboard_draw_help", "Keyboard: focus the map, use arrow keys to aim, then Enter to paint or erase at the crosshair. D selects Paint; E selects Erase.")}</p>
-          <div class="map-scale" aria-label=${`Scale ${scale.label}`}>
+          <div class="map-scale" role="img" aria-label=${this.#t("v4_map_scale", "Scale {distance}", { distance: scale.label })}>
             <span class="scale-line" style=${`--scale-width:${scale.pixels}px`}></span>
             <span>${scale.label}</span>
           </div>
@@ -744,7 +732,7 @@ export class MaticMapCanvasV4 extends LitElement {
         ${this.#renderDock(showScene)}
 
         ${message && !(state.fullMap && (locating || !state.host.administrator)) ? html`
-          <div class="map-message ms-surface ms-surface--floating" role="status">
+          <div class="map-message ms-surface ms-surface--floating">
             <strong>${message.title}</strong>
             <span>${message.detail}</span>
           </div>

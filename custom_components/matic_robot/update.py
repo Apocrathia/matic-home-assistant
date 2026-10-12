@@ -2,18 +2,34 @@
 
 from __future__ import annotations
 
+from typing import Final
+
 from homeassistant.components.update import (
     UpdateDeviceClass,
     UpdateEntity,
     UpdateEntityDescription,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import translation
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import MaticConfigEntry
+from .const import DOMAIN
 from .entity import MaticEntity
 
 PARALLEL_UPDATES = 0
+
+# Home Assistant core loads the ``common`` translations before entry setup and
+# again on a language change, so the entity reads them from its cache. The
+# English values below are the fallback while the cache lacks a key.
+PENDING_FIRMWARE_VERSION_KEY: Final = (
+    f"component.{DOMAIN}.common.pending_firmware_version"
+)
+PENDING_FIRMWARE_VERSION_UNKNOWN_KEY: Final = (
+    f"component.{DOMAIN}.common.pending_firmware_version_unknown"
+)
+PENDING_FIRMWARE_VERSION: Final = "Newer than {installed}"
+PENDING_FIRMWARE_VERSION_UNKNOWN: Final = "Newer firmware"
 
 UPDATE_DESCRIPTION = UpdateEntityDescription(
     key="firmware",
@@ -35,7 +51,11 @@ class MaticFirmwareUpdate(MaticEntity, UpdateEntity):
     """Surface robot-managed OTA state in Home Assistant's update UI.
 
     The robot never reports the target version over Hermes, so a pending
-    OTA shows as an unknown latest version; installs stay robot-managed.
+    OTA reads as "Newer than {installed}" in the user's language. The marker
+    changes when the installed version or the language changes, so a Skip
+    lasts until the robot installs firmware; with no installed version it
+    stays "Newer firmware" and Home Assistant reports no state. Installs stay
+    robot-managed.
     """
 
     entity_description = UPDATE_DESCRIPTION
@@ -52,10 +72,19 @@ class MaticFirmwareUpdate(MaticEntity, UpdateEntity):
 
     @property
     def latest_version(self) -> str | None:
-        """Return the installed version unless the robot reports a pending OTA."""
-        if self.coordinator.data.telemetry.update_state == "available":
-            return None
-        return self.installed_version
+        """Return a translated pending marker while the robot reports an OTA."""
+        installed = self.installed_version
+        if self.coordinator.data.telemetry.update_state != "available":
+            return installed
+        cached = translation.async_get_cached_translations(
+            self.hass, self.hass.config.language, "common", DOMAIN
+        )
+        if installed is None:
+            return cached.get(
+                PENDING_FIRMWARE_VERSION_UNKNOWN_KEY, PENDING_FIRMWARE_VERSION_UNKNOWN
+            )
+        marker = cached.get(PENDING_FIRMWARE_VERSION_KEY, PENDING_FIRMWARE_VERSION)
+        return marker.replace("{installed}", installed)
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:

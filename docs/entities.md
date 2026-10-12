@@ -18,7 +18,7 @@ plus two opt-in statistics sensors per mapped room.
 | Cleaning mode | Default vacuum, mop, or vacuum-and-mop mode |
 | Vacuum coverage | Default Quick, Optimal, or Heavy Duty vacuum coverage |
 | Saved cleaning plan | Select the default plan |
-| Custom cleaning area | Select a saved outline |
+| Custom cleaning area | Select a saved custom area |
 | Plan buttons | Run the selected plan, use rotation, run top-to-bottom, or stop |
 | Clean selected area | Run the selected custom area |
 | Setting switches | Child lock, pet-waste avoidance, Matic Cues, double-pass mopping |
@@ -41,9 +41,16 @@ fully charged, problem, update available, active session, Matter pairing,
 robot SSH permission, robot diagnostic upload, and following-person state.
 **Fully charged** is on when the battery is full.
 
-The firmware update entity is read-only; Matic manages its own updates. The
-latest version may be unknown while an update is pending. Diagnostic entities
-are generally disabled by default.
+The firmware update entity is read-only; Matic manages its own updates. While
+the robot reports an update, the latest version reads "Newer than" the installed
+version (or "Newer firmware" if that is unknown), in Home Assistant's language;
+the robot does not publish the new version number in advance. **Skip** hides the
+update only while that text stays the same: it shows again after the robot
+installs firmware (the installed version changes) or when Home Assistant's
+language changes, but a second update offered before the robot installs the
+first stays skipped. With no installed version the text stays "Newer firmware"
+and Home Assistant shows the update's state as unknown, so there is nothing to
+skip. Diagnostic entities are generally disabled by default.
 
 If **Problem** turns on, inspect `sensor.matic_activity`:
 

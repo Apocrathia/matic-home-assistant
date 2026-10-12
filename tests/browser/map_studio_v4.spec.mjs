@@ -1,3 +1,4 @@
+import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 import { deflateSync } from "node:zlib";
 import { build } from "esbuild";
@@ -73,7 +74,7 @@ async function loadGallery(page, { scenario = "ready", narrow = false } = {}) {
 async function loadEffectHarness(page) {
   const bundle = await build({
     stdin: {
-    contents: 'export { EffectController } from "./frontend/map-studio-v4/effects"; export { BackendError } from "./frontend/map-studio-v4/backend"; export { LayerHistoryController } from "./frontend/map-studio-v4/layer-history"; export { WorkspaceStore, captureCoordinateEdit, canEditCoordinates, canReadFloorResources } from "./frontend/map-studio-v4/state"; export { createGalleryState, withGalleryRoomPreview } from "./frontend/map-studio-v4/gallery-state";',
+    contents: 'export { EffectController } from "./frontend/map-studio-v4/effects"; export { LayerHistoryController } from "./frontend/map-studio-v4/layer-history"; export { WorkspaceStore, captureCoordinateEdit, canEditCoordinates, canReadFloorResources } from "./frontend/map-studio-v4/state"; export { createGalleryState, withGalleryRoomPreview } from "./frontend/map-studio-v4/gallery-state";',
     resolveDir: process.cwd(),
     },
     bundle: true, format: "esm", write: false,
@@ -134,8 +135,10 @@ test.describe("Map Studio v0.4 foundation", () => {
   test("loads workflow tools on first open and diagnostics only when requested", async ({ page }) => {
     const workflowRequests = [];
     const diagnosticsRequests = [];
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
     await page.route("**/chunks/workflow-panel-*.js", async (route) => {
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      await held;
       await route.continue();
     });
     page.on("request", (request) => {
@@ -151,6 +154,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), workflow: "history" });
     }, GALLERY_TAG);
     await expect(gallery.getByRole("status")).toContainText("Loading workspace tools");
+    release();
     await expect(gallery.locator("matic-map-workflow-v4")).toBeVisible();
     expect(workflowRequests).toHaveLength(1);
     expect(diagnosticsRequests).toHaveLength(0);
@@ -171,6 +175,301 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(gallery.locator("matic-map-diagnostics-v4")).toBeVisible();
     expect(diagnosticsRequests).toHaveLength(1);
   });
+
+  for (const narrow of [false, true]) {
+    test(`Draw ${narrow ? "on a phone" : "at desktop width"} shows its tools at once and says Loading once${narrow ? " @mobile" : ""}`, async ({ page }) => {
+      if (narrow) await page.setViewportSize({ width: 390, height: 844 });
+      let release;
+      const held = new Promise((resolve) => { release = resolve; });
+      await page.route("**/chunks/{workflow-panel,outline-editor,draw-tools}-*.js", async (route) => {
+        await held;
+        await route.continue();
+      });
+      const gallery = await loadGallery(page, { scenario: "ready", narrow });
+      await gallery.evaluate((element) => element.setScenario("draw"));
+      const toolbar = gallery.getByRole("toolbar", { name: "Draw area tools" });
+      const loading = gallery.getByText("Loading workspace tools…");
+      await expect(toolbar).toBeVisible();
+      await expect(loading).toHaveCount(1);
+      // A phone's draw sheet rests at peek: the line sits by the tools it is about.
+      await expect(loading).toBeInViewport();
+      const before = await toolbar.boundingBox();
+      release();
+      await expect(gallery.locator("matic-map-workflow-v4")).toBeAttached();
+      await expect(loading).toHaveCount(0);
+      expect(await toolbar.boundingBox(), "the tools must not move when the rest arrives").toEqual(before);
+    });
+  }
+
+  // A failed import is final for the page in every engine, so Try again
+  // reloads; the failure shows where the workflow is looked at, once.
+  for (const [chunk, workflow, view, narrow] of [
+    ["workflow-panel", "rooms", "matic-map-workflow-v4", false],
+    ["outline-editor", "draw", "matic-map-workflow-v4", false],
+    ["outline-editor", "draw", "matic-map-workflow-v4", true],
+    ["diagnostics-panel", "support", "matic-map-diagnostics-v4", false],
+  ]) {
+    test(`a ${chunk} chunk that fails in ${workflow}${narrow ? " on a phone" : ""} says so once, and Try again reloads into it${narrow ? " @mobile" : ""}`, async ({ page }) => {
+      if (narrow) await page.setViewportSize({ width: 390, height: 844 });
+      const pattern = `**/chunks/${chunk}-*.js`;
+      await page.route(pattern, (route) => route.abort());
+      await page.goto("/map-studio-v4-audit");
+      const gallery = page.locator(GALLERY_TAG);
+      await gallery.evaluate((element, [selected, phone]) => {
+        element.narrow = phone;
+        element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), workflow: selected });
+      }, [workflow, narrow]);
+      const failure = gallery.getByRole("alert").filter({ hasText: "Workspace tools could not be loaded." });
+      await expect(failure).toHaveCount(1);
+      await expect(failure).toBeInViewport();
+      await expect(gallery.getByText("Loading workspace tools…")).toHaveCount(0);
+
+      await page.unroute(pattern);
+      await Promise.all([
+        page.waitForEvent("load"),
+        failure.getByRole("button", { name: "Try again" }).click(),
+      ]);
+      // The reload lands in the workflow Try again was pressed in.
+      await expect.poll(() => gallery.evaluate((element) => element.getWorkspaceSnapshot().workflow)).toBe(workflow);
+      // A phone's draw sheet rests at peek, with the workflow body below it.
+      await expect(gallery.locator(view)).toBeAttached();
+      if (!narrow) await expect(gallery.locator(view)).toBeVisible();
+      await expect(failure).toHaveCount(0);
+      expect(await page.evaluate(() => sessionStorage.length), "the resume marker lasts one reload").toBe(0);
+    });
+  }
+
+  // The shell loads and builds the outline editor, so a constructor that
+  // throws is a failure it says, not a map that ignores taps.
+  for (const narrow of [false, true]) {
+    test(`an outline editor that cannot be built says so in Draw${narrow ? " on a phone @mobile" : ""}`, async ({ page }) => {
+      if (narrow) await page.setViewportSize({ width: 390, height: 844 });
+      await page.route("**/chunks/outline-editor-*.js", (route) => route.fulfill({
+        contentType: "text/javascript",
+        body: "export class OutlineEditor { constructor() { throw new Error(\"synthetic\"); } }",
+      }));
+      const gallery = await loadGallery(page, { scenario: "ready", narrow });
+      await gallery.evaluate((element) => element.setScenario("draw"));
+      const failure = gallery.getByRole("alert").filter({ hasText: "Workspace tools could not be loaded." });
+      await expect(failure).toHaveCount(1);
+      await expect(failure.getByRole("button", { name: "Try again" })).toBeInViewport();
+    });
+  }
+
+  test("only Draw needs the outline editor", async ({ page }) => {
+    const outlineRequests = [];
+    page.on("request", (request) => {
+      if (request.url().includes("/chunks/outline-editor-")) outlineRequests.push(request.url());
+    });
+    await page.route("**/chunks/outline-editor-*.js", (route) => route.abort());
+    const gallery = await loadGallery(page, { scenario: "ready" });
+    const failure = gallery.getByRole("alert").filter({ hasText: "Workspace tools could not be loaded." });
+    await gallery.evaluate((element) => {
+      element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), workflow: "plans" });
+    });
+    await expect(gallery.locator("matic-map-workflow-v4")).toBeVisible();
+    await expect(failure).toHaveCount(0);
+    expect(outlineRequests).toHaveLength(0);
+
+    await gallery.evaluate((element) => {
+      element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), workflow: "draw" });
+    });
+    await expect(failure).toHaveCount(1);
+  });
+
+  test("Try again in Draw reloads into Draw, and Back works as after a fresh entry @safety", async ({ page }) => {
+    const fixture = await installPanelFixture(page, { moduleSource: "packaged" });
+    const panel = page.locator(fixture.panelTag);
+    const snapshot = () => page.evaluate((tag) => {
+      const state = document.querySelector(tag)?.getWorkspaceSnapshot();
+      return { workflow: state?.workflow, ready: state?.map.available === true };
+    }, fixture.panelTag);
+    const mount = () => page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+    await mount();
+    await expect.poll(snapshot).toEqual({ workflow: "none", ready: true });
+    const entryLength = await page.evaluate(() => history.length);
+
+    await page.route("**/chunks/outline-editor-*.js", (route) => route.abort());
+    await panel.getByRole("button", { name: /Clean a custom area/ }).click();
+    const failure = panel.getByRole("alert").filter({ hasText: "Workspace tools could not be loaded." });
+    await expect(failure).toHaveCount(1);
+    expect(await page.evaluate(() => history.length)).toBe(entryLength + 1);
+
+    await page.unroute("**/chunks/outline-editor-*.js");
+    await Promise.all([
+      page.waitForEvent("load"),
+      failure.getByRole("button", { name: "Try again" }).click(),
+    ]);
+    await fixture.remount();
+    await mount();
+    await expect.poll(snapshot).toEqual({ workflow: "draw", ready: true });
+    await expect(panel.getByRole("toolbar", { name: "Draw area tools" })).toBeVisible();
+    await expect(failure).toHaveCount(0);
+    expect(await page.evaluate(() => history.length), "no layer entry is left behind").toBe(entryLength + 1);
+
+    await page.evaluate(() => history.back());
+    await expect.poll(snapshot).toEqual({ workflow: "none", ready: true });
+    expect(await page.evaluate(() => history.state?.maticMapLayer ?? null)).toBeNull();
+  });
+
+  // A reload loses the draft, so Try again asks first, as Back does.
+  test("Try again with an unsaved area asks before the reload discards it @safety", async ({ page }) => {
+    await page.route("**/chunks/outline-editor-*.js", (route) => route.abort());
+    await page.goto("/map-studio-v4-audit");
+    const gallery = page.locator(GALLERY_TAG);
+    const draft = () => gallery.evaluate((element) => {
+      const { workflow, draw } = element.getWorkspaceSnapshot();
+      return { workflow, dirty: draw.dirty };
+    });
+    await gallery.evaluate((element) => {
+      const state = element.getWorkspaceSnapshot();
+      element.replaceWorkspaceState({ ...state, workflow: "draw", draw: { ...state.draw, dirty: true } });
+    });
+    const failure = gallery.getByRole("alert").filter({ hasText: "Workspace tools could not be loaded." });
+    const retry = failure.getByRole("button", { name: "Try again" });
+    const dialog = gallery.getByRole("dialog", { name: "Discard area changes?" });
+    await page.evaluate(() => { window.__samePage = true; });
+
+    await retry.click();
+    await expect(dialog).toBeVisible();
+    // shell.md §5: a Draw draft's primary is Name and save, so the dialog offers no Save.
+    await expect(dialog.getByRole("button", { name: "Save" }), "a Draw draft has no Save").toHaveCount(0);
+    await dialog.getByRole("button", { name: "Keep editing" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(retry, "Keep editing hands focus back to Try again").toBeFocused();
+    expect(await draft()).toEqual({ workflow: "draw", dirty: true });
+    expect(await page.evaluate(() => window.__samePage), "Keep editing must not reload").toBe(true);
+
+    await page.unroute("**/chunks/outline-editor-*.js");
+    await retry.click();
+    await Promise.all([
+      page.waitForEvent("load"),
+      dialog.getByRole("button", { name: "Discard" }).click(),
+    ]);
+    await expect.poll(draft).toEqual({ workflow: "draw", dirty: false });
+    await expect(gallery.getByRole("toolbar", { name: "Draw area tools" })).toBeVisible();
+    await expect(failure).toHaveCount(0);
+  });
+
+  // A resumed Try again opens only what the entry screen would: a limited map
+  // offers no room choice, so the reload stays on the entry screen.
+  test("Try again in Rooms reloads onto the entry screen when the map is then limited", async ({ page }) => {
+    await page.route("**/chunks/workflow-panel-*.js", (route) => route.abort());
+    const gallery = await loadGallery(page, { scenario: "ready" });
+    await gallery.evaluate((element) => {
+      element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), workflow: "rooms" });
+    });
+    const failure = gallery.getByRole("alert").filter({ hasText: "Workspace tools could not be loaded." });
+    await Promise.all([
+      page.waitForEvent("load"),
+      failure.getByRole("button", { name: "Try again" }).click(),
+    ]);
+    await page.unroute("**/chunks/workflow-panel-*.js");
+    const limited = await loadGallery(page, { scenario: "map-limited" });
+    await expect(limited.locator(".host-state")).toContainText("Home Assistant can show this map but can't confirm it well enough to start cleaning.");
+    expect(await limited.evaluate((element) => {
+      const { workflow, notice } = element.getWorkspaceSnapshot();
+      return { workflow, notice };
+    })).toEqual({ workflow: "none", notice: null });
+    expect(await page.evaluate(() => sessionStorage.length), "the refused marker is dropped").toBe(0);
+  });
+
+  // The marker belongs to the reload Try again started: one the map does not
+  // open within 30 seconds (an offline error page, another page first) is
+  // dropped, and the map opens on the entry screen.
+  test("Try again's resume is dropped when the map opens more than 30 seconds later", async ({ page }) => {
+    await page.clock.install({ time: new Date("2026-10-12T12:00:00Z") });
+    await page.route("**/chunks/workflow-panel-*.js", (route) => route.abort());
+    const gallery = await loadGallery(page, { scenario: "ready" });
+    await gallery.evaluate((element) => {
+      element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), workflow: "rooms" });
+    });
+    const failure = gallery.getByRole("alert").filter({ hasText: "Workspace tools could not be loaded." });
+    await Promise.all([
+      page.waitForEvent("load"),
+      failure.getByRole("button", { name: "Try again" }).click(),
+    ]);
+    await page.unroute("**/chunks/workflow-panel-*.js");
+    await page.clock.setSystemTime(new Date("2026-10-12T12:00:31Z"));
+    const later = await loadGallery(page, { scenario: "ready" });
+    await expect(later.getByRole("heading", { level: 2 })).toBeAttached();
+    expect(await later.evaluate((element) => element.getWorkspaceSnapshot().workflow), "workflow after a stale resume")
+      .toBe("none");
+    expect(await page.evaluate(() => sessionStorage.length), "stored markers after a stale resume").toBe(0);
+  });
+
+  test("a chunk loading while the panel is detached gets its full 20 seconds after it returns", async ({ page }) => {
+    await page.clock.install();
+    await page.route("**/chunks/workflow-panel-*.js", () => {});
+    const gallery = await loadGallery(page, { scenario: "ready" });
+    await gallery.evaluate((element) => {
+      element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), workflow: "rooms" });
+    });
+    const loading = gallery.getByText("Loading workspace tools…");
+    await expect(loading).toHaveCount(1);
+    await gallery.evaluate((element) => { window.__detached = element; element.remove(); });
+    await page.clock.runFor(30_000);
+    await page.evaluate(() => document.body.append(window.__detached));
+    await expect(loading).toHaveCount(1);
+    await page.clock.runFor(19_000);
+    await expect(loading).toHaveCount(1);
+    await page.clock.runFor(1_000);
+    await expect(gallery.getByRole("alert").filter({ hasText: "Workspace tools could not be loaded." })).toHaveCount(1);
+  });
+
+  test("a chunk still loading after 20 seconds counts as failed", async ({ page }) => {
+    await page.clock.install();
+    await page.route("**/chunks/workflow-panel-*.js", () => {});
+    const gallery = await loadGallery(page, { scenario: "ready" });
+    await gallery.evaluate((element) => {
+      element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), workflow: "rooms" });
+    });
+    await expect(gallery.getByText("Loading workspace tools…")).toHaveCount(1);
+    await page.clock.runFor(19_000);
+    await expect(gallery.getByText("Loading workspace tools…")).toHaveCount(1);
+    await page.clock.runFor(1_000);
+    await expect(gallery.getByRole("alert").filter({ hasText: "Workspace tools could not be loaded." })).toHaveCount(1);
+    await expect(gallery.getByText("Loading workspace tools…")).toHaveCount(0);
+  });
+
+  // MS-KEY-01: a control that leaves while focused hands focus to the heading,
+  // or in Full map, where no heading shows, to the control that leaves it.
+  for (const [layout, setup, target] of [
+    ["the status strip", async () => {}, ".panel-heading h2"],
+    ["the phone action bar", async (page, gallery) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await gallery.evaluate((element) => { element.narrow = true; });
+    }, ".panel-heading h2"],
+    ["the Full map HUD", async (page, gallery) => {
+      await gallery.evaluate((element) => {
+        element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), fullMap: true });
+      });
+      // Full map entry focuses its exit control after a frame; let it land first.
+      await expect(gallery.locator(".workspace-toggle")).toBeFocused();
+    }, ".workspace-toggle"],
+  ]) {
+    test(`@safety Stop pressed in ${layout} keeps focus in the panel when it leaves`, async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "cleaning" });
+      await setup(page, gallery);
+      await gallery.evaluate((element) => {
+        element.addEventListener("matic-workspace-action", (event) => {
+          if (event.detail.id !== "stop") return;
+          element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), activity: "stopping", command: "settling" });
+        });
+      });
+      const stop = gallery.getByRole("button", { name: "Stop cleaning" });
+      await stop.focus();
+      await page.keyboard.press("Enter");
+      await expect(stop).toHaveCount(0);
+      const focused = await gallery.evaluate((element, selector) => {
+        let active = element.shadowRoot.activeElement;
+        while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+        if (active?.matches(selector)) return selector;
+        return active ? active.outerHTML.slice(0, 80) : `document.activeElement ${document.activeElement?.localName}`;
+      }, target);
+      expect(focused).toBe(target);
+    });
+  }
 
   test("confirms a named room schedule reset and sends its exact saved identities", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "ready" });
@@ -200,12 +499,12 @@ test.describe("Map Studio v0.4 foundation", () => {
     const inspector = gallery.locator(".inspector");
     const schedule = inspector.locator("details").first();
     await schedule.locator("summary").click();
-    await expect(inspector.getByRole("button", { name: "Reset coverage progress for Kitchen" })).toBeVisible();
+    await expect(inspector.getByRole("button", { name: "Reset vacuum rotation progress for Kitchen" })).toBeVisible();
     const reset = inspector.getByRole("button", { name: "Reset mopping progress for Kitchen" });
     await reset.click();
-    const dialog = gallery.getByRole("dialog", { name: "Reset mopping progress for Kitchen?" });
-    await expect(dialog).toContainText("across plans that use its shared schedule");
-    await expect(dialog).toContainText("Coverage progress and saved cleaning history stay unchanged");
+    const dialog = gallery.getByRole("dialog", { name: "Reset mopping progress?" });
+    await expect(dialog).toContainText("The count for Kitchen starts again in every plan that shares its schedule");
+    await expect(dialog).toContainText("Other work and cleaning history don't change.");
     await dialog.getByRole("button", { name: "Cancel" }).click();
     await expect(dialog).toHaveCount(0);
     await reset.click();
@@ -216,7 +515,7 @@ test.describe("Map Studio v0.4 foundation", () => {
         element.__resetAction = event.detail;
       }, { once: true });
     }, GALLERY_TAG);
-    await dialog.getByRole("button", { name: "Reset mopping progress" }).click();
+    await dialog.getByRole("button", { name: "Reset", exact: true }).click();
     await expect(dialog).toHaveCount(0);
     const action = await page.evaluate((tag) => document.querySelector(tag).__resetAction, GALLERY_TAG);
     expect(action).toEqual({ id: "reset-room-cadence", planId: "daily", roomId: "room-a", mode: "mop" });
@@ -256,10 +555,10 @@ test.describe("Map Studio v0.4 foundation", () => {
     await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
     const inspector = gallery.locator(".inspector");
     await inspector.locator("details").first().locator("summary").click();
-    await expect(inspector).toContainText("Mopping progress must be reset before this schedule can run.");
-    await expect(inspector).toContainText("Coverage progress must be reset before this schedule can run.");
+    await expect(inspector).toContainText("Can't run this schedule until you reset its mopping progress, which Home Assistant can't confirm.");
+    await expect(inspector).toContainText("Can't run this schedule until you reset its vacuum rotation progress, which Home Assistant can't confirm.");
     await expect(inspector.getByRole("button", { name: "Reset mopping progress for Kitchen" })).toBeVisible();
-    await expect(inspector.getByRole("button", { name: "Reset coverage progress for Kitchen" })).toBeVisible();
+    await expect(inspector.getByRole("button", { name: "Reset vacuum rotation progress for Kitchen" })).toBeVisible();
   });
 
   test("previews next-run order, effective settings, cadence reasons, and mission boundaries", async ({ page }) => {
@@ -342,7 +641,7 @@ test.describe("Map Studio v0.4 foundation", () => {
         planDraft: { ...state.planDraft, id: null, name: "Capacity check", rooms: selected, dirty: false },
       });
     }, GALLERY_TAG);
-    const planRooms = gallery.getByRole("group", { name: "Plan rooms" });
+    const planRooms = gallery.getByRole("group", { name: "Rooms in this plan" });
     const planChoices = planRooms.locator(".plan-room-label input[type=checkbox]");
     await expect(planChoices).toHaveCount(101);
     await planChoices.nth(99).check();
@@ -393,7 +692,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await gallery.getByRole("button", { name: /Legacy plan.*Edit plan/ }).click();
 
     await expect(gallery.getByRole("button", { name: "Run this plan", exact: true })).toBeDisabled();
-    const rooms = gallery.getByRole("group", { name: "Plan rooms" });
+    const rooms = gallery.getByRole("group", { name: "Rooms in this plan" });
     const draftRoomCount = () => page.evaluate(
       (tag) => document.querySelector(tag).getWorkspaceSnapshot().planDraft.rooms.length,
       fixture.panelTag,
@@ -442,7 +741,7 @@ test.describe("Map Studio v0.4 foundation", () => {
 
     await gallery.getByRole("button", { name: "Back to plans", exact: true }).click();
     await gallery.getByRole("button", { name: /Legacy plan.*Edit plan/ }).click();
-    await expect(gallery.getByRole("group", { name: "Plan rooms" })
+    await expect(gallery.getByRole("group", { name: "Rooms in this plan" })
       .locator(".plan-room-label input[type=checkbox]:checked")).toHaveCount(100);
     await expect.poll(() => page.evaluate((tag) => {
       const state = document.querySelector(tag).getWorkspaceSnapshot();
@@ -484,11 +783,11 @@ test.describe("Map Studio v0.4 foundation", () => {
         await effects.refreshCatalog(true);
         useUpdatedPreview = true;
         await effects.executeAction("run-plan");
-        return { calls, notice: store.value.notice?.text, refreshedOrder: store.value.resources.plans.value?.plans[0]?.nextRunPreview?.rooms.map((room) => room.roomId) };
+        return { calls, notice: store.value.notice?.key, refreshedOrder: store.value.resources.plans.value?.plans[0]?.nextRunPreview?.rooms.map((room) => room.roomId) };
       } finally { effects.dispose(); }
     });
     expect(result.calls).toEqual([]);
-    expect(result.notice).toContain("preview changed");
+    expect(result.notice).toBe("v4_notice_plan_preview_changed");
     expect(result.refreshedOrder).toEqual(["room-c", "room-b", "room-a"]);
   });
 
@@ -545,7 +844,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     const useSchedule = gallery.getByRole("checkbox", { name: "Override shared schedule settings" });
     await expect(useSchedule).not.toBeChecked();
     expect((await snapshot(page)).selection.useRoomSchedule).toBe(true);
-    const sharedStatus = gallery.getByLabel("Shared room schedule status");
+    const sharedStatus = gallery.getByText(/^Kitchen: /u);
     await expect(sharedStatus).toContainText("Vacuum and mop is due on this clean.");
     await useSchedule.check();
     await expect(useSchedule).toBeChecked();
@@ -586,12 +885,168 @@ test.describe("Map Studio v0.4 foundation", () => {
           areaDraft: { ...state.areaDraft, status: "stale", canRebind: reviewable },
         });
       }, { tag: GALLERY_TAG, reviewable: canRebind });
-      const review = gallery.getByText("Review the saved outline on this current map, then confirm it.", { exact: true });
-      const redraw = gallery.getByText("This outline no longer matches the current room map. Redraw it before saving.", { exact: true });
+      const review = gallery.getByText("The map changed since you saved this area, so save it again or redraw it.", { exact: true });
+      const redraw = gallery.getByText("Home Assistant can't use this area as it was saved, so redraw it.", { exact: true });
       await expect(canRebind ? review : redraw).toBeVisible();
       await expect(canRebind ? redraw : review).toHaveCount(0);
     });
   }
+
+  test("a paused plan shows a Paused chip beside its name and only its room count below", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plans" });
+    const paused = gallery.getByRole("button", { name: /^Guest prep/ });
+    await expect(paused.locator("strong .ms-chip")).toHaveText("Paused");
+    await expect(paused.locator("small")).toHaveText("1 room");
+    const running = gallery.getByRole("button", { name: /^Weekend refresh/ });
+    await expect(running.locator(".ms-chip")).toHaveCount(0);
+    await expect(running.locator("small")).toHaveText("2 rooms");
+  });
+
+  test("delete dialogs use a generic title, the bare verb and the saved name", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-saved-intelligent" });
+    const savedPlan = await gallery.evaluate((element) => {
+      const state = element.getWorkspaceSnapshot();
+      element.replaceWorkspaceState({
+        ...state,
+        planDraft: { ...state.planDraft, name: "Unsaved rename", dirty: true },
+        dialog: "confirmDeletePlan",
+      });
+      return state.resources.plans.value.plans.find((plan) => plan.id === state.planDraft.id).name;
+    });
+    const planDialog = gallery.getByRole("dialog", { name: "Delete plan?" });
+    await expect(planDialog).toContainText(`Automations that run "${savedPlan}" will stop working, and the robot won't move.`);
+    await expect(planDialog).not.toContainText("Unsaved rename");
+    await expect(planDialog.getByRole("button", { name: "Delete", exact: true })).toBeVisible();
+
+    await page.evaluate((tag) => document.querySelector(tag).setScenario("area-review-rebind"), GALLERY_TAG);
+    const savedArea = await gallery.evaluate((element) => {
+      const state = element.getWorkspaceSnapshot();
+      element.replaceWorkspaceState({
+        ...state,
+        areaDraft: { ...state.areaDraft, name: "Unsaved area name", dirty: true },
+        dialog: "confirmDeleteArea",
+      });
+      return state.resources.areas.value.areas.find((area) => area.id === state.areaDraft.id).name;
+    });
+    const areaDialog = gallery.getByRole("dialog", { name: "Delete area?" });
+    await expect(areaDialog).toContainText(`Automations that clean "${savedArea}" will stop working, and the robot won't move.`);
+    await expect(areaDialog).not.toContainText("Unsaved area name");
+    await expect(areaDialog.getByRole("button", { name: "Delete", exact: true })).toBeVisible();
+  });
+
+  // The backend promotes the first remaining item in saved order, paused or
+  // not, or none (plans.py:2623-2624, 2159-2160); the dialog says which.
+  const openDelete = (gallery, { kind, id, selected, order }) => gallery.evaluate((element, request) => {
+    const state = element.getWorkspaceSnapshot();
+    const plan = request.kind === "plan";
+    const resource = plan ? state.resources.plans : state.resources.areas;
+    const scenario = window.__galleryModule.createGalleryState(plan ? "plans" : "area-review-rebind").resources;
+    const pool = plan ? scenario.plans.value.plans : scenario.areas.value.areas;
+    const extra = (itemId) => ({ ...pool[0], id: itemId, name: itemId[0].toUpperCase() + itemId.slice(1) });
+    const items = request.order.map((itemId) => pool.find((item) => item.id === itemId) ?? extra(itemId));
+    const name = items.find((item) => item.id === request.id).name;
+    const value = { ...resource.value, [plan ? "plans" : "areas"]: items, [plan ? "selectedPlan" : "selectedArea"]: request.selected };
+    element.replaceWorkspaceState({
+      ...state,
+      resources: { ...state.resources, [plan ? "plans" : "areas"]: { ...resource, value } },
+      ...(plan
+        ? { planDraft: { ...state.planDraft, id: request.id, name }, selection: { ...state.selection, planId: request.id } }
+        : { areaDraft: { ...state.areaDraft, id: request.id, name }, selection: { ...state.selection, areaId: request.id } }),
+      dialog: plan ? "confirmDeletePlan" : "confirmDeleteArea",
+    });
+  }, { kind, id, selected, order });
+
+  test("deleting the default plan says which plan becomes the default", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plans" });
+    const dialog = gallery.getByRole("dialog", { name: "Delete plan?" });
+    for (const [id, order, expected] of [
+      ["weekend", ["daily", "weekend", "guest"], "Daily clean becomes your default plan."],
+      ["daily", ["daily", "guest", "weekend"], "Guest prep becomes your default plan."],
+      ["daily", ["daily"], "You'll have no default plan."],
+    ]) {
+      await openDelete(gallery, { kind: "plan", id, selected: id, order });
+      await expect(dialog, `deleting default ${id} of ${order}`).toContainText(expected);
+    }
+    await openDelete(gallery, { kind: "plan", id: "weekend", selected: "daily", order: ["daily", "weekend"] });
+    await expect(dialog).toContainText("Automations that run \"Weekend refresh\" will stop working, and the robot won't move.");
+    await expect(dialog, "a plan that is not the default changes no default").not.toContainText("default plan");
+  });
+
+  test("deleting the selected custom area says which area becomes selected", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "area-review-rebind" });
+    const dialog = gallery.getByRole("dialog", { name: "Delete area?" });
+    for (const [id, order, expected] of [
+      ["entryway", ["porch", "entryway", "desk"], "Porch becomes the selected custom area."],
+      ["porch", ["entryway", "desk", "porch"], "Entryway becomes the selected custom area."],
+      ["entryway", ["entryway"], "No custom area will be selected."],
+    ]) {
+      await openDelete(gallery, { kind: "area", id, selected: id, order });
+      await expect(dialog, `deleting selected ${id} of ${order}`).toContainText(expected);
+    }
+    await openDelete(gallery, { kind: "area", id: "entryway", selected: "porch", order: ["porch", "entryway"] });
+    await expect(dialog).toContainText("Automations that clean \"Entryway\" will stop working, and the robot won't move.");
+    await expect(dialog, "an area that is not selected changes no selection").not.toContainText("custom area");
+  });
+
+  test("Delete shows and its dialog stands only while the catalog holds the saved item", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "area-review-rebind" });
+    const unresolved = (patch) => gallery.evaluate((element, { patch: kind }) => {
+      const state = element.getWorkspaceSnapshot();
+      const resources = kind === "area-loading"
+        ? { ...state.resources, areas: { status: "loading", value: null, problem: null } }
+        : { ...state.resources, plans: { ...state.resources.plans, value: { ...state.resources.plans.value, plans: [] } } };
+      element.replaceWorkspaceState({ ...state, resources, ...(kind === "plan-gone" ? { planDraft: { ...state.planDraft, dirty: true } } : {}) });
+      const dialog = kind === "area-loading" ? "confirmDeleteArea" : "confirmDeletePlan";
+      element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), dialog });
+      return element.getWorkspaceSnapshot().dialog;
+    }, { patch });
+
+    await expect(gallery.getByRole("button", { name: "Delete area" })).toBeVisible();
+    expect(await unresolved("area-loading"), "a delete dialog for an area the catalog has not loaded").toBeNull();
+    await expect(gallery.getByRole("button", { name: "Delete area" })).toHaveCount(0);
+    await expect(gallery.getByRole("dialog")).toHaveCount(0);
+
+    await page.evaluate((tag) => document.querySelector(tag).setScenario("plan-saved-intelligent"), GALLERY_TAG);
+    await expect(gallery.getByRole("button", { name: "Delete plan", exact: true })).toBeVisible();
+    expect(await unresolved("plan-gone"), "a delete dialog for a plan deleted elsewhere").toBeNull();
+    await expect(gallery.getByRole("button", { name: "Delete plan", exact: true })).toHaveCount(0);
+    await expect(gallery.getByRole("dialog")).toHaveCount(0);
+  });
+
+  test("a room settings check that fails says so and offers Try again", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "rooms" });
+    // The gallery always admits a synthetic preview, so the failed check is
+    // rendered by handing the workflow panel that state directly.
+    await gallery.evaluate((element) => {
+      const shell = element.shadowRoot.querySelector(".stage").firstElementChild;
+      const panel = [...shell.shadowRoot.querySelectorAll("*")]
+        .find((node) => node.localName.startsWith("matic-map-workflow-v4"));
+      const state = element.getWorkspaceSnapshot();
+      panel.state = { ...state, manualRoomPreview: { status: "error", value: null, problem: "request-failed" } };
+    });
+    const problem = gallery.locator(".problem", { hasText: "room settings" });
+    await expect(problem).toHaveText("Home Assistant couldn't check the room settings.");
+    await expect(gallery.getByRole("button", { name: "Try again", exact: true })).toBeVisible();
+  });
+
+  test("a selected point has one name in every language", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "draw" });
+    await page.evaluate((tag) => {
+      const element = document.querySelector(tag);
+      const shell = element.shadowRoot.querySelector(".stage").firstElementChild;
+      shell.localize = (key, values) => key === "component.matic_robot.common.v4_zone_point_number"
+        ? `Punkt ${values.number}`
+        : key;
+      const state = element.getWorkspaceSnapshot();
+      element.replaceWorkspaceState({ ...state, draw: { ...state.draw, tool: "outline", undo: [], redo: [],
+        outline: { closed: true, points: [{ x: 1, y: 1 }, { x: 3.5, y: 1 }, { x: 3.5, y: 2.5 }, { x: 1, y: 2.5 }] },
+        circles: [{ x: 2.25, y: 1.75, radius: 0.7 }] } });
+    }, GALLERY_TAG);
+    await gallery.getByRole("button", { name: "Punkt 1", exact: true }).click();
+    const actions = gallery.locator(".zone-point-actions");
+    await expect(actions).toHaveAttribute("aria-label", "Punkt 1");
+    await expect(actions.locator(".zone-selection")).toHaveText("Punkt 1");
+  });
 
   test("never offers a hidden stale plan while its catalog is loading or unavailable @safety", async ({ page }) => {
     const gallery = await loadGallery(page);
@@ -822,7 +1277,7 @@ test.describe("Map Studio v0.4 foundation", () => {
   test("ignores an old start response, including a late coverage guard, after changing robots or closing the panel @safety", async ({ page }) => {
     await loadEffectHarness(page);
     const results = await page.evaluate(async () => {
-      const { EffectController, BackendError, WorkspaceStore, createGalleryState } = await import("/plan-recovery-test.js");
+      const { EffectController, WorkspaceStore, createGalleryState } = await import("/plan-recovery-test.js");
       const results = [];
       for (const close of [false, true]) {
         for (const rejectLate of [false, true]) {
@@ -842,7 +1297,7 @@ test.describe("Map Studio v0.4 foundation", () => {
               if (service !== "run_selected_plan") return Promise.resolve();
               return new Promise((resolve, reject) => {
               completeStart = () => rejectLate
-                ? reject(new BackendError("coverage_identity_changed", null, "The cleaning task changed during setup. Check the robot status, then try again."))
+                ? reject(Object.assign(new Error("late guard"), { translation_domain: "matic_robot", translation_key: "coverage_identity_changed" }))
                 : resolve();
               });
             },
@@ -883,52 +1338,50 @@ test.describe("Map Studio v0.4 foundation", () => {
       preserved: true,
     }))));
   });
-  test("shows allowlisted guard recovery text and keeps generic service errors generic", async ({ page }) => {
+  // Home Assistant's service error carries the integration's translation key;
+  // effects.ts maps a Matic coverage guard key to its notice and treats any
+  // other error, whatever its text or domain, as an unconfirmed action.
+  test("maps Matic coverage guard rejections to their notices and keeps other service errors generic", async ({ page }) => {
     await loadEffectHarness(page);
     const result = await page.evaluate(async () => {
-      const { EffectController, BackendError, WorkspaceStore, createGalleryState } = await import("/plan-recovery-test.js");
-      const messages = {
-        coverage_identity_unavailable: "Could not verify the current cleaning task. Check the robot status, then try again.",
-        coverage_activity_unavailable: "Could not verify whether the robot is cleaning. Check the robot status, then try again.",
-        coverage_native_session_active: "The robot already has a cleaning task. Wait for it to finish before starting another cleaning task.",
-        coverage_identity_changed: "The cleaning task changed during setup. Check the robot status, then try again.",
-      };
+      const { EffectController, WorkspaceStore, createGalleryState } = await import("/plan-recovery-test.js");
+      const rejection = (domain, key) => Object.assign(new Error("secret untrusted service text"), {
+        translation_domain: domain, translation_key: key,
+      });
       const notices = [];
-      for (const [code, message] of Object.entries(messages)) {
+      for (const error of [
+        rejection("matic_robot", "coverage_identity_unavailable"),
+        rejection("matic_robot", "coverage_activity_unavailable"),
+        rejection("matic_robot", "coverage_native_session_active"),
+        rejection("matic_robot", "coverage_identity_changed"),
+        rejection("other_domain", "coverage_identity_unavailable"),
+        rejection("matic_robot", "toString"),
+        new Error("secret untrusted service text"),
+      ]) {
         const initial = { ...createGalleryState("ready"), workflow: "plan" };
         const store = new WorkspaceStore(initial);
         const backend = {
           plans: async () => initial.resources.plans.value,
-          service: async () => { throw new BackendError(code, null, message); },
+          service: async () => { throw error; },
           dispose() {},
         };
         const effects = new EffectController(store, backend);
         effects.sync({ host: initial.host, activity: initial.activity, batteryPercent: 92, robotLabel: "Synthetic", robots: initial.robots, language: "en", userKey: "test", entryKey: initial.selection.entryId, vacuumEntityId: "vacuum.synthetic" });
         await effects.executeAction("run-plan");
-        notices.push(store.value.notice?.text);
+        notices.push(store.value.notice?.key);
         effects.dispose();
       }
-      const initial = { ...createGalleryState("ready"), workflow: "plan" };
-      const store = new WorkspaceStore(initial);
-      const backend = {
-        plans: async () => initial.resources.plans.value,
-        service: async () => { throw new Error("secret untrusted service text"); },
-        dispose() {},
-      };
-      const effects = new EffectController(store, backend);
-      effects.sync({ host: initial.host, activity: initial.activity, batteryPercent: 92, robotLabel: "Synthetic", robots: initial.robots, language: "en", userKey: "test", entryKey: initial.selection.entryId, vacuumEntityId: "vacuum.synthetic" });
-      await effects.executeAction("run-plan");
-      const untrustedNotice = store.value.notice?.text;
-      effects.dispose();
-      return { notices, untrustedNotice };
+      return notices;
     });
-    expect(result.notices).toEqual([
-      "Could not verify the current cleaning task. Check the robot status, then try again.",
-      "Could not verify whether the robot is cleaning. Check the robot status, then try again.",
-      "The robot already has a cleaning task. Wait for it to finish before starting another cleaning task.",
-      "The cleaning task changed during setup. Check the robot status, then try again.",
+    expect(result, "notice keys for each service rejection").toEqual([
+      "v4_notice_coverage_task_unknown",
+      "v4_notice_coverage_activity_unknown",
+      "v4_notice_coverage_robot_busy",
+      "v4_notice_coverage_task_changed",
+      "v4_notice_action_unconfirmed",
+      "v4_notice_action_unconfirmed",
+      "v4_notice_action_unconfirmed",
     ]);
-    expect(result.untrustedNotice).toBe("The action could not be confirmed. Check the robot status before trying again.");
   });
   test("ends Starting when a managed service returns at the end of its run", async ({ page }) => {
     await loadEffectHarness(page);
@@ -1094,13 +1547,13 @@ test.describe("Map Studio v0.4 foundation", () => {
         reject = false;
         await effects.deletePlan();
         const deletedDraft = { selected: store.value.selection.planId, id: store.value.planDraft.id, dirty: store.value.planDraft.dirty, name: store.value.planDraft.name };
-        const deletionNotice = store.value.notice?.text;
+        const deletionNotice = store.value.notice?.key;
         effects.selectPlan(null);
         const nextNotice = store.value.notice;
         return { failed, deletionNotice, nextNotice, deleted: deletedDraft };
       } finally { effects.dispose(); }
     });
-    expect(result).toEqual({ deletionNotice: "Plan deleted", nextNotice: null, failed: { id: "daily", dirty: true, name: "Keep on failure" }, deleted: { selected: null, id: null, dirty: false, name: "" } });
+    expect(result).toEqual({ deletionNotice: "v4_notice_plan_deleted", nextNotice: null, failed: { id: "daily", dirty: true, name: "Keep on failure" }, deleted: { selected: null, id: null, dirty: false, name: "" } });
   });
   for (const pruned of ["snapshot", "floor", "all", "navigation"]) {
     test(`reconciles the scene and floor when history prunes the selected ${pruned}`, async ({ page }) => {
@@ -1181,13 +1634,55 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(gallery.getByRole("button", { name: "Delete plan", exact: true })).toBeInViewport();
   });
 
+  test("a limited map while idle says so and offers one Try again that rechecks", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "map-limited" });
+    await expect(gallery.locator(".status-copy strong")).toHaveText("Map limited");
+    await expect(gallery.locator(".status-copy small")).toHaveText("Cleaning can't start");
+    const body = gallery.locator(".host-state");
+    await expect(body).toContainText("Home Assistant can show this map but can't confirm it well enough to start cleaning.");
+    await expect(gallery.locator(".quick-actions")).toHaveCount(0);
+    const retry = body.getByRole("button", { name: "Try again", exact: true });
+    await expect(retry).not.toHaveAttribute("aria-disabled", "true");
+    await page.evaluate((tag) => {
+      const element = document.querySelector(tag);
+      element.__actions = [];
+      element.addEventListener("matic-workspace-action", (event) => element.__actions.push(event.detail));
+    }, GALLERY_TAG);
+    await retry.click();
+    expect(await page.evaluate((tag) => document.querySelector(tag).__actions, GALLERY_TAG))
+      .toEqual([{ id: "recheck-status" }]);
+
+    // A catalog read the user did not ask for (sync, spatial recovery) changes nothing.
+    await gallery.evaluate((element) => {
+      const state = element.getWorkspaceSnapshot();
+      element.replaceWorkspaceState({
+        ...state,
+        resources: { ...state.resources, catalog: { ...state.resources.catalog, status: "loading" } },
+      });
+    });
+    await expect(gallery.locator(".status-copy small")).toHaveText("Cleaning can't start");
+    await expect(retry).not.toHaveAttribute("aria-disabled", "true");
+
+    // While the user's recheck runs the button stays, disabled, and the strip says so.
+    await gallery.evaluate((element) => {
+      element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), rechecking: true });
+    });
+    await expect(retry).toHaveAttribute("aria-disabled", "true");
+    await expect(gallery.locator(".status-copy small")).toHaveText("Checking again");
+    await retry.dispatchEvent("click");
+    expect(await page.evaluate((tag) => document.querySelector(tag).__actions.length, GALLERY_TAG)).toBe(1);
+  });
+
   test("distinguishes setup, robot problems and unavailable maps from localization", async ({ page }) => {
+    // shell.md §2: these rows have no footer button; the strip says the state.
     const gallery = await loadGallery(page, { scenario: "empty" });
-    await expect(gallery.locator(".action-bar")).toContainText("Set up a Matic robot");
+    await expect(gallery.locator(".status-copy strong")).toHaveText("No robot");
+    await expect(gallery.locator(".action-bar")).not.toContainText("Set up a Matic robot");
     await page.evaluate((tag) => document.querySelector(tag).setScenario("problem"), GALLERY_TAG);
-    await expect(gallery.locator(".action-bar")).toContainText("Check the robot");
+    await expect(gallery.locator(".status-copy strong")).toHaveText("Needs attention");
+    await expect(gallery.locator(".action-bar")).not.toContainText("Check the robot");
     await page.evaluate((tag) => document.querySelector(tag).setScenario("unsupported"), GALLERY_TAG);
-    await expect(gallery.locator(".action-bar")).toContainText("Map unavailable");
+    await expect(gallery.locator(".action-bar")).not.toContainText("Map unavailable");
     await expect(gallery.locator(".action-bar")).not.toContainText("Finding the map");
     await expect(gallery.locator(".status-copy strong")).toHaveText("Map unavailable");
     await expect(gallery.locator(".status-copy small")).toContainText(/new cleaning is disabled/i);
@@ -1254,7 +1749,7 @@ test.describe("Map Studio v0.4 foundation", () => {
           await effects.refreshCatalog();
           for (const action of ["clean-rooms", "run-plan", "run-area"]) await effects.executeAction(action);
           window.__pausedMapState = store.value;
-          const paused = { available: store.value.map.available, exactPose: store.value.map.exactPose, scene: !!store.value.resources.scene.value, notice: store.value.notice?.text, commands };
+          const paused = { available: store.value.map.available, exactPose: store.value.map.exactPose, scene: !!store.value.resources.scene.value, notice: store.value.notice?.key ?? null, commands };
           entry = { ...initial.resources.entry, deltaUrl: null };
           await effects.refreshCatalog();
           for (let i = 0; i < 20 && store.value.resources.scene.value?.marker !== "live"; i++) await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1264,7 +1759,7 @@ test.describe("Map Studio v0.4 foundation", () => {
         } finally { effects.dispose(); }
       }, retained);
       expect(result.paused).toMatchObject({ available: true, exactPose: false, scene: true, commands: 0 });
-      expect(result.paused.notice).toContain(retained ? "rechecked" : "Saved map from");
+      expect(result.paused.notice).toBe(retained ? null : "v4_notice_saved_map");
       expect(result.commands).toBe(1);
       expect(result.recovered).toEqual({ available: true, readOnly: false, marker: "live" });
       await page.addScriptTag({ url: "/map_studio_v4-review/review.js", type: "module" });
@@ -1278,7 +1773,8 @@ test.describe("Map Studio v0.4 foundation", () => {
         gallery.replaceWorkspaceState(window.__pausedMapState);
       }, GALLERY_TAG);
       await expect(page.locator(GALLERY_TAG).locator(".scene-window")).toBeVisible();
-      if (!retained) await expect(page.locator(GALLERY_TAG).locator(".map-message")).toContainText("Saved map from");
+      if (!retained) await expect(page.locator(GALLERY_TAG).locator(".map-message")).toContainText("Showing the saved map from");
+      else await expect(page.locator(GALLERY_TAG).getByText("Locating the current map").first()).toBeVisible();
       await page.screenshot({ path: testInfo.outputPath(`${retained ? "retained" : "saved"}-map.png`) });
 
     });
@@ -1316,10 +1812,11 @@ test.describe("Map Studio v0.4 foundation", () => {
         window.__deltaRecheckState = store.value;
         return { retained: store.value.resources.scene.value === initial.resources.scene.value,
           available: store.value.map.available, readOnly: store.value.floor.readOnly,
-          exactPose: store.value.map.exactPose, catalog: store.value.resources.catalog.status, commands };
+          exactPose: store.value.map.exactPose, catalog: store.value.resources.catalog.status, commands,
+          notice: store.value.notice };
       } finally { effects.dispose(); }
     });
-    expect(result).toEqual({ retained: true, available: true, readOnly: true, exactPose: false, catalog: "error", commands: 0 });
+    expect(result).toEqual({ retained: true, available: true, readOnly: true, exactPose: false, catalog: "error", commands: 0, notice: null });
     await page.addScriptTag({ url: "/map_studio_v4-review/review.js", type: "module" });
     await page.evaluate(async tag => {
       await customElements.whenDefined(tag);
@@ -1329,7 +1826,11 @@ test.describe("Map Studio v0.4 foundation", () => {
       gallery.replaceWorkspaceState(window.__deltaRecheckState);
     }, GALLERY_TAG);
     await expect(page.locator(GALLERY_TAG).locator(".scene-window")).toBeVisible();
-    await expect(page.locator(GALLERY_TAG).locator(".map-message")).toContainText("rechecked");
+    // The catalog failure leaves coherence degraded, so the workspace, not a
+    // notice, says the map is limited; the row has no footer button (shell.md §2).
+    await expect(page.locator(GALLERY_TAG).getByRole("heading", { name: "Saved map is read only" })).toBeVisible();
+    await expect(page.locator(GALLERY_TAG).locator(".status-copy strong")).toHaveText("Map limited");
+    await expect(page.locator(GALLERY_TAG).getByRole("button", { name: "Finding the map" })).toHaveCount(0);
   });
 
   test("returning to live keeps the saved map if the catalog is unavailable", async ({ page }) => {
@@ -1643,9 +2144,9 @@ test.describe("Map Studio v0.4 foundation", () => {
       await effects.refreshCatalog(true);
       effects.sync({ ...projection, host: { ...projection.host, connected: false, robotConnected: false } });
       effects.sync(projection);
-      const pending = { notice: store.value.notice?.text ?? null, reads };
+      const pending = { notice: store.value.notice?.key ?? null, reads };
       await new Promise((resolve) => window.setTimeout(resolve, 0));
-      const recovered = { notice: store.value.notice?.text ?? null, reads, coherence: store.value.coherence };
+      const recovered = { notice: store.value.notice?.key ?? null, reads, coherence: store.value.coherence };
       effects.dispose();
       return { pending, recovered };
     });
@@ -3286,7 +3787,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       const sheetBounds = element.getRootNode().host.getRootNode().querySelector(".mobile-sheet")?.getBoundingClientRect();
       return sheetBounds ? Math.abs(bounds.bottom - sheetBounds.top) : Number.POSITIVE_INFINITY;
     })).toBeLessThanOrEqual(1);
-    await expect(showMore).toHaveAttribute("aria-controls", "sheet-body");
+    await expect(showMore).toHaveAttribute("aria-controls", "sheet-panel");
     await expect(showMore).not.toHaveAttribute("aria-disabled", "true");
     await expect(showLess).not.toHaveAttribute("aria-disabled", "true");
     await showMore.click();
@@ -3299,10 +3800,11 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(sheet).toHaveAttribute("data-detent", "peek");
     await expect(showLess).toHaveAttribute("aria-disabled", "true");
     await expect(live).toContainText("Map workspace, peek height");
-    await expect(gallery.locator("#sheet-body")).toBeHidden();
+    await expect(gallery.locator("#sheet-panel")).toBeHidden();
     await showMore.click();
     await expect(sheet).toHaveAttribute("data-detent", "half");
-    await expect(gallery.locator("#sheet-body")).toBeVisible();
+    await expect(live).toContainText("Map workspace, half height");
+    await expect(gallery.locator("#sheet-panel")).toBeVisible();
 
     // Room choices are immediately visible; long forms start at full height.
     await page.evaluate((tag) => {
@@ -3310,7 +3812,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       document.querySelector(tag).replaceWorkspaceState(module.createGalleryState("rooms"));
     }, GALLERY_TAG);
     await expect(sheet).toHaveAttribute("data-detent", "half");
-    await expect(gallery.locator("#sheet-body")).toBeVisible();
+    await expect(gallery.locator("#sheet-panel")).toBeVisible();
     await page.evaluate((tag) => {
       const module = window.__galleryModule;
       document.querySelector(tag).replaceWorkspaceState({ ...module.createGalleryState("ready"), workflow: "plan" });
@@ -3332,15 +3834,15 @@ test.describe("Map Studio v0.4 foundation", () => {
     const deletePlan = gallery.getByRole("button", { name: "Delete plan" });
     await expect(deletePlan).toBeVisible();
     await deletePlan.click();
-    await expect(gallery.getByRole("dialog", { name: "Delete this plan?" })).toBeVisible();
+    await expect(gallery.getByRole("dialog", { name: "Delete plan?" })).toBeVisible();
     expect(await page.evaluate(() => window.__mapStudioActions)).toEqual([]);
     await gallery.getByRole("button", { name: "Cancel" }).click();
     await expect(deletePlan).toBeFocused();
 
     await deletePlan.click();
-    await gallery.getByRole("dialog", { name: "Delete this plan?" })
-      .getByRole("button", { name: "Delete plan", exact: true }).click();
-    await expect(gallery.getByRole("dialog", { name: "Delete this plan?" })).toHaveCount(0);
+    await gallery.getByRole("dialog", { name: "Delete plan?" })
+      .getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(gallery.getByRole("dialog", { name: "Delete plan?" })).toHaveCount(0);
     expect(await page.evaluate(() => window.__mapStudioActions)).toEqual(["delete-plan"]);
 
     await page.evaluate((tag) => {
@@ -3373,7 +3875,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     const deletePlan = gallery.getByRole("button", { name: "Delete plan" });
     await expect(deletePlan).toBeVisible();
     await deletePlan.click();
-    await expect(gallery.getByRole("dialog", { name: "Delete this plan?" })).toBeVisible();
+    await expect(gallery.getByRole("dialog", { name: "Delete plan?" })).toBeVisible();
     await gallery.getByRole("button", { name: "Cancel" }).click();
     await expect(deletePlan).toBeFocused();
   });
@@ -3617,8 +4119,8 @@ test.describe("Map Studio v0.4 foundation", () => {
     const inspector = gallery.locator(".inspector");
     // Groups are named by a visible h3 (aria-labelledby), not a bare
     // aria-label, so the outline is readable by sighted users as well.
-    await expect(inspector.getByRole("heading", { name: "Plan rooms", level: 3 })).toBeVisible();
-    const list = inspector.getByLabel("Plan rooms");
+    await expect(inspector.getByRole("heading", { name: "Rooms in this plan", level: 3 })).toBeVisible();
+    const list = inspector.getByLabel("Rooms in this plan");
     await expect(list).toHaveCount(1);
     await expect(list).toHaveAttribute("aria-labelledby", "plan-rooms-heading");
     await expect(inspector.getByLabel("Room order and settings")).toHaveCount(0);
@@ -3672,7 +4174,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       }, GALLERY_TAG);
       await gallery.getByRole("button", { name: /^Run a plan/ }).click();
       await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
-      const cadence = gallery.getByLabel("Plan rooms").locator("details").first();
+      const cadence = gallery.getByLabel("Rooms in this plan").locator("details").first();
       await cadence.locator("summary").click();
       await expect(cadence.getByText("Periodic coverage is credited only after the robot confirms the requested vacuum coverage and completed clean. If those settings cannot be verified, coverage stays due for the next clean.")).toBeVisible();
       const scope = cadence.getByLabel("Schedule scope for Kitchen");
@@ -3763,7 +4265,8 @@ test.describe("Map Studio v0.4 foundation", () => {
         resources: { ...state.resources, history: { status: "error", value: null, problem: "request-failed" } },
       });
     }, GALLERY_TAG);
-    await expect(gallery.getByRole("alert")).toContainText("Map history is unavailable right now. Try again shortly.");
+    // The shell's static alert region is always present, so filter to the panel's message.
+    await expect(gallery.getByRole("alert").filter({ hasText: "Map history is unavailable" })).toContainText("Map history is unavailable right now. Try again shortly.");
   });
 
   test("keeps a saved-area destination intact through cancel and discard", async ({ page }) => {
@@ -3820,7 +4323,7 @@ test.describe("Map Studio v0.4 foundation", () => {
         areaDraft: { ...state.areaDraft, dirty: true },
       });
     }, GALLERY_TAG);
-    await gallery.getByRole("button", { name: "Edit outline" }).click();
+    await gallery.getByRole("button", { name: "Redraw" }).click();
     await expect.poll(async () => (await snapshot(page)).workflow).toBe("draw");
     await floor.selectOption("saved-1");
     await expect(gallery.getByRole("dialog", { name: "Discard area changes?" })).toBeVisible();
@@ -4067,7 +4570,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     }
   });
 
-  const DRAW_TOOL_NAMES = ["Zone", "Paint", "Erase", "Move map", "Undo", "Redo", /^Brush width, 0\.60 m/];
+  const DRAW_TOOL_NAMES = ["Points", "Paint", "Erase", "Move map", "Undo", "Redo", /^Brush width, 0\.60 m/];
 
   async function expectDrawTools(gallery, tools) {
     await expect(tools).toHaveCount(7);
@@ -4418,7 +4921,10 @@ test.describe("Map Studio v0.4 foundation", () => {
         return (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05);
       });
     });
+    // evaluateAll does not wait, and the Draw list renders in the lazily
+    // loaded workflow chunk, so wait for the rows before measuring them.
     const expectContrast = async (selector) => {
+      await gallery.locator(selector).first().waitFor();
       const ratios = await contrastRatios(selector);
       expect(ratios.length, `${selector} rendered`).toBeGreaterThan(0);
       expect(Math.min(...ratios), `${selector} contrast ${JSON.stringify(ratios)}`).toBeGreaterThanOrEqual(4.5);
@@ -4436,6 +4942,9 @@ test.describe("Map Studio v0.4 foundation", () => {
       });
       await expectContrast(".action-reason");
       await gallery.evaluate((element) => element.setScenario("draw"));
+      // The Rooms rows still on screen match the row selector, so wait for the
+      // Draw list itself before measuring its rows.
+      await expect(gallery.getByRole("group", { name: "Saved custom areas" })).toBeVisible();
       await expectContrast(".list .ms-row small");
       await gallery.evaluate((element) => { element.narrow = true; element.setScenario("rooms"); });
       await expectContrast(".sheet-status");
@@ -4461,10 +4970,15 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(mapLive).toContainText("Live map");
 
     await gallery.evaluate((element) => element.setScenario("transition"));
-    await expect(gallery.getByRole("status")).toContainText("Locating");
-    const locating = gallery.getByRole("button", { name: "Finding the map" });
-    await expect(locating).toHaveAttribute("aria-disabled", "true");
-    await expect(locating).toHaveAccessibleDescription("Waiting for the robot to confirm which floor it is on.");
+    // The canvas chip carries no live role; the shell's polite region announces
+    // the status title change (shell.md §4 rule 6).
+    await expect(gallery.locator("matic-map-canvas-v4 .map-message")).toContainText("Locating");
+    await expect(gallery.locator(".root > .sr-only[aria-live=polite]")).toHaveText("Locating");
+    // Locating has no footer button (shell.md §2 row 8); the sheet body gives
+    // the reason on the choices it holds back.
+    await expect(gallery.getByRole("button", { name: "Finding the map" })).toHaveCount(0);
+    await expect(gallery.getByRole("button", { name: /^One-time clean/ }))
+      .toContainText("Waiting for the robot to confirm which floor it is on.");
     await expect(mapLive).toContainText("not available");
   });
 
@@ -5929,7 +6443,7 @@ test.describe("Map Studio v0.4 on touch @mobile", () => {
     await touchDrag(page, grip, slowDrag(220), { stepMs: 40 });
     await expect(sheet).toHaveAttribute("data-detent", "peek");
     await settleSheet(gallery);
-    await expect(gallery.locator("#sheet-body")).toBeHidden();
+    await expect(gallery.locator("#sheet-panel")).toBeHidden();
     await expect.poll(() => sheetSeam(gallery)).toBeLessThanOrEqual(1);
     expect(await sheet.evaluate((element) => element.style.transform)).toBe("");
   });
@@ -6185,7 +6699,7 @@ test.describe("Map Studio v0.4 on touch @mobile", () => {
       outline: { points: [{ x: 1.5, y: 1.4 }, { x: 1.9, y: 1.6 }, { x: 1.8, y: 2 }], closed: true },
     } }));
     await settlePhoneMap(gallery);
-    await gallery.getByRole("button", { name: "Zone", exact: true }).click();
+    await gallery.getByRole("button", { name: "Points", exact: true }).click();
     const handle = gallery.locator(".zone-point:not(.zone-midpoint)").first();
     await expect(handle).toBeVisible();
     const bounds = await handle.boundingBox();
@@ -6350,7 +6864,7 @@ for (const narrow of [false, true]) for (const direction of ["ltr", "rtl"]) {
     const backward = direction === "rtl" ? "ArrowRight" : "ArrowLeft";
     const toolbar = gallery.getByRole("toolbar", { name: "Draw area tools" });
     await expect(toolbar).toBeVisible();
-    const zone = toolbar.getByRole("button", { name: "Zone", exact: true });
+    const zone = toolbar.getByRole("button", { name: "Points", exact: true });
     const paint = toolbar.getByRole("button", { name: "Paint", exact: true });
     const erase = toolbar.getByRole("button", { name: "Erase", exact: true });
     const brush = toolbar.getByRole("button", { name: /^Brush width/ });
@@ -6747,7 +7261,7 @@ test("zone perimeter closes automatically and supports extending dragging insert
     element.replaceWorkspaceState({ ...state, cameras: { top: { yaw: 0, pitch: 0, zoom: 2, targetX: 2.475, targetZ: -1.975 } },
       draw: { ...state.draw, circles: [], outline: null, undo: [], redo: [], strokeCount: 0, dirty: false } });
   }, GALLERY_TAG);
-  await gallery.getByRole("button", { name: "Zone", exact: true }).click();
+  await gallery.getByRole("button", { name: "Points", exact: true }).click();
   const canvas = gallery.locator(".scene-canvas");
   await expect(gallery.locator(".zone-help")).toBeVisible();
   const box = await canvas.boundingBox();
@@ -6770,15 +7284,15 @@ test("zone perimeter closes automatically and supports extending dragging insert
   // An image ancestor flattens these controls out of Safari's native AX tree.
   const accessibleScene = await gallery.locator(".scene-window").ariaSnapshot();
   expect(accessibleScene).toMatch(/^- group /);
-  expect(accessibleScene).toContain('button "Zone point 1"');
+  expect(accessibleScene).toContain('button "Point 1"');
   expect(accessibleScene).not.toContain('button "Close zone"');
   await expect.poll(async () => (await snapshot(page)).draw.outline.closed).toBe(true);
   expect((await snapshot(page)).draw.circles.length).toBeGreaterThan(0);
   const closed = (await snapshot(page)).draw.outline;
-  await gallery.getByRole("button", { name: "Zone point 1", exact: true }).click();
+  await gallery.getByRole("button", { name: "Point 1", exact: true }).click();
   expect((await snapshot(page)).draw.outline).toEqual(closed);
   const before = (await snapshot(page)).draw.outline;
-  const first = gallery.getByRole("button", { name: "Zone point 1", exact: true });
+  const first = gallery.getByRole("button", { name: "Point 1", exact: true });
   const unrotated = await first.boundingBox();
   await gallery.locator(".map-root").evaluate(element => {
     for (const [name,rotation] of [["gesturestart",0],["gesturechange",90],["gestureend",90]]) {
@@ -6794,7 +7308,7 @@ test("zone perimeter closes automatically and supports extending dragging insert
   await first.focus();
   await gallery.getByRole("button", { name: "Insert point", exact: true }).click();
   await expect(gallery.locator(".zone-point:not(.zone-midpoint)")).toHaveCount(5);
-  await gallery.getByRole("button", { name: "Zone point 2", exact: true }).press("Delete");
+  await gallery.getByRole("button", { name: "Point 2", exact: true }).press("Delete");
   await expect(gallery.locator(".zone-point:not(.zone-midpoint)")).toHaveCount(4);
   await gallery.getByRole("button", { name: "Undo", exact: true }).click();
   await expect(gallery.locator(".zone-point:not(.zone-midpoint)")).toHaveCount(5);
@@ -6884,7 +7398,7 @@ test("rotated zone coordinates match rendered coverage and preserve zoom anchors
 
 test("zone keyboard creation and point editing stay local and undoable", async ({ page }) => {
   const gallery = await loadGallery(page, { scenario: "draw" });
-  await gallery.getByRole("button", { name: "Zone", exact: true }).click();
+  await gallery.getByRole("button", { name: "Points", exact: true }).click();
   const map = gallery.locator(".map-root");
   await map.focus();
   await map.press("ArrowDown"); await map.press("Enter");
@@ -6894,12 +7408,34 @@ test("zone keyboard creation and point editing stay local and undoable", async (
   await map.press("ArrowDown"); await map.press("Enter");
   await expect.poll(async () => (await snapshot(page)).draw.outline.closed).toBe(true);
   const before = (await snapshot(page)).draw.outline;
-  await gallery.getByRole("button", { name: "Zone point 1", exact: true }).press("ArrowRight");
+  await gallery.getByRole("button", { name: "Point 1", exact: true }).press("ArrowRight");
   await expect.poll(async () => (await snapshot(page)).draw.outline.points[0].x).toBeCloseTo(before.points[0].x - .02);
   await gallery.getByRole("button", { name: "Delete point 1", exact: true }).click();
   await expect.poll(async () => (await snapshot(page)).draw.outline.closed).toBe(false);
   await gallery.getByRole("button", { name: "Undo", exact: true }).click();
   await expect.poll(async () => (await snapshot(page)).draw.outline.closed).toBe(true);
+});
+
+// shell.md §2 row 8: a map Home Assistant cannot confirm well enough cannot be
+// edited, so Name and save is disabled and says why, as the strip's body does.
+// (A degraded map shows no action button at all: `locating` has no button.)
+for (const flag of ["complete", "floorCoherent", "sessionVerified"]) test(`Name and save explains itself when the map is not ${flag}`, async ({ page }) => {
+  const gallery = await loadGallery(page, { scenario: "draw" });
+  await gallery.getByRole("button", { name: "Points", exact: true }).click();
+  const map = gallery.locator(".map-root");
+  await map.focus();
+  await map.press("ArrowDown"); await map.press("Enter");
+  await map.press("ArrowLeft"); await map.press("Enter");
+  await map.press("ArrowDown"); await map.press("Enter");
+  await expect.poll(async () => (await snapshot(page)).draw.outline.closed).toBe(true);
+  const save = gallery.locator(".action-bar").getByRole("button", { name: "Name and save", exact: true });
+  await expect(save).toBeEnabled();
+  await gallery.evaluate((element, flag) => {
+    const state = element.getWorkspaceSnapshot();
+    element.replaceWorkspaceState({ ...state, map: { ...state.map, [flag]: false } });
+  }, flag);
+  await expect(save).toBeDisabled();
+  await expect(save).toHaveAccessibleDescription("Home Assistant can show this map but can't confirm it well enough to start cleaning.");
 });
 
 for (const change of ["revision", "floor", "session"]) test(`slow initial scene survives only a ${change} catalog update`, async ({ page }) => {
@@ -7146,8 +7682,8 @@ for (const device of [
         outline: { closed: true, points: [{x:1,y:1},{x:3.5,y:1},{x:3.5,y:2.5},{x:1,y:2.5}] },
         circles: [{x:2.25,y:1.75,radius:.7}] } });
     }, GALLERY_TAG);
-    await expect(gallery.getByRole("button", { name: "Zone", exact: true })).toHaveAttribute("aria-pressed", "true");
-    const first = gallery.getByRole("button", { name: "Zone point 1", exact: true });
+    await expect(gallery.getByRole("button", { name: "Points", exact: true })).toHaveAttribute("aria-pressed", "true");
+    const first = gallery.getByRole("button", { name: "Point 1", exact: true });
     if (device.touch) await first.tap(); else await first.click();
     await expect(gallery.getByRole("button", { name: "Insert point", exact: true })).toBeVisible();
     await expect(gallery.getByRole("button", {name:"Name and save",exact:true})).toBeEnabled();
@@ -7191,7 +7727,7 @@ for (const interruption of ["Escape", "pointer cancel", "floor revalidation"]) {
       const e = document.querySelector(tag), s = e.getWorkspaceSnapshot();
       e.replaceWorkspaceState({...s, draw:{...s.draw,tool:"outline",outline:{closed:true,points:[{x:1,y:1},{x:3.5,y:1},{x:3.5,y:2.5},{x:1,y:2.5}]},circles:[{x:2,y:1.75,radius:.5}]}});
     }, GALLERY_TAG);
-    const first = gallery.getByRole("button", { name: "Zone point 1", exact: true });
+    const first = gallery.getByRole("button", { name: "Point 1", exact: true });
     const before = (await snapshot(page)).draw;
     const box = await first.boundingBox();
     await page.mouse.move(box.x + 22, box.y + 22); await page.mouse.down();
@@ -7206,7 +7742,7 @@ for (const interruption of ["Escape", "pointer cancel", "floor revalidation"]) {
 
 test("painting can undo back to an editable perimeter and ignores no-op marks", async ({ page }) => {
   const gallery = await loadGallery(page, { scenario: "draw" });
-  await gallery.getByRole("button", { name: "Zone", exact: true }).click();
+  await gallery.getByRole("button", { name: "Points", exact: true }).click();
   const map = gallery.locator(".map-root");
   await map.focus();
   await map.press("ArrowDown"); await map.press("Enter");
@@ -7432,7 +7968,7 @@ for (const refresh of ["delayed", "failed"]) {
         const saving = effects.saveArea();
         for (let i = 0; i < 20 && !reading; i++) await new Promise(resolve => setTimeout(resolve, 0));
         if (!reading) throw new Error("Save did not reach catalog refresh");
-        const acknowledged = { notice: store.value.notice.text, areaDirty: store.value.areaDraft.dirty, drawDirty: store.value.draw.dirty, id: store.value.areaDraft.id };
+        const acknowledged = { notice: store.value.notice.key, areaDirty: store.value.areaDraft.dirty, drawDirty: store.value.draw.dirty, id: store.value.areaDraft.id };
         store.dispatch({ type: "dismiss-top-layer" });
         const left = { workflow: store.value.workflow, dialog: store.value.dialog };
         finish();
@@ -7440,7 +7976,7 @@ for (const refresh of ["delayed", "failed"]) {
         return { acknowledged, left, afterRefresh: { workflow: store.value.workflow, dialog: store.value.dialog } };
       } finally { effects.dispose(); }
     }, refresh);
-    expect(result).toEqual({ acknowledged: { notice: "Area saved", areaDirty: false, drawDirty: false, id: "saved-zone" }, left: { workflow: "none", dialog: null }, afterRefresh: { workflow: "none", dialog: null } });
+    expect(result).toEqual({ acknowledged: { notice: "v4_notice_area_saved", areaDirty: false, drawDirty: false, id: "saved-zone" }, left: { workflow: "none", dialog: null }, afterRefresh: { workflow: "none", dialog: null } });
   });
 }
 
@@ -7497,10 +8033,10 @@ test("failed area write keeps the draft and leave confirmation", async ({ page }
     try {
       await effects.saveArea();
       store.dispatch({ type: "dismiss-top-layer" });
-      return { name: store.value.areaDraft.name, areaDirty: store.value.areaDraft.dirty, drawDirty: store.value.draw.dirty, dialog: store.value.dialog, notice: store.value.notice.text };
+      return { name: store.value.areaDraft.name, areaDirty: store.value.areaDraft.dirty, drawDirty: store.value.draw.dirty, dialog: store.value.dialog, notice: store.value.notice.key };
     } finally { effects.dispose(); }
   });
-  expect(result).toEqual({ name: "Keep this area", areaDirty: true, drawDirty: true, dialog: "discardDraft", notice: "Area could not be saved" });
+  expect(result).toEqual({ name: "Keep this area", areaDirty: true, drawDirty: true, dialog: "discardDraft", notice: "v4_notice_area_save_failed" });
 });
 
 test("area save clears an obsolete discard prompt opened while the write was pending", async ({ page }) => {
@@ -7522,10 +8058,10 @@ test("area save clears an obsolete discard prompt opened while the write was pen
       await saving;
       const savedDialog = store.value.dialog;
       store.dispatch({ type: "dismiss-top-layer" });
-      return { pendingDialog, savedDialog, workflow: store.value.workflow, notice: store.value.notice.text };
+      return { pendingDialog, savedDialog, workflow: store.value.workflow, notice: store.value.notice.key };
     } finally { effects.dispose(); }
   });
-  expect(result).toEqual({ pendingDialog: "discardDraft", savedDialog: null, workflow: "none", notice: "Area saved" });
+  expect(result).toEqual({ pendingDialog: "discardDraft", savedDialog: null, workflow: "none", notice: "v4_notice_area_saved" });
 });
 
 test("map taps select run and plan rooms in both views and clear old deletion notices", async ({ page }) => {
@@ -7573,7 +8109,7 @@ test("map taps select run and plan rooms in both views and clear old deletion no
       const afterCancel = workflow === "plan" ? store.value.planDraft.rooms.map(room => room.roomId) : store.value.selection.roomIds;
       tap();
       const remaining = workflow === "plan" ? store.value.planDraft.rooms.length : store.value.selection.roomIds.length;
-      store.patch({ notice: { tone: "success", text: "Plan deleted" } });
+      store.patch({ notice: { tone: "success", key: "v4_notice_plan_deleted", fallback: "Plan deleted" } });
       store.dispatch({ type: "select-plan", planId: "daily" });
       results.push({ selected, afterCancel, remaining, room: hit.room, notice: store.value.notice });
       gestures.dispose(); renderer.dispose(); canvas.remove(); overlay.remove();
@@ -7586,4 +8122,393 @@ test("map taps select run and plan rooms in both views and clear old deletion no
     expect(result.remaining).toBe(0);
     expect(result.notice).toBeNull();
   }
+});
+
+// design-system.md §8 and shell.md §8: axe serious and critical findings are
+// zero at every width, and aria-label sits only on a role that takes a name
+// (MS-AXE-01; axe files a named generic that has content under "incomplete").
+async function settleWorkspace(gallery) {
+  const { workflow } = await gallery.evaluate((element) => element.getWorkspaceSnapshot());
+  if (workflow !== "none") await expect(gallery.locator("matic-map-workflow-v4")).toBeAttached();
+  await expect(gallery.getByText("Loading workspace tools…")).toHaveCount(0);
+  await gallery.evaluate(async (element) => {
+    await element.updateComplete;
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  });
+}
+
+const axeFindings = (results) => results.map(({ id, nodes }) => `${id}: ${nodes.map(({ target }) => target.flat().join(" >> ")).join(" | ")}`);
+
+test.describe("Map Studio accessibility baselines", () => {
+  for (const scenario of ["ready", "rooms", "plans", "plan-saved-intelligent", "draw", "history", "cleaning", "access"]) {
+    for (const [width, height] of [[390, 844], [1024, 768]]) {
+      const narrow = width < 1024;
+      test(`${scenario} at ${width} has no serious axe finding and no name on an unnamed role${narrow ? " @mobile" : ""}`, async ({ page }) => {
+        await page.setViewportSize({ width, height });
+        const gallery = await loadGallery(page, { scenario, narrow });
+        await settleWorkspace(gallery);
+        const { violations, incomplete } = await new AxeBuilder({ page }).analyze();
+        expect(axeFindings(violations.filter(({ impact }) => impact === "serious" || impact === "critical"))).toEqual([]);
+        expect(axeFindings(incomplete.filter(({ id }) => id === "aria-prohibited-attr"))).toEqual([]);
+      });
+    }
+  }
+
+  test("the toast sits in a region named Notifications, so axe finds no content outside a landmark", async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    const gallery = await loadGallery(page, { scenario: "ready" });
+    await settleWorkspace(gallery);
+    await gallery.locator("matic-map-shell-v4").evaluate((shell) => shell.dispatchEvent(new CustomEvent("matic-workspace-intent", {
+      detail: { type: "set-notice", notice: { tone: "error", key: "v4_notice_audit_sample", fallback: "Sample notice text" } },
+      bubbles: true, composed: true,
+    })));
+    await expect(gallery.getByRole("region", { name: "Notifications" })).toContainText("Sample notice text");
+    const { violations } = await new AxeBuilder({ page }).withRules(["region"]).analyze();
+    expect(axeFindings(violations)).toEqual([]);
+  });
+
+  // The help popover's title continues the outline under the app's h1, so it
+  // is an h2; its size comes from its class, not its level.
+  test("the help popover's title is an h2 that keeps the heading order valid", async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    const gallery = await loadGallery(page, { scenario: "ready" });
+    await settleWorkspace(gallery);
+    await gallery.getByRole("button", { name: "How to move the map" }).click();
+    const title = gallery.getByRole("dialog", { name: "How to move the map" }).getByRole("heading", { name: "How to move the map" });
+    await expect(title).toHaveJSProperty("tagName", "H2");
+    await expect(title).toHaveCSS("font-size", "13px");
+    const { violations } = await new AxeBuilder({ page }).withRules(["heading-order"]).analyze();
+    expect(axeFindings(violations)).toEqual([]);
+  });
+
+  // MS-AXE-02: a scrolling body is a region named by the h2, and it and the
+  // capped pinned top above it (which holds the h2) are tab stops only while
+  // they overflow with nothing inside to Tab to; a pinned top that is a tab
+  // stop is a group named by the h2 (a second region of that name would make
+  // the landmark ambiguous). The stage fills the viewport, so a
+  // resize after the first layout must be caught too.
+  const openScroller = async (page, scenario, width, height) => {
+    await page.setViewportSize({ width, height });
+    const gallery = await loadGallery(page, { scenario, narrow: width < 1024 });
+    await settleWorkspace(gallery);
+    await gallery.locator(".stage").evaluate((stage) => {
+      Object.assign(stage.style, { blockSize: "100dvh", minBlockSize: "0", maxInlineSize: "none" });
+    });
+    await settleWorkspace(gallery);
+    const heading = gallery.getByRole("heading", { level: 2 }).first();
+    const title = (await heading.textContent()).trim();
+    return { gallery, heading, body: gallery.getByRole("region", { name: title, exact: true }).last() };
+  };
+  const scrollerState = (element, top) => element.evaluate((node, pinned) => {
+    const target = pinned ? node.closest(".panel-top") : node;
+    const tabbable = "a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])";
+    const nested = [...target.querySelectorAll("*")].some((child) => child.shadowRoot?.querySelector(tabbable));
+    return {
+      overflows: target.scrollHeight > target.clientHeight,
+      focusableChild: Boolean(target.querySelector(tabbable)) || nested,
+      tabindex: target.getAttribute("tabindex"),
+      role: target.getAttribute("role"),
+      named: target.getAttribute("aria-labelledby") === "workspace-title",
+    };
+  }, top);
+
+  test("a scroller is a tab stop only while it overflows without a focusable child @mobile", async ({ page }) => {
+    const scroller = async (scenario, width, height, which) => {
+      const { heading, body } = await openScroller(page, scenario, width, height);
+      return scrollerState(which === "body" ? body : heading, which === "top");
+    };
+    expect(await scroller("access", 844, 390, "body"), "access body on a landscape phone").toEqual({ overflows: true, focusableChild: false, tabindex: "0", role: "region", named: true });
+    expect(await scroller("plans", 844, 390, "body"), "plans body on a landscape phone").toEqual({ overflows: true, focusableChild: true, tabindex: null, role: "region", named: true });
+    expect(await scroller("access", 1440, 900, "body"), "access body on a desktop").toEqual({ overflows: false, focusableChild: false, tabindex: null, role: "region", named: true });
+    expect(await scroller("paused", 844, 390, "top"), "paused pinned top on a landscape phone").toEqual({ overflows: true, focusableChild: false, tabindex: "0", role: "group", named: true });
+    expect(await scroller("ready", 844, 390, "top"), "ready pinned top on a landscape phone").toEqual({ overflows: false, focusableChild: false, tabindex: null, role: null, named: false });
+  });
+
+  test("a focused tab-stop scroller shows a 2 px ring inset 2 px and stays a tab stop until it loses focus @mobile", async ({ page }) => {
+    const { gallery, body } = await openScroller(page, "access", 844, 390);
+    await expect(body).toHaveAttribute("tabindex", "0");
+    await body.focus();
+    expect(await body.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return [style.outlineStyle, style.outlineWidth, style.outlineOffset, style.outlineColor];
+    })).toEqual(["solid", "2px", "-2px", "rgb(6, 120, 206)"]);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await settleWorkspace(gallery);
+    await expect.poll(() => scrollerState(body, false), "no longer overflowing, but focused").toMatchObject({ overflows: false, tabindex: "0" });
+    await gallery.getByRole("heading", { level: 2 }).first().focus();
+    await expect.poll(() => scrollerState(body, false), "after blur").toMatchObject({ overflows: false, tabindex: null });
+  });
+
+  // The pinned top is re-checked when its content changes: a notice brings a
+  // Close button, so it stops being a tab stop until the notice goes.
+  test("the pinned top is a tab stop only while no notice gives it a control @mobile", async ({ page }) => {
+    const { gallery, heading } = await openScroller(page, "paused", 844, 390);
+    const notice = (value) => gallery.locator("matic-map-shell-v4").evaluate((shell, next) => shell.dispatchEvent(new CustomEvent("matic-workspace-intent", {
+      detail: { type: "set-notice", notice: next }, bubbles: true, composed: true,
+    })), value);
+    await expect.poll(() => scrollerState(heading, true)).toMatchObject({ focusableChild: false, tabindex: "0", role: "group", named: true });
+    const { violations } = await new AxeBuilder({ page }).withRules(["landmark-unique", "aria-allowed-role"]).analyze();
+    expect(axeFindings(violations), "the body stays the only region named by the h2").toEqual([]);
+    await notice({ tone: "warning", key: "v4_notice_sample", fallback: "Sample notice text" });
+    await expect(gallery.locator("[data-notice-slot]")).toBeVisible();
+    await expect.poll(() => scrollerState(heading, true), "with a notice").toMatchObject({ focusableChild: true, tabindex: null, role: null, named: false });
+    await notice(null);
+    await expect.poll(() => scrollerState(heading, true), "after the notice").toMatchObject({ focusableChild: false, tabindex: "0", role: "group", named: true });
+  });
+
+  // MS-AXE-03 (design-system.md §5): HA's fill pair is kept at 4.5:1, else the
+  // fill steps 5% toward black (white under a darker label) until it reaches
+  // it, else the label becomes whichever of black or white contrasts more.
+  test("primary and Stop resolve HA's theme colours to a 4.5:1 pair @mobile", async ({ page }) => {
+    const luminance = (rgb) => rgb.reduce((sum, channel, index) => {
+      const value = channel / 255;
+      return sum + [0.2126, 0.7152, 0.0722][index] * (value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+    }, 0);
+    const pair = async (button) => {
+      const [label, fill] = await button.evaluate((element) => {
+        const style = getComputedStyle(element);
+        return [style.color, style.backgroundColor];
+      });
+      const [high, low] = [label, fill].map((color) => luminance(color.match(/\d+/gu).slice(0, 3).map(Number))).sort((x, y) => y - x);
+      return { label, fill, ratio: Math.round(((high + 0.05) / (low + 0.05)) * 100) / 100 };
+    };
+    const theme = (vars) => page.evaluate((values) => {
+      for (const [name, value] of Object.entries(values)) document.documentElement.style.setProperty(name, value);
+    }, vars);
+    await page.setViewportSize({ width: 390, height: 844 });
+    const gallery = await loadGallery(page, { scenario: "cleaning", narrow: true });
+    await settleWorkspace(gallery);
+    await theme({ "--primary-color": "#009ac7", "--text-primary-color": "#ffffff", "--error-color": "#db4437" });
+    const stop = gallery.getByRole("button", { name: "Stop cleaning" });
+    await expect.poll(() => pair(stop), "Stop: white on #db4437 is 4.29:1").toEqual({ label: "rgb(255, 255, 255)", fill: "rgb(208, 65, 52)", ratio: 4.68 });
+
+    await gallery.evaluate((element) => element.setScenario("plans"));
+    await settleWorkspace(gallery);
+    const create = gallery.getByRole("button", { name: "Create a plan" });
+    await expect.poll(() => pair(create), "primary: white on #009ac7 is 3.26:1").toEqual({ label: "rgb(255, 255, 255)", fill: "rgb(0, 123, 159)", ratio: 4.85 });
+    await theme({ "--primary-color": "#0b5394" });
+    await expect.poll(() => pair(create), "a passing pair is kept").toEqual({ label: "rgb(255, 255, 255)", fill: "rgb(11, 83, 148)", ratio: 7.84 });
+    await theme({ "--primary-color": "#808080", "--text-primary-color": "#777777" });
+    await expect.poll(() => pair(create), "no 5% step reaches 4.5:1").toEqual({ label: "rgb(0, 0, 0)", fill: "rgb(128, 128, 128)", ratio: 5.32 });
+  });
+});
+
+// design-system.md §5 (MS-AXE-03): the other D1 colours, measured with HA's
+// default palettes (the values ha_theme_axe.mjs applies).
+test.describe("Map Studio resolved theme colours", () => {
+  const HA_LIGHT = { "--primary-color": "#009ac7", "--text-primary-color": "#ffffff", "--error-color": "#db4437", "--card-background-color": "#ffffff", "--secondary-background-color": "#e5e5e5", "--primary-text-color": "#141414" };
+  const HA_DARK = { ...HA_LIGHT, "--card-background-color": "#1c1c1c", "--secondary-background-color": "#282828", "--primary-text-color": "#e1e1e1" };
+  // `rgb()` and `color(srgb …)` (color-mix results) as 0-255 channels.
+  const channels = (css) => {
+    const values = css.match(/[\d.]+/gu).map(Number);
+    return css.startsWith("color(srgb") ? values.slice(0, 3).map((value) => value * 255) : values.slice(0, 3);
+  };
+  const luminance = (rgb) => rgb.reduce((sum, channel, index) => {
+    const value = channel / 255;
+    return sum + [0.2126, 0.7152, 0.0722][index] * (value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+  }, 0);
+  const ratio = (a, b) => {
+    const [high, low] = [a, b].map((css) => luminance(channels(css))).sort((x, y) => y - x);
+    return Math.round(((high + 0.05) / (low + 0.05)) * 100) / 100;
+  };
+  const theme = (page, vars) => page.evaluate((values) => {
+    for (const [name, value] of Object.entries(values)) document.documentElement.style.setProperty(name, value);
+  }, vars);
+  const style = (locator, property) => locator.evaluate((element, name) => getComputedStyle(element)[name], property);
+  // A computed colour in any syntax (color-mix gives oklab or color()) as
+  // the sRGB pixel the browser paints.
+  const paint = (locator, property) => locator.evaluate((element, name) => {
+    const context = Object.assign(document.createElement("canvas"), { width: 1, height: 1 }).getContext("2d", { colorSpace: "srgb" });
+    context.fillStyle = getComputedStyle(element)[name];
+    context.fillRect(0, 0, 1, 1);
+    const [red, green, blue] = context.getImageData(0, 0, 1, 1).data;
+    return `rgb(${red}, ${green}, ${blue})`;
+  }, property);
+
+  test("the focus ring reaches 3:1 on both surfaces and danger text 4.5:1 on the card", async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    const gallery = await loadGallery(page, { scenario: "draw" });
+    await settleWorkspace(gallery);
+    await gallery.getByRole("button", { name: "Points", exact: true }).click();
+    const feedback = gallery.locator(".zone-feedback");
+    const ring = async () => {
+      const button = gallery.getByRole("button", { name: "Your plans" }).or(gallery.getByRole("button", { name: "All tasks" })).first();
+      // A Tab first, so the focus is keyboard focus (:focus-visible).
+      await page.keyboard.press("Tab");
+      await button.focus();
+      return style(button, "outlineColor");
+    };
+    await theme(page, HA_LIGHT);
+    await expect.poll(async () => {
+      const color = await ring();
+      return { color, sunken: ratio(color, "rgb(229, 229, 229)"), card: ratio(color, "rgb(255, 255, 255)") };
+    }, "#009ac7 is 2.59:1 on #e5e5e5").toEqual({ color: "rgb(0, 139, 179)", sunken: 3.12, card: 3.93 });
+    await expect.poll(async () => {
+      const color = await style(feedback, "color");
+      return { color, card: ratio(color, "rgb(255, 255, 255)") };
+    }, "#db4437 is 4.29:1 on #fff").toEqual({ color: "rgb(208, 65, 52)", card: 4.68 });
+
+    await theme(page, HA_DARK);
+    await expect.poll(async () => {
+      const color = await ring();
+      return { color, sunken: ratio(color, "rgb(40, 40, 40)"), card: ratio(color, "rgb(28, 28, 28)") };
+    }, "a passing indicator is kept").toEqual({ color: "rgb(0, 154, 199)", sunken: 4.53, card: 5.23 });
+    await expect.poll(async () => {
+      const color = await style(feedback, "color");
+      return { color, card: ratio(color, "rgb(28, 28, 28)") };
+    }, "#db4437 is 3.97:1 on #1c1c1c").toEqual({ color: "rgb(223, 87, 75)", card: 4.55 });
+  });
+
+  // The indicator is checked on every surface it sits on. A light card over
+  // a dark sunken surface needs a step away from the card's far end; when no
+  // step reaches 3:1 on both, the end colour with the greater minimum wins.
+  test("the indicator reaches 3:1 on a light card and a dark sunken surface, or is the end colour that contrasts more", async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    const errors = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    const gallery = await loadGallery(page, { scenario: "draw" });
+    await settleWorkspace(gallery);
+    const tool = gallery.getByRole("button", { name: "Paint", exact: true });
+    await tool.click();
+    await expect(tool).toHaveAttribute("aria-pressed", "true");
+    const measure = (card, sunken) => async () => {
+      const color = await style(tool, "borderTopColor");
+      return { color, card: ratio(color, card), sunken: ratio(color, sunken) };
+    };
+    await theme(page, { ...HA_LIGHT, "--primary-color": "#000000", "--card-background-color": "#ffffff", "--secondary-background-color": "#000000" });
+    await expect.poll(measure("rgb(255, 255, 255)", "rgb(0, 0, 0)"), "black is 1:1 on the black surface; the first step toward white that passes both")
+      .toEqual({ color: "rgb(102, 102, 102)", card: 5.74, sunken: 3.66 });
+    // #767676 sends the search toward black first, but white's minimum
+    // (4.54 on the card) beats black's (4 on #6c6c6c).
+    await theme(page, { ...HA_LIGHT, "--primary-color": "#767676", "--card-background-color": "#767676", "--secondary-background-color": "#6c6c6c" });
+    await expect.poll(measure("rgb(118, 118, 118)", "rgb(108, 108, 108)"), "no step passes; the end colour with the greater minimum")
+      .toEqual({ color: "rgb(255, 255, 255)", card: 4.54, sunken: 5.25 });
+    expect(errors).toEqual([]);
+  });
+
+  // A filled button's hover and press mix away from its label, so the label
+  // keeps 4.5:1 in a dark theme too.
+  test("hovered and pressed primary and Stop keep their label at 4.5:1 in HA's dark palette", async ({ page }) => {
+    // Reduced motion makes the state colours land at once (tokens.ts).
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.setViewportSize({ width: 390, height: 844 });
+    const gallery = await loadGallery(page, { scenario: "cleaning", narrow: true });
+    await settleWorkspace(gallery);
+    await theme(page, HA_DARK);
+    const states = async (button) => {
+      await expect.poll(() => style(button, "backgroundColor")).not.toBe("rgb(219, 68, 55)");
+      await expect.poll(() => style(button, "backgroundColor")).not.toBe("rgb(0, 154, 199)");
+      await button.hover();
+      const label = await paint(button, "color");
+      const hover = ratio(label, await paint(button, "backgroundColor"));
+      await page.mouse.down();
+      const active = ratio(label, await paint(button, "backgroundColor"));
+      await page.mouse.move(0, 0);
+      await page.mouse.up();
+      return { label, hover, active };
+    };
+    expect(await states(gallery.getByRole("button", { name: "Stop cleaning" }))).toEqual({ label: "rgb(255, 255, 255)", hover: 5.97, active: 7.43 });
+    await gallery.evaluate((element) => element.setScenario("plans"));
+    await settleWorkspace(gallery);
+    expect(await states(gallery.getByRole("button", { name: "Create a plan" }))).toEqual({ label: "rgb(255, 255, 255)", hover: 6.14, active: 7.61 });
+  });
+
+  // An unparsable, transparent or translucent theme colour is never written
+  // as a fill: the resolved property goes, so the button shows HA's colour.
+  test("a theme colour the resolver cannot measure leaves HA's own colour in place @mobile", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const gallery = await loadGallery(page, { scenario: "plans", narrow: true });
+    await settleWorkspace(gallery);
+    const shell = gallery.locator("matic-map-shell-v4");
+    const create = gallery.getByRole("button", { name: "Create a plan" });
+    const state = async () => ({
+      property: await shell.evaluate((element) => element.style.getPropertyValue("--ms-resolved-accent-fill")),
+      fill: await style(create, "backgroundColor"),
+    });
+    await theme(page, HA_LIGHT);
+    await expect.poll(state, "HA's default is resolved").toEqual({ property: "rgba(0,123,159,1)", fill: "rgb(0, 123, 159)" });
+    await theme(page, { "--primary-color": "not-a-colour" });
+    await expect.poll(state, "unparsable").toEqual({ property: "", fill: "rgba(0, 0, 0, 0)" });
+    await theme(page, { "--primary-color": "rgba(0, 0, 0, 0)" });
+    await expect.poll(state, "transparent").toEqual({ property: "", fill: "rgba(0, 0, 0, 0)" });
+    await theme(page, { "--primary-color": "rgba(0, 154, 199, 0.5)" });
+    await expect.poll(state, "translucent").toEqual({ property: "", fill: "rgba(0, 154, 199, 0.5)" });
+  });
+
+  // Only the contrast resolver needs an opaque colour. The canvas palette
+  // draws a translucent theme colour's RGB, and its accent (the selected-room
+  // stroke) is the resolved indicator (design-system.md §7).
+  test("the canvas palette keeps a translucent colour's RGB and strokes with the indicator", async ({ page }) => {
+    const bundle = await build({
+      stdin: { contents: 'export { readCanvasPalette } from "./frontend/map-studio-v4/theme-probe";', resolveDir: process.cwd() },
+      bundle: true, format: "esm", write: false,
+    });
+    await page.route("**/theme-probe-harness.js", (route) => route.fulfill({ contentType: "text/javascript", body: bundle.outputFiles[0].text }));
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    const palette = await page.evaluate(async () => {
+      const { readCanvasPalette } = await import("/theme-probe-harness.js");
+      const host = document.createElement("div");
+      for (const [name, value] of Object.entries({
+        "--ms-accent": "#009ac7",
+        "--ms-resolved-indicator": "rgba(0,139,179,1)",
+        "--ms-surface-card": "rgba(28, 28, 28, 0.5)",
+        "--ms-surface-sunken": "rgba(40, 40, 40, 0.8)",
+      })) host.style.setProperty(name, value);
+      document.body.append(host);
+      const { accent, plate, roomFill } = readCanvasPalette(host);
+      return { accent, plate, roomFill };
+    });
+    expect(palette).toEqual({ accent: [0, 139, 179], plate: [28, 28, 28], roomFill: [40, 40, 40] });
+  });
+
+  // design-system.md §3 and §7: every selection and checked state reads the
+  // indicator, so with HA's light palette (#009ac7 is 2.59:1 on #e5e5e5)
+  // they all show the resolved #008bb3.
+  test("pressed buttons, checkboxes, the slider and a checked switch show the resolved indicator", async ({ page }) => {
+    await page.setViewportSize({ width: 1180, height: 760 });
+    const gallery = await loadGallery(page, { scenario: "draw" });
+    await settleWorkspace(gallery);
+    await theme(page, HA_LIGHT);
+    const indicator = "rgb(0, 139, 179)";
+    const paint = gallery.getByRole("button", { name: "Paint", exact: true });
+    await paint.click();
+    await expect(paint).toHaveAttribute("aria-pressed", "true");
+    await expect.poll(() => style(paint, "borderTopColor"), "pressed tool").toBe(indicator);
+    await gallery.getByRole("button", { name: /^Brush width, / }).click();
+    await expect.poll(() => style(gallery.getByRole("slider", { name: "Brush width slider" }), "accentColor"), "brush slider").toBe(indicator);
+
+    await gallery.evaluate((element) => element.setScenario("plan-new"));
+    await settleWorkspace(gallery);
+    const enabled = gallery.getByRole("switch", { name: "Plan enabled" });
+    if ((await enabled.getAttribute("aria-checked")) !== "true") await enabled.click();
+    await expect(enabled).toHaveAttribute("aria-checked", "true");
+    await expect.poll(() => enabled.evaluate((element) => getComputedStyle(element, "::before").backgroundColor), "checked switch").toBe(indicator);
+    await expect.poll(() => style(gallery.getByRole("checkbox", { name: /^Return to the dock when finished/ }), "accentColor"), "plan option").toBe(indicator);
+
+    // The Room names checkbox sits in the phone sheet's Map display section.
+    await page.setViewportSize({ width: 390, height: 844 });
+    const phone = await loadGallery(page, { scenario: "ready", narrow: true });
+    await settleWorkspace(phone);
+    await theme(page, HA_LIGHT);
+    await expect.poll(() => style(phone.getByRole("checkbox", { name: "Room names" }), "accentColor"), "Room names").toBe(indicator);
+  });
+
+  // One ordering rule: a press always shows over hover, for every variant.
+  test("a pressed button shows its pressed colour, not its hover colour", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.setViewportSize({ width: 1024, height: 768 });
+    const gallery = await loadGallery(page, { scenario: "rooms" });
+    await settleWorkspace(gallery);
+    const states = async (button) => {
+      await button.hover();
+      const hover = await style(button, "backgroundColor");
+      await page.mouse.down();
+      const pressed = await style(button, "backgroundColor");
+      await page.mouse.move(0, 0);
+      await page.mouse.up();
+      return { differ: hover !== pressed };
+    };
+    expect(await states(gallery.getByRole("button", { name: "Fit the whole map on screen" })), "plain").toEqual({ differ: true });
+    expect(await states(gallery.getByRole("button", { name: "Back to all tasks" })), "secondary").toEqual({ differ: true });
+  });
 });

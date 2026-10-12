@@ -12,11 +12,22 @@ import type {
   PlanRoom,
   RoomCadencePolicy,
 } from "./backend-contracts";
-import { MAX_ROOM_SEQUENCE_SIZE, type Localize, type WorkspaceIntent, type WorkspaceState } from "./contracts";
+import {
+  MAX_ROOM_SEQUENCE_SIZE,
+  type DateFormat,
+  type Localize,
+  type ResourceState,
+  type WorkspaceIntent,
+  type WorkspaceState,
+} from "./contracts";
 import { WORKFLOW_TAG } from "./element-tags";
 import { WORKSPACE_INTENT_EVENT } from "./map-canvas";
-import { admittedManualRoomPreview, initialWorkspaceState } from "./state";
-import { translate } from "./localize";
+import { admittedManualRoomPreview, deleteSubject, initialWorkspaceState } from "./state";
+import { formatDateTime, translate } from "./localize";
+import { LazyChunk, chunkStatus } from "./lazy-chunk";
+// Draw's precision controls load with the other workflow tools; the shell
+// renders them only in the draw workflow.
+import "./precision-controls";
 
 const modes: readonly CleaningMode[] = ["vacuum", "mop", "vacuum_and_mop"];
 const coverage: readonly CoverageSetting[] = ["quick", "standard", "heavy_duty"];
@@ -28,7 +39,7 @@ export class MaticMapWorkflowV4 extends LitElement {
   static override properties = {
     state: { attribute: false },
     localize: { attribute: false },
-    _diagnosticsLoadFailed: { state: true },
+    dates: { attribute: false },
     _historyPreviewPosition: { state: true },
   };
 
@@ -46,14 +57,16 @@ background: var(--ms-local);
 font-size: var(--ms-t-sm);
 line-height: var(--ms-lh-snug);
 }
-.problem, .notice[data-tone="error"] { --ms-local: color-mix(in srgb, var(--ms-danger) 9%, var(--ms-surface-card)); color: color-mix(in srgb, var(--ms-danger) 82%, var(--ms-text)); background: var(--ms-local); }
-.notice[data-tone="success"] { --ms-local: color-mix(in srgb, var(--ms-success) 10%, var(--ms-surface-card)); color: color-mix(in srgb, var(--ms-success) 82%, var(--ms-text)); background: var(--ms-local); }
-.notice[data-tone="warning"] { --ms-local: color-mix(in srgb, var(--ms-warning) 11%, var(--ms-surface-card)); color: color-mix(in srgb, var(--ms-warning) 82%, var(--ms-text)); background: var(--ms-local); }
+/* As the shell's notices: the text keeps the primary colour and the tone is
+   the inline-start rule and the tint (design-system.md). */
+.problem, .notice[data-tone="warning"] { --ms-local: color-mix(in srgb, var(--notice-tone) 12%, var(--ms-surface-card)); border-inline-start: 3px solid var(--notice-tone); color: var(--ms-text); }
+.problem { --notice-tone: var(--ms-danger); }
+.notice[data-tone="warning"] { --notice-tone: var(--ms-warning); }
 .split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--ms-space-2); }
 .list { display: grid; gap: var(--ms-space-2); }
 .group { display: grid; gap: var(--ms-space-2); }
 .group-heading { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); font-weight: var(--ms-w-medium); letter-spacing: 0.04em; line-height: var(--ms-lh-snug); text-transform: uppercase; }
-.floor[aria-current="true"] { border-color: var(--ms-accent); background: color-mix(in srgb, var(--ms-accent) 12%, var(--ms-local)); }
+.floor[aria-current="true"] { border-color: var(--ms-resolved-indicator, var(--ms-accent)); background: color-mix(in srgb, var(--ms-accent) 12%, var(--ms-local)); }
 .problem p { margin: 0; }
 @media (forced-colors: active) { .floor[aria-current="true"] { forced-color-adjust: none; color: HighlightText; background: Highlight; border-color: Highlight; } }
 .room { display: grid; gap: var(--ms-space-2); }
@@ -69,10 +82,10 @@ line-height: var(--ms-lh-snug);
 .plan-room-label { display: flex; align-items: center; gap: var(--ms-space-2); min-block-size: var(--ms-control); }
 .plan-room { display: grid; gap: var(--ms-space-2); }
 .plan-option { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: var(--ms-space-2); }
-.plan-option input[type="checkbox"] { inline-size: 1.2rem; block-size: 1.2rem; margin: 0.1rem 0 0; accent-color: var(--ms-accent); }
+.plan-option input[type="checkbox"] { inline-size: 1.2rem; block-size: 1.2rem; margin: 0.1rem 0 0; accent-color: var(--ms-resolved-indicator, var(--ms-accent)); }
 .plan-option-copy, .plan-threshold-copy { display: grid; gap: var(--ms-space-1); min-inline-size: 0; }
 .cadence-config { grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr); display: grid; gap: var(--ms-space-2); }
-.cadence-config > summary { cursor: pointer; min-block-size: var(--ms-control-sm); font-weight: var(--ms-w-semibold); }
+.cadence-config > summary { cursor: pointer; min-block-size: var(--ms-control-sm); font-weight: var(--ms-w-bold); }
 .cadence-fields { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--ms-space-2); min-inline-size: 0; }
 .cadence-fields > .ms-field { min-inline-size: 0; }
 .plan-option-copy strong, .plan-threshold-copy strong { font-size: var(--ms-t-sm); line-height: var(--ms-lh-snug); }
@@ -89,13 +102,16 @@ line-height: var(--ms-lh-snug);
 .timeline input[type="range"] { inline-size: 100%; min-block-size: var(--ms-control); }
 @media (max-width: 25rem) { .split { grid-template-columns: 1fr; } }
 @container (max-width: 38rem) { .plan-meta { grid-template-columns: 1fr; } }
+.ms-chip { display: inline-flex; align-items: center; block-size: 1.5rem; padding-inline: var(--ms-space-2); border: 1px solid var(--ms-line); border-radius: var(--ms-radius-pill); background: var(--ms-surface-sunken); color: var(--ms-text); font-size: var(--ms-t-xs); font-weight: var(--ms-w-regular); vertical-align: middle; }
 `];
 
   state: WorkspaceState = initialWorkspaceState();
   localize?: Localize;
-  _diagnosticsLoadFailed = false;
+  dates?: DateFormat;
+  /** The shell's Try again (shell.ts #retry), for the diagnostics chunk. */
+  retry!: (event: Event) => void;
   _historyPreviewPosition: number | null = null;
-  #diagnosticsLoad: Promise<void> | null = null;
+  readonly #diagnostics = new LazyChunk(this, () => import("./diagnostics-panel"));
   #historySelectionKey = "";
 
   protected override willUpdate(changed: PropertyValues<this>): void {
@@ -112,7 +128,7 @@ line-height: var(--ms-lh-snug);
     super.disconnectedCallback();
   }
 
-  #t(key: string, fallback: string, placeholders?: Record<string, string | number>): string {
+  #t(key: string, fallback: string, placeholders?: Readonly<Record<string, string | number>>): string {
     return translate(this.localize, key, fallback, placeholders);
   }
 
@@ -141,8 +157,8 @@ line-height: var(--ms-lh-snug);
   #cadenceReason(reason: string): string {
     if (reason === "mop_due") return this.#t("v4_cadence_mop_due_reason", "Vacuum and mop are due");
     if (reason === "coverage_due") return this.#t("v4_cadence_coverage_due_reason", "Periodic coverage is due");
-    if (reason === "mop_progress_unverified") return this.#t("v4_cadence_mop_progress_unverified", "Mopping progress must be reset before this schedule can run.");
-    if (reason === "coverage_progress_unverified") return this.#t("v4_cadence_coverage_progress_unverified", "Coverage progress must be reset before this schedule can run.");
+    if (reason === "mop_progress_unverified") return this.#t("v4_cadence_mop_progress_unverified", "Can't run this schedule until you reset its mopping progress, which Home Assistant can't confirm.");
+    if (reason === "coverage_progress_unverified") return this.#t("v4_cadence_coverage_progress_unverified", "Can't run this schedule until you reset its vacuum rotation progress, which Home Assistant can't confirm.");
     return this.#t("v4_cadence_due_unknown_reason", "Schedule setting due");
   }
 
@@ -163,14 +179,6 @@ line-height: var(--ms-lh-snug);
       bubbles: true,
       composed: true,
     }));
-  }
-
-  #notice() {
-    return this.state.notice ? html`
-      <div class="notice" data-tone=${this.state.notice.tone} role=${this.state.notice.tone === "error" ? "alert" : "status"}>
-        ${this.state.notice.text}
-      </div>
-    ` : nothing;
   }
 
   #resourceCopy(): { readonly loading: string; readonly unavailable: string; readonly empty: string } {
@@ -205,9 +213,10 @@ line-height: var(--ms-lh-snug);
     }
   }
 
-  #resource(status: string, problem: string | null, body: unknown) {
+  // A reload keeps showing what is already loaded; only an empty load waits.
+  #resource({ status, value, problem }: ResourceState<unknown>, body: unknown) {
     const copy = this.#resourceCopy();
-    if (status === "loading" || status === "idle") return html`<div class="loading" role="status">${copy.loading}</div>`;
+    if (value === null && (status === "idle" || status === "loading")) return html`<div class="loading" role="status">${copy.loading}</div>`;
     if (status === "error") {
       const workflow = this.state.workflow;
       return html`
@@ -228,7 +237,7 @@ line-height: var(--ms-lh-snug);
     const admitted = admittedManualRoomPreview(this.state);
     const previewCurrent = admitted !== null;
     const atRoomLimit = this.state.selection.roomIds.length >= MAX_ROOM_SEQUENCE_SIZE;
-    return this.#resource(plans.status, plans.problem, html`
+    return this.#resource(plans, html`
       <div class="stack">
         <h3 class="group-heading" id="rooms-heading">${this.#t("v4_rooms_to_clean", "Rooms to clean")}</h3>
         <div class="list" role="group" aria-labelledby="rooms-heading">
@@ -264,25 +273,22 @@ line-height: var(--ms-lh-snug);
             <small>${this.#t("v4_override_room_schedule_hint", "By default, this clean applies the shared schedule. Turn this on to use the settings selected here. Omitted due work stays due, and compatible verified work still counts toward shared progress.")}</small>
           </span>
         </label>
-        <div class="stack" aria-label=${this.#t("v4_shared_schedule_status", "Shared room schedule status")}>
-          ${this.state.selection.roomIds.map((roomId) => {
-            const room = plans.value?.rooms.find((candidate) => candidate.roomId === roomId);
-            return room?.sharedCadence || room?.sharedCadenceProgress || room?.sharedCadenceReasons?.length
-              ? html`<p class="subtle">${room.name}: ${this.#cadenceSummary(room.sharedCadence, room.sharedCadenceProgress, room.sharedCadenceReasons)}</p>`
-              : nothing;
-          })}
-        </div>
+        ${this.state.selection.roomIds.map((roomId) => {
+          const room = plans.value?.rooms.find((candidate) => candidate.roomId === roomId);
+          return room?.sharedCadence || room?.sharedCadenceProgress || room?.sharedCadenceReasons?.length
+            ? html`<p class="subtle">${room.name}: ${this.#cadenceSummary(room.sharedCadence, room.sharedCadenceProgress, room.sharedCadenceReasons)}</p>`
+            : nothing;
+        })}
         ${this.state.manualRoomPreview.status === "loading"
           ? html`<p role="status" class="subtle">${this.#t("v4_room_preview_loading", "Verifying the effective room settings…")}</p>`
           : nothing}
         ${this.state.manualRoomPreview.status === "error"
           ? html`<div class="stack">
-            <div role="alert" class="problem">${this.#t("v4_room_preview_unavailable", "Your room selections are saved, but the effective settings could not be verified. Retry the preview to enable cleaning.")}</div>
-            <div class="toolbar"><button class="ms-btn ms-btn--secondary" type="button" @click=${() => this.#intent({ type: "retry-room-preview" })}>${this.#t("v4_retry_preview", "Retry preview")}</button></div>
+            <div role="alert" class="problem">${this.#t("v4_room_preview_unavailable", "Home Assistant couldn't check the room settings.")}</div>
+            <div class="toolbar"><button class="ms-btn ms-btn--secondary" type="button" @click=${() => this.#intent({ type: "retry-room-preview" })}>${this.#t("v4_retry", "Try again")}</button></div>
           </div>`
           : nothing}
         ${previewCurrent ? this.#manualRoomPreview(admitted.preview) : nothing}
-        ${this.#notice()}
       </div>
     `);
   }
@@ -377,10 +383,10 @@ line-height: var(--ms-lh-snug);
     if (reasons.includes("mop_progress_unverified") || reasons.includes("coverage_progress_unverified")) {
       const unverified: string[] = [];
       if (reasons.includes("mop_progress_unverified")) {
-        unverified.push(this.#t("v4_cadence_mop_progress_unverified", "Mopping progress must be reset before this schedule can run."));
+        unverified.push(this.#t("v4_cadence_mop_progress_unverified", "Can't run this schedule until you reset its mopping progress, which Home Assistant can't confirm."));
       }
       if (reasons.includes("coverage_progress_unverified")) {
-        unverified.push(this.#t("v4_cadence_coverage_progress_unverified", "Coverage progress must be reset before this schedule can run."));
+        unverified.push(this.#t("v4_cadence_coverage_progress_unverified", "Can't run this schedule until you reset its vacuum rotation progress, which Home Assistant can't confirm."));
       }
       return unverified.join(" ");
     }
@@ -483,7 +489,7 @@ line-height: var(--ms-lh-snug);
             ? this.#t("v4_cadence_shared_join_effect", "Saving makes this schedule shared across participating plans and opted-in room cleans. It adopts existing shared progress when available; a new shared schedule starts at zero.")
             : this.#t("v4_cadence_new_shared_effect", "Saving creates a shared schedule for participating plans and opted-in room cleans. Its progress starts at zero.")
           : this.#t("v4_cadence_new_private_effect", "Saving creates private progress for this plan only. It starts at zero when enabled.")
-        : this.#t("v4_cadence_existing_effect", "Interval edits keep progress, and disabling pauses it. Mopping and coverage have separate progress and resets.");
+        : this.#t("v4_cadence_existing_effect", "Changing how often keeps the progress, and turning a schedule off pauses it.");
     const cadenceLabel = this.#t("v4_room_cadence_named", "Room schedule for {room}", { room: label });
     return html`
       <details class="plan-option cadence-config">
@@ -541,7 +547,7 @@ line-height: var(--ms-lh-snug);
             ${policy.coverageEveryN || hasCoverageProgress ? html`<button
               class="danger ms-btn ms-btn--secondary ms-btn--danger"
               type="button"
-              aria-label=${this.#t("v4_reset_coverage_cadence_button_named", "Reset coverage progress for {room}", { room: label })}
+              aria-label=${this.#t("v4_reset_coverage_cadence_button_named", "Reset vacuum rotation progress for {room}", { room: label })}
               data-dialog-launcher="confirmResetCadence"
               ?disabled=${resetDisabled}
               @click=${() => this.#intent({
@@ -550,7 +556,7 @@ line-height: var(--ms-lh-snug);
                 roomId: room.roomId,
                 mode: "coverage",
               })}
-            >${this.#t("v4_reset_coverage_cadence_button", "Reset coverage")}</button>` : nothing}
+            >${this.#t("v4_reset_coverage_cadence_button", "Reset vacuum rotation")}</button>` : nothing}
           </div>
           <p class="subtle">${this.#t("v4_reset_cadence_hint", "Reset is available for a saved plan while the robot is idle. Cleaning history is kept separately.")}</p>
         ` : nothing}
@@ -580,17 +586,17 @@ line-height: var(--ms-lh-snug);
 
   #planPicker() {
     const resource = this.state.resources.plans;
-    return this.#resource(resource.status, resource.problem, html`
+    return this.#resource(resource, html`
       <div class="stack">
         <button class="ms-btn ms-btn--primary" type="button" @click=${() => this.#intent({ type: "select-plan", planId: null })}>
           ${icon(iconPlus)}<span>${this.#t("v4_create_plan", "Create a plan")}</span>
         </button>
         ${(resource.value?.plans || []).map((plan) => html`
           <button class="ms-row ms-row--card" type="button" @click=${() => this.#intent({ type: "select-plan", planId: plan.id })}>
-            <span class="ms-row__body"><strong>${plan.name}</strong>
+            <span class="ms-row__body"><strong>${plan.name}${plan.enabled ? nothing : html` <span class="ms-chip">${this.#t("v4_paused", "Paused")}</span>`}</strong>
               <small>${plan.rooms.length === 1
                 ? this.#t("v4_plan_room_count_one", "1 room")
-                : this.#t("v4_plan_room_count", "{count} rooms", { count: plan.rooms.length })}${plan.enabled ? "" : ` · ${this.#t("v4_paused", "paused")}`}</small>
+                : this.#t("v4_plan_room_count", "{count} rooms", { count: plan.rooms.length })}</small>
             </span>
             <span class="ms-row__trail">${this.#t("v4_edit_plan", "Edit plan")}</span>
           </button>
@@ -620,7 +626,7 @@ line-height: var(--ms-lh-snug);
     const mixedSettings = new Set(draft.rooms.map((room) => `${room.cleaningMode}:${room.coverageSetting}`)).size > 1;
     const savedPlan = draft.id ? catalog?.plans.find((plan) => plan.id === draft.id) : undefined;
     const nextRunPreview = savedPlan?.nextRunPreview;
-    return this.#resource(resource.status, resource.problem, html`
+    return this.#resource(resource, html`
       <div class="stack">
         <label class="field ms-field">${this.#t("plan_name", "Plan name")}
           <input
@@ -661,7 +667,7 @@ line-height: var(--ms-lh-snug);
             ></button>
           </div>
         </div>
-        <h3 class="group-heading" id="plan-rooms-heading">${this.#t("plan_rooms", "Plan rooms")}</h3>
+        <h3 class="group-heading" id="plan-rooms-heading">${this.#t("v4_plan_rooms_heading", "Rooms in this plan")}</h3>
         ${mixedSettings ? html`
           <p class="subtle plan-transition-hint">${this.#t("v4_plan_mixed_settings", "Rooms with different cleaning settings may need separate missions and dock visits.")}
             ${draft.runBehavior === "ordered"
@@ -755,17 +761,16 @@ line-height: var(--ms-lh-snug);
           ` : nothing}
         </div>
         <div class="toolbar">
-          ${draft.id ? html`
+          ${deleteSubject(this.state, "confirmDeletePlan") ? html`
             <button
               class="danger ms-btn ms-btn--secondary ms-btn--danger"
               type="button"
-              aria-label=${this.#t("plan_delete", "Delete plan")}
+              aria-label=${this.#t("v4_delete_plan_label", "Delete plan")}
               data-dialog-launcher="confirmDeletePlan"
               @click=${() => this.#intent({ type: "open-dialog", dialog: "confirmDeletePlan" })}
             >${this.#t("plan_delete", "Delete")}</button>
           ` : nothing}
         </div>
-        ${this.#notice()}
       </div>
     `);
   }
@@ -774,13 +779,13 @@ line-height: var(--ms-lh-snug);
     const areas = this.state.resources.areas;
     return html`
       <div class="stack">
-        <p class="subtle">${this.state.draw.tool === "outline" ? this.#t("v4_zone_coverage", "Place points around the zone. Shading shows cleaning coverage inside the perimeter; narrow edges may remain uncovered.") : this.#t("v4_draw_floor_hint", "Paint only on the mapped floor. Zoom and pan never change the saved outline.")}</p>
+        <p class="subtle">${this.state.draw.tool === "outline" ? this.#t("v4_zone_coverage", "Place points around the area. Shading shows where the robot cleans inside the outline; narrow edges may stay uncovered.") : this.#t("v4_draw_floor_hint", "Paint only on the mapped floor. Zooming and panning never change the area.")}</p>
         ${this.state.draw.tool !== "outline" ? html`<p class="subtle">${this.#t("v4_keyboard_draw_help", "Keyboard: focus the map, use arrow keys to aim, then Enter to paint or erase at the crosshair. D selects Paint; E selects Erase.")}</p>` : nothing}
-        ${this.#resource(areas.status, areas.problem, html`
+        ${this.#resource(areas, html`
           <div class="group">
             <h3 class="group-heading" id="areas-heading">${this.#t("area_workspace_title", "Saved custom areas")}</h3>
             <div class="list" role="group" aria-labelledby="areas-heading">
-            <button class="list-button ms-row ms-row" type="button" @click=${() => this.#intent({ type: "select-area", areaId: null })}>＋ ${this.#t("area_new", "New outline")}</button>
+            <button class="list-button ms-row ms-row" type="button" @click=${() => this.#intent({ type: "select-area", areaId: null })}>${this.#t("area_new", "New area")}</button>
             ${(areas.value?.areas || []).map((area) => html`
               <button class="list-button ms-row ms-row" type="button" @click=${() => {
                 this.#intent({ type: "select-area", areaId: area.id, workflow: "areaReview" });
@@ -802,8 +807,8 @@ line-height: var(--ms-lh-snug);
     const stale = !needsReview && (draft.status === "stale" || draft.status === "unknown");
     return html`
       <div class="stack">
-        ${needsReview ? html`<div class="notice" data-tone="warning" role="status">${this.#t("area_review_required", "Review the saved outline on this current map, then confirm it.")}</div>` : nothing}
-        ${stale ? html`<div class="problem" role="alert">${this.#t("area_redraw_required", "This outline no longer matches the current room map. Redraw it before saving.")}</div>` : nothing}
+        ${needsReview ? html`<div class="notice" data-tone="warning" role="status">${this.#t("area_review_required", "The map changed since you saved this area, so save it again or redraw it.")}</div>` : nothing}
+        ${stale ? html`<div class="problem" role="alert">${this.#t("area_redraw_required", "Home Assistant can't use this area as it was saved, so redraw it.")}</div>` : nothing}
         <label class="field ms-field">${this.#t("area_name", "Area name")}
           <input maxlength="128" autocomplete="off" .value=${draft.name} @input=${(event: Event) => this.#intent({ type: "patch-area-draft", patch: { name: eventValue(event) } })}>
         </label>
@@ -817,18 +822,17 @@ line-height: var(--ms-lh-snug);
         </div>
         ${this.#mopCoverageHint(draft.cleaningMode)}
         <div class="toolbar">
-          <button class="ms-btn ms-btn--secondary" type="button" @click=${() => this.#intent({ type: "open-workflow", workflow: "draw" })}>${this.#t("v4_edit_outline", "Edit outline")}</button>
-          ${draft.id ? html`
+          <button class="ms-btn ms-btn--secondary" type="button" @click=${() => this.#intent({ type: "open-workflow", workflow: "draw" })}>${this.#t("v4_edit_outline", "Redraw")}</button>
+          ${deleteSubject(this.state, "confirmDeleteArea") ? html`
             <button
               class="danger ms-btn ms-btn--secondary ms-btn--danger"
               type="button"
-              aria-label=${this.#t("area_delete", "Delete area")}
+              aria-label=${this.#t("v4_delete_area_label", "Delete area")}
               data-dialog-launcher="confirmDeleteArea"
               @click=${() => this.#intent({ type: "open-dialog", dialog: "confirmDeleteArea" })}
             >${this.#t("area_delete", "Delete")}</button>
           ` : nothing}
         </div>
-        ${this.#notice()}
       </div>
     `;
   }
@@ -848,7 +852,7 @@ line-height: var(--ms-lh-snug);
       : this.#t("v4_return_current_floor", "Return to current floor");
     const displayPosition = this._historyPreviewPosition ?? position;
     const selectedSnapshot = snapshots[displayPosition];
-    return this.#resource(resource.status, resource.problem, html`
+    return this.#resource(resource, html`
       <div class="stack">
         ${(catalog?.floors.length || 0) > 1 ? html`
           <div class="group">
@@ -878,7 +882,7 @@ line-height: var(--ms-lh-snug);
               max=${String(snapshots.length)}
               step="1"
               .value=${String(displayPosition)}
-              aria-valuetext=${selectedSnapshot ? this.#formatTime(selectedSnapshot.createdAt) : liveLabel}
+              aria-valuetext=${selectedSnapshot ? formatDateTime(selectedSnapshot.createdAt, this.dates) : liveLabel}
               ?disabled=${!snapshots.length}
               @input=${(event: Event) => {
                 this._historyPreviewPosition = Number(eventValue(event));
@@ -894,7 +898,7 @@ line-height: var(--ms-lh-snug);
             <button class="snapshot ms-row ms-row" type="button" aria-current=${String(!this.state.selection.historyId && Boolean(floor?.active))} @click=${() => this.#intent({ type: "set-history", historyId: null })}><span>${liveLabel}</span><small>${this.#t("v4_current", "Current")}</small></button>
             ${snapshots.map((snapshot, index) => html`
               <button class="snapshot ms-row ms-row" type="button" aria-current=${String(snapshot.id === this.state.selection.historyId)} @click=${() => this.#intent({ type: "set-history", historyId: snapshot.id })}>
-                <span>${this.#formatTime(snapshot.createdAt)}</span><small>${index + 1} of ${snapshots.length}</small>
+                <span>${formatDateTime(snapshot.createdAt, this.dates)}</span><small>${this.#t("v4_history_position", "{position} of {count}", { position: index + 1, count: snapshots.length })}</small>
               </button>
             `)}
           </div>
@@ -904,46 +908,14 @@ line-height: var(--ms-lh-snug);
     `);
   }
 
-  #formatTime(value: string): string {
-    try {
-      return new Intl.DateTimeFormat(this.state.locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
-    } catch {
-      return this.#t("v4_saved_map", "Saved map");
-    }
-  }
-
-  #loadDiagnostics(): void {
-    if (this.#diagnosticsLoad || customElements.get("matic-map-diagnostics-v4")) return;
-    this._diagnosticsLoadFailed = false;
-    this.#diagnosticsLoad = import("./diagnostics-panel")
-      .then(() => {
-        this.#diagnosticsLoad = null;
-        this.requestUpdate();
-      })
-      .catch(() => {
-        this.#diagnosticsLoad = null;
-        this._diagnosticsLoadFailed = true;
-      });
-  }
-
   #support() {
-    if (customElements.get("matic-map-diagnostics-v4")) {
-      return html`<matic-map-diagnostics-v4
-        .state=${this.state}
-        .localize=${this.localize}
-        .disabled=${this.state.command !== "idle" && this.state.command !== "failed"}
-      ></matic-map-diagnostics-v4>`;
-    }
-    if (this._diagnosticsLoadFailed) {
-      return html`<div class="problem" role="alert">
-        <p>${this.#t("v4_workflow_load_failed", "Workspace tools could not be loaded.")}</p>
-        <button class="ms-btn ms-btn--secondary" type="button" @click=${this.#loadDiagnostics}>
-          ${this.#t("v4_retry", "Try again")}
-        </button>
-      </div>`;
-    }
-    this.#loadDiagnostics();
-    return html`<p class="loading" role="status" aria-live="polite">${this.#t("v4_workflow_loading", "Loading workspace tools…")}</p>`;
+    this.#diagnostics.request();
+    if (this.#diagnostics.status !== "ready") return chunkStatus(this.#diagnostics.status, this.localize, this.retry);
+    return html`<matic-map-diagnostics-v4
+      .state=${this.state}
+      .localize=${this.localize}
+      .disabled=${this.state.command !== "idle" && this.state.command !== "failed"}
+    ></matic-map-diagnostics-v4>`;
   }
 
   protected override render() {

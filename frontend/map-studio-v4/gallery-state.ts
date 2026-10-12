@@ -53,6 +53,7 @@ export type GalleryScenario =
   | "stopping-command"
   | "task-in-progress"
   | "map-unavailable"
+  | "map-limited"
   | "room-limit";
 
 const verified = (): WorkspaceState => ({
@@ -478,6 +479,8 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
           scene: { status: "error", value: null, problem: "request-failed" },
         },
       };
+    case "map-limited":
+      return { ...state, coherence: "degraded" };
     case "room-limit": {
       const rooms = galleryRooms(100);
       const roomIds = rooms.map((room) => room.roomId);
@@ -576,6 +579,7 @@ export const GALLERY_SCENARIOS: readonly GalleryScenario[] = [
   "stopping-command",
   "task-in-progress",
   "map-unavailable",
+  "map-limited",
   "room-limit",
 ];
 
@@ -585,8 +589,6 @@ export const GALLERY_DIALOGS: readonly DialogKind[] = [
   "confirmDeletePlan",
   "confirmDeleteArea",
   "confirmResetCadence",
-  "confirmStop",
-  "error",
 ];
 
 /** Every notice tone the workflow panels render. */

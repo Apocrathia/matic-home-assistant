@@ -29,7 +29,7 @@ cursor: pointer;
 -webkit-tap-highlight-color: transparent;
 transition: background-color var(--ms-fast) var(--ms-ease), border-color var(--ms-fast) var(--ms-ease), color var(--ms-fast) var(--ms-ease);
 }
-.ms-btn:focus-visible, .ms-row:focus-visible { outline: 2px solid var(--ms-accent); outline-offset: 2px; }
+.ms-btn:focus-visible, .ms-row:focus-visible { outline: 2px solid var(--ms-resolved-indicator, var(--ms-accent)); outline-offset: 2px; }
 .ms-btn:disabled, .ms-row:disabled, .ms-btn[aria-disabled="true"], .ms-row[aria-disabled="true"] {
 cursor: default;
 color: var(--ms-text-disabled);
@@ -56,21 +56,21 @@ white-space: nowrap;
 .ms-btn--block { display: flex; inline-size: 100%; }
 .ms-btn--icon { padding-inline: 0; inline-size: var(--ms-control); }
 .ms-btn--pill { border-radius: var(--ms-radius-pill); }
-.ms-btn--primary { --ms-local: var(--ms-accent); color: var(--ms-on-accent); background: var(--ms-accent); box-shadow: var(--ms-shadow-1); }
+.ms-btn--primary { --ms-local: var(--ms-resolved-accent-fill, var(--ms-accent)); color: var(--ms-resolved-on-accent-fill, var(--ms-on-accent)); background: var(--ms-local); box-shadow: var(--ms-shadow-1); }
 .ms-btn--secondary { --ms-local: var(--ms-surface-card); border-color: var(--ms-line-strong); background: var(--ms-local); }
 .ms-btn--danger { color: color-mix(in srgb, var(--ms-danger) 82%, var(--ms-text)); border-color: currentColor; }
-.ms-btn--primary.ms-btn--danger { --ms-local: var(--ms-danger); color: var(--ms-on-accent); background: var(--ms-danger); border-color: transparent; }
-.ms-btn:active:not(:disabled):not([aria-disabled="true"]) { background: color-mix(in srgb, var(--ms-text) 14%, var(--ms-local)); }
-.ms-btn--primary:active:not(:disabled):not([aria-disabled="true"]) { background: color-mix(in srgb, var(--ms-accent) 74%, var(--ms-text)); box-shadow: none; }
+.ms-btn--primary.ms-btn--danger { --ms-local: var(--ms-resolved-danger-fill, var(--ms-danger)); color: var(--ms-resolved-on-danger-fill, var(--ms-on-accent)); border-color: transparent; }
 @media (hover: hover) {
 .ms-btn:hover:not(:disabled):not([aria-disabled="true"]) { background: color-mix(in srgb, var(--ms-text) 7%, var(--ms-local)); }
-.ms-btn--primary:hover:not(:disabled):not([aria-disabled="true"]) { background: color-mix(in srgb, var(--ms-accent) 86%, var(--ms-text)); }
 .ms-btn--danger:hover:not(:disabled):not([aria-disabled="true"]) { background: color-mix(in srgb, var(--ms-danger) 10%, var(--ms-local)); }
+.ms-btn--primary:hover:not(:disabled):not([aria-disabled="true"]) { background: color-mix(in srgb, var(--ms-local) 86%, rgb(from currentColor calc(255 - r) calc(255 - g) calc(255 - b))); }
 }
+.ms-btn:active:not(:disabled):not([aria-disabled="true"]) { background: color-mix(in srgb, var(--ms-text) 14%, var(--ms-local)); }
+.ms-btn--primary:active:not(:disabled):not([aria-disabled="true"]) { background: color-mix(in srgb, var(--ms-local) 74%, rgb(from currentColor calc(255 - r) calc(255 - g) calc(255 - b))); box-shadow: none; }
 .ms-btn[aria-pressed="true"], .ms-btn[aria-checked="true"] {
 color: var(--ms-text);
 background: color-mix(in srgb, var(--ms-accent) 12%, var(--ms-local));
-border-color: color-mix(in srgb, var(--ms-accent) 45%, var(--ms-line));
+border-color: var(--ms-resolved-indicator, var(--ms-accent));
 }
 @media (hover: hover) {
 .ms-btn[aria-pressed="true"]:hover, .ms-btn[aria-checked="true"]:hover { background: color-mix(in srgb, var(--ms-accent) 20%, var(--ms-local)); }
@@ -112,7 +112,7 @@ background: color-mix(in srgb, var(--ms-accent) 12%, var(--ms-local));
 @media (hover: hover) {
 .ms-row:hover:not(:disabled):not([aria-disabled="true"]) { border-color: color-mix(in srgb, var(--ms-accent) 45%, var(--ms-line)); background: color-mix(in srgb, var(--ms-text) 7%, var(--ms-local)); }
 }
-.ms-row[aria-pressed="true"], .ms-row[aria-current="true"], .ms-row[data-selected="true"] { border-color: var(--ms-accent); background: color-mix(in srgb, var(--ms-accent) 12%, var(--ms-local)); }
+.ms-row[aria-pressed="true"], .ms-row[aria-current="true"], .ms-row[data-selected="true"] { border-color: var(--ms-resolved-indicator, var(--ms-accent)); background: color-mix(in srgb, var(--ms-accent) 12%, var(--ms-local)); }
 .ms-switch {
 position: relative;
 flex: none;
@@ -149,10 +149,10 @@ background: var(--ms-surface-card);
 box-shadow: var(--ms-shadow-1);
 transition: translate var(--ms-fast) var(--ms-ease);
 }
-.ms-switch[aria-checked="true"]::before { border-color: var(--ms-accent); background: var(--ms-accent); }
+.ms-switch[aria-checked="true"]::before { border-color: var(--ms-resolved-indicator, var(--ms-accent)); background: var(--ms-resolved-indicator, var(--ms-accent)); }
 .ms-switch[aria-checked="true"]::after { translate: 1.25rem -50%; background: var(--ms-on-accent); }
 .ms-switch:focus-visible { outline: 0; }
-.ms-switch:focus-visible::before { outline: 2px solid var(--ms-accent); outline-offset: 2px; }
+.ms-switch:focus-visible::before { outline: 2px solid var(--ms-resolved-indicator, var(--ms-accent)); outline-offset: 2px; }
 .ms-switch:disabled, .ms-switch[aria-disabled="true"] { cursor: default; opacity: 0.55; }
 @media (forced-colors: active) {
 .ms-switch::before { border-color: ButtonBorder; }
@@ -181,7 +181,7 @@ color: var(--ms-text);
 background: var(--ms-local);
 font-size: var(--ms-t-sm);
 }
-.ms-field > input:focus-visible, .ms-field > select:focus-visible, .ms-select:focus-visible { outline: 2px solid var(--ms-accent); outline-offset: 1px; border-color: var(--ms-accent); }
+.ms-field > input:focus-visible, .ms-field > select:focus-visible, .ms-select:focus-visible { outline: 2px solid var(--ms-resolved-indicator, var(--ms-accent)); outline-offset: 1px; border-color: var(--ms-resolved-indicator, var(--ms-accent)); }
 .ms-field > input:disabled, .ms-field > select:disabled, .ms-select:disabled { color: var(--ms-text-disabled); cursor: default; }
 @media (forced-colors: active) {
 .ms-btn, .ms-row, .ms-surface, .ms-field > input, .ms-field > select, .ms-select { border-color: ButtonBorder; }

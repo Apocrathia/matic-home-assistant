@@ -10,6 +10,7 @@ import {
   type CoordinateEditCapture,
   type CoordinateEditTool,
   type CommandState,
+  type NoButtonAction,
   type PrimaryAction,
   type ResourceStamp,
   type AdmittedManualRoomPreview,
@@ -17,7 +18,7 @@ import {
   type WorkspaceState,
 } from "./contracts";
 import type { AreaCircle, SavedPlan } from "./backend-contracts";
-import type { CameraPreference } from "./contracts";
+import { readWorkspaceNotice, type CameraPreference } from "./contracts";
 
 const emptyResource = <T>(): { status: "idle"; value: T | null; problem: null } => ({
   status: "idle",
@@ -74,6 +75,7 @@ export const initialWorkspaceState = (): WorkspaceState => ({
   activity: "unknown",
   workflow: "none",
   command: "idle",
+  rechecking: false,
   fullMap: false,
   precisionOpen: false,
   dialog: null,
@@ -551,6 +553,7 @@ export const reduceWorkspace = (
         },
       };
     case "set-notice":
+      // Validated where every notice is committed (WorkspaceStore.replace).
       return { ...state, notice: intent.notice };
     case "open-dialog":
       return { ...state, dialog: intent.dialog };
@@ -583,6 +586,35 @@ export const reduceWorkspace = (
   }
 };
 
+/**
+ * What a delete dialog names and changes (shell.md §5): the saved item, and,
+ * when it is the default plan or the selected custom area, the one the backend
+ * promotes in its place: the first remaining in saved order, or null for none
+ * (plans.py:2623-2624, 2159-2160). Undefined while the catalog does not hold it.
+ */
+export interface DeleteSubject {
+  readonly name: string;
+  readonly successor?: string | null;
+}
+
+export const deleteSubject = (
+  state: WorkspaceState,
+  dialog: WorkspaceState["dialog"] = state.dialog,
+): DeleteSubject | undefined => {
+  const plans = state.resources.plans.value;
+  const areas = state.resources.areas.value;
+  const catalog = dialog === "confirmDeletePlan"
+    ? { items: plans?.plans, id: state.planDraft.id, selected: plans?.selectedPlan }
+    : dialog === "confirmDeleteArea"
+      ? { items: areas?.areas, id: state.areaDraft.id, selected: areas?.selectedArea }
+      : null;
+  const items: readonly { readonly id: string; readonly name: string }[] = catalog?.items ?? [];
+  const item = items.find((candidate) => candidate.id === catalog?.id);
+  return item && (item.id === catalog?.selected
+    ? { name: item.name, successor: items.find((candidate) => candidate !== item)?.name ?? null }
+    : { name: item.name });
+};
+
 export class WorkspaceStore {
   readonly #listeners = new Set<(state: WorkspaceState) => void>();
   #state: WorkspaceState;
@@ -596,17 +628,27 @@ export class WorkspaceStore {
   }
 
   dispatch(intent: WorkspaceIntent): WorkspaceState {
-    const next = reduceWorkspace(this.#state, intent);
-    if (next === this.#state) return next;
-    this.#state = next;
-    this.#publish();
-    return next;
+    return this.replace(reduceWorkspace(this.#state, intent));
   }
 
-  replace(next: WorkspaceState): void {
-    if (next === this.#state) return;
-    this.#state = next;
+  // The one place a notice is validated. Every notice committed in place of
+  // another is its own frozen object, so a repeated notice toasts and
+  // announces again (shell.md §4 rule 1); an invalid one is ignored and the
+  // current notice stays. A delete dialog stands only while the catalog holds
+  // the saved item it names (copy-style-0.5.md:90, 96). A reload, failed or
+  // not, keeps the last catalog (effects.ts loadPlans, loadAreas), so only a
+  // ready read without the item, or a reset that empties the catalog, closes
+  // it; a dialog left with nothing to name would block the workspace unseen.
+  replace(next: WorkspaceState): WorkspaceState {
+    if (next === this.#state) return next;
+    const noticed = next.notice && next.notice !== this.#state.notice
+      ? { ...next, notice: readWorkspaceNotice(next.notice) ?? this.#state.notice }
+      : next;
+    const committed = noticed.dialog?.startsWith("confirmDelete") && !deleteSubject(noticed)
+      ? { ...noticed, dialog: null } : noticed;
+    this.#state = committed;
     this.#publish();
+    return committed;
   }
 
   #publish(): void {
@@ -621,9 +663,7 @@ export class WorkspaceStore {
   }
 
   patch(patch: Partial<WorkspaceState>): WorkspaceState {
-    const next = { ...this.#state, ...patch };
-    this.replace(next);
-    return next;
+    return this.replace({ ...this.#state, ...patch });
   }
 
   subscribe(listener: (state: WorkspaceState) => void): () => void {
@@ -820,6 +860,8 @@ const disabledAction = (
   reasonKey,
 });
 
+const noButton = (id: string): NoButtonAction => ({ id, enabled: false });
+
 const hasStoppableWork = (state: WorkspaceState): boolean =>
   state.command === "starting"
   || state.activity === "cleaning" || state.activity === "paused"
@@ -846,7 +888,7 @@ const stopAction = (state: WorkspaceState): PrimaryAction => {
   };
 };
 
-export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction => {
+export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction | NoButtonAction => {
   if (state.dataMode === "history") {
     return {
       id: "return-live",
@@ -883,13 +925,7 @@ export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction => {
     };
   }
   if (state.activity === "stopping" || state.command === "settling") {
-    return disabledAction(
-      "stopping",
-      "Stopping",
-      "Waiting for the robot to settle.",
-      "v4_action_stopping",
-      "v4_reason_stopping",
-    );
+    return noButton("stopping");
   }
   if (state.command === "starting") {
     return disabledAction("starting", "Starting", "Waiting for the robot to begin.", "v4_action_starting", "v4_reason_starting");
@@ -904,74 +940,64 @@ export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction => {
     };
   }
   if (!state.host.connected) {
-    return disabledAction(
-      "reconnecting",
-      "Reconnecting",
-      "Home Assistant is offline.",
-      "v4_action_reconnecting",
-      "v4_reason_reconnecting",
-    );
+    return noButton("reconnecting");
   }
   if (!state.host.administrator) {
-    return disabledAction(
-      "administrator",
-      "Administrator access required",
-      "Ask a Home Assistant administrator to open this map.",
-      "v4_action_administrator",
-      "v4_reason_administrator",
-    );
+    return noButton("administrator");
   }
   if (state.host.robotCount === 0) {
-    return disabledAction("setup", "Set up a Matic robot", "Add the Matic integration to get started.", "v4_set_up_robot", "v4_setup_reason");
+    return noButton("setup");
   }
   if (isSelectedRobotUnavailable(state)) {
-    return disabledAction("choose-robot", "Selected robot unavailable", "Choose another robot to open its map.", "v4_selected_robot_unavailable", "v4_choose_another_robot");
+    return noButton("choose-robot");
   }
   if (state.activity === "problem") {
-    return disabledAction("problem", "Check the robot", "Resolve the robot's problem before starting another task.", "v4_check_robot", "v4_problem_reason");
+    return noButton("problem");
   }
   if (!state.host.robotConnected) {
-    return disabledAction(
-      "robot-offline",
-      "Robot offline",
-      "Reconnect the robot to start cleaning.",
-      "v4_action_robot_offline",
-      "v4_reason_robot_offline",
-    );
+    return noButton("robot-offline");
   }
   if (state.coherence === "unavailable" || state.coherence === "blocked") {
-    return disabledAction("map-unavailable", "Map unavailable", "Open Map diagnostics to check why the map is unavailable.", "v4_map_unavailable", "v4_map_unavailable_reason");
+    return noButton("map-unavailable");
   }
   if (state.coherence !== "current") {
-    return disabledAction(
-      "locating",
-      "Finding the map",
-      "Waiting for the robot to confirm which floor it is on.",
-      "v4_action_locating",
-      "v4_reason_locating",
-    );
+    return noButton("locating");
   }
   if ((state.workflow === "plan" || state.workflow === "rooms")
     && state.resources.plans.status !== "ready") {
     const unavailable = state.resources.plans.status === "error" || state.resources.plans.status === "empty";
-    return disabledAction(
-      "plans-unavailable",
-      unavailable ? "Rooms and plans unavailable" : "Loading rooms and plans…",
-      "Load the room and plan list before choosing a cleaning action.",
-      unavailable ? "v4_plans_unavailable_action" : "v4_loading_rooms_plans",
-      "v4_plans_required_reason",
-    );
+    return unavailable
+      ? disabledAction(
+        "plans-unavailable",
+        "Rooms and plans unavailable",
+        "Load the room and plan list before choosing a cleaning action.",
+        "v4_plans_unavailable_action",
+        "v4_plans_required_reason",
+      )
+      : disabledAction(
+        "plans-unavailable",
+        "Loading rooms and plans…",
+        "Load the room and plan list before choosing a cleaning action.",
+        "v4_loading_rooms_plans",
+        "v4_plans_required_reason",
+      );
   }
   if (state.workflow === "draw") {
     const drawFirst = { reason: "Draw the area first.", reasonKey: "v4_reason_save_area_draw" };
+    // shell.md §2 row 8: the reason the strip's body gives for a map that cannot be confirmed.
+    const mapLimited = {
+      reason: "Home Assistant can show this map but can't confirm it well enough to start cleaning.",
+      reasonKey: "v4_map_limited_body",
+    };
     const hasCoverage = state.draw.circles.length > 0 && (!state.draw.outline || state.draw.outline.closed);
+    const editable = canEditCoordinates(state);
     return {
       id: "review-area",
       label: "Name and save",
       labelKey: "v4_action_review_area",
       kind: "primary",
-      enabled: hasCoverage && canEditCoordinates(state),
-      ...(hasCoverage ? {} : drawFirst),
+      enabled: hasCoverage && editable,
+      ...(!hasCoverage ? drawFirst : editable ? {} : mapLimited),
     };
   }
   if (state.workflow === "rooms") {
@@ -980,12 +1006,11 @@ export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction => {
     const previewCurrent = admitted !== null;
     const previewAllowed = previewCurrent && !admitted.preview.blocker && admitted.preview.rooms.length > 0;
     const ready = canStartMotion(state) && count > 0 && previewAllowed;
-    // The counted label carries a placeholder the view cannot fill through
-    // `t(labelKey, label)`, so it ships without a key and falls back to English.
     return {
       id: "clean-rooms",
-      label: count ? `Clean ${count} room${count === 1 ? "" : "s"}` : "Clean selected rooms",
-      ...(count ? {} : { labelKey: "v4_action_clean_rooms" }),
+      ...(count === 0 ? { label: "Clean selected rooms", labelKey: "v4_action_clean_rooms" }
+        : count === 1 ? { label: "Clean 1 room", labelKey: "v4_action_clean_rooms_count_one" }
+        : { label: "Clean {count} rooms", labelKey: "v4_action_clean_rooms_count", labelPlaceholders: { count } }),
       kind: "primary",
       enabled: ready,
       ...(ready
@@ -1048,8 +1073,8 @@ export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction => {
         && state.draw.circles.length > 0;
       return {
         id: "save-area",
-        label: state.areaDraft.canRebind ? "Confirm on this map" : "Save area",
-        labelKey: state.areaDraft.canRebind ? "v4_action_save_area_confirm" : "v4_action_save_area",
+        label: "Save area",
+        labelKey: "v4_action_save_area",
         kind: "primary",
         enabled: valid,
         ...(valid
@@ -1066,18 +1091,10 @@ export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction => {
       enabled: current && canStartMotion(state),
       ...(current
         ? {}
-        : { reason: "Confirm this outline on the current map first.", reasonKey: "v4_reason_run_area" }),
+        : { reason: "Can't clean this area until you save it on the current map.", reasonKey: "v4_reason_run_area" }),
     };
   }
-  return {
-    id: "choose-cleaning",
-    label: "Choose what to clean",
-    labelKey: "v4_action_choose_cleaning",
-    kind: "neutral",
-    enabled: false,
-    reason: "Choose rooms, a plan, or a custom area.",
-    reasonKey: "v4_reason_choose_cleaning",
-  };
+  return noButton("choose-cleaning");
 };
 
 export const selectStopSecondaryAction = (

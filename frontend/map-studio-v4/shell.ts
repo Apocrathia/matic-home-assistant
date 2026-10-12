@@ -5,10 +5,15 @@ import type { PropertyValues } from "lit";
 import { isWorkspaceIntent } from "./contracts";
 
 import type {
+  DateFormat,
   Localize,
+  NoticePlaceholders,
+  NoticeTone,
+  NoButtonAction,
   PrimaryAction,
   ResetCadenceAction,
   WorkspaceIntent,
+  WorkspaceNotice,
   WorkspaceState,
   Workflow,
 } from "./contracts";
@@ -19,8 +24,10 @@ import {
   WORKFLOW_TAG,
 } from "./element-tags";
 import { renderDrawTools } from "./draw-tools";
+import { LazyChunk, chunkStatus, reloadInto, takeResume, type ChunkStatus } from "./lazy-chunk";
 import { isNativeSelectControl } from "./gesture-controller";
 import { RovingFocusController } from "./roving-focus";
+import { opaque, readColors, resolveFill, resolveTone, rgba, watchTheme, type Channel } from "./theme-probe";
 import {
   icon,
   iconBack,
@@ -29,11 +36,15 @@ import {
   iconChevronRight,
   iconChevronUp,
   iconCleaning,
+  iconClose,
   iconDiagnostics,
   iconHistory,
   iconMenu,
   iconPlan,
   iconNewArea,
+  iconNoticeError,
+  iconNoticeSuccess,
+  iconNoticeWarning,
   iconOffline,
   iconOverflow,
   iconPaused,
@@ -45,14 +56,15 @@ import {
   WORKSPACE_INTENT_EVENT,
 } from "./map-canvas";
 import "./map-canvas";
-import "./precision-controls";
-import { translate } from "./localize";
+import { formatList, translate } from "./localize";
 import { needsDraftConfirmation } from "./draft-navigation";
 import {
+  deleteSubject,
   initialWorkspaceState,
   isSelectedRobotUnavailable,
   selectStopSecondaryAction,
   selectPrimaryAction,
+  type DeleteSubject,
 } from "./state";
 
 const mapCanvasTag = unsafeStatic(MAP_CANVAS_TAG);
@@ -68,6 +80,8 @@ interface StatusPresentation {
   readonly icon: string;
   /** True when the robot is doing something the workspace title alone would hide. */
   readonly notable: boolean;
+  /** True for the idle "Map limited" row, whose sheet body offers Try again. */
+  readonly recheck?: boolean;
 }
 
 const statusCopy = (state: WorkspaceState, localize?: Localize): StatusPresentation => {
@@ -134,6 +148,17 @@ const statusCopy = (state: WorkspaceState, localize?: Localize): StatusPresentat
     icon: iconOffline,
     notable: true,
   };
+  // shell.md §4 row 8: a degraded map while idle can persist, so say so and
+  // offer the recheck at once rather than a Ready beside "Finding the map".
+  if (state.coherence === "degraded") return {
+    title: t("v4_map_limited", "Map limited"),
+    detail: state.rechecking
+      ? t("v4_locating_rechecking", "Checking again")
+      : t("v4_cleaning_blocked", "Cleaning can't start"),
+    icon: iconRobot,
+    notable: true,
+    recheck: true,
+  };
   const battery = state.batteryPercent === null
     ? t("v4_ready", "Ready")
     : t("v4_battery", "{percent}% battery", { percent: state.batteryPercent });
@@ -182,6 +207,15 @@ type SheetDetent = "peek" | "half" | "full";
 
 const DETENTS: readonly SheetDetent[] = ["peek", "half", "full"];
 
+// shell.md §4 notice rule: glyph per tone, and how long each toast stays.
+const NOTICE_ICONS: Readonly<Record<NoticeTone, string>> = {
+  info: iconDiagnostics,
+  success: iconNoticeSuccess,
+  warning: iconNoticeWarning,
+  error: iconNoticeError,
+};
+const TOAST_MS: Readonly<Record<NoticeTone, number>> = { info: 6000, success: 4000, warning: 6000, error: 10000 };
+
 // Where the sheet rests when a workflow opens. The map is the document, so a
 // drawing starts at peek; room choices stay visible at half height, while
 // longer forms (plans, diagnostics) start at full height.
@@ -206,6 +240,8 @@ const FLICK_VELOCITY = 0.5;
 const FLICK_WINDOW_MS = 100;
 const TAP_SLOP = 6;
 const BODY_SWIPE_DISTANCE = 48;
+// The panel's scrollers: the pinned top, capped on a sheet, and the body.
+const SCROLLERS = ".panel-top, .sheet-body, .workflow-body";
 const INTERACTIVE_SHEET_SELECTOR = [
   "a[href]",
   "button",
@@ -223,7 +259,9 @@ const INTERACTIVE_SHEET_SELECTOR = [
   '[role="switch"]',
   '[role="tab"]',
   '[role="menuitem"]',
-  '[tabindex]:not([tabindex="-1"])',
+  // A scroller is a tab stop only so a keyboard can scroll it
+  // (#syncScrollers); a swipe that starts on it still steps the sheet.
+  `[tabindex]:not([tabindex="-1"]):not(${SCROLLERS})`,
 ].join(",");
 
 interface SheetDrag {
@@ -238,7 +276,7 @@ interface SheetDrag {
 interface BodySwipe {
   readonly pointerId: number;
   readonly startY: number;
-  readonly atTop: boolean;
+  readonly scroller: HTMLElement | null;
   consumed: boolean;
 }
 
@@ -251,12 +289,18 @@ const FOCUSABLE = [
   "[tabindex]:not([tabindex='-1'])",
 ].join(", ");
 
+// Whether Tab reaches anything inside `root`, open shadow roots included.
+const hasFocusable = (root: ParentNode): boolean => Boolean(root.querySelector(FOCUSABLE))
+  || [...root.querySelectorAll("*")].some((element) => element.shadowRoot !== null && hasFocusable(element.shadowRoot));
+
 interface DialogPresentation {
   readonly title: string;
   readonly detail: string;
+  /** What else the delete changes: the default plan or the selected custom area. */
+  readonly consequence?: string;
   readonly cancelLabel: string;
   readonly confirmLabel: string;
-  readonly action: "discard" | "delete-plan" | "delete-area" | "reset-room-cadence" | "stop" | null;
+  readonly action: "discard" | "delete-plan" | "delete-area" | "reset-room-cadence";
 }
 
 const dialogCopy = (
@@ -266,7 +310,8 @@ const dialogCopy = (
   resetRoomName = "room",
   sharedCadence = false,
   resetMode: "mop" | "coverage" = "mop",
-): DialogPresentation | null => {
+  subject?: DeleteSubject,
+): DialogPresentation | undefined => {
   const t = (key: string, fallback: string, placeholders?: Record<string, string | number>): string =>
     translate(localize, key, fallback, placeholders);
   switch (dialog) {
@@ -279,57 +324,45 @@ const dialogCopy = (
         action: "discard",
       };
     case "confirmDeletePlan":
-      return {
-        title: t("v4_delete_plan", "Delete this plan?"),
-        detail: t("v4_delete_plan_detail", "This removes the saved plan from Home Assistant. The robot will not move."),
+      return subject && {
+        title: t("v4_delete_plan", "Delete plan?"),
+        detail: t("v4_delete_plan_detail", "Automations that run \"{name}\" will stop working, and the robot won't move.", { name: subject.name }),
+        ...(subject.successor === undefined ? {} : {
+          consequence: subject.successor === null
+            ? t("v4_delete_plan_none", "You'll have no default plan.")
+            : t("v4_delete_plan_default", "{new_default} becomes your default plan.", { new_default: subject.successor }),
+        }),
         cancelLabel: t("v4_cancel", "Cancel"),
-        confirmLabel: t("plan_delete", "Delete plan"),
+        confirmLabel: t("plan_delete", "Delete"),
         action: "delete-plan",
       };
     case "confirmDeleteArea":
-      return {
-        title: t("v4_delete_area", "Delete this area?"),
-        detail: t("v4_delete_area_detail", "This removes the saved outline from Home Assistant. The robot will not move."),
+      return subject && {
+        title: t("v4_delete_area", "Delete area?"),
+        detail: t("v4_delete_area_detail", "Automations that clean \"{name}\" will stop working, and the robot won't move.", { name: subject.name }),
+        ...(subject.successor === undefined ? {} : {
+          consequence: subject.successor === null
+            ? t("v4_delete_area_none", "No custom area will be selected.")
+            : t("v4_delete_area_selected", "{area} becomes the selected custom area.", { area: subject.successor }),
+        }),
         cancelLabel: t("v4_cancel", "Cancel"),
-        confirmLabel: t("area_delete", "Delete area"),
+        confirmLabel: t("area_delete", "Delete"),
         action: "delete-area",
       };
     case "confirmResetCadence":
       return {
         title: resetMode === "mop"
-          ? t("v4_reset_mop_cadence_title", "Reset mopping progress for {room}?", { room: resetRoomName })
-          : t("v4_reset_coverage_cadence_title", "Reset coverage progress for {room}?", { room: resetRoomName }),
+          ? t("v4_reset_mop_cadence_title", "Reset mopping progress?")
+          : t("v4_reset_coverage_cadence_title", "Reset vacuum rotation progress?"),
         detail: sharedCadence
-          ? resetMode === "mop"
-            ? t("v4_reset_shared_mop_cadence_detail", "This clears shared mopping progress for {room} across plans that use its shared schedule. Coverage progress and saved cleaning history stay unchanged.", { room: resetRoomName })
-            : t("v4_reset_shared_coverage_cadence_detail", "This clears shared coverage progress for {room} across plans that use its shared schedule. Mopping progress and saved cleaning history stay unchanged.", { room: resetRoomName })
-          : resetMode === "mop"
-            ? t("v4_reset_private_mop_cadence_detail", "This clears mopping progress for {room} in this plan. Coverage progress and saved cleaning history stay unchanged.", { room: resetRoomName })
-            : t("v4_reset_private_coverage_cadence_detail", "This clears coverage progress for {room} in this plan. Mopping progress and saved cleaning history stay unchanged.", { room: resetRoomName }),
+          ? t("v4_reset_shared_cadence_detail", "The count for {room} starts again in every plan that shares its schedule, and work brought forward to the next clean goes back to its schedule. Other work and cleaning history don't change.", { room: resetRoomName })
+          : t("v4_reset_private_cadence_detail", "The count for {room} starts again in this plan only, and work brought forward to the next clean goes back to its schedule. Other work and cleaning history don't change.", { room: resetRoomName }),
         cancelLabel: t("v4_cancel", "Cancel"),
-        confirmLabel: resetMode === "mop"
-          ? t("v4_reset_mop_cadence_confirm", "Reset mopping progress")
-          : t("v4_reset_coverage_cadence_confirm", "Reset coverage progress"),
+        confirmLabel: t("v4_reset", "Reset"),
         action: "reset-room-cadence",
       };
-    case "confirmStop":
-      return {
-        title: t("v4_stop_cleaning", "Stop cleaning?"),
-        detail: t("v4_stop_cleaning_detail", "The robot may take a moment to settle before another action is available."),
-        cancelLabel: t("v4_keep_cleaning", "Keep cleaning"),
-        confirmLabel: t("v4_stop", "Stop"),
-        action: "stop",
-      };
-    case "error":
-      return {
-        title: t("v4_error", "Something went wrong"),
-        detail: t("v4_error_detail", "No action was started. Close this message and try again when the map is ready."),
-        cancelLabel: t("v4_close", "Close"),
-        confirmLabel: t("v4_close", "Close"),
-        action: null,
-      };
     case null:
-      return null;
+      return undefined;
   }
 };
 
@@ -348,20 +381,24 @@ export class MaticMapShellV4 extends LitElement {
   static override properties = {
     state: { attribute: false },
     localize: { attribute: false },
+    dates: { attribute: false },
     _measuredNarrow: { state: true },
     _sheetOffset: { state: true },
     _overflowOpen: { state: true },
     _helpOpen: { state: true },
     _browserFullscreen: { state: true },
     _sheetDetent: { state: true },
-    _announcement: { state: true },
-    _workflowLoadFailed: { state: true },
+    _polite: { state: true },
+    _alert: { state: true },
+    _toast: { state: true },
   };
 
   static override styles = shellStyles;
 
   state: WorkspaceState = initialWorkspaceState();
   localize?: Localize;
+  /** How the panel shows timestamps; set by the panel, not part of the snapshot. */
+  dates?: DateFormat;
 
   constructor() {
     super();
@@ -371,8 +408,8 @@ export class MaticMapShellV4 extends LitElement {
     });
   }
 
-  #t(key: string, fallback: string, placeholders?: Record<string, string | number>): string {
-    return translate(this.localize, key, fallback, placeholders);
+  #t(key: string, fallback: string, placeholders?: NoticePlaceholders): string {
+    return translate(this.localize, key, fallback, placeholders, this.dates);
   }
   protected _measuredNarrow = false;
   protected _sheetOffset = 0;
@@ -380,16 +417,41 @@ export class MaticMapShellV4 extends LitElement {
   protected _helpOpen = false;
   protected _browserFullscreen = false;
   protected _sheetDetent: SheetDetent = "half";
-  protected _announcement = "";
-  protected _workflowLoadFailed = false;
+  // The two live regions (shell.md §4 rule 6). Each holds only its newest
+  // message: the polite one for detent, status title and non-error notices,
+  // the alert one for error notices.
+  protected _polite = "";
+  protected _alert = "";
+  #statusRow: string | null = null;
+  #announced = new Set<"_polite" | "_alert">();
+  protected _toast: WorkspaceNotice | null = null;
+  // A chunk loads when the first view that needs it opens: the workflow views
+  // with any workflow, the outline editor with Draw. The shell builds the
+  // editor and hands it to the canvas, so the sheet is the one place a failure
+  // of either, building included, is said.
+  readonly #views = new LazyChunk(this, () => import("./workflow-panel"));
+  readonly #outline = new LazyChunk(this, async () => new (await import("./outline-editor")).OutlineEditor());
+  // The workflow a Try again reload was pressed in (lazy-chunk.ts).
+  #resume = takeResume();
+  #toastTimer: ReturnType<typeof setTimeout> | undefined;
+  #toastDeadline = 0;
+  #toastRemaining = 0;
+  #toastHover = false;
+  #toastFocus = false;
+  #focused: Element | null = null;
   #resizeObserver: ResizeObserver | null = null;
   #sheetResizeObserver: ResizeObserver | null = null;
+  #scrollerResizeObserver: ResizeObserver | null = null;
+  #unwatchTheme: (() => void) | null = null;
   #observedSheet: Element | null = null;
   #dialogLauncher: HTMLElement | null = null;
   #workspaceLauncher: HTMLElement | null = null;
   #helpLauncher: HTMLElement | null = null;
-  #pendingNavigation: WorkspaceIntent | null = null;
-  #workflowPanelLoad: Promise<void> | null = null;
+  // What Discard goes on to: the intent that asked, or Try again's reload.
+  #pendingNavigation: WorkspaceIntent | "reload" | null = null;
+  // The workflows the entry screen's enabled rows offered at its last render
+  // (#launch), plus Map diagnostics, which Map options offers on any screen.
+  #launchers = new Set<string>();
   #drag: SheetDrag | null = null;
   #bodySwipe: BodySwipe | null = null;
 
@@ -442,29 +504,187 @@ export class MaticMapShellV4 extends LitElement {
       const next = Math.ceil(entry.target.getBoundingClientRect().height);
       if (next !== this._sheetOffset) this._sheetOffset = next;
     });
+    this.#scrollerResizeObserver = new ResizeObserver(() => this.#syncScrollers());
+    this.#resolveTheme();
+    this.#unwatchTheme = watchTheme(() => this.#resolveTheme());
+  }
+
+  // MS-AXE-03 (design-system.md §5): the six D1 colours, resolved from HA's
+  // theme colours (theme-probe.ts): the primary and Stop fill pairs, the
+  // focus and selection indicator (3:1 on the card and sunken surfaces) and
+  // danger text (4.5:1 on the card). Forced colours bypass it.
+  #resolveTheme(): void {
+    const forced = window.matchMedia("(forced-colors: active)").matches;
+    const read = readColors(this.renderRoot, {
+      accent: "var(--ms-accent)", danger: "var(--ms-danger)", label: "var(--ms-on-accent)",
+      card: "var(--ms-surface-card)", sunken: "var(--ms-surface-sunken)",
+    });
+    // In the order read. A translucent colour has no single contrast, so it
+    // resolves nothing.
+    const [accent, danger, label, card, sunken] = Object.values(read).map(opaque);
+    const pair = (fill?: Channel | null) => (forced || !fill || !label ? [] : resolveFill(fill, label));
+    const tone = (color: Channel | null | undefined, ratio: number, surface = card) =>
+      (forced || !color || !card || !surface ? undefined : resolveTone(color, ratio, [card, surface]));
+    // An empty value removes the property, so the CSS falls back to HA's colour.
+    const value = (channel?: Channel): string => (channel ? rgba(channel, 1) : "");
+    const [accentFill, onAccentFill] = pair(accent);
+    const [dangerFill, onDangerFill] = pair(danger);
+    this.style.setProperty("--ms-resolved-accent-fill", value(accentFill));
+    this.style.setProperty("--ms-resolved-on-accent-fill", value(onAccentFill));
+    this.style.setProperty("--ms-resolved-danger-fill", value(dangerFill));
+    this.style.setProperty("--ms-resolved-on-danger-fill", value(onDangerFill));
+    this.style.setProperty("--ms-resolved-indicator", value(tone(accent, 3, sunken)));
+    this.style.setProperty("--ms-resolved-danger-text", value(tone(danger, 4.5)));
   }
 
   override disconnectedCallback(): void {
+    // Nothing re-arms a toast on reconnect, so it must not outlive the detach.
+    this.#hideToast();
     this.#resizeObserver?.disconnect();
     this.#resizeObserver = null;
     this.#sheetResizeObserver?.disconnect();
     this.#sheetResizeObserver = null;
+    this.#scrollerResizeObserver?.disconnect();
+    this.#scrollerResizeObserver = null;
+    this.#unwatchTheme?.();
+    this.#unwatchTheme = null;
     this.#observedSheet = null;
     window.removeEventListener("pointerdown", this.#outsidePointer, true);
     document.removeEventListener("fullscreenchange", this.#fullscreenChange);
     super.disconnectedCallback();
   }
 
+  // A live region speaks when its text changes, so the same message twice is
+  // written as empty first and set again after that render. A region gets one
+  // message per render; a second one waits for the next render, so both are
+  // spoken in order.
+  #announce(region: "_polite" | "_alert", text: string): void {
+    if (this.#announced.has(region)) {
+      void this.updateComplete.then(() => this.#announce(region, text));
+      return;
+    }
+    this.#announced.add(region);
+    const repeat = this[region] === text;
+    this[region] = repeat ? "" : text;
+    // Read after the write, so this is the render that shows it.
+    void this.updateComplete.then(() => {
+      this.#announced.delete(region);
+      if (repeat && !this[region]) this.#announce(region, text);
+    });
+  }
+
+  // A status title change, then each new notice object (never a re-render or
+  // a language swap), is announced once; a new notice also restarts the toast
+  // (shell.md §4 rules 3 and 6). Clearing a notice announces nothing.
+  protected override willUpdate(changed: PropertyValues<this>): void {
+    // The control holding focus before this render. If the render removes or
+    // hides it (Stop on its "No button" row, a closed notice or toast),
+    // updated() hands focus to the heading rather than let it fall to the
+    // page (shell.md §5 Focus, MS-KEY-01).
+    this.#focused = this.shadowRoot?.activeElement ?? null;
+    if (!changed.has("state")) return;
+    // The untranslated title names the status row, so only a new row is
+    // announced, in the current language.
+    const row = statusCopy(this.state).title;
+    if (this.#statusRow !== null && row !== this.#statusRow) {
+      this.#announce("_polite", statusCopy(this.state, this.localize).title);
+    }
+    this.#statusRow = row;
+    const next = this.state.notice;
+    const previous = changed.get("state") as WorkspaceState | undefined;
+    if (next === previous?.notice) return;
+    // A workflow change clears a success notice from the slot, but a toast
+    // already showing it finishes its timer (shell.md §4 rule 5).
+    if (!next && previous?.notice?.tone === "success" && previous.workflow !== this.state.workflow) return;
+    this.#hideToast();
+    if (!next) return;
+    this._toast = next;
+    this.#toastRemaining = TOAST_MS[next.tone];
+    this.#announce(next.tone === "error" ? "_alert" : "_polite", this.#t(next.key, next.fallback, next.placeholders));
+    void this.updateComplete.then(() => {
+      if (this.state.notice !== next) return;
+      // A toast replaced in place gets no new pointerenter or focusin, so
+      // read the live hover and focus before the timer starts.
+      const toast = this.renderRoot.querySelector<HTMLElement>("[data-notice-toast]");
+      this.#toastHover = Boolean(toast?.matches(":hover"));
+      this.#toastFocus = Boolean(toast?.contains(this.shadowRoot?.activeElement ?? null));
+      this.#armToast();
+    });
+  }
+
+  #armToast(): void {
+    if (!this._toast || this.#toastTimer !== undefined || this.#toastHover || this.#toastFocus) return;
+    this.#toastDeadline = Date.now() + this.#toastRemaining;
+    this.#toastTimer = setTimeout(this.#hideToast, this.#toastRemaining);
+  }
+
+  #stopToast(): void {
+    clearTimeout(this.#toastTimer);
+    this.#toastTimer = undefined;
+  }
+
+  // Hides only the toast; state.notice and the slot are untouched.
+  readonly #hideToast = (): void => {
+    this.#stopToast();
+    this.#toastHover = false;
+    this.#toastFocus = false;
+    this._toast = null;
+  };
+
+  readonly #holdToast = (event: Event): void => {
+    if (event.type === "pointerenter") this.#toastHover = true;
+    else this.#toastFocus = true;
+    if (this.#toastTimer === undefined) return;
+    this.#stopToast();
+    this.#toastRemaining = Math.max(0, this.#toastDeadline - Date.now());
+  };
+
+  readonly #releaseToast = (event: Event): void => {
+    if (event.type === "pointerleave") this.#toastHover = false;
+    else if (!(event.currentTarget as Node).contains((event as FocusEvent).relatedTarget as Node | null)) this.#toastFocus = false;
+    this.#armToast();
+  };
+
+  readonly #closeToast = (): void => {
+    this.#hideToast();
+    void this.updateComplete.then(() => this.#focusPanel());
+  };
+
+  readonly #closeNotice = (): void => {
+    this.#intent({ type: "set-notice", notice: null });
+    void this.updateComplete.then(() => this.#focusPanel());
+  };
+
+  // The slot's Close clears the notice; the toast's control only hides the
+  // toast, so it is named for that (shell.md §4 rule 3).
+  #noticeBody(notice: WorkspaceNotice, close: () => void, label: string) {
+    return html`${icon(NOTICE_ICONS[notice.tone])}<span class="notice-text">${this.#t(notice.key, notice.fallback, notice.placeholders)}</span><button
+      class="ms-btn ms-btn--icon"
+      type="button"
+      aria-label=${label}
+      @click=${close}
+    >${icon(iconClose)}</button>`;
+  }
+
   protected override updated(changed: PropertyValues<this>): void {
     // Protected reactive fields are not in `keyof this`, so the map is read
     // through the untyped view for those.
     const local = changed as PropertyValues;
+    const focused = this.#focused;
+    this.#focused = null;
+    if (focused && (!focused.isConnected || focused.closest("[hidden]"))) this.#focusPanel();
     const sheet = this.renderRoot.querySelector(".mobile-sheet");
     if (sheet !== this.#observedSheet) {
       this.#sheetResizeObserver?.disconnect();
       this.#observedSheet = sheet;
       if (sheet) this.#sheetResizeObserver?.observe(sheet);
       else if (this._sheetOffset !== 0) this._sheetOffset = 0;
+    }
+    // Observing again reports each box once after this layout, and later
+    // whenever a scroller or its content (the workflow view too) resizes.
+    this.#scrollerResizeObserver?.disconnect();
+    for (const scroller of this.renderRoot.querySelectorAll(SCROLLERS)) {
+      for (const element of [scroller, ...scroller.children]) this.#scrollerResizeObserver?.observe(element);
     }
     if (local.has("_overflowOpen") && this._overflowOpen) {
       void this.updateComplete.then(() => {
@@ -485,6 +705,7 @@ export class MaticMapShellV4 extends LitElement {
       }
     }
     if (changed.has("state")) {
+      this.#resumeWorkflow();
       const previous = changed.get("state") as WorkspaceState | undefined;
       if (previous?.precisionOpen && !this.state.precisionOpen) {
         this.#brushLauncher()?.focus();
@@ -536,8 +757,16 @@ export class MaticMapShellV4 extends LitElement {
           ? this.#dialogLauncher
           : this.#dialogLauncherFor(previous.dialog);
         this.#dialogLauncher = null;
+        // One rule: try the launcher, then, if closing the dialog left focus
+        // on the page body (the launcher is gone or hidden, or Safari gave a
+        // clicked Cancel no focus to move), hand it to the panel. Focus the
+        // user moved elsewhere in the document is left alone.
         void this.updateComplete.then(() => {
-          requestAnimationFrame(() => launcher?.focus({ preventScroll: true }));
+          requestAnimationFrame(() => {
+            launcher?.focus({ preventScroll: true });
+            const body = !document.activeElement || document.activeElement === document.body;
+            if (!this.shadowRoot?.activeElement && body) this.#focusPanel();
+          });
         });
       }
       if (!previous) {
@@ -551,14 +780,33 @@ export class MaticMapShellV4 extends LitElement {
     }
   }
 
-  #focusPanel(): void {
-    const heading = this.renderRoot.querySelector<HTMLElement>(".panel-heading h2");
-    if (isVisible(heading)) {
-      heading.focus({ preventScroll: true });
-      return;
+  // MS-AXE-02: a scroller that overflows with nothing inside to Tab to is
+  // itself a tab stop, so a keyboard can scroll it. The pinned top is then a
+  // group named by the h2; the body below it is already the region of that
+  // name, and landmark names must be unique. A focused scroller
+  // keeps its stop until it loses focus, so focus never falls to the page.
+  #syncScrollers = (): void => {
+    for (const scroller of this.renderRoot.querySelectorAll<HTMLElement>(SCROLLERS)) {
+      const stop = scroller.scrollHeight > scroller.clientHeight && !hasFocusable(scroller);
+      if (!stop && scroller.matches(":focus")) {
+        scroller.addEventListener("blur", this.#syncScrollers, { once: true });
+        continue;
+      }
+      const set = (name: string, value: string) => (stop ? scroller.setAttribute(name, value) : scroller.removeAttribute(name));
+      set("tabindex", "0");
+      if (scroller.classList.contains("panel-top")) {
+        set("role", "group");
+        set("aria-labelledby", "workspace-title");
+      }
     }
-    const primary = this.renderRoot.querySelector<HTMLElement>(".action-bar .ms-btn--primary");
-    if (isVisible(primary)) primary.focus({ preventScroll: true });
+  };
+
+  // The heading, else the primary; in Full map neither shows, so the control
+  // that leaves it, which Full map entry focuses too.
+  #focusPanel(): void {
+    [".panel-heading h2", ".action-bar .ms-btn--primary", ".workspace-toggle"]
+      .map((selector) => this.renderRoot.querySelector<HTMLElement>(selector))
+      .find(isVisible)?.focus({ preventScroll: true });
   }
 
   #brushLauncher(): HTMLElement | null {
@@ -604,9 +852,45 @@ export class MaticMapShellV4 extends LitElement {
     this.#intent(intent);
   }
 
+  // Once the floor is located, reopens the resumed workflow as a tap on its
+  // entry row would, only while that row is offered; otherwise the user stays
+  // on the entry screen. Opening anything first drops it.
+  #resumeWorkflow(): void {
+    const workflow = this.#resume;
+    const { coherence, workflow: open } = this.state;
+    if (!workflow || (open === "none" && (coherence === "booting" || coherence === "verifying"))) return;
+    this.#resume = null;
+    if (open === "none" && this.#launchers.has(workflow)) this.#workflow(workflow as Workflow);
+  }
+
+  // Every Try again (chunkStatus) reloads the page, which loses a dirty
+  // draft, so it asks first, as every other way out of the workflow does.
+  readonly #retry = (event: Event): void => {
+    if (!needsDraftConfirmation(this.state, { type: "open-workflow", workflow: "none" })) {
+      reloadInto(this.state.workflow);
+      return;
+    }
+    this.#dialogLauncher = event.currentTarget as HTMLElement;
+    this.#pendingNavigation = "reload";
+    this.#intent({ type: "open-dialog", dialog: "discardDraft" });
+  };
+
+  // The worst of the chunks `workflow` needs, each requested as it opens.
+  #tools(workflow: Workflow): ChunkStatus {
+    this.#views.request();
+    if (workflow !== "draw") return this.#views.status;
+    this.#outline.request();
+    const views = this.#views.status, outline = this.#outline.status;
+    return views === "failed" || outline === "failed" ? "failed" : views === outline ? views : "loading";
+  }
+
   #discardAndContinue(): void {
     const pending = this.#pendingNavigation;
     this.#pendingNavigation = null;
+    if (pending === "reload") {
+      reloadInto(this.state.workflow);
+      return;
+    }
     if (pending?.type === "select-plan" || pending?.type === "select-area") {
       this.#intent({ type: "patch-plan-draft", patch: { dirty: false } });
       this.#intent({ type: "patch-area-draft", patch: { dirty: false } });
@@ -666,19 +950,14 @@ export class MaticMapShellV4 extends LitElement {
       this.#confirmDelete(presentation.action);
       return;
     }
-    if (presentation.action === "reset-room-cadence") {
-      const resetRequest = this.state.cadenceResetRequest;
-      this.#intent({ type: "dismiss-top-layer" });
-      if (resetRequest) this.#dispatchAction({
-        id: "reset-room-cadence",
-        planId: resetRequest.planId,
-        roomId: resetRequest.roomId,
-        mode: resetRequest.mode,
-      });
-      return;
-    }
+    const resetRequest = this.state.cadenceResetRequest;
     this.#intent({ type: "dismiss-top-layer" });
-    if (presentation.action === "stop") this.#dispatchAction("stop");
+    if (resetRequest) this.#dispatchAction({
+      id: "reset-room-cadence",
+      planId: resetRequest.planId,
+      roomId: resetRequest.roomId,
+      mode: resetRequest.mode,
+    });
   }
 
   // ---- Bottom sheet -------------------------------------------------------
@@ -686,7 +965,9 @@ export class MaticMapShellV4 extends LitElement {
   #setDetent(detent: SheetDetent): void {
     if (detent === this._sheetDetent) return;
     this._sheetDetent = detent;
-    this._announcement = this.#t("v4_workspace_height", "Map workspace, {height} height", { height: detent });
+    this.#announce("_polite", detent === "peek" ? this.#t("v4_workspace_height_peek", "Map workspace, peek height")
+      : detent === "half" ? this.#t("v4_workspace_height_half", "Map workspace, half height")
+      : this.#t("v4_workspace_height_full", "Map workspace, full height"));
   }
 
   #sheetStep(delta: 1 | -1, wrap = false): void {
@@ -712,6 +993,14 @@ export class MaticMapShellV4 extends LitElement {
 
   #sheet(): HTMLElement | null {
     return this.renderRoot.querySelector<HTMLElement>(".mobile-sheet");
+  }
+
+  // A drag moves the sheet by transform only, so the toast, anchored to the
+  // sheet's resting top edge, takes the same transform and rides with it.
+  #translateSheet(sheet: HTMLElement, transform: string): void {
+    sheet.style.transform = transform;
+    const toast = this.renderRoot.querySelector<HTMLElement>("[data-notice-toast]");
+    if (toast) toast.style.transform = transform;
   }
 
   #startsOnInteractiveSheetDescendant(event: PointerEvent): boolean {
@@ -756,7 +1045,7 @@ export class MaticMapShellV4 extends LitElement {
     const min = drag.startHeight - drag.heights.full;
     const max = drag.startHeight - drag.heights.peek;
     const offset = Math.max(min, Math.min(max, dy));
-    sheet.style.transform = `translateY(${offset}px)`;
+    this.#translateSheet(sheet, `translateY(${offset}px)`);
   }
 
   #gripUp(event: PointerEvent): void {
@@ -765,7 +1054,7 @@ export class MaticMapShellV4 extends LitElement {
     this.#drag = null;
     const sheet = this.#sheet();
     if (sheet) {
-      sheet.style.transform = "";
+      this.#translateSheet(sheet, "");
       sheet.classList.remove("dragging");
     }
     if (event.type === "pointercancel") return;
@@ -796,23 +1085,34 @@ export class MaticMapShellV4 extends LitElement {
     this.#setDetent(nearest);
   }
 
+  // A swipe follows what the finger scrolls: the nearest scrollable ancestor
+  // of where it starts inside the panel (the capped pinned top or the body).
+  // It steps the sheet only while that scroller is at its top, or with none.
+  #swipeScroller(event: PointerEvent): HTMLElement | null {
+    for (const node of event.composedPath()) {
+      if (node === event.currentTarget) break;
+      if (node instanceof HTMLElement && node.scrollHeight > node.clientHeight
+        && /auto|scroll/u.test(getComputedStyle(node).overflowY)) return node;
+    }
+    return null;
+  }
+
   #bodyDown(event: PointerEvent): void {
     if (event.pointerType === "mouse") return;
     if (this.#startsOnInteractiveSheetDescendant(event)) return;
-    const body = event.currentTarget as HTMLElement;
-    this.#bodySwipe = {
+    const scroller = this.#swipeScroller(event);
+    this.#bodySwipe = scroller?.scrollTop ? null : {
       pointerId: event.pointerId,
       startY: event.clientY,
-      atTop: body.scrollTop === 0,
+      scroller,
       consumed: false,
     };
   }
 
   #bodyMove(event: PointerEvent): void {
     const swipe = this.#bodySwipe;
-    if (!swipe || swipe.consumed || !swipe.atTop || event.pointerId !== swipe.pointerId) return;
-    const body = event.currentTarget as HTMLElement;
-    if (body.scrollTop > 0) {
+    if (!swipe || swipe.consumed || event.pointerId !== swipe.pointerId) return;
+    if (swipe.scroller?.scrollTop) {
       this.#bodySwipe = null;
       return;
     }
@@ -944,9 +1244,9 @@ export class MaticMapShellV4 extends LitElement {
 
   // ---- Templates ----------------------------------------------------------
 
-  #actionButton(action: PrimaryAction, classes: string, reasonId: string) {
-    if (action.id === "choose-cleaning") return nothing;
-    const label = action.labelKey ? this.#t(action.labelKey, action.label) : action.label;
+  #actionButton(action: PrimaryAction | NoButtonAction, classes: string, reasonId: string) {
+    if (!("label" in action)) return nothing;
+    const label = action.labelKey ? this.#t(action.labelKey, action.label, action.labelPlaceholders) : action.label;
     const reason = !action.enabled && action.reason
       ? (action.reasonKey ? this.#t(action.reasonKey, action.reason) : action.reason)
       : null;
@@ -964,20 +1264,20 @@ export class MaticMapShellV4 extends LitElement {
     `;
   }
 
-  #roomNames(state: WorkspaceState): string[] {
+  #rooms(state: WorkspaceState): string {
     const rooms = state.resources.plans.value?.rooms
       ?? state.resources.areas.value?.rooms
       ?? [];
-    return state.selection.roomIds.map((roomId) =>
-      rooms.find((room) => room.roomId === roomId)?.name ?? roomId);
+    return formatList(state.locale, state.selection.roomIds.map((roomId) =>
+      rooms.find((room) => room.roomId === roomId)?.name ?? roomId));
   }
 
-  #actionBar(state: WorkspaceState, primary: PrimaryAction | null, secondary: PrimaryAction | null) {
+  #actionBar(state: WorkspaceState, primary: PrimaryAction | NoButtonAction | null, secondary: PrimaryAction | null) {
+    const rooms = this.#rooms(state);
     const summary = primary?.enabled && state.workflow === "rooms" && primary.id === "clean-rooms"
-      ? [
-        this.#roomNames(state).join(", "),
-        state.planDraft.returnToBase ? this.#t("v4_returns_to_dock", "returns to the dock") : "",
-      ].filter(Boolean).join(" · ")
+      ? (state.planDraft.returnToBase && rooms
+        ? this.#t("v4_rooms_summary_dock", "{rooms} · returns to the dock", { rooms })
+        : rooms)
       : "";
     return html`
       <div class="action-bar">
@@ -998,13 +1298,19 @@ export class MaticMapShellV4 extends LitElement {
     `;
   }
 
-  #shelfRow(label: string, glyph: string, onClick: () => void, detail?: string, disabled = false) {
+  // An entry row's tap; an enabled row also records it for a resumed Try again.
+  #launch(workflow: Workflow, disabled = false): () => void {
+    if (!disabled) this.#launchers.add(workflow);
+    return () => { if (!disabled) this.#workflow(workflow); };
+  }
+
+  #shelfRow(label: string, glyph: string, workflow: Workflow, detail?: string, disabled = false) {
     return html`
       <button
         class="ms-row"
         type="button"
         aria-disabled=${disabled ? "true" : nothing}
-        @click=${() => { if (!disabled) onClick(); }}
+        @click=${this.#launch(workflow, disabled)}
       >
         <span class="ms-row__lead">${icon(glyph)}</span>
         <span class="ms-row__body"><strong>${label}</strong>${detail ? html`<small>${detail}</small>` : nothing}</span>
@@ -1047,19 +1353,21 @@ export class MaticMapShellV4 extends LitElement {
     `;
   }
 
-  #entry(state: WorkspaceState, narrow: boolean) {
+  #entry(state: WorkspaceState, narrow: boolean, status: StatusPresentation) {
     const t = (key: string, fallback: string, placeholders?: Record<string, string | number>): string =>
       this.#t(key, fallback, placeholders);
-    const historyRow = this.#shelfRow(
+    this.#launchers = new Set(["support"]);
+    // Built where shown, so only a shown row counts as a launcher.
+    const historyRow = () => this.#shelfRow(
       t("v4_map_history", "Map history"),
       iconHistory,
-      () => this.#workflow("history"),
+      "history",
       t("v4_map_history_detail", "Saved maps are floor-scoped and read only."),
     );
-    const diagnosticsRow = this.#shelfRow(
+    const diagnosticsRow = () => this.#shelfRow(
       t("v4_map_diagnostics", "Map diagnostics"),
       iconDiagnostics,
-      () => this.#workflow("support"),
+      "support",
       t("v4_map_support_detail", "Private geometry is never included."),
     );
     const { host } = state;
@@ -1079,15 +1387,15 @@ export class MaticMapShellV4 extends LitElement {
       return html`
         ${this.#hostState(t("v4_robot_offline_title", "Robot offline"), t("v4_robot_offline_body", "Showing the last verified map. Cleaning is unavailable until the robot reconnects."))}
         <h3 class="shelf-heading">${t("v4_more", "Map tools")}</h3>
-        <div class="shelf">${historyRow}${diagnosticsRow}</div>
+        <div class="shelf">${historyRow()}${diagnosticsRow()}</div>
       `;
     }
     if (isReadOnlyWorkspace(state)) {
       return html`
         <h3 class="shelf-heading">${t("v4_more", "Map tools")}</h3>
         <div class="shelf">
-          ${historyRow}
-          ${diagnosticsRow}
+          ${historyRow()}
+          ${diagnosticsRow()}
         </div>
       `;
     }
@@ -1111,13 +1419,23 @@ export class MaticMapShellV4 extends LitElement {
     return html`
       ${state.activity === "problem"
         ? this.#hostState(t("v4_attention_title", "The robot needs attention"), t("v4_attention_body", "Check the robot, then start a new task."))
-        : html`
-          <div class="quick-actions" aria-label=${t("v4_cleaning_choices", "Cleaning choices")}>
+        : status.recheck ? html`
+          <div class="host-state">
+            <p>${t("v4_map_limited_body", "Home Assistant can show this map but can't confirm it well enough to start cleaning.")}</p>
+            <button
+              class="ms-btn ms-btn--secondary"
+              type="button"
+              aria-disabled=${state.rechecking ? "true" : nothing}
+              @click=${() => { if (!this.state.rechecking) this.#dispatchAction("recheck-status"); }}
+            >${t("v4_retry", "Try again")}</button>
+          </div>
+        ` : html`
+          <div class="quick-actions" role="group" aria-label=${t("v4_cleaning_choices", "Cleaning choices")}>
             <button
               class="ms-row ms-row--card ms-row--featured"
               type="button"
               aria-disabled=${roomsDisabled ? "true" : nothing}
-              @click=${() => { if (!roomsDisabled) this.#workflow("rooms"); }}
+              @click=${this.#launch("rooms", roomsDisabled)}
             >
               <span class="ms-row__lead">${icon(iconRobot)}</span>
               <span class="ms-row__body">
@@ -1130,7 +1448,7 @@ export class MaticMapShellV4 extends LitElement {
               class="ms-row ms-row--card"
               type="button"
               aria-disabled=${locating ? "true" : nothing}
-              @click=${() => { if (!locating) this.#workflow("plans"); }}
+              @click=${this.#launch("plans", locating)}
             >
               <span class="ms-row__lead">${icon(iconPlan)}</span>
               <span class="ms-row__body">
@@ -1158,11 +1476,11 @@ export class MaticMapShellV4 extends LitElement {
         ${this.#shelfRow(
           t("v4_custom_areas", "Clean a custom area"),
           iconNewArea,
-          () => this.#workflow("draw"),
+          "draw",
           customAreaReason,
           locating,
         )}
-        ${historyRow}
+        ${historyRow()}
 
       </div>
       ${narrow ? html`
@@ -1198,65 +1516,52 @@ export class MaticMapShellV4 extends LitElement {
     `;
   }
 
-  #workflowBody(state: WorkspaceState, narrow: boolean) {
-    if (state.workflow === "none") return this.#entry(state, narrow);
-    if (!customElements.get(WORKFLOW_TAG)) {
-      this.#loadWorkflowPanel();
-      if (this._workflowLoadFailed) {
-        return html`<div class="workflow-loading" role="alert">
-          <p>${this.#t("v4_workflow_load_failed", "Workspace tools could not be loaded.")}</p>
-          <button class="ms-btn ms-btn--secondary" @click=${this.#retryWorkflowPanel}>
-            ${this.#t("v4_retry", "Try again")}
-          </button>
-        </div>`;
-      }
-      return html`<div class="workflow-loading" role="status" aria-live="polite">
-        ${this.#t("v4_workflow_loading", "Loading workspace tools…")}
-      </div>`;
+  #workflowBody(state: WorkspaceState, narrow: boolean, status: StatusPresentation) {
+    if (state.workflow === "none") return this.#entry(state, narrow, status);
+    const tools = this.#tools(state.workflow);
+    if (tools !== "ready") {
+      // A phone's draw sheet rests at peek, with the body below it, so the
+      // line, loading or failed, sits in .sheet-tools, above the drawing tools
+      // so they stay put when it goes.
+      return narrow && state.workflow === "draw"
+        ? nothing
+        : chunkStatus(tools, this.localize, this.#retry);
     }
     return html`<${workflowTag}
       .state=${state}
       .localize=${this.localize}
+      .dates=${this.dates}
+      .retry=${this.#retry}
       @matic-workspace-intent=${this.#captureDialogLauncher}
     ></${workflowTag}>`;
   }
 
-  #loadWorkflowPanel(): void {
-    if (this.#workflowPanelLoad || customElements.get(WORKFLOW_TAG)) return;
-    this._workflowLoadFailed = false;
-    this.#workflowPanelLoad = import("./workflow-panel")
-      .then(() => {
-        this.#workflowPanelLoad = null;
-        this.requestUpdate();
-      })
-      .catch(() => {
-        this.#workflowPanelLoad = null;
-        this._workflowLoadFailed = true;
-      });
+  // The heading and notice slot sit outside the scroller, so they stay put
+  // and never cover a control the body scrolls into view.
+  #panelTop(state: WorkspaceState) {
+    return html`
+      <div class="panel-top">
+        <div class="panel-heading">
+          ${state.workflow !== "none" ? html`
+            <button
+              class="panel-back ms-btn ms-btn--secondary"
+              type="button"
+              aria-label=${state.workflow === "plan" ? this.#t("v4_back_to_plans", "Back to plans") : this.#t("v4_back_to_all_tasks", "Back to all tasks")}
+              data-dialog-launcher="discardDraft"
+              @click=${(event: Event) => this.#workflow(state.workflow === "plan" ? "plans" : "none", event.currentTarget)}
+            >${icon(iconBack)}<span class="ms-btn__label">${state.workflow === "plan" ? this.#t("v4_your_plans", "Your plans") : this.#t("v4_all_tasks", "All tasks")}</span></button>
+          ` : nothing}
+          <h2 id="workspace-title" tabindex="-1">${workflowCopy(state, this.localize).title}</h2>
+        </div>
+        ${state.notice ? html`<div class="notice" data-notice-slot data-tone=${state.notice.tone}>${this.#noticeBody(state.notice, this.#closeNotice, this.#t("v4_close", "Close"))}</div>` : nothing}
+      </div>
+    `;
   }
 
-  #retryWorkflowPanel = (): void => {
-    this._workflowLoadFailed = false;
-    this.#loadWorkflowPanel();
-  };
-
-  #panel(state: WorkspaceState, narrow: boolean) {
-    const workflow = workflowCopy(state, this.localize);
+  #panel(state: WorkspaceState, narrow: boolean, status: StatusPresentation) {
     return html`
-      <div class="panel-heading">
-        ${state.workflow !== "none" ? html`
-          <button
-            class="panel-back ms-btn ms-btn--secondary"
-            type="button"
-            aria-label=${state.workflow === "plan" ? this.#t("v4_back_to_plans", "Back to plans") : this.#t("v4_back_to_all_tasks", "Back to all tasks")}
-            data-dialog-launcher="discardDraft"
-            @click=${(event: Event) => this.#workflow(state.workflow === "plan" ? "plans" : "none", event.currentTarget)}
-          >${icon(iconBack)}<span class="ms-btn__label">${state.workflow === "plan" ? this.#t("v4_your_plans", "Your plans") : this.#t("v4_all_tasks", "All tasks")}</span></button>
-        ` : nothing}
-        <h2 tabindex="-1">${workflow.title}</h2>
-      </div>
-      <p class="panel-description">${workflow.description}</p>
-      ${this.#workflowBody(state, narrow)}
+      <p class="panel-description">${workflowCopy(state, this.localize).description}</p>
+      ${this.#workflowBody(state, narrow, status)}
     `;
   }
 
@@ -1264,7 +1569,10 @@ export class MaticMapShellV4 extends LitElement {
     const workflow = workflowCopy(state, this.localize);
     let line = workflow.title;
     if (state.workflow === "rooms" && state.selection.roomIds.length) {
-      line = `${this.#t("v4_rooms_selected", "Rooms selected: {count}", { count: state.selection.roomIds.length })} · ${this.#roomNames(state).join(", ")}`;
+      line = this.#t("v4_rooms_selected_names", "Rooms selected: {count} · {rooms}", {
+        count: state.selection.roomIds.length,
+        rooms: this.#rooms(state),
+      });
     }
     // With the body open the h2 already names the workflow, so the grip line
     // carries the robot instead of repeating the title directly above it.
@@ -1347,10 +1655,16 @@ export class MaticMapShellV4 extends LitElement {
       resetRoom?.name || state.cadenceResetRequest?.roomId || "room",
       resetPlanRoom?.cadence?.scope === "shared",
       state.cadenceResetRequest?.mode,
+      // Automations name the saved plan or area, never an unsaved rename.
+      deleteSubject(state),
     );
     const sheetOffset = narrow && !state.fullMap ? `--map-sheet-offset:${this._sheetOffset}px` : "--map-sheet-offset:0px";
     const showDrawTools = narrow && state.workflow === "draw";
     const precisionOpen = state.precisionOpen && state.workflow === "draw";
+    // Success and error always toast; info and warning only while the slot is
+    // off-screen (sheet at peek, or Full map).
+    const toast = this._toast && (this._toast.tone === "success" || this._toast.tone === "error"
+      || state.fullMap || (narrow && this._sheetDetent === "peek")) ? this._toast : null;
     return html`
       <div class=${`root ${narrow ? "narrow" : "wide"}`} @keydown=${this.#keyboard}>
         <button class="skip-link ms-btn ms-btn--primary" type="button" @click=${this.#skipToMap}>${this.#t("v4_skip_to_map", "Skip to the map")}</button>
@@ -1449,6 +1763,8 @@ export class MaticMapShellV4 extends LitElement {
                 style=${sheetOffset}
                 .state=${state}
                 .localize=${this.localize}
+                .dates=${this.dates}
+                .outlineEditor=${this.#outline.value}
                 .narrow=${narrow}
               >${this.#floorSwitcher(state)}
                 ${narrow && !state.fullMap && this._sheetDetent === "full" ? html`
@@ -1509,7 +1825,7 @@ export class MaticMapShellV4 extends LitElement {
                     class="ms-btn ms-btn--icon ms-btn--sm"
                     type="button"
                     aria-label=${this.#t("v4_show_more", "Show more of the map workspace")}
-                    aria-controls="sheet-body"
+                    aria-controls="sheet-panel"
                     aria-disabled=${this._sheetDetent === "full" ? "true" : nothing}
                     @click=${() => this.#sheetStep(1)}
                   >${icon(iconChevronUp)}</button>
@@ -1517,14 +1833,15 @@ export class MaticMapShellV4 extends LitElement {
                     class="ms-btn ms-btn--icon ms-btn--sm"
                     type="button"
                     aria-label=${this.#t("v4_show_less", "Show less of the map workspace")}
-                    aria-controls="sheet-body"
+                    aria-controls="sheet-panel"
                     aria-disabled=${this._sheetDetent === "peek" ? "true" : nothing}
                     @click=${() => this.#sheetStep(-1)}
                   >${icon(iconChevronDown)}</button>
                 </div>
                 ${showDrawTools ? html`
                   <div class="sheet-tools">
-                    ${renderDrawTools(state, { intent: (intent) => this.#intent(intent), openBrush: () => this.#openBrush(), t: (key, fallback) => this.#t(key, fallback) }, "grid")}
+                    ${chunkStatus(this.#tools("draw"), this.localize, this.#retry)}
+                    ${renderDrawTools(state, { intent: (intent) => this.#intent(intent), openBrush: () => this.#openBrush(), t: (key, fallback, placeholders) => this.#t(key, fallback, placeholders) }, "grid")}
                     ${precisionOpen ? html`
                       <div class="precision-popover">
                         <${precisionControlsTag} compact inline .state=${state} .localize=${this.localize}></${precisionControlsTag}>
@@ -1533,14 +1850,15 @@ export class MaticMapShellV4 extends LitElement {
                   </div>
                 ` : nothing}
                 <div
-                  class="sheet-body"
-                  id="sheet-body"
+                  class="sheet-panel"
+                  id="sheet-panel"
                   @pointerdown=${this.#bodyDown}
                   @pointermove=${this.#bodyMove}
                   @pointerup=${this.#bodyUp}
                   @pointercancel=${this.#bodyUp}
                 >
-                  ${this.#panel(state, narrow)}
+                  ${this.#panelTop(state)}
+                  <div class="sheet-body" role="region" aria-labelledby="workspace-title">${this.#panel(state, narrow, status)}</div>
                 </div>
                 ${this.#actionBar(state, footerPrimary, footerSecondary)}
               ` : html`
@@ -1552,7 +1870,8 @@ export class MaticMapShellV4 extends LitElement {
                     : nothing}
                 </div>
                 <section class="workflow">
-                  <div class="workflow-body">${this.#panel(state, narrow)}</div>
+                  ${this.#panelTop(state)}
+                  <div class="workflow-body" role="region" aria-labelledby="workspace-title">${this.#panel(state, narrow, status)}</div>
                   ${this.#actionBar(state, footerPrimary, footerSecondary)}
                 </section>
               `}
@@ -1573,7 +1892,23 @@ export class MaticMapShellV4 extends LitElement {
           </main>
         </div>
 
-        <div class="sr-only" aria-live="polite" aria-atomic="true">${[this._announcement, state.notice?.text ?? ""].filter(Boolean).join(" ")}</div>
+        <div
+          class="notice notice-toast"
+          data-notice-toast
+          role="region"
+          aria-label=${this.#t("v4_notifications", "Notifications")}
+          data-tone=${toast?.tone ?? nothing}
+          style=${sheetOffset}
+          ?hidden=${!toast}
+          ?inert=${Boolean(dialog) || this._helpOpen}
+          @pointerenter=${this.#holdToast}
+          @focusin=${this.#holdToast}
+          @pointerleave=${this.#releaseToast}
+          @focusout=${this.#releaseToast}
+        >${toast ? this.#noticeBody(toast, this.#closeToast, this.#t("v4_hide_notification", "Hide notification")) : nothing}</div>
+
+        <div class="sr-only" aria-live="polite" aria-atomic="true">${this._polite}</div>
+        <div class="sr-only" role="alert" aria-atomic="true">${this._alert}</div>
 
         ${this._helpOpen ? this.#helpDialog() : nothing}
 
@@ -1588,7 +1923,10 @@ export class MaticMapShellV4 extends LitElement {
               @keydown=${this.#dialogKeyboard}
             >
               <h2 id="dialog-title">${dialog.title}</h2>
-              <p id="dialog-detail">${dialog.detail}</p>
+              <div id="dialog-detail">
+                <p>${dialog.detail}</p>
+                ${dialog.consequence ? html`<p>${dialog.consequence}</p>` : nothing}
+              </div>
               <div class="dialog-actions">
                 <button
                   class="ms-btn ms-btn--secondary"
@@ -1598,13 +1936,11 @@ export class MaticMapShellV4 extends LitElement {
                     ? this.#keepDraft
                     : this.#dismissDialog}
                 >${dialog.cancelLabel}</button>
-                ${dialog.action === null ? nothing : html`
-                  <button
-                    class="discard ms-btn ms-btn--primary ms-btn--danger"
-                    type="button"
-                    @click=${() => this.#confirmDialog(dialog)}
-                  >${dialog.confirmLabel}</button>
-                `}
+                <button
+                  class="discard ms-btn ms-btn--primary ms-btn--danger"
+                  type="button"
+                  @click=${() => this.#confirmDialog(dialog)}
+                >${dialog.confirmLabel}</button>
               </div>
             </section>
           </div>

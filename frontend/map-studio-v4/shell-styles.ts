@@ -15,7 +15,8 @@ export const shellStyles = [tokens, base, controls, css`
       container-type: size;
     }
 
-    .root { position: relative; min-block-size: 0; block-size: 100%; }
+    /* The wide inspector's width, shared by its grid column and the toast's offset. */
+    .root { --ms-inspector: 22.5rem; position: relative; min-block-size: 0; block-size: 100%; }
 
     .sr-only, .skip-link:not(:focus) {
       position: absolute;
@@ -98,7 +99,7 @@ export const shellStyles = [tokens, base, controls, css`
     .workspace {
       position: relative;
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(19rem, 22.5rem);
+      grid-template-columns: minmax(0, 1fr) minmax(19rem, var(--ms-inspector));
       min-inline-size: 0;
       min-block-size: 0;
     }
@@ -164,14 +165,62 @@ export const shellStyles = [tokens, base, controls, css`
       overflow: hidden;
     }
     .workflow-body { flex: 1; min-block-size: 0; overflow: auto; overscroll-behavior: contain; }
+    .panel-top:focus-visible, .sheet-body:focus-visible, .workflow-body:focus-visible { outline: 2px solid var(--ms-resolved-indicator, var(--ms-accent)); outline-offset: -2px; }
     .workflow > .action-bar { flex: none; }
 
     .panel-heading { display: flex; gap: var(--ms-space-2); align-items: center; min-inline-size: 0; }
     .panel-heading h2 { margin: 0; min-inline-size: 0; font-size: var(--ms-t-xl); letter-spacing: var(--ms-track-tight); }
     .panel-heading h2:focus { outline: none; }
-    .panel-heading h2:focus-visible { outline: 2px solid var(--ms-accent); outline-offset: 4px; border-radius: var(--ms-radius-xs); }
+    .panel-heading h2:focus-visible { outline: 2px solid var(--ms-resolved-indicator, var(--ms-accent)); outline-offset: 4px; border-radius: var(--ms-radius-xs); }
     .panel-back { flex: none; }
     .panel-description { margin: var(--ms-space-1) 0 var(--ms-space-4); color: var(--ms-text-quiet); font-size: var(--ms-t-sm); line-height: var(--ms-lh-normal); }
+
+    /* Notice slot and toast (shell.md §4, design-system.md .ms-notice): the
+       text stays --ms-text on the tone's tint; the glyph and the inline-start
+       rule carry the tone, never the text colour. */
+    .notice {
+      --notice-tone: var(--ms-accent);
+      --ms-local: color-mix(in srgb, var(--notice-tone) 12%, var(--ms-surface-card));
+      display: flex;
+      gap: var(--ms-space-2);
+      align-items: center;
+      padding-inline-start: var(--ms-space-3);
+      border-inline-start: 3px solid var(--notice-tone);
+      border-radius: var(--ms-radius-md);
+      background: var(--ms-local);
+      color: var(--ms-text);
+      font-size: var(--ms-t-sm);
+      line-height: var(--ms-lh-snug);
+    }
+    .notice[data-tone="success"] { --notice-tone: var(--ms-success); }
+    .notice[data-tone="warning"] { --notice-tone: var(--ms-warning); }
+    .notice[data-tone="error"] { --notice-tone: var(--ms-danger); }
+    .notice > .ms-icon { color: var(--notice-tone); }
+    .notice > .ms-btn { flex: none; }
+    .notice-text { flex: 1; min-inline-size: 0; padding-block: var(--ms-space-2); }
+    [data-notice-slot] { margin-block-start: var(--ms-space-3); }
+    /* Wide: bottom centre of the canvas, above the dock. */
+    .notice-toast {
+      position: absolute;
+      z-index: 10;
+      inset-inline: 0 var(--ms-inspector);
+      inset-block-end: calc(var(--ms-space-3) + 3.5rem + var(--ms-space-2));
+      inline-size: fit-content;
+      max-inline-size: min(28rem, calc(100% - var(--ms-inspector) - 2 * var(--ms-space-3)));
+      margin-inline: auto;
+      box-shadow: var(--ms-shadow-2);
+    }
+    .notice-toast[hidden] { display: none; }
+    /* Narrow: the sheet's top edge. */
+    .narrow > .notice-toast { inset-inline: 0; inset-block-end: calc(var(--map-sheet-offset, 0px) + var(--ms-space-2)); max-inline-size: calc(100% - 2 * var(--ms-space-3)); }
+    /* Full map: above the HUD, in its column. */
+    .root:has(.full-map-hud) > .notice-toast {
+      inset-inline: auto var(--ms-space-3);
+      inset-block-end: calc(max(var(--ms-space-3), var(--ms-safe-bottom)) + var(--ms-control-lg) + 3 * var(--ms-space-3));
+      inline-size: min(24rem, calc(100% - 1.5rem));
+      max-inline-size: none;
+    }
+    .wide:has(.full-map-hud.above-dock) > .notice-toast { inset-block-end: calc(max(var(--ms-space-3), var(--ms-safe-bottom)) + var(--ms-control-lg) + 4 * var(--ms-space-3) + 3.5rem + var(--ms-space-2)); }
 
     .quick-actions, .shelf { display: grid; gap: var(--ms-space-2); }
     .quick-actions .ms-row__body small { color: var(--ms-text-quiet); }
@@ -182,15 +231,15 @@ export const shellStyles = [tokens, base, controls, css`
     .quick-actions .ms-row[aria-disabled="true"] .ms-row__lead { color: var(--ms-text-disabled); background: color-mix(in srgb, var(--ms-text) 6%, var(--ms-local)); }
     .quick-actions .ms-row[aria-disabled="true"] .ms-row__body strong { color: var(--ms-text-disabled); }
     .shelf-heading { margin: var(--ms-space-5) 0 var(--ms-space-2); color: var(--ms-text-quiet); font-size: var(--ms-t-sm); font-weight: var(--ms-w-bold); }
-    .host-state { display: grid; gap: var(--ms-space-2); padding: var(--ms-space-4); border: 1px solid var(--ms-line); border-radius: var(--ms-radius-md); }
+    .host-state, .problem { display: grid; gap: var(--ms-space-2); padding: var(--ms-space-4); border: 1px solid var(--ms-line); border-radius: var(--ms-radius-md); }
     .host-state h3 { margin: 0; font-size: var(--ms-t-md); }
-    .host-state p { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-sm); line-height: var(--ms-lh-normal); }
-    .host-state .ms-btn { justify-self: start; text-decoration: none; }
+    .host-state p, .problem p, .loading { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-sm); line-height: var(--ms-lh-normal); }
+    .host-state .ms-btn, .problem .ms-btn { justify-self: start; text-decoration: none; }
     .map-display { display: grid; gap: var(--ms-space-2); }
     .map-display .ms-segment { --ms-local: var(--ms-surface-sunken); border: 1px solid var(--ms-line); border-radius: var(--ms-radius-md); background: var(--ms-local); }
     .map-display .ms-segment .ms-btn { flex: 1; }
     .ms-checkbox { display: flex; gap: var(--ms-space-2); align-items: center; min-block-size: var(--ms-control); font-size: var(--ms-t-sm); }
-    .ms-checkbox input { inline-size: 1.25rem; block-size: 1.25rem; margin: 0; accent-color: var(--ms-accent); }
+    .ms-checkbox input { inline-size: 1.25rem; block-size: 1.25rem; margin: 0; accent-color: var(--ms-resolved-indicator, var(--ms-accent)); }
 
     .action-bar { display: grid; gap: var(--ms-space-2); margin-block-start: auto; padding-block-start: var(--ms-space-4); }
     .action-summary { margin: 0; overflow: hidden; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); text-overflow: ellipsis; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
@@ -276,7 +325,7 @@ export const shellStyles = [tokens, base, controls, css`
     .narrow .mobile-sheet[data-detent="half"] { block-size: min(48%, 26rem); }
     .narrow .mobile-sheet[data-detent="full"] { block-size: min(92%, calc(100% - 9rem)); }
     .narrow .mobile-sheet.dragging { transition: none; }
-    .narrow .mobile-sheet[data-detent="peek"] .sheet-body { display: none; }
+    .narrow .mobile-sheet[data-detent="peek"] .sheet-panel { display: none; }
 
     .narrow .sheet-grip {
       position: relative;
@@ -316,6 +365,7 @@ export const shellStyles = [tokens, base, controls, css`
       white-space: nowrap;
     }
     .narrow .sheet-tools { display: block; padding-block: var(--ms-space-1) var(--ms-space-2); }
+    .sheet-tools > :is(.loading, .problem) { margin-block-end: var(--ms-space-2); }
     .narrow .draw-tools--grid {
       display: grid;
       grid-template-columns: repeat(12, minmax(0, 1fr));
@@ -344,7 +394,10 @@ export const shellStyles = [tokens, base, controls, css`
       clip-path: none;
       white-space: nowrap;
     }
-    .narrow .sheet-body { flex: 1; min-block-size: 0; padding-block: var(--ms-space-1); overflow: auto; overscroll-behavior: contain; }
+    .narrow .sheet-panel { display: flex; flex: 1; flex-direction: column; min-block-size: 0; }
+    /* On a short sheet the pinned heading and notice give the body at least half. */
+    .narrow .panel-top { max-block-size: 50%; padding-block-start: var(--ms-space-1); overflow: auto; overscroll-behavior: contain; }
+    .narrow .sheet-body { flex: 1; min-block-size: 0; padding-block-end: var(--ms-space-1); overflow: auto; overscroll-behavior: contain; }
     .narrow .mobile-sheet .action-bar { flex: none; margin-block-start: 0; padding-block-start: var(--ms-space-2); }
     .narrow .panel-back { inline-size: var(--ms-control); padding-inline: 0; }
     .narrow .panel-back .ms-btn__label {
@@ -370,11 +423,11 @@ export const shellStyles = [tokens, base, controls, css`
       background: color-mix(in srgb, #000 18%, transparent);
       cursor: pointer;
     }
-    .narrow .sheet-scrim:focus-visible { outline: 3px solid var(--ms-accent); outline-offset: -3px; }
+    .narrow .sheet-scrim:focus-visible { outline: 3px solid var(--ms-resolved-indicator, var(--ms-accent)); outline-offset: -3px; }
     .narrow .precision-popover { position: static; inline-size: auto; block-size: auto; }
 
     @media (forced-colors: active) {
-      .dialog, .full-map-hud, .mobile-sheet, .host-state { border: 1px solid CanvasText; }
+      .dialog, .full-map-hud, .mobile-sheet, .host-state, .problem, .notice { border: 1px solid CanvasText; }
       .sheet-handle { background: CanvasText; }
     }
 

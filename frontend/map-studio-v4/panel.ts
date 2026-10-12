@@ -22,6 +22,28 @@ import { initialWorkspaceState, WorkspaceStore } from "./state";
 
 const shellTag = unsafeStatic(SHELL_TAG);
 
+// Home Assistant never loads an integration's `common` translations for a
+// custom panel, so the panel asks once per connection and language. A rejected
+// load keeps its pair recorded and is asked again 30 s later, so while loads
+// keep rejecting the panel sends one request every 30 s, with one retry timer
+// at a time; a detached panel waits until it is attached again. Hass updates
+// never ask more often, and a load that never settles is left alone.
+// One request per (connection, language) is enough because Home Assistant's
+// frontend changes language in one synchronous call: `_selectLanguage`
+// (src/state/translations-mixin.ts) writes the language into hass through
+// `_updateHass` (src/state/hass-base-mixin.ts, synchronous assignment) and then
+// clears its loaded-integration cache via `_refetchCachedHassTranslations`,
+// before Lit delivers that hass to this panel. A request for the new language
+// therefore always reaches the backend; no localize-identity guard is needed.
+const commonTranslationsRequested = new WeakMap<object, string>();
+const NO_CONNECTION: object = {};
+const COMMON_RETRY_MS = 30_000;
+// Forgets a failed pair so the next update asks again, unless a newer
+// language has already replaced it (that load may still be pending).
+const forgetFailedPair = (owner: object, language: string): void => {
+  if (commonTranslationsRequested.get(owner) === language) commonTranslationsRequested.delete(owner);
+};
+
 export class MaticMapPanelV4 extends LitElement {
   static override styles = [tokens, base, css`
 :host { display: block; block-size: 100%; }
@@ -48,6 +70,11 @@ export class MaticMapPanelV4 extends LitElement {
   #backend: MaticBackend | null = null;
   #effects: EffectController | null = null;
   #layers: LayerHistoryController | null = null;
+  #commonRetry: {
+    readonly owner: object;
+    readonly language: string;
+    readonly timer: ReturnType<typeof setTimeout>;
+  } | null = null;
 
   #project(
     hass: HassLike | undefined = this.hass,
@@ -59,7 +86,37 @@ export class MaticMapPanelV4 extends LitElement {
       : this.#adapter.project(hass, panel);
   }
 
+  #requestCommonTranslations(): void {
+    const hass = this.hass;
+    const load = hass?.loadBackendTranslation;
+    if (!hass || typeof load !== "function") return;
+    const owner = hass.connection ?? NO_CONNECTION;
+    const language = hass.language ?? "";
+    if (commonTranslationsRequested.get(owner) === language) return;
+    commonTranslationsRequested.set(owner, language);
+    void Promise.resolve().then(() => load.call(hass, "common", "matic_robot")).catch(() => {
+      if (commonTranslationsRequested.get(owner) !== language) return;
+      // A detached panel cannot retry, so it forgets the pair for its reattach.
+      if (!this.isConnected) {
+        forgetFailedPair(owner, language);
+        return;
+      }
+      // The newest failure owns the one retry timer.
+      if (this.#commonRetry) clearTimeout(this.#commonRetry.timer);
+      this.#commonRetry = {
+        owner,
+        language,
+        timer: setTimeout(() => {
+          this.#commonRetry = null;
+          forgetFailedPair(owner, language);
+          this.#requestCommonTranslations();
+        }, COMMON_RETRY_MS),
+      };
+    });
+  }
+
   protected override shouldUpdate(changed: PropertyValues<this>): boolean {
+    this.#requestCommonTranslations();
     if (!changed.has("hass")
       || [...changed.keys()].some((property) => property !== "hass")) return true;
     const previousHass = changed.get("hass") as HassLike | undefined;
@@ -73,6 +130,7 @@ export class MaticMapPanelV4 extends LitElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
+    this.#requestCommonTranslations();
     this.#unsubscribe = this.#store.subscribe((state) => {
       this._workspace = state;
       if (state.selection.entryId !== this.#projection?.entryKey) {
@@ -87,6 +145,13 @@ export class MaticMapPanelV4 extends LitElement {
   }
 
   override disconnectedCallback(): void {
+    // A detached panel drops its waiting retry and the failed pair with it, so
+    // reattaching asks again.
+    if (this.#commonRetry) {
+      clearTimeout(this.#commonRetry.timer);
+      forgetFailedPair(this.#commonRetry.owner, this.#commonRetry.language);
+      this.#commonRetry = null;
+    }
     this.#unsubscribe?.();
     this.#unsubscribe = null;
     this.#stopControllers();
@@ -220,6 +285,7 @@ export class MaticMapPanelV4 extends LitElement {
       <${shellTag}
         .state=${this._workspace}
         .localize=${this.hass?.localize}
+        .dates=${this.#projection?.dates}
         @matic-workspace-intent=${this.#intent}
         @matic-workspace-action=${this.#action}
       ></${shellTag}>

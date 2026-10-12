@@ -11,7 +11,9 @@ from uuid import UUID
 
 import pytest
 from homeassistant.components.vacuum.const import VacuumActivity
+from homeassistant.const import STATE_OFF, STATE_ON
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import translation
 
 from custom_components.matic_robot import (
     binary_sensor,
@@ -44,6 +46,7 @@ from custom_components.matic_robot.client.models import (
     Room,
     WifiNetwork,
 )
+from custom_components.matic_robot.const import DOMAIN
 from custom_components.matic_robot.coordinator import MaticCuesEvent
 from custom_components.matic_robot.entity import MaticEntity
 from custom_components.matic_robot.plans import (
@@ -55,6 +58,7 @@ from custom_components.matic_robot.slam_map_store import (
     CANDIDATE_CLASSIFICATION_SECONDS,
     SlamMapStore,
 )
+from tests.frontend_sources import common_strings
 from tests.test_slam_map import synthetic_slam_entry, synthetic_structure_entry
 
 
@@ -971,23 +975,113 @@ def test_room_statistics_sensors_skip_unmatched_sessions() -> None:
     assert sensor.MaticRoomDurationSensor(entry, kitchen)._room_session_value() is None
 
 
-async def test_update_entity_mirrors_robot_managed_ota_state() -> None:
+def _update_entity(hass, version: str | None = "v178.8"):
     entry = _entry()
+    coordinator = entry.runtime_data.coordinator
+    coordinator.data = replace(
+        coordinator.data,
+        operational=replace(coordinator.data.operational, software_version=version),
+        telemetry=replace(coordinator.data.telemetry, software_version=version),
+    )
     entity = update.MaticFirmwareUpdate(entry)
+    entity.hass = hass
+    return entity, coordinator
 
-    assert entity.installed_version == "v-test"
-    assert entity.latest_version == "v-test"
+
+def _set_update_state(coordinator, update_state: str) -> None:
+    coordinator.data = replace(
+        coordinator.data,
+        telemetry=replace(coordinator.data.telemetry, update_state=update_state),
+    )
+
+
+async def test_update_entity_mirrors_robot_managed_ota_state(hass) -> None:
+    entity, coordinator = _update_entity(hass)
+
+    assert entity.installed_version == "v178.8"
+    assert entity.latest_version == entity.installed_version
+    assert entity.state == STATE_OFF
     assert entity.extra_state_attributes == {
         "update_state": "idle",
         "update_channel": "stable",
     }
 
-    coordinator = entry.runtime_data.coordinator
+    _set_update_state(coordinator, "available")
+    assert entity.latest_version == "Newer than v178.8"
+    assert entity.state == STATE_ON
+
+    _set_update_state(coordinator, "complete")
+    assert entity.latest_version == entity.installed_version
+    assert entity.state == STATE_OFF
+
+
+async def test_pending_firmware_reads_the_loaded_translation(hass) -> None:
+    """The marker comes from Home Assistant's cache, which core fills at setup."""
+    await translation.async_load_integrations(hass, {DOMAIN})
+    entity, coordinator = _update_entity(hass)
+    _set_update_state(coordinator, "available")
+    common = common_strings()
+    assert common["pending_firmware_version"] == update.PENDING_FIRMWARE_VERSION
+    assert (
+        common["pending_firmware_version_unknown"]
+        == update.PENDING_FIRMWARE_VERSION_UNKNOWN
+    )
+    assert entity.latest_version == "Newer than v178.8"
+
+    hass.config.language = "de"
+    german = {
+        update.PENDING_FIRMWARE_VERSION_KEY: "Neuer als {installed}",
+        update.PENDING_FIRMWARE_VERSION_UNKNOWN_KEY: "Neuere Firmware",
+    }
+    with patch.object(
+        update.translation, "async_get_cached_translations", return_value=german
+    ) as cached:
+        assert entity.latest_version == "Neuer als v178.8"
+        assert entity.state == STATE_ON
+        cached.assert_called_with(hass, "de", "common", DOMAIN)
+        unknown, unknown_coordinator = _update_entity(hass, None)
+        _set_update_state(unknown_coordinator, "available")
+        assert unknown.latest_version == "Neuere Firmware"
+
+
+async def test_a_skip_lasts_until_the_installed_version_or_language_changes(
+    hass,
+) -> None:
+    """The documented Skip behaviour (docs/entities.md, ha-entities.md §10)."""
+    entity, coordinator = _update_entity(hass)
+    _set_update_state(coordinator, "available")
+    with patch.object(entity, "async_write_ha_state"):
+        await entity.async_skip()
+    assert entity.state == STATE_OFF
+
+    # A second pending update before any install keeps the same marker.
+    _set_update_state(coordinator, "idle")
+    _set_update_state(coordinator, "available")
+    assert entity.state == STATE_OFF
+
+    hass.config.language = "de"
+    german = {update.PENDING_FIRMWARE_VERSION_KEY: "Neuer als {installed}"}
+    with patch.object(
+        update.translation, "async_get_cached_translations", return_value=german
+    ):
+        assert entity.state == STATE_ON
+    hass.config.language = "en"
+
     coordinator.data = replace(
         coordinator.data,
-        telemetry=replace(coordinator.data.telemetry, update_state="available"),
+        telemetry=replace(coordinator.data.telemetry, software_version="v179.0"),
     )
-    assert entity.latest_version is None
+    assert entity.latest_version == "Newer than v179.0"
+    assert entity.state == STATE_ON
+
+
+async def test_pending_firmware_without_an_installed_version(hass) -> None:
+    entity, coordinator = _update_entity(hass, None)
+    _set_update_state(coordinator, "available")
+
+    assert entity.installed_version is None
+    assert entity.latest_version == "Newer firmware"
+    assert entity.state is None
 
 
 def test_sensor_and_binary_sensor_values() -> None:
@@ -1977,6 +2071,23 @@ async def test_vacuum_start_resumes_or_cleans_all_rooms() -> None:
         "protocol-1",
         "protocol-2",
     ]
+
+
+async def test_paused_vacuum_with_latched_warning_reports_paused_and_problem() -> None:
+    """A latched warning must not turn a paused robot back into cleaning."""
+    entry = _entry(paused=True)
+    coordinator = entry.runtime_data.coordinator
+    # Firmware keeps the mission flag set while paused; warning 326 is latched.
+    coordinator.data = replace(
+        coordinator.data,
+        operational=replace(
+            coordinator.data.operational, cleaning=True, error_codes=(326,)
+        ),
+    )
+    entity = vacuum.MaticVacuum(entry)
+
+    assert entity.activity is VacuumActivity.PAUSED, entity.activity
+    assert entity.extra_state_attributes["problem"] is True
 
 
 async def test_clean_action_supports_the_complete_verified_option_matrix() -> None:
