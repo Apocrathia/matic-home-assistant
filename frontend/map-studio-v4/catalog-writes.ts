@@ -37,6 +37,8 @@ export interface CatalogWriteContext {
   /** The live projection; a completion for an older entry or user changes nothing. */
   projection(): HassProjection | null;
   disposed(): boolean;
+  /** Gives back the mutation resource before the write's own follow-up reads finish. */
+  release(): void;
 }
 
 export const saveArea = async (context: CatalogWriteContext): Promise<void> => {
@@ -238,5 +240,9 @@ const serviceMutation = async (
   } catch {
     if (current()) store.patch({ command: "failed", notice: context.failure });
     return false;
+  } finally {
+    // Home Assistant has answered, so the next plan write may start while
+    // this one reloads the catalog.
+    context.release();
   }
 };

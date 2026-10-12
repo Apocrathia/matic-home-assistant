@@ -383,26 +383,28 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect.poll(draft).toEqual({ workflow: "none", dirty: false });
   });
 
-  // Plan and area writes load on the first save; a failed load is that
-  // write's own failure and leaves nothing pending.
-  test("Save shows the plan save failure when the writes fail to load @safety", async ({ page }) => {
-    const roomCatalog = ["kitchen", "hall"].map((id, index) => ({
+  // One saved two-room plan, as Home Assistant's plan catalog sends it.
+  const dailyPlanCatalog = () => {
+    const rooms = ["kitchen", "hall"].map((id, index) => ({
       room_id: id, name: id === "kitchen" ? "Kitchen" : "Hall",
       boundary: [[index * 6, 0], [index * 6 + 6, 0], [index * 6 + 6, 5], [index * 6, 5]],
     }));
-    const planRooms = roomCatalog.map((room) => ({ room_id: room.room_id, cleaning_mode: "vacuum", coverage_setting: "standard" }));
-    const fixture = await installPanelFixture(page, {
-      moduleSource: "packaged",
-      initialPlanCatalog: {
-        rooms: roomCatalog,
-        selected_plan: "daily",
-        plans: [{
-          id: "daily", name: "Daily", enabled: true, run_behavior: "ordered", rooms: planRooms,
-          room_order: planRooms.map((room) => room.room_id), return_to_base: true,
-          finish_current_room: false, finish_current_room_threshold: 50,
-        }],
-      },
-    });
+    const planRooms = rooms.map((room) => ({ room_id: room.room_id, cleaning_mode: "vacuum", coverage_setting: "standard" }));
+    return {
+      rooms,
+      selected_plan: "daily",
+      plans: [{
+        id: "daily", name: "Daily", enabled: true, run_behavior: "ordered", rooms: planRooms,
+        room_order: planRooms.map((room) => room.room_id), return_to_base: true,
+        finish_current_room: false, finish_current_room_threshold: 50,
+      }],
+    };
+  };
+
+  // Plan and area writes load on the first save; a failed load is that
+  // write's own failure and leaves nothing pending.
+  test("Save shows the plan save failure when the writes fail to load @safety", async ({ page }) => {
+    const fixture = await installPanelFixture(page, { moduleSource: "packaged", initialPlanCatalog: dailyPlanCatalog() });
     const panel = page.locator(fixture.panelTag);
     const state = () => page.evaluate((tag) => {
       const { command, planDraft } = document.querySelector(tag).getWorkspaceSnapshot();
@@ -425,6 +427,20 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect.poll(state).toEqual({ command: "idle", dirty: true });
     await expect(save).toBeEnabled();
     expect(await page.evaluate(() => window.__panelFixture.serviceCalls.length)).toBe(0);
+  });
+
+  // The writes stay out of startup, but opening a workflow that can write
+  // starts their load so a save rarely waits for it.
+  test("opening the plan workflow, not startup, requests the plan and area writes", async ({ page }) => {
+    const fixture = await installPanelFixture(page, { moduleSource: "packaged", initialPlanCatalog: dailyPlanCatalog() });
+    const panel = page.locator(fixture.panelTag);
+    const requested = [];
+    page.on("request", (request) => { if (/\/chunks\/catalog-writes-[^/]+\.js$/u.test(request.url())) requested.push(request.url()); });
+    await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+    await expect.poll(() => page.evaluate((tag) => document.querySelector(tag).getWorkspaceSnapshot().map.available, fixture.panelTag)).toBe(true);
+    expect(requested).toEqual([]);
+    await panel.getByRole("button", { name: /^Run a plan/ }).click();
+    await expect.poll(() => requested.length).toBe(1);
   });
 
   // A resumed Try again opens only what the entry screen would: a limited map

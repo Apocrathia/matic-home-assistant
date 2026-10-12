@@ -229,7 +229,7 @@ export class EffectController {
   #storeUnsubscribe: (() => void) | null = null;
   #manualPreviewRequestIdentity = "";
   #manualPreviewPreflight = false;
-  #catalogWrites: Promise<CatalogWrites> | null = null;
+  #catalogWrites: Promise<CatalogWrites | null> | null = null;
   readonly #workspaceConnection: WorkspaceConnection | null;
   readonly #workspaceTransportOverride: boolean | undefined;
 
@@ -2041,6 +2041,8 @@ export class EffectController {
       this.selectArea(null);
     }
     this.#store.dispatch({ type: "open-workflow", workflow });
+    // The workflows history blocks are the ones whose controls write.
+    if (READ_ONLY_WORKFLOWS.includes(workflow)) void this.#catalogWritesModule();
     if (workflow === "history") {
       const entry = this.#store.value.resources.entry;
       const stamp = this.#coherence.current();
@@ -2263,11 +2265,20 @@ export class EffectController {
     return this.#write("plan-mutation", NOTICES.planDeleteFailed, (writes, context) => writes.deletePlan(context));
   }
 
+  // Opening a workflow that can write starts the load, so a write rarely waits
+  // for it. A failed load stays failed for the page, as browsers keep a failed
+  // module fetch: each write then shows its failure notice and only a reload
+  // recovers.
+  #catalogWritesModule(): Promise<CatalogWrites | null> {
+    return this.#catalogWrites ??= import("./catalog-writes").catch(() => null);
+  }
+
   // A write starts when it is asked for: it keeps the state of that moment and
   // takes its mutation resource then, so a floor, entry or user change while
-  // the module loads cancels it as one would cancel its request. The first
-  // write loads the module; if that fails, the write shows its own failure
-  // notice, `command` stays as it was, and the next write loads it again.
+  // the module loads cancels it as one would cancel its request. Before it is
+  // sent it must still be admitted, as when the old code sent it at once. If
+  // the module failed, the write shows its own failure notice and `command`
+  // stays as it was.
   async #write(
     resource: (typeof MUTATION_RESOURCES)[number],
     failure: WorkspaceNotice,
@@ -2279,9 +2290,9 @@ export class EffectController {
     if (state.command === "pending" || this.#controllers.has(resource)) return;
     const controller = this.#controller(resource);
     try {
-      const writes = await (this.#catalogWrites ??= import("./catalog-writes"))
-        .catch(() => { this.#catalogWrites = null; return null; });
-      if (controller.signal.aborted) return;
+      const writes = await this.#catalogWritesModule();
+      const live = this.#store.value;
+      if (controller.signal.aborted || !canEditCoordinates(live) || live.command === "pending") return;
       if (!writes) {
         this.#store.patch({ notice: failure });
         return;
@@ -2296,6 +2307,7 @@ export class EffectController {
         failure,
         projection: () => this.#projection,
         disposed: () => this.#disposed,
+        release: () => this.#release(resource, controller),
       });
     } finally {
       this.#release(resource, controller);

@@ -177,8 +177,8 @@ for (const context of ["disposed", "robot", "user"]) {
 
 // The writes module loads on the first save. A save owns its mutation from the
 // moment it is asked for, so a context change before the module arrives
-// cancels it before anything is sent.
-for (const context of ["disposed", "robot", "user", "floor"]) {
+// cancels it before anything is sent; a hidden page no longer admits it.
+for (const context of ["disposed", "robot", "user", "floor", "pagehide"]) {
   test(`drops a plan save whose context becomes ${context} while the writes load`, async ({ page }) => {
     await loadQualityModules(page);
     const result = await page.evaluate(async (context) => {
@@ -194,6 +194,7 @@ for (const context of ["disposed", "robot", "user", "floor"]) {
       const pending = effects.savePlan();
       if (context === "disposed") effects.dispose();
       else if (context === "floor") void effects.selectFloor("saved-1");
+      else if (context === "pagehide") window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true }));
       else effects.sync({ ...projection, ...(context === "robot" ? { entryKey: "other-entry", vacuumEntityId: "vacuum.other" } : { userKey: "two" }) });
       await pending;
       const outcome = { calls: calls.length, command: store.value.command, saving: store.value.notice?.key === "v4_notice_saving" };
@@ -201,6 +202,37 @@ for (const context of ["disposed", "robot", "user", "floor"]) {
       return outcome;
     }, context);
     expect(result).toEqual({ calls: 0, command: "idle", saving: false });
+  });
+}
+
+// A plan write gives back its resource once Home Assistant answers, so the
+// next plan write can start while the first one reloads the catalog.
+for (const [first, second] of [["save", "delete"], ["reset", "reset"]]) {
+  test(`a plan ${second} asked for while a ${first} reloads the catalog is sent`, async ({ page }) => {
+    await loadQualityModules(page);
+    const result = await page.evaluate(async ({ first, second }) => {
+      const { EffectController, WorkspaceStore, createGalleryState } = await import("/quality-modules.js");
+      const initial = createGalleryState("ready");
+      const store = new WorkspaceStore({ ...initial, workflow: "plan", planDraft: { ...initial.planDraft, dirty: first === "save" } });
+      const calls = [];
+      const effects = new EffectController(store, { service: async (_domain, service) => { calls.push(service); }, dispose() {} });
+      effects.sync({ host: initial.host, activity: initial.activity, batteryPercent: 92, robotLabel: "Synthetic", robots: initial.robots, language: "en", userKey: "one", entryKey: initial.selection.entryId, vacuumEntityId: "vacuum.synthetic" });
+      const reloads = [];
+      effects.loadPlans = () => new Promise((resolve) => { reloads.push(() => resolve(null)); });
+      const planId = store.value.selection.planId;
+      const write = (kind, roomId) => kind === "save" ? effects.savePlan() : kind === "delete" ? effects.deletePlan()
+        : effects.executeAction({ id: "reset-room-cadence", planId, roomId, mode: "mop" });
+      const writing = write(first, "room-a");
+      for (let i = 0; i < 20 && !reloads.length; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+      const next = write(second, "room-b");
+      for (let i = 0; i < 20 && reloads.length < 2; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+      for (const reload of reloads) reload();
+      await Promise.all([writing, next]);
+      effects.dispose();
+      return calls;
+    }, { first, second });
+    const services = { save: "save_plan", delete: "delete_plan", reset: "reset_room_cadence" };
+    expect(result).toEqual([services[first], services[second]]);
   });
 }
 
