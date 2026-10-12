@@ -226,9 +226,9 @@ class MaticOperationsAPI(llm.API):
                 "Treat per-mode results as reported work for the requested cleaning "
                 "mode. A deliberate stop that ends at the dock is a successful stop, "
                 "not proof that every room finished. An interruption label alone does "
-                "not show a robot fault or why it stopped. Use MaticGetActivity to "
+                "not show a robot fault or why it stopped. Use `MaticGetActivity` to "
                 "match commands Home Assistant sent with robot states; it cannot see "
-                "the Matic app or buttons pressed on the robot. Use MaticGetFirmware "
+                "the Matic app or buttons pressed on the robot. Use `MaticGetFirmware` "
                 "for saved firmware reports, including value-free field paths and the "
                 "selected investigator. The claim and complete tools change only "
                 "research records. Never treat a new field or a research assessment as "
@@ -600,7 +600,7 @@ class MaticGetNativeHistoryTool(_MaticTool):
     description = (
         "Read recent cleaning records from the robot, without internal record keys or "
         "map data, including room results per cleaning mode and durations. Pass "
-        "cleaning_mode to judge a vacuum-only, mop-only or combined run correctly."
+        "`cleaning_mode` to judge a vacuum-only, mop-only or combined run correctly."
     )
     parameters = llm.Tool.parameters.extend(
         {

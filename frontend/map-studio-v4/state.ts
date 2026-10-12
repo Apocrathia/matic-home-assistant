@@ -163,7 +163,7 @@ export const initialWorkspaceState = (): WorkspaceState => ({
     dirty: false,
   },
   notice: null,
-  robotLabel: "Matic robot",
+  robotLabel: "Robot",
   robots: [],
   locale: "en",
 });
