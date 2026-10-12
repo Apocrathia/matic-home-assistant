@@ -4705,6 +4705,8 @@ test.describe("Map Studio v0.4 foundation", () => {
     // plus an aria-describedby reason, which is stronger than `disabled`.
     const cleanRooms = gallery.getByRole("button", { name: "Clean rooms", exact: true });
     await expect(cleanRooms).toHaveCount(1);
+    // A leaked launcher ("Clean rooms Choose rooms for this run") would not match the exact name.
+    await expect(gallery.getByRole("button", { name: /^Clean rooms/ })).toHaveCount(1);
     await expect(cleanRooms).toHaveAttribute("aria-disabled", "true");
     await expect(cleanRooms).toHaveAccessibleDescription(/room/i);
     await expect(cleanRooms).not.toHaveAttribute("disabled");
