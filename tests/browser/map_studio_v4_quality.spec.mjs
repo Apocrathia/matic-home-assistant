@@ -157,6 +157,8 @@ for (const context of ["disposed", "robot", "user"]) {
         const projection = { host: initial.host, activity: initial.activity, batteryPercent: 92, robotLabel: "Synthetic", robots: initial.robots, language: "en", userKey: "one", entryKey: initial.selection.entryId, vacuumEntityId: "vacuum.synthetic" };
         effects.sync(projection);
         const pending = effects.savePlan();
+        // The write is in flight once the lazily loaded save reaches the service.
+        for (let i = 0; i < 20 && !finish; i++) await new Promise((resolve) => setTimeout(resolve, 0));
         if (context === "disposed") effects.dispose();
         else effects.sync({ ...projection, ...(context === "robot" ? { entryKey: "other-entry", vacuumEntityId: "vacuum.other" } : { userKey: "two" }) });
         await Promise.resolve(); await Promise.resolve();
@@ -170,6 +172,36 @@ for (const context of ["disposed", "robot", "user"]) {
       expect(result).toBe(true);
     });
   }
+
+}
+
+// The writes module loads on the first save. A save owns its mutation from the
+// moment it is asked for, so a context change before the module arrives
+// cancels it before anything is sent.
+for (const context of ["disposed", "robot", "user", "floor"]) {
+  test(`drops a plan save whose context becomes ${context} while the writes load`, async ({ page }) => {
+    await loadQualityModules(page);
+    const result = await page.evaluate(async (context) => {
+      const { EffectController, WorkspaceStore, createGalleryState } = await import("/quality-modules.js");
+      const initial = createGalleryState("ready");
+      const store = new WorkspaceStore({ ...initial, planDraft: { ...initial.planDraft, dirty: true } });
+      const calls = [];
+      const aborted = async () => { throw new DOMException("Aborted", "AbortError"); };
+      const effects = new EffectController(store, { catalog: async () => [initial.resources.entry], scene: aborted, pose: aborted, history: aborted, plans: aborted,
+        service: async (...args) => { calls.push(args); }, dispose() {} });
+      const projection = { host: initial.host, activity: initial.activity, batteryPercent: 92, robotLabel: "Synthetic", robots: initial.robots, language: "en", userKey: "one", entryKey: initial.selection.entryId, vacuumEntityId: "vacuum.synthetic" };
+      effects.sync(projection);
+      const pending = effects.savePlan();
+      if (context === "disposed") effects.dispose();
+      else if (context === "floor") void effects.selectFloor("saved-1");
+      else effects.sync({ ...projection, ...(context === "robot" ? { entryKey: "other-entry", vacuumEntityId: "vacuum.other" } : { userKey: "two" }) });
+      await pending;
+      const outcome = { calls: calls.length, command: store.value.command, saving: store.value.notice?.key === "v4_notice_saving" };
+      effects.dispose();
+      return outcome;
+    }, context);
+    expect(result).toEqual({ calls: 0, command: "idle", saving: false });
+  });
 }
 
 test("debounced preferences stay with the user who changed them", async ({ page }) => {
@@ -243,6 +275,7 @@ for (const action of ["saveArea", "deleteArea"]) {
         const projection = { host: initial.host, activity: initial.activity, batteryPercent: 92, robotLabel: "Synthetic", robots: initial.robots, language: "en", userKey: "one", entryKey: initial.selection.entryId, vacuumEntityId: "vacuum.synthetic" };
         effects.sync(projection);
         const pending = effects[action]();
+        for (let i = 0; i < 20 && !finish; i++) await new Promise((resolve) => setTimeout(resolve, 0));
         await effects[action]();
         effects.sync({ ...projection, userKey: "two" });
         await Promise.resolve(); await Promise.resolve();
@@ -257,6 +290,30 @@ for (const action of ["saveArea", "deleteArea"]) {
     });
   }
 }
+
+// As while a write is pending, a second write asked for while the first one's
+// module loads is refused; the first is never cancelled.
+test("an area delete asked for while an area save loads is refused", async ({ page }) => {
+  await loadQualityModules(page);
+  const result = await page.evaluate(async () => {
+    const { EffectController, WorkspaceStore, createGalleryState } = await import("/quality-modules.js");
+    const initial = createGalleryState("draw");
+    const store = new WorkspaceStore(initial);
+    const writes = [];
+    const effects = new EffectController(store, {
+      saveArea: async () => { writes.push("save"); return "entryway"; },
+      deleteArea: async () => { writes.push("delete"); },
+      areas: async () => initial.resources.areas.value,
+      dispose() {},
+    });
+    effects.sync({ host: initial.host, activity: initial.activity, batteryPercent: 92, robotLabel: "Synthetic", robots: initial.robots, language: "en", userKey: "one", entryKey: initial.selection.entryId, vacuumEntityId: "vacuum.synthetic" });
+    await Promise.all([effects.saveArea(), effects.deleteArea()]);
+    const outcome = { writes, notice: store.value.notice?.key };
+    effects.dispose();
+    return outcome;
+  });
+  expect(result).toEqual({ writes: ["save"], notice: "v4_notice_area_saved" });
+});
 
 for (const scenario of ["draw", "history"]) {
 for (const change of ["user", "robot", "access", "removed"]) {
@@ -392,6 +449,7 @@ for (const rejected of [false, true]) {
         service: () => new Promise((resolve, reject) => { finish = () => rejected ? reject(new Error("Late failure")) : resolve(); }), dispose() {} });
       effects.sync({ host: initial.host, activity: initial.activity, batteryPercent: 92, robotLabel: "Synthetic", robots: initial.robots, language: "en", userKey: "one", entryKey: initial.selection.entryId, vacuumEntityId: "vacuum.synthetic" });
       const pending = effects.savePlan();
+      for (let i = 0; i < 20 && !finish; i++) await new Promise((resolve) => setTimeout(resolve, 0));
       await effects.selectFloor("saved-1");
       const saved = { command: store.value.command, notice: store.value.notice };
       await effects.selectFloor("current");

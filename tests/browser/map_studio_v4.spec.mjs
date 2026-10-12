@@ -383,6 +383,50 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect.poll(draft).toEqual({ workflow: "none", dirty: false });
   });
 
+  // Plan and area writes load on the first save; a failed load is that
+  // write's own failure and leaves nothing pending.
+  test("Save shows the plan save failure when the writes fail to load @safety", async ({ page }) => {
+    const roomCatalog = ["kitchen", "hall"].map((id, index) => ({
+      room_id: id, name: id === "kitchen" ? "Kitchen" : "Hall",
+      boundary: [[index * 6, 0], [index * 6 + 6, 0], [index * 6 + 6, 5], [index * 6, 5]],
+    }));
+    const planRooms = roomCatalog.map((room) => ({ room_id: room.room_id, cleaning_mode: "vacuum", coverage_setting: "standard" }));
+    const fixture = await installPanelFixture(page, {
+      moduleSource: "packaged",
+      initialPlanCatalog: {
+        rooms: roomCatalog,
+        selected_plan: "daily",
+        plans: [{
+          id: "daily", name: "Daily", enabled: true, run_behavior: "ordered", rooms: planRooms,
+          room_order: planRooms.map((room) => room.room_id), return_to_base: true,
+          finish_current_room: false, finish_current_room_threshold: 50,
+        }],
+      },
+    });
+    const panel = page.locator(fixture.panelTag);
+    const state = () => page.evaluate((tag) => {
+      const { command, planDraft } = document.querySelector(tag).getWorkspaceSnapshot();
+      return { command, dirty: planDraft.dirty };
+    }, fixture.panelTag);
+    await page.route("**/chunks/catalog-writes-*.js", (route) => route.abort());
+    await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+    await panel.getByRole("button", { name: /^Run a plan/ }).click();
+    await panel.getByRole("button", { name: /Daily.*Edit plan/ }).click();
+    await page.evaluate((tag) => {
+      document.querySelector(tag).shadowRoot.querySelector("matic-map-shell-v4").dispatchEvent(new CustomEvent("matic-workspace-intent", {
+        detail: { type: "set-plan-view", view: "edit" }, bubbles: true, composed: true,
+      }));
+    }, fixture.panelTag);
+    await panel.getByRole("group", { name: "Rooms in this plan" }).locator(".plan-room-label input[type=checkbox]").first().uncheck();
+    const save = panel.getByRole("button", { name: "Save", exact: true });
+    await save.click();
+
+    await expect(panel.getByRole("alert")).toHaveText("Home Assistant can't confirm the plan was saved, so check your plans, then try again.");
+    await expect.poll(state).toEqual({ command: "idle", dirty: true });
+    await expect(save).toBeEnabled();
+    expect(await page.evaluate(() => window.__panelFixture.serviceCalls.length)).toBe(0);
+  });
+
   // A resumed Try again opens only what the entry screen would: a limited map
   // offers no room choice, so the reload stays on the entry screen.
   test("Try again in Rooms reloads onto the entry screen when the map is then limited", async ({ page }) => {
@@ -8389,6 +8433,8 @@ test("area save clears an obsolete discard prompt opened while the write was pen
     effects.loadAreas = async () => {};
     try {
       const saving = effects.saveArea();
+      // The write is pending once the lazily loaded save reaches the backend.
+      for (let i = 0; i < 20 && !finish; i++) await new Promise((resolve) => setTimeout(resolve, 0));
       store.dispatch({ type: "dismiss-top-layer" });
       const pendingDialog = store.value.dialog;
       finish("saved-zone");

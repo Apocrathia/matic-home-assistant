@@ -120,6 +120,23 @@ def test_dialog_copy_ships_in_the_lazy_workflow_chunk() -> None:
     assert "Delete plan?" not in startup
 
 
+def test_catalog_writes_ship_in_their_own_lazy_chunk() -> None:
+    """Plan and area writes run only from a workflow, so they load on first use."""
+    _, assets = _startup_graph()
+    startup = "".join(
+        (_STUDIO_V4_DIRECTORY.parent / path).read_text(encoding="utf-8")
+        for path in assets
+    )
+    chunks = sorted(_STUDIO_V4_CHUNK_DIRECTORY.glob("catalog-writes-*.js"))
+    assert len(chunks) == 1
+    writes = chunks[0].read_text(encoding="utf-8")
+    assert len(gzip.compress(chunks[0].read_bytes(), mtime=0)) <= 30 * 1024
+    markers = ('"save_plan"', '"delete_plan"', '"reset_room_cadence"', "Area saved")
+    for marker in markers:
+        assert marker not in startup
+        assert marker in writes
+
+
 def test_workflow_only_classes_ship_in_the_lazy_workflow_chunk() -> None:
     """design-system.md: classes only workflow views use stay out of controls.ts."""
     modules = shipped_modules()

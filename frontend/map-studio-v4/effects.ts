@@ -20,6 +20,7 @@ import {
   type SavedArea,
 } from "./backend-contracts";
 import { BackendError, MaticBackend } from "./backend";
+import type { CatalogWriteContext, CatalogWriteHelpers } from "./catalog-writes";
 import {
   canEditCoordinates,
   canReadFloorResources,
@@ -38,6 +39,8 @@ import { PreferenceStore, type MapPreferences } from "./preferences";
 import { WorkspaceTransport, type WorkspaceConnection } from "./workspace-transport";
 import { PageLifecycle } from "./page-lifecycle";
 
+type CatalogWrites = typeof import("./catalog-writes");
+
 const resource = <T>(
   status: "idle" | "loading" | "ready" | "empty" | "error",
   value: T | null,
@@ -49,6 +52,10 @@ const cancelLoading = <T>(value: ResourceState<T>): ResourceState<T> =>
 
 const isAbort = (error: unknown): boolean =>
   error instanceof DOMException && error.name === "AbortError";
+
+const CATALOG_WRITE_HELPERS: CatalogWriteHelpers = {
+  notice, parseSavedPlanId, BackendError, isAbort, canEditCoordinates, initialWorkspaceState,
+};
 
 const problemCode = (error: unknown, fallback: string): string => {
   if (error instanceof BackendError) return error.code;
@@ -64,10 +71,7 @@ const NOTICES = {
   actionUnconfirmed: notice("error", "v4_notice_action_unconfirmed", "Home Assistant can't confirm that command, so check the robot before trying again."),
   mapChanged: notice("info", "v4_notice_map_changed", "The map changed, so choose what to clean again."),
   statusRefreshed: notice("info", "v4_notice_status_refreshed", "Status refreshed, so check the robot before trying again."),
-  saving: notice("info", "v4_notice_saving", "Saving…"),
-  planSaved: notice("success", "v4_notice_plan_saved", "Plan saved"),
   planSaveFailed: notice("error", "v4_notice_plan_save_failed", "Home Assistant can't confirm the plan was saved, so check your plans, then try again."),
-  planDeleted: notice("success", "v4_notice_plan_deleted", "Plan deleted"),
   planDeleteFailed: notice("error", "v4_notice_plan_delete_failed", "The plan wasn't deleted; try again."),
   planPreviewMissing: notice("warning", "v4_notice_plan_preview_missing", "The next-run preview isn't ready; reload your plans, then try again."),
   planPreviewRefreshFailed: notice("warning", "v4_notice_plan_preview_refresh_failed", "The next-run preview didn't refresh; check the plan, then try again."),
@@ -77,13 +81,8 @@ const NOTICES = {
   roomPreviewChanged: notice("info", "v4_notice_room_preview_changed", "The room settings changed, so check them and start again."),
   roomPreviewFailed: notice("warning", "v4_notice_room_preview_failed", "Home Assistant couldn't check the room settings, so try starting again."),
   areaRemoved: notice("warning", "v4_notice_area_removed", "This saved area was removed elsewhere. Your edits are kept as a new draft; saving will create a new area."),
-  areaSaving: notice("info", "v4_notice_area_saving", "Saving area…"),
-  areaSaved: notice("success", "v4_notice_area_saved", "Area saved"),
   areaSaveFailed: notice("error", "v4_notice_area_save_failed", "Home Assistant can't confirm the area was saved, so try again."),
-  areaDeleted: notice("success", "v4_notice_area_deleted", "Area deleted"),
   areaDeleteFailed: notice("error", "v4_notice_area_delete_failed", "Home Assistant can't confirm the area was deleted, so try again."),
-  resetMop: notice("success", "v4_notice_reset_mop", "Mopping progress reset"),
-  resetVacuum: notice("success", "v4_notice_reset_vacuum", "Vacuum rotation progress reset"),
   resetMopFailed: notice("error", "v4_notice_reset_mop_failed", "Mopping progress wasn't reset; try again."),
   resetVacuumFailed: notice("error", "v4_notice_reset_vacuum_failed", "Vacuum rotation progress wasn't reset; try again."),
 } as const;
@@ -230,6 +229,7 @@ export class EffectController {
   #storeUnsubscribe: (() => void) | null = null;
   #manualPreviewRequestIdentity = "";
   #manualPreviewPreflight = false;
+  #catalogWrites: Promise<CatalogWrites> | null = null;
   readonly #workspaceConnection: WorkspaceConnection | null;
   readonly #workspaceTransportOverride: boolean | undefined;
 
@@ -2247,149 +2247,58 @@ export class EffectController {
     };
   }
 
-  async saveArea(): Promise<void> {
+  saveArea(): Promise<void> {
+    return this.#write("area-mutation", NOTICES.areaSaveFailed, (writes, context) => writes.saveArea(context));
+  }
+
+  deleteArea(): Promise<void> {
+    return this.#write("area-mutation", NOTICES.areaDeleteFailed, (writes, context) => writes.deleteArea(context));
+  }
+
+  savePlan(): Promise<void> {
+    return this.#write("plan-mutation", NOTICES.planSaveFailed, (writes, context) => writes.savePlan(context));
+  }
+
+  deletePlan(): Promise<void> {
+    return this.#write("plan-mutation", NOTICES.planDeleteFailed, (writes, context) => writes.deletePlan(context));
+  }
+
+  // A write starts when it is asked for: it keeps the state of that moment and
+  // takes its mutation resource then, so a floor, entry or user change while
+  // the module loads cancels it as one would cancel its request. The first
+  // write loads the module; if that fails, the write shows its own failure
+  // notice, `command` stays as it was, and the next write loads it again.
+  async #write(
+    resource: (typeof MUTATION_RESOURCES)[number],
+    failure: WorkspaceNotice,
+    run: (writes: CatalogWrites, context: CatalogWriteContext) => Promise<void>,
+  ): Promise<void> {
     const state = this.#store.value;
-    const entry = state.resources.entry;
-    const draft = state.areaDraft;
-    if (!entry || state.command === "pending" || !canEditCoordinates(state) || !draft.name.trim() || !state.draw.circles.length) return;
-    const controller = this.#controller("area-mutation");
-    const current = (): boolean => !this.#disposed && !controller.signal.aborted;
-    this.#store.patch({ command: "pending", notice: NOTICES.areaSaving });
+    // Every catalog write refuses while a command is pending or another write
+    // holds its resource, so taking the resource never cancels a write.
+    if (state.command === "pending" || this.#controllers.has(resource)) return;
+    const controller = this.#controller(resource);
     try {
-      const id = await this.#backend.saveArea(entry.areasUrl, {
-        areaId: draft.id,
-        name: draft.name.trim(),
-        circles: state.draw.circles,
-        outline: state.draw.outline ?? null,
-        cleaningMode: draft.cleaningMode,
-        coverageSetting: draft.coverageSetting,
-      }, controller.signal);
-      if (!current()) return;
-      const latest = this.#store.value;
-      const sameDraft = latest.areaDraft === draft
-        && latest.draw.circles === state.draw.circles && latest.draw.outline === state.draw.outline
-        && latest.selection.entryId === state.selection.entryId
-        && (latest.workflow === "draw" || latest.workflow === "areaReview");
-      const savedDraft = sameDraft ? {
-        ...draft, id, name: draft.name.trim(), status: "current" as const, canRebind: false, dirty: false,
-      } : null;
-      // The write acknowledgement is the save boundary. Refreshing the list
-      // must not leave a successfully saved draft dirty or restore it after Back.
-      this.#store.patch({
-        command: "idle", notice: NOTICES.areaSaved,
-        ...(savedDraft ? {
-          dialog: latest.dialog === "discardDraft" ? null : latest.dialog,
-          selection: { ...latest.selection, areaId: id },
-          areaDraft: savedDraft,
-          draw: { ...latest.draw, dirty: false, strokeCount: 0, undo: [], redo: [], outlineUndo: [], outlineRedo: [] },
-        } : {}),
-      });
-      const areas = await this.loadAreas({ reconcileDraft: false });
-      const refreshed = this.#store.value;
-      if (current() && savedDraft && refreshed.areaDraft === savedDraft
-        && !refreshed.draw.dirty
-        && (refreshed.workflow === "draw" || refreshed.workflow === "areaReview")
-        && refreshed.selection.entryId === state.selection.entryId
-        && areas && refreshed.resources.areas.value === areas
-        && areas.areas.some((area) => area.id === id)) this.selectArea(id);
-    } catch (error) {
-      if (isAbort(error) || !current()) return;
-      this.#store.patch({ command: "failed", notice: NOTICES.areaSaveFailed });
-    } finally {
-      this.#release("area-mutation", controller);
-    }
-  }
-
-  async deleteArea(): Promise<void> {
-    const entry = this.#store.value.resources.entry;
-    const areaId = this.#store.value.selection.areaId;
-    if (!entry || !areaId || this.#store.value.command === "pending" || !canEditCoordinates(this.#store.value)) return;
-    const controller = this.#controller("area-mutation");
-    const current = (): boolean => !this.#disposed && !controller.signal.aborted;
-    this.#store.patch({ command: "pending", notice: null });
-    try {
-      await this.#backend.deleteArea(entry.areasUrl, areaId, controller.signal);
-      if (!current()) return;
-      this.#store.patch({ command: "idle", notice: NOTICES.areaDeleted });
-      await this.loadAreas();
-    } catch (error) {
-      if (!isAbort(error) && current()) this.#store.patch({ command: "failed", notice: NOTICES.areaDeleteFailed });
-    } finally {
-      this.#release("area-mutation", controller);
-    }
-  }
-
-  async savePlan(): Promise<void> {
-    const state = this.#store.value;
-    const draft = state.planDraft;
-    const plans = state.resources.plans.value;
-    if (!plans || !draft.name.trim() || !draft.rooms.length || !canEditCoordinates(state)) return;
-    const rooms: readonly PlanRoom[] = draft.rooms;
-    let savedId = draft.id;
-    const saved = await this.#serviceMutation("save_plan", {
-      ...(draft.id ? { plan_id: draft.id } : {}),
-      name: draft.name.trim(),
-      enabled: draft.enabled,
-      run_behavior: draft.runBehavior,
-      rooms: rooms.map((room) => ({
-        room: room.roomId,
-        cleaning_mode: room.cleaningMode,
-        coverage_setting: room.coverageSetting,
-        ...(room.cadence ? {
-          cadence: {
-            scope: room.cadence.scope,
-            mop_every_n: room.cadence.mopEveryN,
-            coverage_every_n: room.cadence.coverageEveryN,
-            periodic_coverage_setting: room.cadence.periodicCoverageSetting,
-            do_mop_next: room.cadence.doMopNext,
-            do_coverage_next: room.cadence.doCoverageNext,
-          },
-        } : {}),
-      })),
-      return_to_base: draft.returnToBase,
-      finish_current_room: draft.finishCurrentRoom,
-      finish_current_room_threshold: draft.finishCurrentRoomThreshold,
-      // Home Assistant makes a new plan the default only when none exists.
-      select: plans.selectedPlan === draft.id,
-    }, NOTICES.planSaved, NOTICES.planSaveFailed, (response) => {
-      const acknowledgedId = response === undefined && draft.id ? draft.id : parseSavedPlanId(response);
-      if (draft.id && acknowledgedId !== draft.id) throw new BackendError("invalid-plan-save-response");
-      savedId = acknowledgedId;
-    });
-    if (saved) {
-      // A save may finish after Back/discard or after another editor opens.
-      // Refresh the catalog in every case, but reconcile only the same draft.
-      const savedDraft = this.#store.value.workflow === "plan"
-        && this.#store.value.planDraft === draft ? { ...draft, id: savedId, dirty: false } : null;
-      if (savedDraft) this.#store.patch({
-        planDraft: savedDraft,
-        selection: { ...this.#store.value.selection, planId: savedId },
-      });
-      const catalog = await this.loadPlans({ force: true });
-      if (savedDraft && this.#store.value.workflow === "plan"
-        && this.#store.value.planDraft === savedDraft
-        && this.#store.value.selection.entryId === state.selection.entryId
-        && catalog && this.#store.value.resources.plans.value === catalog) {
-        if (savedId && catalog.plans.some((plan) => plan.id === savedId)) this.selectPlan(savedId, true);
+      const writes = await (this.#catalogWrites ??= import("./catalog-writes"))
+        .catch(() => { this.#catalogWrites = null; return null; });
+      if (controller.signal.aborted) return;
+      if (!writes) {
+        this.#store.patch({ notice: failure });
+        return;
       }
-    }
-  }
-
-  async deletePlan(): Promise<void> {
-    const planId = this.#store.value.selection.planId;
-    const entryId = this.#store.value.selection.entryId;
-    if (!planId) return;
-    const deleted = await this.#serviceMutation("delete_plan", { plan: planId }, NOTICES.planDeleted, NOTICES.planDeleteFailed);
-    if (deleted) {
-      const current = this.#store.value;
-      if (current.selection.entryId === entryId && current.planDraft.id === planId) {
-        this.#store.patch({
-          selection: { ...current.selection, planId: null },
-          planDraft: initialWorkspaceState().planDraft,
-        });
-        if (current.workflow === "plan") this.#store.patch({ workflow: "plans", precisionOpen: false });
-      }
-      await this.loadPlans({ force: true });
+      await run(writes, {
+        state,
+        signal: controller.signal,
+        store: this.#store,
+        backend: this.#backend,
+        effects: this,
+        helpers: CATALOG_WRITE_HELPERS,
+        failure,
+        projection: () => this.#projection,
+        disposed: () => this.#disposed,
+      });
+    } finally {
+      this.#release(resource, controller);
     }
   }
 
@@ -2518,28 +2427,14 @@ export class EffectController {
       case "delete-area":
         await this.deleteArea();
         return;
-      case "reset-room-cadence": {
+      case "reset-room-cadence":
         if (typeof idOrAction === "string") return;
-        const state = this.#store.value;
-        if (state.selection.planId !== idOrAction.planId || state.planDraft.dirty
-          || state.dataMode !== "live" || state.command !== "idle"
-          || (state.activity !== "idle" && state.activity !== "docked")) return;
-        const reset = await this.#serviceMutation(
-          "reset_room_cadence",
-          { plan: idOrAction.planId, room_id: idOrAction.roomId, modes: [idOrAction.mode] },
-          idOrAction.mode === "mop" ? NOTICES.resetMop : NOTICES.resetVacuum,
+        await this.#write(
+          "plan-mutation",
           idOrAction.mode === "mop" ? NOTICES.resetMopFailed : NOTICES.resetVacuumFailed,
+          (writes, context) => writes.resetRoomCadence(context, idOrAction),
         );
-        if (!reset) return;
-        const catalog = await this.loadPlans({ force: true });
-        const latest = this.#store.value;
-        if (!this.#disposed && latest.selection.entryId === state.selection.entryId
-          && latest.selection.planId === idOrAction.planId && !latest.planDraft.dirty
-          && catalog && latest.resources.plans.value === catalog) {
-          this.selectPlan(idOrAction.planId, true);
-        }
         return;
-      }
     }
   }
 
@@ -2608,38 +2503,6 @@ export class EffectController {
       this.#release("room-preview", controller);
       this.#manualPreviewPreflight = false;
       this.#reconcileManualRoomPreview();
-    }
-  }
-
-  async #serviceMutation(
-    service: string,
-    data: Readonly<Record<string, unknown>>,
-    success: WorkspaceNotice,
-    failure: WorkspaceNotice,
-    onAcknowledged?: (response: unknown) => void,
-  ): Promise<boolean> {
-    const entityId = this.#projection?.vacuumEntityId;
-    if (!entityId || !canEditCoordinates(this.#store.value) || this.#store.value.command === "pending") return false;
-    const controller = this.#controller("plan-mutation");
-    const entryKey = this.#projection?.entryKey;
-    const userKey = this.#projection?.userKey;
-    const current = (): boolean => !this.#disposed && !controller.signal.aborted
-      && entryKey === this.#projection?.entryKey && userKey === this.#projection?.userKey;
-    this.#store.patch({ command: "pending", notice: NOTICES.saving });
-    try {
-      const response = await this.#backend.service("matic_robot", service, data, entityId, {
-        acknowledgementTimeout: "mutation",
-        ...(onAcknowledged ? { returnResponse: true } : {}),
-      });
-      if (!current()) return false;
-      onAcknowledged?.(response);
-      this.#store.patch({ command: "idle", notice: success });
-      return true;
-    } catch {
-      if (current()) this.#store.patch({ command: "failed", notice: failure });
-      return false;
-    } finally {
-      this.#release("plan-mutation", controller);
     }
   }
 
