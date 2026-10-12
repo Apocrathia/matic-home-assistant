@@ -1026,11 +1026,8 @@
     "plan_already_running": {
       "message": "A cleaning plan is already running. Wait for it to finish or stop it, then try again."
     },
-    "plan_not_running": {
-      "message": "No cleaning plan is running."
-    },
     "invalid_plan": {
-      "message": "This request can't run. Check the plan, then try again. Details: {error}"
+      "message": "This request can't run. Check the plan, then try again.\nDetails: {error}"
     },
     "plan_limit_reached": {
       "message": "This robot has reached the saved-plan limit. Delete an existing plan before creating another one."
@@ -1066,7 +1063,7 @@
       "message": "The robot couldn't do that. Check the robot, then try again."
     },
     "room_interrupted": {
-      "message": "Cleaning in {room} stopped before the robot confirmed it was done. The room stays due for the next run. Check the robot, then start the plan again."
+      "message": "Cleaning in {room} stopped before the robot confirmed it was done, so the room stays due for the next run. Check the robot, then start the plan again."
     },
     "room_taken_over": {
       "message": "Home Assistant could no longer confirm that the cleaning in {room} was the one it started, so the plan stopped. Check the robot, then start the plan again."
@@ -1102,7 +1099,7 @@
       "message": "Home Assistant rejected an internal plan command. Start the plan again."
     },
     "cadence_reset_blocked": {
-      "message": "This room schedule can't be reset right now: {error}"
+      "message": "This room schedule can't be reset right now. Try again shortly.\nDetails: {error}"
     },
     "plan_locked": {
       "message": "This plan can't be deleted while it is running or while the robot is still confirming a finished room. Stop it or wait, then try again."
@@ -1111,10 +1108,10 @@
       "message": "A newer command replaced this one before it ran. Send it again if you still want it."
     },
     "mixed_coverage_needs_plan": {
-      "message": "Rooms with different vacuum coverage settings can only be cleaned in order, from a saved plan with settings for each room."
+      "message": "Rooms with different cleaning modes or vacuum coverage can only be cleaned in order from a saved plan with settings for each room. Save the rooms as a plan, then run it."
     },
     "coverage_stopped_before_start": {
-      "message": "Cleaning was stopped before it started."
+      "message": "Cleaning was stopped before it started. Start it again if you still want it."
     },
     "coverage_start_unconfirmed": {
       "message": "The robot didn't confirm that the clean started. Check the robot, then try again."

@@ -471,6 +471,14 @@ def test_every_raised_exception_key_exists_with_its_placeholders() -> None:
         )
 
 
+def test_every_exception_key_is_raised() -> None:
+    from custom_components.matic_robot.client.exceptions import CoverageGuardReason
+
+    raised = {key for _file, _line, key, _supplied in _raised_keys()}
+    raised |= {reason.value for reason in CoverageGuardReason}
+    assert set(_strings()["exceptions"]) - raised == set()
+
+
 def test_coverage_guard_text_matches_everywhere() -> None:
     from custom_components.matic_robot.client.exceptions import _COVERAGE_GUARD_MESSAGES
 

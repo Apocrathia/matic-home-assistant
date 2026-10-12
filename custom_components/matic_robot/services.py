@@ -106,8 +106,8 @@ TARGET_KEYS = (
 )
 
 # invalid_plan {error} clauses for a preview that no longer matches the run.
-_PREVIEW_STALE = "the preview is out of date; preview again, then run it"
-_PREVIEW_CHANGED = "the rooms changed after the preview; preview again, then run it"
+_PREVIEW_STALE = "The preview is out of date. Preview again, then run it."
+_PREVIEW_CHANGED = "The rooms changed after the preview. Preview again, then run it."
 
 CLEAN_SERVICE_SCHEMA = cv.make_entity_service_schema(
     {

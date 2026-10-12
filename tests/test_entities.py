@@ -2231,7 +2231,8 @@ async def test_send_command_defaults_and_option_type_validation() -> None:
     assert coverage_call.kwargs["ordered"] is False
 
     with pytest.raises(
-        ServiceValidationError, match="Cleaning mode must be one of: vacuum, mop"
+        ServiceValidationError,
+        match=r"^Cleaning mode must be one of: vacuum, mop, vacuum_and_mop\.$",
     ) as raised:
         await entity.async_send_command("clean_all", {"cleaning_mode": 5})
     assert "CleaningMode" not in str(raised.value)
@@ -2286,13 +2287,13 @@ async def test_vacuum_named_commands_and_validation() -> None:
         (
             "clean_all",
             {"coverage": "unknown"},
-            "Vacuum coverage must be one of: quick, standard, heavy_duty",
+            r"^Vacuum coverage must be one of: quick, standard, heavy_duty\.$",
             "invalid_cleaning_option",
         ),
         (
             "clean_all",
             {"coverage": 7},
-            "Vacuum coverage must be one of: quick, standard, heavy_duty",
+            r"^Vacuum coverage must be one of: quick, standard, heavy_duty\.$",
             "invalid_cleaning_option",
         ),
         ("unknown", None, "Unsupported Matic command", "unsupported_command"),

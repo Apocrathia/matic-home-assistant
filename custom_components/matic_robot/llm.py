@@ -846,7 +846,8 @@ class MaticGetActivityTool(_MaticTool):
             )
         if args.get("observation_session", session) != session:
             raise HomeAssistantError(
-                "The activity record restarted. Read again without before_sequence."
+                "The activity record restarted. Read again without "
+                "observation_session or before_sequence."
             )
         kind = args["kind"]
         prefixes = {
