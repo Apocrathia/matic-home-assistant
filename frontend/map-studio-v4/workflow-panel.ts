@@ -207,7 +207,7 @@ line-height: var(--ms-lh-snug);
       default:
         return {
           loading: this.#t("map_loading", "Loading…"),
-          unavailable: this.#t("v4_workspace_unavailable", "The cleaning panel isn't available right now. Try again shortly."),
+          unavailable: this.#t("v4_workspace_unavailable", "The cleaning panel isn't available right now."),
           empty: this.#t("v4_nothing_saved", "Nothing saved yet."),
         };
     }
