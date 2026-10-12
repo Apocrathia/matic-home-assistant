@@ -351,6 +351,38 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(failure).toHaveCount(0);
   });
 
+  // The draw tools are startup code, so an area draft can be dirty while the
+  // views chunk failed; the shell's own discard dialog still guards it.
+  test("browser Back asks before discarding an area drawn while the workflow views failed @safety", async ({ page }) => {
+    const fixture = await installPanelFixture(page, { moduleSource: "packaged" });
+    const panel = page.locator(fixture.panelTag);
+    const draft = () => page.evaluate((tag) => {
+      const { workflow, draw } = document.querySelector(tag).getWorkspaceSnapshot();
+      return { workflow, dirty: draw.dirty };
+    }, fixture.panelTag);
+    await page.route("**/chunks/workflow-panel-*.js", (route) => route.abort());
+    await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+    await panel.getByRole("button", { name: /Clean custom area/ }).click();
+    await expect(panel.getByRole("alert").filter({ hasText: "The cleaning tools didn't load. Reload the page to try again." })).toHaveCount(1);
+    await page.evaluate((tag) => {
+      document.querySelector(tag).shadowRoot.querySelector("matic-map-shell-v4").dispatchEvent(new CustomEvent("matic-workspace-intent", {
+        detail: { type: "mark-draft", strokeDelta: 1 },
+        bubbles: true,
+        composed: true,
+      }));
+    }, fixture.panelTag);
+    await expect.poll(draft).toEqual({ workflow: "draw", dirty: true });
+
+    await page.evaluate(() => history.back());
+    const dialog = panel.getByRole("dialog", { name: "Discard area changes?" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("Your area changes have not been saved. Keep editing or discard them.");
+    await expect(dialog.getByRole("button", { name: "Keep editing" })).toBeVisible();
+    await dialog.getByRole("button", { name: "Discard" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(draft).toEqual({ workflow: "none", dirty: false });
+  });
+
   // A resumed Try again opens only what the entry screen would: a limited map
   // offers no room choice, so the reload stays on the entry screen.
   test("Try again in Rooms reloads onto the entry screen when the map is then limited", async ({ page }) => {

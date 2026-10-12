@@ -29,7 +29,7 @@ import { LazyChunk, chunkStatus } from "./lazy-chunk";
 // renders them only in the draw workflow.
 import "./precision-controls";
 
-// The shell's dialogs open only inside a workflow, so their copy loads here.
+// Dialogs that only these views' controls open carry their copy here.
 export { dialogCopy } from "./dialog-copy";
 
 const modes: readonly CleaningMode[] = ["vacuum", "mop", "vacuum_and_mop"];

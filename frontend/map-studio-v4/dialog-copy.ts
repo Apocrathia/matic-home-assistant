@@ -1,4 +1,4 @@
-import type { Localize, WorkspaceState } from "./contracts";
+import type { DialogKind, Localize } from "./contracts";
 import { translate } from "./localize";
 import type { DeleteSubject } from "./state";
 
@@ -12,10 +12,16 @@ export interface DialogPresentation {
   readonly action: "discard" | "delete-plan" | "delete-area" | "reset-room-cadence";
 }
 
+/**
+ * Every dialog opened from a control inside the workflow views. The shell owns
+ * the draft confirmation and builds `discardDraft` itself, so that dialog
+ * shows even when this chunk failed to load.
+ */
+export type WorkflowDialog = Exclude<DialogKind, "discardDraft">;
+
 export const dialogCopy = (
-  dialog: WorkspaceState["dialog"],
+  dialog: WorkflowDialog,
   localize?: Localize,
-  plan = false,
   resetRoomName = "room",
   sharedCadence = false,
   resetMode: "mop" | "coverage" = "mop",
@@ -24,14 +30,6 @@ export const dialogCopy = (
   const t = (key: string, fallback: string, placeholders?: Record<string, string | number>): string =>
     translate(localize, key, fallback, placeholders);
   switch (dialog) {
-    case "discardDraft":
-      return {
-        title: plan ? t("v4_discard_plan", "Discard plan changes?") : t("v4_discard_area", "Discard area changes?"),
-        detail: plan ? t("v4_discard_plan_detail", "Your plan changes have not been saved. Keep editing or discard them.") : t("v4_discard_area_detail", "Your area changes have not been saved. Keep editing or discard them."),
-        cancelLabel: t("v4_keep_area_editing", "Keep editing"),
-        confirmLabel: t("v4_discard", "Discard"),
-        action: "discard",
-      };
     case "confirmDeletePlan":
       return subject && {
         title: t("v4_delete_plan", "Delete plan?"),
@@ -70,7 +68,5 @@ export const dialogCopy = (
         confirmLabel: t("v4_reset", "Reset"),
         action: "reset-room-cadence",
       };
-    case null:
-      return undefined;
   }
 };

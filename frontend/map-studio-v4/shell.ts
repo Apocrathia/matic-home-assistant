@@ -1575,12 +1575,19 @@ export class MaticMapShellV4 extends LitElement {
       ? state.resources.plans.value?.plans.find((plan) => plan.id === state.cadenceResetRequest?.planId)
         ?.rooms.find((room) => room.roomId === state.cadenceResetRequest?.roomId)
       : undefined;
-    // Dialogs open only inside a workflow, whose body has requested the views
-    // chunk that carries their copy; until it is ready there is no dialog.
-    const dialog = this.#views.value?.dialogCopy(
+    const plan = state.workflow === "plan";
+    // The shell asks before a draft is lost, so its copy is here: a draft can
+    // be dirty in Draw while the views chunk failed. Every other dialog opens
+    // from a control in the views chunk, which carries its copy.
+    const dialog: DialogPresentation | undefined = state.dialog === "discardDraft" ? {
+      title: plan ? this.#t("v4_discard_plan", "Discard plan changes?") : this.#t("v4_discard_area", "Discard area changes?"),
+      detail: plan ? this.#t("v4_discard_plan_detail", "Your plan changes have not been saved. Keep editing or discard them.") : this.#t("v4_discard_area_detail", "Your area changes have not been saved. Keep editing or discard them."),
+      cancelLabel: this.#t("v4_keep_area_editing", "Keep editing"),
+      confirmLabel: this.#t("v4_discard", "Discard"),
+      action: "discard",
+    } : state.dialog === null ? undefined : this.#views.value?.dialogCopy(
       state.dialog,
       this.localize,
-      state.workflow === "plan",
       resetRoom?.name || state.cadenceResetRequest?.roomId || "room",
       resetPlanRoom?.cadence?.scope === "shared",
       state.cadenceResetRequest?.mode,
