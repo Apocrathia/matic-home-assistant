@@ -338,6 +338,29 @@ def _services_yaml() -> Copy:
             yield from _texts(value, f"services.yaml.{key}")
 
 
+class _BlueprintLoader(yaml.SafeLoader): ...
+
+
+_BlueprintLoader.add_constructor(
+    "!input", lambda loader, node: loader.construct_scalar(node)
+)
+
+
+def _blueprints() -> Copy:
+    for path in sorted((ROOT / "blueprints").rglob("*.yaml")):
+        data = yaml.load(path.read_text(), Loader=_BlueprintLoader)
+        meta = data["blueprint"]
+        yield f"{path.name}:name", meta["name"]
+        yield f"{path.name}:description", meta["description"]
+        for key, spec in meta["input"].items():
+            for field in ("name", "description"):
+                if field in spec:
+                    yield f"{path.name}:input.{key}.{field}", spec[field]
+        for found_path, text in _texts(data, path.name):
+            if found_path.rsplit(".", 1)[-1] in {"title", "message"}:
+                yield found_path, text
+
+
 _COPY_SURFACES: dict[str, Callable[[], Copy]] = {
     "strings:common": _common,
     "strings:config": lambda: _texts(_strings()["config"], "config"),
@@ -347,6 +370,7 @@ _COPY_SURFACES: dict[str, Callable[[], Copy]] = {
     "strings:selector": lambda: _texts(_strings()["selector"], "selector"),
     "strings:services": _services,
     "services.yaml": _services_yaml,
+    "blueprints": _blueprints,
 }
 
 
@@ -358,6 +382,26 @@ def test_plan_ui_uses_clear_scheduler_language(surface: str) -> None:
         for path, text in _COPY_SURFACES[surface]()
     }
     assert {path: found for path, found in hits.items() if found} == {}
+
+
+def test_blueprint_scanner_reads_every_blueprint() -> None:
+    texts = list(_blueprints())
+    files = {
+        "clean_when_away.yaml",
+        "firmware_intelligence.yaml",
+        "pet_aware.yaml",
+        "quiet_hours.yaml",
+        "room_rotation.yaml",
+    }
+    for name in files:
+        assert sum(path.startswith(f"{name}:") for path, _ in texts) >= 3, name
+    assert {path.split(":")[0] for path, _ in texts if ":" in path} == files
+    for blueprint in (ROOT / "blueprints").rglob("*.yaml"):
+        meta = yaml.load(blueprint.read_text(), Loader=_BlueprintLoader)["blueprint"]
+        missing = [
+            key for key, spec in meta["input"].items() if "description" not in spec
+        ]
+        assert missing == [], f"{blueprint.name}: {missing}"
 
 
 def test_advanced_actions_are_exactly_the_four_named() -> None:

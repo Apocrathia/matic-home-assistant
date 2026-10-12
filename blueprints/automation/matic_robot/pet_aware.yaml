@@ -1,29 +1,33 @@
 blueprint:
-  name: Matic — Pet-aware cleaning plan
+  name: 'Matic: Clean after pets leave'
   description: >-
-    Wait until a pet occupancy sensor has been clear for a configurable period,
-    then run a saved Matic plan. Pair with the pet-waste avoidance switch for
-    an additional robot-side safeguard.
+    Waits until a pet presence sensor has been clear for a time you set, then
+    runs a saved Matic plan. Also turn on the pet-waste avoidance switch for an
+    extra safeguard on the robot.
   domain: automation
   source_url: https://github.com/ProspectOre/matic-home-assistant/blob/main/blueprints/automation/matic_robot/pet_aware.yaml
   input:
     vacuum:
-      name: Matic vacuum
+      name: Robot
+      description: The robot to clean.
       selector:
         entity:
           integration: matic_robot
           domain: vacuum
     pet_presence:
       name: Pet presence sensor
+      description: Pick the sensor that is on while a pet is in the area.
       selector:
         entity:
           domain: binary_sensor
     plan:
-      name: Saved pet-aware plan
+      name: Plan
+      description: Name of a plan saved in Matic Map, for example Main floor.
       selector:
         text:
     clear_time:
       name: Clear time before cleaning
+      description: How long the sensor must stay clear before cleaning starts.
       default:
         minutes: 10
       selector:

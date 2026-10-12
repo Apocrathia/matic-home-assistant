@@ -1,22 +1,24 @@
 blueprint:
-  name: Matic — Firmware intelligence
+  name: 'Matic: Send firmware alerts'
   description: >-
-    Deliver repeated read failures, recovery, and completed actionable research.
-    Unverified protocol-shape observations remain in the report without alerts.
-    Notifications include evidence links, bounded rechecks, and acknowledgement.
-    Reconciles pending delivery after restart. Research routing is configured
-    separately with Matic: Set firmware investigator.
+    Sends a phone notification when the robot's firmware checks keep failing,
+    when they recover, and when firmware research finishes. Notifications let
+    you check again or acknowledge. Notifications that were not delivered are
+    sent after Home Assistant restarts. Choose who researches firmware
+    separately with the action Advanced: Choose firmware investigator.
   domain: automation
   source_url: https://github.com/ProspectOre/matic-home-assistant/blob/main/blueprints/automation/matic_robot/firmware_intelligence.yaml
   input:
     vacuum:
-      name: Matic vacuum
+      name: Robot
+      description: The robot to clean.
       selector:
         entity:
           integration: matic_robot
           domain: vacuum
     firmware_sensor:
-      name: Firmware compatibility sensor
+      name: Firmware check status sensor
+      description: Pick the Firmware check status sensor of the robot.
       selector:
         entity:
           integration: matic_robot
@@ -27,8 +29,8 @@ blueprint:
       selector:
         text:
     notification_namespace:
-      name: Home notification identifier
-      description: Use a different value for each Home Assistant server.
+      name: Notification ID prefix
+      description: Use a different value on each Home Assistant server so notifications don't replace each other.
       default: matic_firmware
       selector:
         text:
@@ -130,13 +132,10 @@ actions:
                 {% else %}Matic firmware reads recovered{% endif %}
               message: >-
                 Firmware {{ report.firmware_version }}.
-                {{ report.reachable_endpoints }}/{{ report.endpoint_count }} endpoints responded.
-                {% if report.attention_required %}Repeated read failures need review.
-                {% elif research_actionable %}An actionable research assessment is ready for administrator review.
-                {% else %}Read checks have recovered.{% endif %}
-                {% if research_actionable %}
-                An administrator can retrieve the assessment with MaticGetFirmware.
-                {% endif %}
+                {{ report.reachable_endpoints }} of {{ report.endpoint_count }} robot data checks succeeded.
+                {% if report.attention_required %}Some checks keep failing; open the details to review them.
+                {% elif research_actionable %}A firmware research report is ready for an administrator to review.
+                {% else %}The checks are working again.{% endif %}
           - action: persistent_notification.create
             data:
               notification_id: "{{ notification_key }}"

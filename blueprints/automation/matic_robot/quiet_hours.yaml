@@ -1,36 +1,41 @@
 blueprint:
-  name: Matic — Quiet-hours cleaning plan
+  name: 'Matic: Clean during quiet hours'
   description: >-
-    Start intelligent cleaning from a saved plan at a chosen time with an
-    optional battery guard. Use Quick coverage for rooms where a shorter
-    overnight run is preferred.
+    Starts a saved plan at a time you choose, but only if the robot's battery
+    is above a level you set (40% by default). Use Quick coverage for rooms
+    where a shorter overnight run is preferred.
   domain: automation
   source_url: https://github.com/ProspectOre/matic-home-assistant/blob/main/blueprints/automation/matic_robot/quiet_hours.yaml
   input:
     vacuum:
-      name: Matic vacuum
+      name: Robot
+      description: The robot to clean.
       selector:
         entity:
           integration: matic_robot
           domain: vacuum
     battery:
-      name: Matic battery sensor
+      name: Battery sensor
+      description: Pick the robot's battery level sensor.
       selector:
         entity:
           integration: matic_robot
           domain: sensor
           device_class: battery
     plan:
-      name: Saved quiet-hours plan
+      name: Plan
+      description: Name of a plan saved in Matic Map, for example Main floor.
       selector:
         text:
     run_time:
       name: Start time
+      description: The time of day the plan starts.
       default: "01:00:00"
       selector:
         time:
     minimum_battery:
-      name: Battery must be above
+      name: Minimum battery
+      description: Skip cleaning when the battery is at or below this level.
       default: 40
       selector:
         number:
