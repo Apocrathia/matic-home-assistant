@@ -246,7 +246,7 @@ export class MaticMapPanelV4 extends LitElement {
       return;
     }
     if (intent.type === "set-plan-enabled") {
-      this.#effects?.setPlanEnabled(intent.enabled);
+      void this.#effects?.setPlanEnabled(intent.enabled);
       return;
     }
     if (intent.type === "select-area") {

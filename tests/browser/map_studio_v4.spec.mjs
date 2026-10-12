@@ -74,7 +74,7 @@ async function loadGallery(page, { scenario = "ready", narrow = false } = {}) {
 async function loadEffectHarness(page) {
   const bundle = await build({
     stdin: {
-    contents: 'export { EffectController } from "./frontend/map-studio-v4/effects"; export { LayerHistoryController, layerDepth } from "./frontend/map-studio-v4/layer-history"; export { WorkspaceStore, captureCoordinateEdit, canEditCoordinates, canReadFloorResources, selectPrimaryAction } from "./frontend/map-studio-v4/state"; export { createGalleryState, withGalleryRoomPreview } from "./frontend/map-studio-v4/gallery-state";',
+    contents: 'export { EffectController } from "./frontend/map-studio-v4/effects"; export { LayerHistoryController, layerDepth } from "./frontend/map-studio-v4/layer-history"; export { WorkspaceStore, captureCoordinateEdit, canEditCoordinates, canReadFloorResources, draftForPlan, selectPrimaryAction } from "./frontend/map-studio-v4/state"; export { createGalleryState, withGalleryRoomPreview } from "./frontend/map-studio-v4/gallery-state";',
     resolveDir: process.cwd(),
     },
     bundle: true, format: "esm", write: false,
@@ -810,14 +810,22 @@ test.describe("Map Studio v0.4 foundation", () => {
         draftDirty: state.planDraft.dirty,
         draftCount: state.planDraft.rooms.length,
         savedCount: state.resources.plans.value?.plans[0]?.rooms.length,
+        planView: state.planView,
       };
-    }, fixture.panelTag)).toEqual({ draftDirty: false, draftCount: 101, savedCount: 101 });
+    }, fixture.panelTag)).toEqual({ draftDirty: false, draftCount: 101, savedCount: 101, planView: "run" });
     await expect.poll(() => page.evaluate(() => window.__panelFixture.planReads)).toBeGreaterThan(initialPlanReads);
 
     const firstSavedCall = await page.evaluate(() => window.__panelFixture.serviceCalls[0]);
     expect(firstSavedCall.data.rooms.map((room) => room.room)).toEqual(
       Array.from({ length: 101 }, (_, index) => `legacy-room-${index + 2}`),
     );
+
+    // A save returns to Run (plan.md §5 Navigation); the next edit opens Edit again.
+    await page.evaluate((tag) => {
+      document.querySelector(tag).shadowRoot.querySelector("matic-map-shell-v4").dispatchEvent(new CustomEvent("matic-workspace-intent", {
+        detail: { type: "set-plan-view", view: "edit" }, bubbles: true, composed: true,
+      }));
+    }, fixture.panelTag);
 
     await gallery.getByRole("checkbox", { name: /Legacy room 2$/ }).uncheck();
     expect(await draftRoomCount()).toBe(100);
@@ -1460,13 +1468,20 @@ test.describe("Map Studio v0.4 foundation", () => {
       ]) {
         const initial = { ...createGalleryState("ready"), workflow: "plan" };
         const store = new WorkspaceStore(initial);
+        const aborted = async () => { throw new DOMException("Aborted", "AbortError"); };
         const backend = {
+          catalog: async () => [initial.resources.entry],
+          history: async () => initial.resources.history.value,
+          scene: aborted,
+          pose: aborted,
           plans: async () => initial.resources.plans.value,
           service: async () => { throw error; },
           dispose() {},
         };
         const effects = new EffectController(store, backend);
         effects.sync({ host: initial.host, activity: initial.activity, batteryPercent: 92, robotLabel: "Synthetic", robots: initial.robots, language: "en", userKey: "test", entryKey: initial.selection.entryId, vacuumEntityId: "vacuum.synthetic" });
+        // The preflight reads the plans fresh, which needs a current map.
+        await effects.refreshCatalog(true);
         await effects.executeAction("run-plan");
         notices.push(store.value.notice?.key);
         effects.dispose();
@@ -1492,7 +1507,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       const calls = [];
       let finish;
       const effects = new EffectController(store, {
-        catalog: async () => new Promise(() => {}),
+        catalog: async () => [initial.resources.entry],
         history: async () => initial.resources.history.value,
         scene: async () => { throw new DOMException("Aborted", "AbortError"); },
         pose: async () => { throw new DOMException("Aborted", "AbortError"); },
@@ -1510,6 +1525,8 @@ test.describe("Map Studio v0.4 foundation", () => {
         dispose() {},
       });
       effects.sync({ host: initial.host, activity: initial.activity, batteryPercent: 92, robotLabel: "Synthetic", robots: initial.robots, language: "en", userKey: "test", entryKey: initial.selection.entryId, vacuumEntityId: "vacuum.synthetic" });
+      // The preflight reads the plans fresh, which needs a current map.
+      await effects.refreshCatalog(true);
       const phases = [];
       try {
         for (const action of ["run-plan", "clean-rooms"]) {
@@ -2516,7 +2533,8 @@ test.describe("Map Studio v0.4 foundation", () => {
         return { draft, failure, blocked, retry };
       } finally { effects.dispose(); }
     });
-    expect(result.failure).toEqual({ draft: result.draft, command: "failed", reloads: 0 });
+    // A failed Home Assistant write returns to idle (plan.md §9, shell.md §6).
+    expect(result.failure).toEqual({ draft: result.draft, command: "idle", reloads: 0 });
     expect(result.blocked).toEqual({ draft: result.draft, writes: 1, reloads: 0 });
     expect(result.retry).toEqual({ command: "idle", writes: 2, reloads: 1 });
   });
@@ -8452,6 +8470,327 @@ test.describe("plan primary action", () => {
       "Can't run this plan until you reset Kitchen's schedule progress, which Home Assistant can't confirm.",
     );
   });
+});
+
+test.describe("plan effects", () => {
+  // Installs `window.planEffects(scenario)`: an EffectController over a gallery
+  // scenario with a synced robot and a current map. `run.calls` lists
+  // [service, data] per Home Assistant call and `run.reloads` counts plan
+  // reads. A test replaces `run.plans` or `run.service` to hold or fail them,
+  // and `run.inFlight()` waits until a lazily loaded write reaches the service.
+  async function loadPlanEffects(page) {
+    await loadEffectHarness(page);
+    await page.evaluate(async () => {
+      const m = await import("/plan-recovery-test.js");
+      const ticks = async () => { for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 0)); };
+      window.planEffects = async (scenario) => {
+        const initial = m.createGalleryState(scenario);
+        const store = new m.WorkspaceStore(initial);
+        const aborted = async () => { throw new DOMException("Aborted", "AbortError"); };
+        const run = { m, initial, store, calls: [], reloads: 0, plans: null, service: null };
+        run.projection = { host: initial.host, activity: initial.activity, batteryPercent: 92, robotLabel: "Synthetic", robots: initial.robots, language: "en", userKey: "one", entryKey: initial.selection.entryId, vacuumEntityId: "vacuum.synthetic" };
+        run.effects = new m.EffectController(store, {
+          catalog: async () => [initial.resources.entry], scene: aborted, pose: aborted,
+          history: async () => initial.resources.history.value,
+          areas: async () => initial.resources.areas.value,
+          plans: async () => { run.reloads += 1; return run.plans ? run.plans() : structuredClone(initial.resources.plans.value); },
+          service: async (_domain, service, data) => { run.calls.push([service, data]); return run.service?.(service, data); },
+          dispose() {},
+        });
+        run.effects.sync(run.projection);
+        await run.effects.refreshCatalog(true);
+        await ticks();
+        store.patch({ map: initial.map, coherence: "current", workflow: initial.workflow, planView: initial.planView,
+          selection: initial.selection, planDraft: initial.planDraft, resources: { ...store.value.resources, plans: initial.resources.plans } });
+        run.reloads = 0;
+        run.hold = () => new Promise((resolve, reject) => { run.finish = resolve; run.fail = reject; });
+        run.inFlight = async () => { for (let i = 0; i < 20 && run.calls.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 0)); };
+        return run;
+      };
+    });
+  }
+
+  test("an in-place reload keeps the plans on screen and a failed one leaves them untouched", async ({ page }) => {
+    await loadPlanEffects(page);
+    const result = await page.evaluate(async () => {
+      const run = await window.planEffects("plan-saved-intelligent");
+      const { store, effects } = run;
+      const fresh = structuredClone(store.value.resources.plans.value);
+      fresh.plans[0].name = "Renamed elsewhere";
+      run.plans = () => run.hold().then(() => fresh);
+      const loading = effects.loadPlans({ force: true, inPlace: true });
+      const during = store.value.resources.plans.status;
+      run.finish(); const returned = await loading;
+      const success = { during, returned: returned === store.value.resources.plans.value,
+        name: store.value.resources.plans.value.plans[0].name, status: store.value.resources.plans.status };
+      const before = store.value.resources.plans;
+      run.plans = async () => { throw new Error("Unavailable"); };
+      const failed = { returned: await effects.loadPlans({ force: true, inPlace: true }), untouched: store.value.resources.plans === before };
+      // With no catalog to keep, the read shows loading as before.
+      store.patch({ resources: { ...store.value.resources, plans: { status: "idle", value: null, problem: null } } });
+      run.plans = () => run.hold().then(() => fresh);
+      const cold = effects.loadPlans({ inPlace: true });
+      const empty = store.value.resources.plans.status;
+      run.finish(); await cold;
+      effects.dispose();
+      return { success, failed, empty };
+    });
+    expect(result).toEqual({
+      success: { during: "ready", returned: true, name: "Renamed elsewhere", status: "ready" },
+      failed: { returned: null, untouched: true },
+      empty: "loading",
+    });
+  });
+
+  test("the preflight never shows Loading rooms and plans", async ({ page }) => {
+    await loadPlanEffects(page);
+    const result = await page.evaluate(async () => {
+      const run = await window.planEffects("plan-saved-intelligent");
+      const { m, store, effects } = run;
+      const catalog = structuredClone(store.value.resources.plans.value);
+      run.plans = () => run.hold().then(() => catalog);
+      const running = effects.executeAction("run-plan");
+      const action = m.selectPrimaryAction(store.value);
+      const during = { status: store.value.resources.plans.status, command: store.value.command,
+        pendingAction: store.value.pendingAction, id: action.id, enabled: action.enabled, reasonKey: action.reasonKey };
+      run.finish(); await running;
+      const sent = { calls: run.calls.map(([service]) => service), pendingAction: store.value.pendingAction };
+      store.patch({ notice: null });
+      const before = store.value.resources.plans;
+      run.plans = async () => { throw new Error("Unavailable"); };
+      await effects.executeAction("run-plan");
+      const failed = { notice: store.value.notice?.key, command: store.value.command,
+        pendingAction: store.value.pendingAction, untouched: store.value.resources.plans === before, calls: run.calls.length };
+      effects.dispose();
+      return { during, sent, failed };
+    });
+    expect(result).toEqual({
+      during: { status: "ready", command: "pending", pendingAction: "run-plan", id: "run-plan", enabled: false,
+        reasonKey: "v4_reason_run_plan_checking" },
+      sent: { calls: ["run_selected_plan"], pendingAction: null },
+      failed: { notice: "v4_notice_plan_preview_refresh_failed", command: "idle", pendingAction: null, untouched: true, calls: 1 },
+    });
+  });
+
+  test("a plan write is pending as a plan save until it settles or is cancelled", async ({ page }) => {
+    await loadPlanEffects(page);
+    const result = await page.evaluate(async () => {
+      const run = await window.planEffects("plan-dirty");
+      const { m, store, effects } = run;
+      run.service = () => run.hold();
+      const saving = effects.executeAction("save-plan");
+      await run.inFlight();
+      const action = m.selectPrimaryAction(store.value);
+      const during = { command: store.value.command, pendingAction: store.value.pendingAction,
+        id: action.id, enabled: action.enabled, reasonKey: action.reasonKey };
+      run.finish(); await saving;
+      const settled = { command: store.value.command, pendingAction: store.value.pendingAction };
+      store.patch({ planDraft: { ...store.value.planDraft, name: "Edited again", dirty: true } });
+      run.calls.length = 0;
+      const cancelled = effects.savePlan();
+      await run.inFlight();
+      void effects.selectFloor("saved-1");
+      const afterCancel = { command: store.value.command, pendingAction: store.value.pendingAction };
+      run.finish(); await cancelled;
+      effects.dispose();
+      return { during, settled, afterCancel };
+    });
+    expect(result).toEqual({
+      during: { command: "pending", pendingAction: "save-plan", id: "save-plan", enabled: false, reasonKey: "v4_reason_plan_saving" },
+      settled: { command: "idle", pendingAction: null },
+      afterCancel: { command: "idle", pendingAction: null },
+    });
+  });
+
+  // shell.md §6: "Check robot status" follows only a failed robot command.
+  for (const write of ["save", "delete", "reset"]) {
+    test(`a failed plan ${write} returns to idle with its notice, not Check robot status`, async ({ page }) => {
+      await loadPlanEffects(page);
+      const result = await page.evaluate(async (write) => {
+        const run = await window.planEffects(write === "save" ? "plan-dirty" : "plan-saved-intelligent");
+        const { m, store, effects } = run;
+        run.service = async () => { throw new Error("Unavailable"); };
+        if (write === "delete") store.dispatch({ type: "set-plan-view", view: "edit" });
+        if (write === "save") await effects.executeAction("save-plan");
+        else if (write === "delete") await effects.executeAction("delete-plan");
+        else await effects.executeAction({ id: "reset-room-cadence", planId: "daily", roomId: "room-a", mode: "mop" });
+        const action = m.selectPrimaryAction(store.value);
+        effects.dispose();
+        return { calls: run.calls.length, command: store.value.command, pendingAction: store.value.pendingAction,
+          notice: store.value.notice?.key, primary: action.id, labelKey: action.labelKey };
+      }, write);
+      expect(result).toEqual({
+        calls: 1, command: "idle", pendingAction: null,
+        ...{
+          save: { notice: "v4_notice_plan_save_failed", primary: "save-plan", labelKey: "v4_action_save_plan" },
+          delete: { notice: "v4_notice_plan_delete_failed", primary: "save-plan", labelKey: "v4_action_done" },
+          reset: { notice: "v4_notice_reset_mop_failed", primary: "run-plan", labelKey: "v4_action_run_plan" },
+        }[write],
+      });
+    });
+  }
+
+  test("post-write reloads keep the plans on screen", async ({ page }) => {
+    await loadPlanEffects(page);
+    const result = await page.evaluate(async () => {
+      const outcome = {};
+      for (const write of ["save", "reset", "delete"]) {
+        const run = await window.planEffects(write === "save" ? "plan-dirty" : "plan-saved-intelligent");
+        const { store, effects } = run;
+        const statuses = new Set();
+        const unsubscribe = store.subscribe((state) => statuses.add(state.resources.plans.status));
+        if (write === "save") await effects.executeAction("save-plan");
+        else if (write === "delete") await effects.executeAction("delete-plan");
+        else await effects.executeAction({ id: "reset-room-cadence", planId: "daily", roomId: "room-a", mode: "mop" });
+        unsubscribe();
+        outcome[write] = { statuses: [...statuses], reloads: run.reloads, workflow: store.value.workflow };
+        effects.dispose();
+      }
+      return outcome;
+    });
+    expect(result).toEqual({
+      save: { statuses: ["ready"], reloads: 1, workflow: "plan" },
+      reset: { statuses: ["ready"], reloads: 1, workflow: "plan" },
+      delete: { statuses: ["ready"], reloads: 1, workflow: "plans" },
+    });
+  });
+
+  test("Done returns a clean saved plan to Run without a write, and a save returns to Run", async ({ page }) => {
+    await loadPlanEffects(page);
+    const result = await page.evaluate(async () => {
+      const run = await window.planEffects("plan-saved-intelligent");
+      const { store, effects } = run;
+      store.dispatch({ type: "set-plan-view", view: "edit" });
+      await effects.executeAction("save-plan");
+      const done = { planView: store.value.planView, calls: run.calls.length };
+      store.dispatch({ type: "set-plan-view", view: "edit" });
+      store.dispatch({ type: "patch-plan-draft", patch: { name: "Renamed" } });
+      await effects.executeAction("save-plan");
+      const saved = { planView: store.value.planView, dirty: store.value.planDraft.dirty,
+        calls: run.calls.map(([service]) => service) };
+      effects.dispose();
+      return { done, saved };
+    });
+    expect(result).toEqual({
+      done: { planView: "run", calls: 0 },
+      saved: { planView: "run", dirty: false, calls: ["save_plan"] },
+    });
+  });
+
+  test("the Run switch saves the freshly read plan with only enabled changed", async ({ page }) => {
+    await loadPlanEffects(page);
+    const result = await page.evaluate(async () => {
+      const run = await window.planEffects("plan-saved-intelligent");
+      const { m, store, effects } = run;
+      const catalog = structuredClone(store.value.resources.plans.value);
+      catalog.plans[0].name = "Renamed elsewhere";
+      run.plans = async () => structuredClone(catalog);
+      run.service = (_service, data) => run.hold().then(() => { catalog.plans[0].enabled = data.enabled; });
+      const original = store.value.planDraft;
+      const pausing = effects.setPlanEnabled(false);
+      await run.inFlight();
+      const during = { enabled: store.value.planDraft.enabled, dirty: store.value.planDraft.dirty, command: store.value.command,
+        pendingAction: store.value.pendingAction, notice: store.value.notice, status: store.value.resources.plans.status, reloads: run.reloads };
+      run.finish(); await pausing;
+      const paused = { enabled: store.value.planDraft.enabled, command: store.value.command, pendingAction: store.value.pendingAction,
+        notice: store.value.notice && { key: store.value.notice.key, tone: store.value.notice.tone }, reloads: run.reloads };
+      const [service, sent] = run.calls[0];
+      // The one request shape: a save of the fresh plan with the same change.
+      store.patch({ planView: "edit", planDraft: { ...m.draftForPlan({ ...catalog.plans[0], enabled: true }), enabled: false, dirty: true } });
+      run.service = (_service, data) => { catalog.plans[0].enabled = data.enabled; };
+      await effects.savePlan();
+      const sameShape = JSON.stringify(sent) === JSON.stringify(run.calls[1][1]);
+      store.patch({ planView: "run", planDraft: { ...store.value.planDraft, dirty: false } });
+      run.calls.length = 0;
+      await effects.setPlanEnabled(true);
+      const on = { enabled: store.value.planDraft.enabled, notice: store.value.notice?.key, sent: run.calls[0]?.[1].enabled };
+      effects.dispose();
+      return { originalEnabled: original.enabled, during, paused, service, name: sent.name, sameShape, on };
+    });
+    expect(result).toEqual({
+      originalEnabled: true,
+      during: { enabled: false, dirty: false, command: "pending", pendingAction: "save-plan", notice: null, status: "ready", reloads: 1 },
+      paused: { enabled: false, command: "idle", pendingAction: null, notice: { key: "v4_notice_plan_paused", tone: "success" }, reloads: 2 },
+      service: "save_plan",
+      name: "Renamed elsewhere",
+      sameShape: true,
+      on: { enabled: true, notice: "v4_notice_plan_on", sent: true },
+    });
+  });
+
+  for (const failure of ["reload", "send", "missing"]) {
+    test(`the switch reverts after a failed ${failure === "missing" ? "reload that lost the plan" : failure === "reload" ? "pre-send reload" : "send"}`, async ({ page }) => {
+      await loadPlanEffects(page);
+      const result = await page.evaluate(async (failure) => {
+        const run = await window.planEffects("plan-saved-intelligent");
+        const { store, effects } = run;
+        const catalog = structuredClone(store.value.resources.plans.value);
+        if (failure === "reload") run.plans = async () => { throw new Error("Unavailable"); };
+        if (failure === "missing") run.plans = async () => ({ ...catalog, plans: [] });
+        if (failure === "send") run.service = async () => { throw new Error("Unavailable"); };
+        const original = store.value.planDraft;
+        await effects.setPlanEnabled(false);
+        effects.dispose();
+        return { calls: run.calls.length, reverted: store.value.planDraft === original, command: store.value.command,
+          pendingAction: store.value.pendingAction, notice: store.value.notice?.key, status: store.value.resources.plans.status };
+      }, failure);
+      expect(result).toEqual({ calls: failure === "send" ? 1 : 0, reverted: true, command: "idle", pendingAction: null,
+        notice: "v4_notice_plan_save_failed", status: "ready" });
+    });
+  }
+
+  test("the switch changes nothing outside a clean, idle Run on an editable map", async ({ page }) => {
+    await loadPlanEffects(page);
+    const result = await page.evaluate(async () => {
+      const refusals = {
+        edit: (store) => store.dispatch({ type: "set-plan-view", view: "edit" }),
+        picker: (store) => store.patch({ workflow: "plans" }),
+        dirty: (store) => store.patch({ planDraft: { ...store.value.planDraft, dirty: true } }),
+        unsaved: (store) => store.patch({ planDraft: { ...store.value.planDraft, id: null } }),
+        pending: (store) => store.patch({ command: "pending" }),
+        failed: (store) => store.patch({ command: "failed" }),
+        map: (store) => store.patch({ pageActive: false }),
+        working: (store) => store.patch({ activity: "cleaning" }),
+      };
+      const outcome = {};
+      for (const [name, refuse] of Object.entries(refusals)) {
+        const run = await window.planEffects("plan-saved-intelligent");
+        refuse(run.store);
+        const before = run.store.value;
+        await run.effects.setPlanEnabled(false);
+        outcome[name] = { unchanged: run.store.value === before, calls: run.calls.length, reloads: run.reloads };
+        run.effects.dispose();
+      }
+      return outcome;
+    });
+    for (const value of Object.values(result)) expect(value).toEqual({ unchanged: true, calls: 0, reloads: 0 });
+    expect(Object.keys(result)).toHaveLength(8);
+  });
+
+  for (const context of ["disposed", "robot", "user"]) {
+    for (const rejected of [false, true]) {
+      test(`a late ${rejected ? "failed" : "successful"} switch after context becomes ${context} changes nothing`, async ({ page }) => {
+        await loadPlanEffects(page);
+        const result = await page.evaluate(async ({ context, rejected }) => {
+          const run = await window.planEffects("plan-saved-intelligent");
+          const { store, effects } = run;
+          run.service = () => run.hold();
+          const switching = effects.setPlanEnabled(false);
+          await run.inFlight();
+          if (context === "disposed") effects.dispose();
+          else effects.sync({ ...run.projection, ...(context === "robot" ? { entryKey: "other-entry", vacuumEntityId: "vacuum.other" } : { userKey: "two" }) });
+          await Promise.resolve(); await Promise.resolve();
+          const before = store.value;
+          if (rejected) run.fail(new Error("Late failure")); else run.finish();
+          await switching;
+          const after = store.value;
+          effects.dispose();
+          return { unchanged: after === before, reloads: run.reloads };
+        }, { context, rejected });
+        expect(result).toEqual({ unchanged: true, reloads: 1 });
+      });
+    }
+  }
 });
 
 test("browser Back steps from Edit to Run to the picker before leaving the route", async ({ page }) => {

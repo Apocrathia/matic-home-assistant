@@ -31,6 +31,7 @@ import {
   CoherenceMachine,
   initialWorkspaceState,
   draftForPlan,
+  hasStoppableWork,
   manualRoomPreviewKey,
   planSelection,
   WorkspaceStore,
@@ -54,7 +55,7 @@ const isAbort = (error: unknown): boolean =>
   error instanceof DOMException && error.name === "AbortError";
 
 const CATALOG_WRITE_HELPERS: CatalogWriteHelpers = {
-  notice, parseSavedPlanId, BackendError, isAbort, canEditCoordinates, initialWorkspaceState,
+  notice, parseSavedPlanId, BackendError, isAbort, canEditCoordinates, initialWorkspaceState, draftForPlan, hasStoppableWork,
 };
 
 const problemCode = (error: unknown, fallback: string): string => {
@@ -2041,7 +2042,8 @@ export class EffectController {
       this.selectArea(null);
     }
     this.#store.dispatch({ type: "open-workflow", workflow });
-    // The workflows history blocks are the ones whose controls write.
+    // History blocks these workflows because their controls write, so opening
+    // one starts loading the writes.
     if (READ_ONLY_WORKFLOWS.includes(workflow)) void this.#catalogWritesModule();
     if (workflow === "history") {
       const entry = this.#store.value.resources.entry;
@@ -2055,19 +2057,23 @@ export class EffectController {
     if (workflow === "draw" || workflow === "areaReview") await this.loadAreas();
   }
 
-  async loadPlans({ force = false }: { force?: boolean } = {}): Promise<PlansCatalog | null> {
+  // `inPlace` keeps a loaded catalog on screen: the read never shows loading
+  // or an error, and a failed read leaves the catalog as it was (plan.md §5).
+  // A read without `force` is skipped while another, shown or not, is in flight.
+  async loadPlans({ force = false, inPlace = false }: { force?: boolean; inPlace?: boolean } = {}): Promise<PlansCatalog | null> {
+    const shown = !inPlace || !this.#store.value.resources.plans.value;
     if (!this.#pageLifecycle.active) {
       this.#controllers.get("plans")?.abort();
       const resources = this.#store.value.resources;
-      this.#store.patch({ resources: { ...resources, plans: resource("idle", resources.plans.value) } });
+      if (shown) this.#store.patch({ resources: { ...resources, plans: resource("idle", resources.plans.value) } });
       return null;
     }
     const entry = this.#store.value.resources.entry;
     if (!entry || !this.#coherence.current() || !canReadFloorResources(this.#store.value)) return null;
-    if (!force && this.#store.value.resources.plans.status === "loading") return null;
+    if (!force && this.#controllers.has("plans")) return null;
     const boundary = entryBoundaryKey(entry);
     const controller = this.#controller("plans");
-    this.#store.patch({
+    if (shown) this.#store.patch({
       resources: { ...this.#store.value.resources, plans: resource("loading", this.#store.value.resources.plans.value) },
     });
     try {
@@ -2117,7 +2123,7 @@ export class EffectController {
       // A failed read proves nothing about the saved plans, so it keeps the
       // last catalog as a reload does; an open delete dialog still names its
       // plan (WorkspaceStore.replace).
-      this.#store.patch({
+      if (shown) this.#store.patch({
         resources: {
           ...this.#store.value.resources,
           plans: resource("error", this.#store.value.resources.plans.value, problem),
@@ -2133,8 +2139,8 @@ export class EffectController {
     this.#store.patch(planSelection(this.#store.value, planId, preserveNotice));
   }
 
-  setPlanEnabled(enabled: boolean): void {
-    this.#store.dispatch({ type: "set-plan-enabled", enabled });
+  setPlanEnabled(enabled: boolean): Promise<void> {
+    return this.#write("plan-mutation", NOTICES.planSaveFailed, (writes, context) => writes.setPlanEnabled(context, enabled));
   }
 
   #resumeAreaCatalog(): void {
@@ -2359,12 +2365,14 @@ export class EffectController {
           this.#store.patch({ notice: NOTICES.planPreviewMissing });
           return;
         }
-        this.#store.patch({ command: "pending", notice: null });
+        this.#store.patch({ command: "pending", pendingAction: "run-plan", notice: null });
         // This read owns a pending preflight, not a transmitted command.
         // Page/floor invalidation cancels it without abandoning a running job.
+        // The read is fresh and in place, so Run plan keeps its view and reason.
         const preflight = this.#controller("plan-preflight");
+        let catalog: PlansCatalog | null;
         try {
-          await this.loadPlans();
+          catalog = await this.loadPlans({ force: true, inPlace: true });
         } finally {
           this.#release("plan-preflight", preflight);
         }
@@ -2384,14 +2392,14 @@ export class EffectController {
           releasePreflight();
           return;
         }
-        if (refreshed.resources.plans.status !== "ready") {
+        if (!catalog) {
           releasePreflight();
           this.#store.patch({
             notice: NOTICES.planPreviewRefreshFailed,
           });
           return;
         }
-        const refreshedPreview = refreshed.resources.plans.value?.plans
+        const refreshedPreview = catalog.plans
           .find((candidate) => candidate.id === plan)?.nextRunPreview;
         if (!refreshedPreview || refreshedPreview.blocker
           || !/^[0-9a-f]{64}$/u.test(refreshedPreview.previewToken ?? "")) {
@@ -2431,7 +2439,10 @@ export class EffectController {
         await this.saveArea();
         return;
       case "save-plan":
-        await this.savePlan();
+        // A clean saved plan has nothing to write: Done returns to Run.
+        if (this.#store.value.planDraft.id && !this.#store.value.planDraft.dirty) {
+          this.#store.dispatch({ type: "set-plan-view", view: "run" });
+        } else await this.savePlan();
         return;
       case "delete-plan":
         await this.deletePlan();

@@ -698,12 +698,14 @@ export class WorkspaceStore {
   // ready read without the item, or a reset that empties the catalog, closes
   // it; a dialog left with nothing to name would block the workspace unseen.
   // Every way out of the plan workflow, an effect's included, resets its view
-  // to Run with no open row (plan.md §5 State).
+  // to Run with no open row (plan.md §5 State). A pending action names only a
+  // pending command, so every way a command settles or is cancelled clears it.
   replace(next: WorkspaceState): WorkspaceState {
     if (next === this.#state) return next;
-    const left = next.workflow !== "plan" && (next.planView !== "run" || next.expandedRoom !== null)
-      ? { ...next, planView: "run" as const, expandedRoom: null }
-      : next;
+    const settled = next.pendingAction && next.command !== "pending" ? { ...next, pendingAction: null } : next;
+    const left = settled.workflow !== "plan" && (settled.planView !== "run" || settled.expandedRoom !== null)
+      ? { ...settled, planView: "run" as const, expandedRoom: null }
+      : settled;
     const noticed = left.notice && left.notice !== this.#state.notice
       ? { ...left, notice: readWorkspaceNotice(left.notice) ?? this.#state.notice }
       : left;

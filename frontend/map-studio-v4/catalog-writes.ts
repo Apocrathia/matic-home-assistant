@@ -3,8 +3,7 @@
 // Runtime imports are deliberately absent: an import edge into the startup
 // modules makes esbuild split them into more chunks, which costs the startup
 // graph more than this module saves. Startup helpers arrive in the context.
-import type { HassProjection, ResetCadenceAction, WorkspaceNotice, WorkspaceState } from "./contracts";
-import type { PlanRoom } from "./backend-contracts";
+import type { HassProjection, PlanDraft, ResetCadenceAction, WorkspaceNotice, WorkspaceState } from "./contracts";
 import type { MaticBackend } from "./backend";
 import type { WorkspaceStore } from "./state";
 import type { EffectController } from "./effects";
@@ -17,6 +16,8 @@ export interface CatalogWriteHelpers {
   readonly isAbort: (error: unknown) => boolean;
   readonly canEditCoordinates: typeof import("./state").canEditCoordinates;
   readonly initialWorkspaceState: typeof import("./state").initialWorkspaceState;
+  readonly draftForPlan: typeof import("./state").draftForPlan;
+  readonly hasStoppableWork: typeof import("./state").hasStoppableWork;
 }
 
 /**
@@ -88,7 +89,7 @@ export const saveArea = async (context: CatalogWriteContext): Promise<void> => {
       && areas.areas.some((area) => area.id === id)) effects.selectArea(id);
   } catch (error) {
     if (isAbort(error) || !current()) return;
-    store.patch({ command: "failed", notice: context.failure });
+    store.patch({ command: "idle", notice: context.failure });
   }
 };
 
@@ -106,7 +107,7 @@ export const deleteArea = async (context: CatalogWriteContext): Promise<void> =>
     store.patch({ command: "idle", notice: notice("success", "v4_notice_area_deleted", "Area deleted") });
     await context.effects.loadAreas();
   } catch (error) {
-    if (!isAbort(error) && current()) store.patch({ command: "failed", notice: context.failure });
+    if (!isAbort(error) && current()) store.patch({ command: "idle", notice: context.failure });
   }
 };
 
@@ -116,34 +117,10 @@ export const savePlan = async (context: CatalogWriteContext): Promise<void> => {
   const draft = state.planDraft;
   const plans = state.resources.plans.value;
   if (!plans || !draft.name.trim() || !draft.rooms.length || !canEditCoordinates(state)) return;
-  const rooms: readonly PlanRoom[] = draft.rooms;
   let savedId = draft.id;
-  const saved = await serviceMutation(context, "save_plan", {
-    ...(draft.id ? { plan_id: draft.id } : {}),
-    name: draft.name.trim(),
-    enabled: draft.enabled,
-    run_behavior: draft.runBehavior,
-    rooms: rooms.map((room) => ({
-      room: room.roomId,
-      cleaning_mode: room.cleaningMode,
-      coverage_setting: room.coverageSetting,
-      ...(room.cadence ? {
-        cadence: {
-          scope: room.cadence.scope,
-          mop_every_n: room.cadence.mopEveryN,
-          coverage_every_n: room.cadence.coverageEveryN,
-          periodic_coverage_setting: room.cadence.periodicCoverageSetting,
-          do_mop_next: room.cadence.doMopNext,
-          do_coverage_next: room.cadence.doCoverageNext,
-        },
-      } : {}),
-    })),
-    return_to_base: draft.returnToBase,
-    finish_current_room: draft.finishCurrentRoom,
-    finish_current_room_threshold: draft.finishCurrentRoomThreshold,
-    // Home Assistant makes a new plan the default only when none exists.
-    select: plans.selectedPlan === draft.id,
-  }, notice("success", "v4_notice_plan_saved", "Plan saved"), (response) => {
+  // Home Assistant makes a new plan the default only when none exists.
+  const request = planSaveRequest(draft, plans.selectedPlan === draft.id);
+  const saved = await serviceMutation(context, "save_plan", request, notice("success", "v4_notice_plan_saved", "Plan saved"), (response) => {
     const acknowledgedId = response === undefined && draft.id ? draft.id : parseSavedPlanId(response);
     if (draft.id && acknowledgedId !== draft.id) throw new BackendError("invalid-plan-save-response");
     savedId = acknowledgedId;
@@ -153,11 +130,15 @@ export const savePlan = async (context: CatalogWriteContext): Promise<void> => {
     // Refresh the catalog in every case, but reconcile only the same draft.
     const savedDraft = store.value.workflow === "plan"
       && store.value.planDraft === draft ? { ...draft, id: savedId, dirty: false } : null;
-    if (savedDraft) store.patch({
-      planDraft: savedDraft,
-      selection: { ...store.value.selection, planId: savedId },
-    });
-    const catalog = await effects.loadPlans({ force: true });
+    if (savedDraft) {
+      store.patch({
+        planDraft: savedDraft,
+        selection: { ...store.value.selection, planId: savedId },
+      });
+      // The saved draft is clean, so the plan returns to Run (plan.md §5).
+      store.dispatch({ type: "set-plan-view", view: "run" });
+    }
+    const catalog = await effects.loadPlans({ force: true, inPlace: true });
     if (savedDraft && store.value.workflow === "plan"
       && store.value.planDraft === savedDraft
       && store.value.selection.entryId === state.selection.entryId
@@ -184,7 +165,7 @@ export const deletePlan = async (context: CatalogWriteContext): Promise<void> =>
       });
       if (current.workflow === "plan") store.patch({ workflow: "plans", precisionOpen: false });
     }
-    await context.effects.loadPlans({ force: true });
+    await context.effects.loadPlans({ force: true, inPlace: true });
   }
 };
 
@@ -203,7 +184,7 @@ export const resetRoomCadence = async (context: CatalogWriteContext, action: Res
       : notice("success", "v4_notice_reset_vacuum", "Vacuum rotation progress reset"),
   );
   if (!reset) return;
-  const catalog = await context.effects.loadPlans({ force: true });
+  const catalog = await context.effects.loadPlans({ force: true, inPlace: true });
   const latest = store.value;
   if (!context.disposed() && latest.selection.entryId === state.selection.entryId
     && latest.selection.planId === action.planId && !latest.planDraft.dirty
@@ -212,6 +193,67 @@ export const resetRoomCadence = async (context: CatalogWriteContext, action: Res
   }
 };
 
+/**
+ * The Run switch (plan.md §5). It shows the change at once, reads the catalog
+ * in place, then saves the plan as Home Assistant now holds it with only
+ * `enabled` changed. A failed read or send puts the switch back.
+ */
+export const setPlanEnabled = async (context: CatalogWriteContext, enabled: boolean): Promise<void> => {
+  const { state, store, effects } = context;
+  const { notice, canEditCoordinates, hasStoppableWork, draftForPlan } = context.helpers;
+  const id = state.planDraft.id;
+  // Admitted when asked for and still now, for the same clean saved plan.
+  const switchable = (value: WorkspaceState): boolean => value.workflow === "plan" && value.planView === "run"
+    && value.planDraft === state.planDraft && !value.planDraft.dirty && value.command === "idle"
+    && canEditCoordinates(value) && !hasStoppableWork(value);
+  const writer = planWriter(context);
+  if (!id || !writer || !switchable(state) || !switchable(store.value)) return;
+  const switched = store.dispatch({ type: "set-plan-enabled", enabled }).planDraft;
+  store.patch({ command: "pending", pendingAction: "save-plan", notice: null });
+  const catalog = await effects.loadPlans({ force: true, inPlace: true });
+  const plan = catalog?.plans.find((candidate) => candidate.id === id);
+  const sent = catalog && plan
+    ? await writer.send("save_plan", planSaveRequest({ ...draftForPlan(plan), enabled }, catalog.selectedPlan === id))
+    : writer.current() ? false : null;
+  if (sent === null) return;
+  store.patch({
+    command: "idle",
+    notice: !sent ? context.failure : enabled
+      ? notice("success", "v4_notice_plan_on", "Plan turned on")
+      : notice("success", "v4_notice_plan_paused", "Plan paused"),
+    ...(!sent && store.value.planDraft === switched ? { planDraft: state.planDraft } : {}),
+  });
+  if (sent) await effects.loadPlans({ force: true, inPlace: true });
+};
+
+/** The one `save_plan` request shape, for Save and the Run switch. Parked rooms are never sent. */
+const planSaveRequest = (draft: PlanDraft, select: boolean): Record<string, unknown> => ({
+  ...(draft.id ? { plan_id: draft.id } : {}),
+  name: draft.name.trim(),
+  enabled: draft.enabled,
+  run_behavior: draft.runBehavior,
+  rooms: draft.rooms.map((room) => ({
+    room: room.roomId,
+    cleaning_mode: room.cleaningMode,
+    coverage_setting: room.coverageSetting,
+    ...(room.cadence ? {
+      cadence: {
+        scope: room.cadence.scope,
+        mop_every_n: room.cadence.mopEveryN,
+        coverage_every_n: room.cadence.coverageEveryN,
+        periodic_coverage_setting: room.cadence.periodicCoverageSetting,
+        do_mop_next: room.cadence.doMopNext,
+        do_coverage_next: room.cadence.doCoverageNext,
+      },
+    } : {}),
+  })),
+  return_to_base: draft.returnToBase,
+  finish_current_room: draft.finishCurrentRoom,
+  finish_current_room_threshold: draft.finishCurrentRoomThreshold,
+  select,
+});
+
+/** Save, delete and Reset: refused unless the map is editable, then pending as a plan save. */
 const serviceMutation = async (
   context: CatalogWriteContext,
   service: string,
@@ -219,30 +261,47 @@ const serviceMutation = async (
   success: WorkspaceNotice,
   onAcknowledged?: (response: unknown) => void,
 ): Promise<boolean> => {
-  const { signal, store } = context;
   const { notice, canEditCoordinates } = context.helpers;
-  const entityId = context.projection()?.vacuumEntityId;
-  if (!entityId || !canEditCoordinates(context.state)) return false;
-  const entryKey = context.projection()?.entryKey;
-  const userKey = context.projection()?.userKey;
-  const current = (): boolean => !context.disposed() && !signal.aborted
-    && entryKey === context.projection()?.entryKey && userKey === context.projection()?.userKey;
-  store.patch({ command: "pending", notice: notice("info", "v4_notice_saving", "Saving…") });
-  try {
-    const response = await context.backend.service("matic_robot", service, data, entityId, {
-      acknowledgementTimeout: "mutation",
-      ...(onAcknowledged ? { returnResponse: true } : {}),
-    });
-    if (!current()) return false;
-    onAcknowledged?.(response);
-    store.patch({ command: "idle", notice: success });
-    return true;
-  } catch {
-    if (current()) store.patch({ command: "failed", notice: context.failure });
-    return false;
-  } finally {
-    // Home Assistant has answered, so the next plan write may start while
-    // this one reloads the catalog.
-    context.release();
-  }
+  const writer = planWriter(context);
+  if (!writer || !canEditCoordinates(context.state)) return false;
+  context.store.patch({ command: "pending", pendingAction: "save-plan", notice: notice("info", "v4_notice_saving", "Saving…") });
+  const sent = await writer.send(service, data, onAcknowledged);
+  if (sent !== null) context.store.patch({ command: "idle", notice: sent ? success : context.failure });
+  return sent === true;
+};
+
+/**
+ * Sends plan-catalog writes for the entry and user of this moment. `send`
+ * resolves true once Home Assistant acknowledges, false when the write failed
+ * and null when the answer arrives for an older entry or user, which then
+ * changes nothing.
+ */
+const planWriter = (context: CatalogWriteContext) => {
+  const projection = context.projection();
+  const entityId = projection?.vacuumEntityId;
+  if (!entityId) return null;
+  const current = (): boolean => !context.disposed() && !context.signal.aborted
+    && projection.entryKey === context.projection()?.entryKey && projection.userKey === context.projection()?.userKey;
+  const send = async (
+    service: string,
+    data: Readonly<Record<string, unknown>>,
+    onAcknowledged?: (response: unknown) => void,
+  ): Promise<boolean | null> => {
+    try {
+      const response = await context.backend.service("matic_robot", service, data, entityId, {
+        acknowledgementTimeout: "mutation",
+        ...(onAcknowledged ? { returnResponse: true } : {}),
+      });
+      if (!current()) return null;
+      onAcknowledged?.(response);
+      return true;
+    } catch {
+      return current() ? false : null;
+    } finally {
+      // Home Assistant has answered, so the next plan write may start while
+      // this one reloads the catalog.
+      context.release();
+    }
+  };
+  return { current, send };
 };
