@@ -4689,7 +4689,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(quick.nth(1)).toHaveAccessibleName(/^Run a plan (1 saved plan|\d+ saved plans)/);
     await expect(gallery.getByRole("heading", { name: "Map tools", level: 3 })).toBeVisible();
     await expect(gallery.locator(".shelf").getByRole("button", { name: /^Clean custom area Draw or choose a custom area/ })).toBeVisible();
-    await expect(gallery.locator(".shelf").getByRole("button", { name: /^Map history Saved maps are floor-scoped and read only/ })).toBeVisible();
+    await expect(gallery.locator(".shelf").getByRole("button", { name: /^Map history Saved maps show one floor each\. They can't be edited and never show where the robot is now\./ })).toBeVisible();
     await expect(gallery.getByRole("button", { name: "Run plan", exact: true })).toHaveCount(0);
     // The launcher and the Rooms strip action share "Clean rooms"; each view holds only one.
     await expect(gallery.getByRole("button", { name: /^Clean rooms/ })).toHaveCount(1);
@@ -4948,7 +4948,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       await gallery.evaluate((element) => element.setScenario("draw"));
       // The Rooms rows still on screen match the row selector, so wait for the
       // Draw list itself before measuring its rows.
-      await expect(gallery.getByRole("group", { name: "Saved custom areas" })).toBeVisible();
+      await expect(gallery.getByRole("group", { name: "Custom areas" })).toBeVisible();
       await expectContrast(".list .ms-row small");
       await gallery.evaluate((element) => { element.narrow = true; element.setScenario("rooms"); });
       await expectContrast(".sheet-status");
@@ -5145,9 +5145,9 @@ test.describe("Map Studio v0.4 foundation", () => {
     const before = await snapshot(page);
     expect(before.draw.circles.length).toBeGreaterThan(0);
 
-    // "Clear drawing" is the draw workflow's secondary action in the action
+    // "Clear" is the draw workflow's secondary action in the action
     // bar; the toolbar itself no longer carries a Clear button.
-    const clear = gallery.locator(".action-bar").getByRole("button", { name: "Clear drawing", exact: true });
+    const clear = gallery.locator(".action-bar").getByRole("button", { name: "Clear", exact: true });
     await expect(clear).not.toHaveAttribute("aria-disabled", "true");
     await clear.click();
     await expect.poll(async () => (await snapshot(page)).draw.circles.length).toBe(0);
@@ -5327,7 +5327,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       document.body.append(gallery);
     }, GALLERY_TAG);
     const gallery = page.locator(GALLERY_TAG);
-    await expect(gallery.getByRole("button", { name: "Clear drawing", exact: true })).toBeVisible();
+    await expect(gallery.getByRole("button", { name: "Clear", exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= 320)).toBe(true);
   });
 
@@ -7270,7 +7270,7 @@ test("zone perimeter closes automatically and supports extending dragging insert
   await expect(gallery.locator(".zone-help")).toBeVisible();
   const box = await canvas.boundingBox();
   await page.mouse.click(box.x + box.width * .3 - 45, box.y + box.height * .25 - 40);
-  const clear = gallery.getByRole("button", { name: "Clear drawing", exact: true });
+  const clear = gallery.getByRole("button", { name: "Clear", exact: true });
   await expect(clear).toBeEnabled();
   expect((await snapshot(page)).draw.circles).toHaveLength(0);
   await clear.click();
@@ -7439,7 +7439,7 @@ for (const flag of ["complete", "floorCoherent", "sessionVerified"]) test(`Name 
     element.replaceWorkspaceState({ ...state, map: { ...state.map, [flag]: false } });
   }, flag);
   await expect(save).toBeDisabled();
-  await expect(save).toHaveAccessibleDescription("Home Assistant can show this map but can't confirm it well enough to start cleaning.");
+  await expect(save).toHaveAccessibleDescription("Can't save until Home Assistant can confirm this map.");
 });
 
 for (const change of ["revision", "floor", "session"]) test(`slow initial scene survives only a ${change} catalog update`, async ({ page }) => {
@@ -7782,7 +7782,7 @@ test("companion safe areas keep navigation and drawing actions clear of system U
   await expect.poll(async () => (await navigation.boundingBox())?.y).toBeGreaterThanOrEqual(62);
   const initialHeight = (await bar.boundingBox()).height;
   await gallery.getByRole("button", { name: /Clean custom area/ }).click();
-  const clear = gallery.getByRole("button", { name: "Clear drawing", exact: true });
+  const clear = gallery.getByRole("button", { name: "Clear", exact: true });
   const clearBox = await clear.boundingBox();
   expect(clearBox.y + clearBox.height).toBeLessThanOrEqual(844 - 34);
   await expect(gallery.locator(".mobile-sheet")).toBeVisible();

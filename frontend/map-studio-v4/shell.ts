@@ -187,7 +187,7 @@ const workflowCopy = (state: WorkspaceState, localize?: Localize): {
     case "areaReview":
       return { title: t("v4_name_this_area", "Name this area"), description: t("area_details_hint", "Name the area and choose cleaning settings.") };
     case "history":
-      return { title: t("v4_map_history", "Map history"), description: t("v4_map_history_detail", "Saved maps are floor-scoped and read only.") };
+      return { title: t("v4_map_history", "Map history"), description: t("v4_map_history_detail", "Saved maps show one floor each. They can't be edited and never show where the robot is now.") };
     case "support":
       return { title: t("v4_map_diagnostics", "Map diagnostics"), description: t("v4_map_support_detail", "Details to share with support") };
     case "none":
@@ -1362,7 +1362,7 @@ export class MaticMapShellV4 extends LitElement {
       t("v4_map_history", "Map history"),
       iconHistory,
       "history",
-      t("v4_map_history_detail", "Saved maps are floor-scoped and read only."),
+      t("v4_map_history_detail", "Saved maps show one floor each. They can't be edited and never show where the robot is now."),
     );
     const diagnosticsRow = () => this.#shelfRow(
       t("v4_map_diagnostics", "Map diagnostics"),
@@ -1629,7 +1629,7 @@ export class MaticMapShellV4 extends LitElement {
     const clearDrawing: PrimaryAction | null = state.workflow === "draw" && state.dataMode === "live"
       ? {
         id: "clear-draft",
-        label: "Clear drawing",
+        label: "Clear",
         labelKey: "v4_clear_drawing",
         kind: "neutral",
         enabled: state.draw.circles.length > 0 || Boolean(state.draw.outline?.points.length),

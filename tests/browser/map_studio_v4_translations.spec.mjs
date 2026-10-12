@@ -269,7 +269,7 @@ test("a Home Assistant translation error string falls back to English", async ({
   // Found by class: its accessible name is the translated text under test.
   const brush = panel.locator(".draw-brush").first();
   await expect(brush).toHaveAttribute("aria-label", /^Brush width, \d+\.\d{2} m\. Opens brush settings\.$/);
-  await expect(brush).toContainText(/^Brush \d+\.\d{2} m$/);
+  await expect(brush).toContainText(/^\d+\.\d{2} m$/);
 });
 
 test("a localize that throws falls back to English", async ({ page }) => {
@@ -289,7 +289,7 @@ test("a localize that throws falls back to English", async ({ page }) => {
   // Found by class: its accessible name is the translated text under test.
   const brush = panel.locator(".draw-brush").first();
   await expect(brush).toHaveAttribute("aria-label", /^Brush width, \d+\.\d{2} m\. Opens brush settings\.$/);
-  await expect(brush).toContainText(/^Brush \d+\.\d{2} m$/);
+  await expect(brush).toContainText(/^\d+\.\d{2} m$/);
   expect(errors).toEqual([]);
 });
 

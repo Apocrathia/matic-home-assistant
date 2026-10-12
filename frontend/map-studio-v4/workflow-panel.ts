@@ -783,7 +783,7 @@ line-height: var(--ms-lh-snug);
         ${this.state.draw.tool !== "outline" ? html`<p class="subtle">${this.#t("v4_keyboard_draw_help", "Keyboard: focus the map, use arrow keys to aim, then Enter to paint or erase at the crosshair. D selects Paint; E selects Erase.")}</p>` : nothing}
         ${this.#resource(areas, html`
           <div class="group">
-            <h3 class="group-heading" id="areas-heading">${this.#t("area_workspace_title", "Saved custom areas")}</h3>
+            <h3 class="group-heading" id="areas-heading">${this.#t("area_workspace_title", "Custom areas")}</h3>
             <div class="list" role="group" aria-labelledby="areas-heading">
             <button class="list-button ms-row ms-row" type="button" @click=${() => this.#intent({ type: "select-area", areaId: null })}>${this.#t("area_new", "New area")}</button>
             ${(areas.value?.areas || []).map((area) => html`
@@ -903,7 +903,7 @@ line-height: var(--ms-lh-snug);
             `)}
           </div>
         </div>
-        <p class="subtle">${this.#t("v4_history_privacy", "Saved maps are floor-scoped and never show a live robot position.")}</p>
+        <p class="subtle">${this.#t("v4_history_privacy", "Saved maps show one floor each and never show where the robot is now.")}</p>
       </div>
     `);
   }

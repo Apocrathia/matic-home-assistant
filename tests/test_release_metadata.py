@@ -323,15 +323,7 @@ def _common(*modules: str) -> Copy:
 
 
 _COPY_SURFACES: dict[str, Callable[[], Copy]] = {
-    "strings:common@startup": lambda: _common(
-        "shell.ts",
-        "state.ts",
-        "map-canvas.ts",
-        "diagnostics-panel.ts",
-        "lazy-chunk.ts",
-        "effects.ts",
-    ),
-    "strings:common@workflow": lambda: _common("workflow-panel.ts"),
+    "strings:common": _common,
 }
 
 

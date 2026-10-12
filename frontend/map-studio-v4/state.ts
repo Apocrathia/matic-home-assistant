@@ -984,10 +984,9 @@ export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction | NoBu
   }
   if (state.workflow === "draw") {
     const drawFirst = { reason: "Can't save until you draw the area.", reasonKey: "v4_reason_save_area_draw" };
-    // shell.md §2 row 8: the reason the strip's body gives for a map that cannot be confirmed.
     const mapLimited = {
-      reason: "Home Assistant can show this map but can't confirm it well enough to start cleaning.",
-      reasonKey: "v4_map_limited_body",
+      reason: "Can't save until Home Assistant can confirm this map.",
+      reasonKey: "v4_reason_save_area_map",
     };
     const hasCoverage = state.draw.circles.length > 0 && (!state.draw.outline || state.draw.outline.closed);
     const editable = canEditCoordinates(state);
