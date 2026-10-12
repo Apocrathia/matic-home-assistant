@@ -110,7 +110,7 @@ def test_v4_foundation_is_local_licensed_and_within_initial_budget() -> None:
 
 
 def test_dialog_copy_ships_in_the_lazy_workflow_chunk() -> None:
-    """Dialogs open only inside a workflow, so their copy is not startup weight."""
+    """Only workflow controls open delete and reset dialogs, so their copy is lazy."""
     _, assets = _startup_graph()
     startup = "".join(
         (_STUDIO_V4_DIRECTORY.parent / path).read_text(encoding="utf-8")
