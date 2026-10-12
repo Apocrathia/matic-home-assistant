@@ -1432,7 +1432,7 @@
     },
     "inspect_hermes_endpoint": {
       "name": "Advanced: Inspect robot data",
-      "description": "Reads the size and a checksum of one item in the robot's local data, without reading its contents. Items that hold credentials are blocked.",
+      "description": "Reports the size and a checksum of one item in the robot's local data. Its contents are never stored or shown. Items that hold credentials are blocked.",
       "fields": {
         "endpoint": {
           "name": "Data item",

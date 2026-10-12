@@ -682,7 +682,7 @@ def test_user_copy_matches_pairing_and_plan_behavior() -> None:
         assert "room map" in exceptions["room_plan_unavailable"]["message"]
         assert "reported an error" in exceptions["robot_error"]["message"]
         inspection = services["inspect_hermes_endpoint"]
-        assert "without reading its contents" in inspection["description"]
+        assert "never stored or shown" in inspection["description"]
         assert set(inspection["fields"]) == {"endpoint", "limit"}
         firmware_snapshot = services["firmware_snapshot"]["description"]
         assert "saves a record without the data itself" in firmware_snapshot
