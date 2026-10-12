@@ -8739,6 +8739,48 @@ test.describe("plan effects", () => {
     });
   }
 
+  // An in-place read keeps only a settled catalog: when it replaces a shown
+  // read that was loading and then fails, it reports the failure itself.
+  for (const write of ["switch", "save"]) {
+    test(`a failed ${write} reload that replaced a loading read does not stay loading`, async ({ page }) => {
+      await loadPlanEffects(page);
+      const result = await page.evaluate(async (write) => {
+        const run = await window.planEffects(write === "save" ? "plan-dirty" : "plan-saved-intelligent");
+        const { store, effects } = run;
+        run.plans = () => run.reloads === 1 ? run.hold() : Promise.reject(new Error("Unavailable"));
+        const shown = effects.loadPlans();
+        const loading = store.value.resources.plans.status;
+        if (write === "save") await effects.executeAction("save-plan");
+        else await effects.setPlanEnabled(false);
+        run.finish(); await shown;
+        const outcome = { loading, status: store.value.resources.plans.status, command: store.value.command, reloads: run.reloads };
+        effects.dispose();
+        return outcome;
+      }, write);
+      expect(result).toEqual({ loading: "loading", status: "error", command: "idle", reloads: 2 });
+    });
+  }
+
+  test("a background reload during the switch's read is skipped and the switch still saves", async ({ page }) => {
+    await loadPlanEffects(page);
+    const result = await page.evaluate(async () => {
+      const run = await window.planEffects("plan-saved-intelligent");
+      const { store, effects } = run;
+      const catalog = structuredClone(store.value.resources.plans.value);
+      run.plans = () => run.reloads === 1 ? run.hold().then(() => catalog) : Promise.resolve(catalog);
+      run.service = (_service, data) => { catalog.plans[0].enabled = data.enabled; };
+      const switching = effects.setPlanEnabled(false);
+      for (let i = 0; i < 20 && run.reloads === 0; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+      const background = await effects.loadPlans();
+      const skipped = { returned: background, reloads: run.reloads };
+      run.finish(); await switching;
+      const outcome = { skipped, calls: run.calls.map(([service]) => service), notice: store.value.notice?.key, enabled: store.value.planDraft.enabled };
+      effects.dispose();
+      return outcome;
+    });
+    expect(result).toEqual({ skipped: { returned: null, reloads: 1 }, calls: ["save_plan"], notice: "v4_notice_plan_paused", enabled: false });
+  });
+
   test("the switch changes nothing outside a clean, idle Run on an editable map", async ({ page }) => {
     await loadPlanEffects(page);
     const result = await page.evaluate(async () => {

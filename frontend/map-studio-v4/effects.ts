@@ -2057,11 +2057,13 @@ export class EffectController {
     if (workflow === "draw" || workflow === "areaReview") await this.loadAreas();
   }
 
-  // `inPlace` keeps a loaded catalog on screen: the read never shows loading
+  // `inPlace` keeps a ready catalog on screen: the read never shows loading
   // or an error, and a failed read leaves the catalog as it was (plan.md §5).
-  // A read without `force` is skipped while another, shown or not, is in flight.
+  // A catalog that is not ready is shown as any read shows it, so a read that
+  // replaces a loading one reports its own outcome. A read without `force` is
+  // skipped while another, shown or not, is in flight.
   async loadPlans({ force = false, inPlace = false }: { force?: boolean; inPlace?: boolean } = {}): Promise<PlansCatalog | null> {
-    const shown = !inPlace || !this.#store.value.resources.plans.value;
+    const shown = !inPlace || this.#store.value.resources.plans.status !== "ready";
     if (!this.#pageLifecycle.active) {
       this.#controllers.get("plans")?.abort();
       const resources = this.#store.value.resources;
