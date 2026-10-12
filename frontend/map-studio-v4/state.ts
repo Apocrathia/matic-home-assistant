@@ -959,16 +959,14 @@ const roomBlockReason = (reasons: readonly CadenceReason[], room: string) => {
  * and a link to it; null when none blocks or that room has no catalog name.
  */
 const roomBlocker = (state: WorkspaceState, plan: SavedPlan) => {
-  for (const { roomId, cadenceReasons = [] } of draftForPlan(plan).rooms) {
-    const room = state.resources.plans.value?.rooms.find((candidate) => candidate.roomId === roomId)?.name;
-    const blocked = roomBlockReason(cadenceReasons, room ?? "");
-    if (blocked) {
-      return room
-        ? { ...blocked, jump: { label: "Review {room}", labelKey: "v4_review_room", labelPlaceholders: { room }, roomId } }
-        : null;
+  const blocking = draftForPlan(plan).rooms.find(({ cadenceReasons = [] }) => roomBlockReason(cadenceReasons, ""));
+  const room = blocking && state.resources.plans.value?.rooms.find((candidate) => candidate.roomId === blocking.roomId)?.name;
+  return blocking && room
+    ? {
+      ...roomBlockReason(blocking.cadenceReasons ?? [], room),
+      jump: { label: "Review {room}", labelKey: "v4_review_room", labelPlaceholders: { room }, roomId: blocking.roomId },
     }
-  }
-  return null;
+    : null;
 };
 
 export const canResumeMotion = (state: WorkspaceState): boolean =>
