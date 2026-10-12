@@ -132,3 +132,34 @@ def test_privacy_scan_skips_generated_browser_artifacts(
     generated.write_text("host=" + ".".join(("192", "168", "50", "12")))
 
     assert scan_tree(tmp_path) == []
+
+
+def test_privacy_scan_skips_generated_ux_audit_screenshots(tmp_path: Path) -> None:
+    """Do not flag gitignored synthetic UX audit captures as household imagery."""
+    screenshot = (
+        tmp_path
+        / "tests"
+        / "browser"
+        / ".generated"
+        / "ux-audit"
+        / "ready"
+        / "390x844-light-ltr.png"
+    )
+    screenshot.parent.mkdir(parents=True)
+    screenshot.write_bytes(b"synthetic gallery capture placeholder")
+    tracked_png = tmp_path / "tests" / "browser" / "house.png"
+    tracked_png.write_bytes(b"synthetic private-map placeholder")
+    # Only the exact audit output root is skipped; a tracked directory that
+    # shares the name is still scanned.
+    namesake_png = tmp_path / "docs" / ".generated" / "house.png"
+    namesake_png.parent.mkdir(parents=True)
+    namesake_png.write_bytes(b"synthetic private-map placeholder")
+    address = ".".join(("192", "168", "50", "12"))
+    namesake_text = tmp_path / "docs" / ".generated" / "notes.md"
+    namesake_text.write_text(f"host={address}")
+
+    assert sorted(scan_tree(tmp_path)) == [
+        "docs/.generated/house.png: private artifact type .png",
+        f"docs/.generated/notes.md:1: private IPv4 address {address}",
+        "tests/browser/house.png: private artifact type .png",
+    ]
