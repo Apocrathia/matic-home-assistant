@@ -74,7 +74,7 @@ async function loadGallery(page, { scenario = "ready", narrow = false } = {}) {
 async function loadEffectHarness(page) {
   const bundle = await build({
     stdin: {
-    contents: 'export { EffectController } from "./frontend/map-studio-v4/effects"; export { LayerHistoryController, layerDepth } from "./frontend/map-studio-v4/layer-history"; export { WorkspaceStore, captureCoordinateEdit, canEditCoordinates, canReadFloorResources } from "./frontend/map-studio-v4/state"; export { createGalleryState, withGalleryRoomPreview } from "./frontend/map-studio-v4/gallery-state";',
+    contents: 'export { EffectController } from "./frontend/map-studio-v4/effects"; export { LayerHistoryController, layerDepth } from "./frontend/map-studio-v4/layer-history"; export { WorkspaceStore, captureCoordinateEdit, canEditCoordinates, canReadFloorResources, selectPrimaryAction } from "./frontend/map-studio-v4/state"; export { createGalleryState, withGalleryRoomPreview } from "./frontend/map-studio-v4/gallery-state";',
     resolveDir: process.cwd(),
     },
     bundle: true, format: "esm", write: false,
@@ -8312,6 +8312,145 @@ test.describe("plan view state", () => {
         .map((scenario) => layerDepth(createGalleryState(scenario)));
     });
     expect(depths).toEqual([0, 1, 2, 2, 3]);
+  });
+});
+
+test.describe("plan primary action", () => {
+  // The primary action for a gallery scenario with `state` spread over it, the
+  // open plan's catalog entry patched with `plan`, its preview with `preview`,
+  // `reasons[roomId]` as that saved room's cadenceReasons, and `draft` over the
+  // plan draft.
+  async function primary(page, scenario, { state = {}, plan = {}, preview = {}, reasons = {}, draft = {} } = {}) {
+    await loadEffectHarness(page);
+    return page.evaluate(async ({ scenario, state, plan, preview, reasons, draft }) => {
+      const { createGalleryState, selectPrimaryAction } = await import("/plan-recovery-test.js");
+      const base = createGalleryState(scenario);
+      const catalog = base.resources.plans.value;
+      const plans = catalog.plans.map((saved) => saved.id !== base.planDraft.id ? saved : {
+        ...saved,
+        ...plan,
+        rooms: (plan.rooms ?? saved.rooms).map((room) => room.roomId in reasons ? { ...room, cadenceReasons: reasons[room.roomId] } : room),
+        nextRunPreview: { ...saved.nextRunPreview, ...preview },
+      });
+      const resources = { ...base.resources, plans: { ...base.resources.plans, value: { ...catalog, plans } } };
+      const { id, label, labelKey, enabled, reason, reasonKey, reasonPlaceholders, jump } =
+        selectPrimaryAction({ ...base, resources, planDraft: { ...base.planDraft, ...draft }, ...state });
+      return { id, label, labelKey, enabled, reason, reasonKey, reasonPlaceholders, jump };
+    }, { scenario, state, plan, preview, reasons, draft });
+  }
+  const run = { planView: "run" };
+  const blocked = { blocker: "invalid_cadence_policy", rooms: [] };
+
+  test("routes Edit, a dirty draft and a new plan to Save, a clean saved plan to Done", async ({ page }) => {
+    expect(await primary(page, "plan-saved-intelligent"))
+      .toMatchObject({ id: "run-plan", label: "Run plan", enabled: true, reason: undefined });
+    expect(await primary(page, "plan-saved-intelligent", { state: { planView: "edit" } }))
+      .toMatchObject({ id: "save-plan", label: "Done", labelKey: "v4_action_done", enabled: true });
+    expect(await primary(page, "plan-dirty"))
+      .toMatchObject({ id: "save-plan", label: "Save", labelKey: "v4_action_save_plan" });
+    expect(await primary(page, "plan-new"))
+      .toMatchObject({ id: "save-plan", label: "Save", labelKey: "v4_action_save_plan" });
+  });
+
+  test("Save is disabled while a save is pending, then names the map, the limit or the form", async ({ page }) => {
+    expect(await primary(page, "plan-dirty", { state: { command: "pending", pendingAction: "save-plan" } })).toMatchObject({
+      id: "save-plan", label: "Save", enabled: false,
+      reason: "Waiting for Home Assistant to save the plan.", reasonKey: "v4_reason_plan_saving",
+    });
+    expect(await primary(page, "plan-saved-intelligent", { state: { planView: "edit", pageActive: false } }))
+      .toMatchObject({ label: "Done", enabled: false, reason: "Waiting for the map to be ready.", reasonKey: "v4_reason_save_plan_map" });
+    expect(await primary(page, "plan-legacy-oversized"))
+      .toMatchObject({ label: "Done", enabled: false, reasonKey: "v4_reason_save_plan_room_limit" });
+    expect(await primary(page, "plan-new")).toMatchObject({ enabled: false, reasonKey: "v4_reason_save_plan" });
+  });
+
+  test("Run plan waits for the next-run check or a plan save before the robot fallback", async ({ page }) => {
+    expect(await primary(page, "plan-saved-intelligent", { state: { command: "pending", pendingAction: "run-plan" } })).toMatchObject({
+      id: "run-plan", enabled: false,
+      reason: "Waiting for Home Assistant to check the next run.", reasonKey: "v4_reason_run_plan_checking",
+    });
+    expect(await primary(page, "plan-saved-intelligent", { state: { command: "pending", pendingAction: "save-plan" } }))
+      .toMatchObject({ id: "run-plan", enabled: false, reasonKey: "v4_reason_plan_saving" });
+    expect(await primary(page, "plan-saved-intelligent", { state: { command: "pending" } }))
+      .toMatchObject({ id: "run-plan", enabled: false, reasonKey: "v4_reason_robot_operation_waiting" });
+  });
+
+  test("a paused plan says so before any blocker; a malformed token asks for a retry", async ({ page }) => {
+    expect(await primary(page, "plan-cadence-blocked", { state: run, draft: { enabled: false } })).toMatchObject({
+      id: "run-plan", enabled: false,
+      reason: "Can't run this plan until you turn it on.", reasonKey: "v4_reason_run_plan_paused", jump: undefined,
+    });
+    expect(await primary(page, "plan-saved-intelligent", { preview: { previewToken: "not-a-token" } })).toMatchObject({
+      enabled: false, reason: "Can't run this plan until you retry its next-run preview.", reasonKey: "v4_reason_run_plan_preview",
+    });
+  });
+
+  test("a blocked run names the first blocking room in saved order and links to it", async ({ page }) => {
+    // plan-cadence-blocked: Kitchen holds invalid_cadence_policy and mop_progress_unverified; progress wins.
+    expect(await primary(page, "plan-cadence-blocked", { state: run })).toEqual({
+      id: "run-plan", label: "Run plan", labelKey: "v4_action_run_plan", enabled: false,
+      reason: "Can't run this plan until you reset {room}'s schedule progress, which Home Assistant can't confirm.",
+      reasonKey: "v4_reason_plan_room_progress",
+      reasonPlaceholders: { room: "Kitchen" },
+      jump: { label: "Review {room}", labelKey: "v4_review_room", labelPlaceholders: { room: "Kitchen" }, roomId: "room-a" },
+    });
+    const cases = [
+      [["coverage_progress_unverified", "identity_changed"], "v4_reason_plan_room_progress"],
+      [["room_not_on_current_map", "identity_changed"], "v4_reason_plan_room_map",
+        "Can't run this plan until you review {room}'s schedule on this map."],
+      [["shared_schedule_unavailable", "room_not_on_current_map"], "v4_reason_plan_room_off_map",
+        "Can't run this plan until {room} is on the current map or removed from the plan."],
+      [["coverage_requires_vacuum", "shared_schedule_unavailable"], "v4_reason_plan_room_schedule",
+        "Can't run this plan until you fix {room}'s schedule."],
+      [["coverage_requires_vacuum", "invalid_cadence_policy"], "v4_reason_plan_room_schedule"],
+      [["mop_due", "coverage_requires_vacuum"], "v4_reason_plan_room_mode",
+        "Can't run this plan until {room} uses a vacuum mode or its vacuum rotation is off."],
+    ];
+    for (const [roomReasons, reasonKey, reason] of cases) {
+      // The saved order is Office, Kitchen, Living room; Kitchen's due reason never blocks.
+      const action = await primary(page, "plan-saved-intelligent", {
+        plan: { roomOrder: ["room-c", "room-a", "room-b"] }, preview: blocked,
+        reasons: { "room-c": ["mop_due"], "room-a": roomReasons, "room-b": ["identity_changed"] },
+      });
+      expect(action).toMatchObject({ enabled: false, reasonKey, reasonPlaceholders: { room: "Kitchen" }, jump: { roomId: "room-a" } });
+      if (reason) expect(action.reason).toBe(reason);
+    }
+  });
+
+  test("a plan-level blocker, or a blocking room without a name, names no room", async ({ page }) => {
+    const cases = [
+      ["cadence_identity_unavailable", "v4_preview_identity_unavailable",
+        "Can't run this plan until Home Assistant can match its rooms to the current map."],
+      ["cadence_identity_changed", "v4_preview_identity_unavailable"],
+      ["plan_has_no_rooms", "v4_preview_no_rooms", "Can't run this plan until it has at least one room."],
+      ["plan_room_limit", "v4_preview_room_limit", "Can't run this plan until it has 100 rooms or fewer."],
+      ["invalid_plan", "v4_preview_invalid", "Can't run this plan until you open Edit and save it again."],
+      ["plan_disabled", "v4_reason_run_plan_paused"],
+      ["preview_unavailable", "v4_reason_run_plan_preview"],
+      ["coverage_requires_vacuum", "v4_reason_run_plan_preview"],
+    ];
+    for (const [blocker, reasonKey, reason] of cases) {
+      const action = await primary(page, "plan-saved-intelligent", { preview: { blocker, rooms: [] } });
+      expect(action).toMatchObject({ id: "run-plan", enabled: false, reasonKey, reasonPlaceholders: undefined, jump: undefined });
+      if (reason) expect(action.reason).toBe(reason);
+    }
+    // room-z is in the plan but not in the catalog, so it has no name to show.
+    expect(await primary(page, "plan-saved-intelligent", {
+      plan: { rooms: [{ roomId: "room-z", cleaningMode: "vacuum", coverageSetting: "standard", cadenceReasons: ["room_not_on_current_map"] }], roomOrder: ["room-z"] },
+      preview: { blocker: "invalid_plan", rooms: [] },
+    })).toMatchObject({ reasonKey: "v4_preview_invalid", jump: undefined });
+  });
+
+  test("the action bar fills in the blocking room's name", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-cadence-blocked" });
+    await page.evaluate((tag) => {
+      document.querySelector(tag).shadowRoot.querySelector("matic-map-shell-v4").dispatchEvent(new CustomEvent("matic-workspace-intent", {
+        detail: { type: "set-plan-view", view: "run" }, bubbles: true, composed: true,
+      }));
+    }, GALLERY_TAG);
+    await expect(gallery.locator(".action-reason")).toHaveText(
+      "Can't run this plan until you reset Kitchen's schedule progress, which Home Assistant can't confirm.",
+    );
   });
 });
 

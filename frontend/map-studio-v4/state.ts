@@ -17,7 +17,7 @@ import {
   type WorkspaceIntent,
   type WorkspaceState,
 } from "./contracts";
-import type { AreaCircle, SavedPlan } from "./backend-contracts";
+import type { AreaCircle, CadenceReason, NextRunPreviewBlocker, SavedPlan } from "./backend-contracts";
 import { readWorkspaceNotice, type CameraPreference } from "./contracts";
 
 const emptyResource = <T>(): { status: "idle"; value: T | null; problem: null } => ({
@@ -880,9 +880,10 @@ export const canStartMotion = (state: WorkspaceState): boolean =>
   && state.command === "idle"
   && (state.activity === "idle" || state.activity === "docked");
 
-const motionBlockReason = (
-  state: WorkspaceState,
-): { readonly reason: string; readonly reasonKey: string } => {
+type Reason = { readonly reason: string; readonly reasonKey: string };
+const PLAN_SAVING: Reason = { reason: "Waiting for Home Assistant to save the plan.", reasonKey: "v4_reason_plan_saving" };
+
+const motionBlockReason = (state: WorkspaceState): Reason => {
   if (!canEditCoordinates(state)) {
     return {
       reason: "Waiting for the map to be ready.",
@@ -895,10 +896,79 @@ const motionBlockReason = (
       reasonKey: "v4_reason_stop_settle_pending",
     };
   }
-  return {
-    reason: "Waiting for the robot to finish what it's doing.",
-    reasonKey: "v4_reason_robot_operation_waiting",
-  };
+  return state.pendingAction === "run-plan"
+    ? { reason: "Waiting for Home Assistant to check the next run.", reasonKey: "v4_reason_run_plan_checking" }
+    : state.pendingAction === "save-plan"
+      ? PLAN_SAVING
+      : { reason: "Waiting for the robot to finish what it's doing.", reasonKey: "v4_reason_robot_operation_waiting" };
+};
+
+const PLAN_PAUSED: Reason = { reason: "Can't run this plan until you turn it on.", reasonKey: "v4_reason_run_plan_paused" };
+const PLAN_PREVIEW: Reason = {
+  reason: "Can't run this plan until you retry its next-run preview.",
+  reasonKey: "v4_reason_run_plan_preview",
+};
+const PLAN_IDENTITY: Reason = {
+  reason: "Can't run this plan until Home Assistant can match its rooms to the current map.",
+  reasonKey: "v4_preview_identity_unavailable",
+};
+/** Run plan's reason for a preview blocker that names no room (plan.md R4); others retry the preview. */
+const PLAN_BLOCKERS: Partial<Record<NextRunPreviewBlocker, Reason>> = {
+  cadence_identity_unavailable: PLAN_IDENTITY,
+  cadence_identity_changed: PLAN_IDENTITY,
+  plan_has_no_rooms: { reason: "Can't run this plan until it has at least one room.", reasonKey: "v4_preview_no_rooms" },
+  plan_room_limit: { reason: "Can't run this plan until it has 100 rooms or fewer.", reasonKey: "v4_preview_room_limit" },
+  invalid_plan: { reason: "Can't run this plan until you open Edit and save it again.", reasonKey: "v4_preview_invalid" },
+  plan_disabled: PLAN_PAUSED,
+};
+
+/** One room's blocking schedule reason, most specific first (plan.md R3), or null when it can run. */
+const roomBlockReason = (reasons: readonly CadenceReason[], room: string) => {
+  const has = (...blocking: CadenceReason[]): boolean => blocking.some((reason) => reasons.includes(reason));
+  return has("mop_progress_unverified", "coverage_progress_unverified")
+    ? {
+      reason: "Can't run this plan until you reset {room}'s schedule progress, which Home Assistant can't confirm.",
+      reasonKey: "v4_reason_plan_room_progress",
+      reasonPlaceholders: { room },
+    }
+    : has("identity_changed")
+      ? {
+        reason: "Can't run this plan until you review {room}'s schedule on this map.",
+        reasonKey: "v4_reason_plan_room_map",
+        reasonPlaceholders: { room },
+      }
+      : has("room_not_on_current_map")
+        ? {
+          reason: "Can't run this plan until {room} is on the current map or removed from the plan.",
+          reasonKey: "v4_reason_plan_room_off_map",
+          reasonPlaceholders: { room },
+        }
+        : has("shared_schedule_unavailable", "invalid_cadence_policy")
+          ? { reason: "Can't run this plan until you fix {room}'s schedule.", reasonKey: "v4_reason_plan_room_schedule", reasonPlaceholders: { room } }
+          : has("coverage_requires_vacuum")
+            ? {
+              reason: "Can't run this plan until {room} uses a vacuum mode or its vacuum rotation is off.",
+              reasonKey: "v4_reason_plan_room_mode",
+              reasonPlaceholders: { room },
+            }
+            : null;
+};
+
+/**
+ * The first room in saved order whose schedule blocks the run, with its reason
+ * and a link to it; null when none blocks or that room has no catalog name.
+ */
+const roomBlocker = (state: WorkspaceState, plan: SavedPlan) => {
+  for (const { roomId, cadenceReasons = [] } of draftForPlan(plan).rooms) {
+    const room = state.resources.plans.value?.rooms.find((candidate) => candidate.roomId === roomId)?.name;
+    const blocked = roomBlockReason(cadenceReasons, room ?? "");
+    if (blocked) {
+      return room
+        ? { ...blocked, jump: { label: "Review {room}", labelKey: "v4_review_room", labelPlaceholders: { room }, roomId } }
+        : null;
+    }
+  }
+  return null;
 };
 
 export const canResumeMotion = (state: WorkspaceState): boolean =>
@@ -1092,29 +1162,38 @@ export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction | NoBu
     };
   }
   if (state.workflow === "plan") {
-    if (state.planDraft.dirty || !state.planDraft.id) {
+    if (state.planView === "edit" || state.planDraft.dirty || !state.planDraft.id) {
       const legacyReduction = isLegacyPlanReduction(state, state.planDraft.rooms);
       const withinRoomLimit = state.planDraft.rooms.length <= MAX_ROOM_SEQUENCE_SIZE || legacyReduction;
-      const valid = canEditCoordinates(state)
+      const editable = canEditCoordinates(state);
+      const enabled = editable
         && state.planDraft.name.trim().length > 0
         && state.planDraft.rooms.length > 0
-        && withinRoomLimit;
+        && withinRoomLimit
+        && state.command !== "pending";
       return {
         id: "save-plan",
-        label: "Save",
-        labelKey: "v4_action_save_plan",
+        // A clean saved plan has nothing to save: Done returns to Run (plan.md E1).
+        ...(state.planDraft.id && !state.planDraft.dirty
+          ? { label: "Done", labelKey: "v4_action_done" }
+          : { label: "Save", labelKey: "v4_action_save_plan" }),
         kind: "primary",
-        enabled: valid,
-        ...(valid ? {} : withinRoomLimit
-          ? { reason: "Can't save until the plan has a name and at least one room.", reasonKey: "v4_reason_save_plan" }
-          : {
-            reason: "Can't save until the plan has 100 rooms or fewer.",
-            reasonKey: "v4_reason_save_plan_room_limit",
-          }),
+        enabled,
+        ...(enabled ? {} : state.command === "pending"
+          ? PLAN_SAVING
+          : !editable
+            ? { reason: "Waiting for the map to be ready.", reasonKey: "v4_reason_save_plan_map" }
+            : withinRoomLimit
+              ? { reason: "Can't save until the plan has a name and at least one room.", reasonKey: "v4_reason_save_plan" }
+              : {
+                reason: "Can't save until the plan has 100 rooms or fewer.",
+                reasonKey: "v4_reason_save_plan_room_limit",
+              }),
       };
     }
     const plan = state.resources.plans.value?.plans.find((candidate) => candidate.id === state.planDraft.id);
-    const previewReady = Boolean(plan?.nextRunPreview && !plan.nextRunPreview.blocker
+    const blocker = plan?.nextRunPreview?.blocker;
+    const previewReady = Boolean(plan?.nextRunPreview && !blocker
       && /^[0-9a-f]{64}$/u.test(plan.nextRunPreview.previewToken ?? ""));
     return {
       id: "run-plan",
@@ -1125,10 +1204,10 @@ export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction | NoBu
       ...(!canStartMotion(state)
         ? motionBlockReason(state)
         : !state.planDraft.enabled
-          ? { reason: "Can't run this plan until you turn it on.", reasonKey: "v4_reason_run_plan_paused" }
-          : !previewReady
-            ? { reason: "Can't run this plan until you retry its next-run preview.", reasonKey: "v4_reason_run_plan_preview" }
-            : {}),
+          ? PLAN_PAUSED
+          : previewReady
+            ? {}
+            : (plan && blocker && (roomBlocker(state, plan) ?? PLAN_BLOCKERS[blocker])) || PLAN_PREVIEW),
     };
   }
   if (state.workflow === "areaReview") {

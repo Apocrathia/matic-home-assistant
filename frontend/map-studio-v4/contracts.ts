@@ -403,7 +403,12 @@ export interface PrimaryAction {
   /** Values for `{name}` placeholders in `reason`. */
   readonly reasonPlaceholders?: Readonly<Record<string, string | number>>;
   /** A link under the reason that opens the room the reason names (plan.md R3). */
-  readonly jump?: { readonly label: string; readonly labelKey: string; readonly roomId: string };
+  readonly jump?: {
+    readonly label: string;
+    readonly labelKey: string;
+    readonly labelPlaceholders: Readonly<Record<string, string>>;
+    readonly roomId: string;
+  };
 }
 
 /**

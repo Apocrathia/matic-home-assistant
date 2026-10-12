@@ -1175,7 +1175,7 @@ export class MaticMapShellV4 extends LitElement {
     if (!("label" in action)) return nothing;
     const label = action.labelKey ? this.#t(action.labelKey, action.label, action.labelPlaceholders) : action.label;
     const reason = !action.enabled && action.reason
-      ? (action.reasonKey ? this.#t(action.reasonKey, action.reason) : action.reason)
+      ? (action.reasonKey ? this.#t(action.reasonKey, action.reason, action.reasonPlaceholders) : action.reason)
       : null;
     const stop = action.id === "stop";
     return html`
