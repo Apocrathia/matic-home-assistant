@@ -109,6 +109,17 @@ def test_v4_foundation_is_local_licensed_and_within_initial_budget() -> None:
     )
 
 
+def test_dialog_copy_ships_in_the_lazy_workflow_chunk() -> None:
+    """Dialogs open only inside a workflow, so their copy is not startup weight."""
+    _, assets = _startup_graph()
+    startup = "".join(
+        (_STUDIO_V4_DIRECTORY.parent / path).read_text(encoding="utf-8")
+        for path in assets
+    )
+    assert "Reset mopping progress?" not in startup
+    assert "Delete plan?" not in startup
+
+
 def test_workflow_only_classes_ship_in_the_lazy_workflow_chunk() -> None:
     """design-system.md: classes only workflow views use stay out of controls.ts."""
     modules = shipped_modules()

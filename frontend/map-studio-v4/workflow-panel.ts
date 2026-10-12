@@ -29,6 +29,9 @@ import { LazyChunk, chunkStatus } from "./lazy-chunk";
 // renders them only in the draw workflow.
 import "./precision-controls";
 
+// The shell's dialogs open only inside a workflow, so their copy loads here.
+export { dialogCopy } from "./dialog-copy";
+
 const modes: readonly CleaningMode[] = ["vacuum", "mop", "vacuum_and_mop"];
 const coverage: readonly CoverageSetting[] = ["quick", "standard", "heavy_duty"];
 
