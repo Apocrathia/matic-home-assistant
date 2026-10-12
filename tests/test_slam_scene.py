@@ -1485,6 +1485,7 @@ async def test_plan_workspace_lists_saved_plans_and_current_rooms() -> None:
                     "preview_token": preview_token,
                     "blocker": None,
                 },
+                "next_run_estimate_seconds": None,
             }
         ],
         "selected_plan": "weekday",
@@ -1514,6 +1515,7 @@ async def test_plan_workspace_explains_legacy_room_limit() -> None:
     runtime.cleaning_plans.preview.side_effect = RoomSequenceLimitError(
         "A plan can include at most 100 rooms"
     )
+    runtime.cleaning_plans.next_run_estimate_seconds = MagicMock(return_value=1980)
     hass = _hass(_entry(runtime))
 
     response = await MaticPlansView().get(_request(hass), "entry")
@@ -1524,6 +1526,8 @@ async def test_plan_workspace_explains_legacy_room_limit() -> None:
         "mission_boundaries": [],
         "blocker": "plan_room_limit",
     }
+    assert plan["next_run_estimate_seconds"] is None
+    runtime.cleaning_plans.next_run_estimate_seconds.assert_not_called()
 
 
 async def test_plan_workspace_projects_saved_and_shared_cadence_state() -> None:
@@ -1734,6 +1738,7 @@ async def test_plan_workspace_projects_read_only_policy_preview_and_boundaries(
     }
     runtime.cleaning_plans.preview.return_value = preview_result
     runtime.cleaning_plans.preview.side_effect = None
+    runtime.cleaning_plans.next_run_estimate_seconds = MagicMock(return_value=1980)
     request_hass = _hass(_entry(runtime))
     view = MaticPlansView()
     preview_token = saved_plan_preview_token(
@@ -1772,6 +1777,14 @@ async def test_plan_workspace_projects_read_only_policy_preview_and_boundaries(
         "preview_token": preview_token,
         "blocker": None,
     }
+    assert json.loads(first.body)["plans"][0]["next_run_estimate_seconds"] == 1980
+    runtime.cleaning_plans.next_run_estimate_seconds.assert_called_with(
+        "synthetic-serial",
+        [
+            ("room-2", "vacuum_and_mop", "heavy_duty"),
+            ("room-1", "vacuum", "standard"),
+        ],
+    )
     runtime.cleaning_plans.preview.assert_any_call(
         "synthetic-serial",
         {"room-1": "Kitchen", "room-2": "Study"},

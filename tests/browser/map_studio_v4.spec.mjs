@@ -2454,6 +2454,37 @@ test.describe("Map Studio v0.4 foundation", () => {
     expect(result.retry).toEqual({ command: "idle", writes: 2, reloads: 1 });
   });
 
+  test("saving keeps the default plan unless it is the plan being saved", async ({ page }) => {
+    await loadEffectHarness(page);
+    const select = await page.evaluate(async () => {
+      const { EffectController, WorkspaceStore, createGalleryState } = await import("/plan-recovery-test.js");
+      const initial = createGalleryState("ready");
+      const store = new WorkspaceStore(initial);
+      const sent = [];
+      const effects = new EffectController(store, {
+        service: async (_domain, _service, data) => {
+          sent.push(data.select);
+          return { response: { plan: { id: data.plan_id ?? "new-plan" } } };
+        },
+        dispose() {},
+      });
+      effects.sync({
+        host: initial.host, activity: initial.activity, batteryPercent: 92,
+        robotLabel: "Synthetic", robots: initial.robots, language: "en",
+        userKey: "test", entryKey: initial.selection.entryId, vacuumEntityId: "vacuum.synthetic",
+      });
+      effects.loadPlans = async () => {};
+      try {
+        for (const id of [null, "weekend", "daily"]) {
+          store.patch({ planDraft: { ...initial.planDraft, id, name: "Saved plan", dirty: true } });
+          await effects.savePlan();
+        }
+        return sent;
+      } finally { effects.dispose(); }
+    });
+    expect(select).toEqual([false, false, true]);
+  });
+
   test("history exposes keyboard navigation buttons and meaningful timeline values", async ({ page, browserName }) => {
     const gallery = await loadGallery(page, { scenario: "history" });
     const floors = gallery.getByRole("group", { name: "Mapped floors" });

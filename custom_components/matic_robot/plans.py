@@ -4791,6 +4791,32 @@ class CleaningPlanManager:
         selected: str | None = self._robot(serial_number).get("selected_area")
         return selected
 
+    def next_run_estimate_seconds(
+        self, serial_number: str, rooms: Sequence[tuple[str, str, str]]
+    ) -> int | None:
+        """Sum confident per-room medians at the settings the next run uses."""
+        if not rooms:
+            return None
+        robot = self._robot(serial_number)
+        total = 0
+        for room_id, cleaning_mode, coverage_setting in rooms:
+            expected = _expected_duration(
+                {
+                    "duration_history_seconds": _compatible_duration_history(
+                        robot,
+                        room_id,
+                        {
+                            "cleaning_mode": cleaning_mode,
+                            "coverage_setting": coverage_setting,
+                        },
+                    )
+                }
+            )
+            if expected is None:
+                return None
+            total += expected
+        return total
+
     def _robot(self, serial_number: str) -> dict[str, Any]:
         robots = self._data.get("robots")
         if not isinstance(robots, dict):

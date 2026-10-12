@@ -2348,7 +2348,8 @@ export class EffectController {
       return_to_base: draft.returnToBase,
       finish_current_room: draft.finishCurrentRoom,
       finish_current_room_threshold: draft.finishCurrentRoomThreshold,
-      select: !draft.id || plans.selectedPlan === draft.id,
+      // Home Assistant makes a new plan the default only when none exists.
+      select: plans.selectedPlan === draft.id,
     }, NOTICES.planSaved, NOTICES.planSaveFailed, (response) => {
       const acknowledgedId = response === undefined && draft.id ? draft.id : parseSavedPlanId(response);
       if (draft.id && acknowledgedId !== draft.id) throw new BackendError("invalid-plan-save-response");

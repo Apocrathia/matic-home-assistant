@@ -1365,6 +1365,29 @@ class MaticPlansView(HomeAssistantView):
                 "blocker": None,
             }
 
+        def next_run_estimate(preview: dict[str, object]) -> int | None:
+            """Estimate the previewed run from the stored per-room durations."""
+            estimator = getattr(
+                runtime.cleaning_plans, "next_run_estimate_seconds", None
+            )
+            if preview["blocker"] is not None or not callable(estimator):
+                return None
+            rooms = cast(list[dict[str, str]], preview["rooms"])
+            return cast(
+                int | None,
+                estimator(
+                    serial_number,
+                    [
+                        (
+                            room["room_id"],
+                            room["cleaning_mode"],
+                            room["coverage_setting"],
+                        )
+                        for room in rooms
+                    ],
+                ),
+            )
+
         def cadence_state(
             plan_id: str,
             room_id: str,
@@ -1429,6 +1452,7 @@ class MaticPlansView(HomeAssistantView):
                     if cadence["cadence"] is not None or cadence_reasons:
                         plan_room_projection.update(cadence)
                 rooms.append(plan_room_projection)
+            preview = next_run_preview(plan_id)
             plans.append(
                 {
                     "id": plan_id,
@@ -1444,7 +1468,8 @@ class MaticPlansView(HomeAssistantView):
                     "finish_current_room_threshold": int(
                         plan.get("finish_current_room_threshold", 50)
                     ),
-                    "next_run_preview": next_run_preview(plan_id),
+                    "next_run_preview": preview,
+                    "next_run_estimate_seconds": next_run_estimate(preview),
                 }
             )
         selected_plan = runtime.cleaning_plans.snapshot(serial_number).get(

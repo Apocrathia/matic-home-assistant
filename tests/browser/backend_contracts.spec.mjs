@@ -217,6 +217,33 @@ test("saved-plan parsing preserves a room-limit blocker without inventing a prev
   expect(result).toEqual({ blocker: "plan_room_limit", previewToken: null });
 });
 
+test("saved-plan parsing keeps only a whole non-negative next-run estimate", async ({ page }) => {
+  await load(page);
+  const result = await page.evaluate(async payload => {
+    const { parsePlansCatalog } = await import("/backend-contracts.js");
+    const parse = estimate => {
+      const candidate = structuredClone(payload);
+      if (estimate === undefined) delete candidate.plans[0].next_run_estimate_seconds;
+      else candidate.plans[0].next_run_estimate_seconds = estimate;
+      return parsePlansCatalog(candidate).plans[0];
+    };
+    const { nextRunEstimateSeconds, ...rest } = parse(1980);
+    const { nextRunEstimateSeconds: _absent, ...withoutEstimate } = parse(undefined);
+    return {
+      estimate: nextRunEstimateSeconds,
+      restUnchanged: JSON.stringify(rest) === JSON.stringify(withoutEstimate),
+      rejected: [null, undefined, -5, 12.5, true, "1980"].map(value =>
+        parse(value).nextRunEstimateSeconds),
+    };
+  }, plansPayload());
+
+  expect(result).toEqual({
+    estimate: 1980,
+    restUnchanged: true,
+    rejected: [null, null, null, null, null, null],
+  });
+});
+
 test("saved-plan parsing admits explicit unverified cadence recovery state", async ({ page }) => {
   await load(page);
   const result = await page.evaluate(async payload => {
