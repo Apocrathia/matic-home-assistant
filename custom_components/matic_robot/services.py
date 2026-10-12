@@ -105,7 +105,7 @@ TARGET_KEYS = (
     ATTR_LABEL_ID,
 )
 
-# invalid_plan {error} clauses for a preview that no longer matches the run.
+# invalid_plan {error} details for a preview that no longer matches the run.
 _PREVIEW_STALE = "The preview is out of date. Preview again, then run it."
 _PREVIEW_CHANGED = "The rooms changed after the preview. Preview again, then run it."
 
