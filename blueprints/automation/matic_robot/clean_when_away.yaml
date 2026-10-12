@@ -1,33 +1,36 @@
 blueprint:
-  name: Matic — Clean when everyone leaves
-  description: >-
-    Start intelligent cleaning after everyone leaves. Rooms that have waited
-    longest are cleaned first, so short trips do not repeatedly clean the same
-    beginning of the plan. It starts only when Matic is docked or idle, so a
-    cleaning already underway is never replaced. When anyone returns, stop the
-    managed run and send Matic to its dock; an interrupted room remains due
-    next time.
+  name: 'Matic: Clean when everyone leaves'
+  description: |-
+    Starts a cleaning plan after everyone leaves, cleaning the rooms that have waited longest first so short trips don't keep cleaning the same rooms.
+
+    1. Cleaning starts only when the robot is docked or idle, so a clean already underway is never replaced.
+    2. When anyone comes home, the plan stops and the robot returns to its dock.
+    3. A room that was interrupted stays due for next time.
   domain: automation
   source_url: https://github.com/ProspectOre/matic-home-assistant/blob/main/blueprints/automation/matic_robot/clean_when_away.yaml
   input:
     vacuum:
-      name: Matic vacuum
+      name: Robot
+      description: The robot to clean.
       selector:
         entity:
           integration: matic_robot
           domain: vacuum
     household:
       name: Household members
+      description: The people whose absence starts cleaning, for example everyone who lives here.
       selector:
         entity:
           domain: person
           multiple: true
     plan:
-      name: Saved plan name
+      name: Plan
+      description: Name of a plan saved in Matic Map, for example Main floor.
       selector:
         text:
     settle_time:
-      name: Departure settle time
+      name: Delay before cleaning
+      description: How long everyone must be away before cleaning starts. Default 5 minutes; for example 15 minutes if people often step out briefly.
       default:
         minutes: 5
       selector:

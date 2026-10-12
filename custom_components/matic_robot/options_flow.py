@@ -161,7 +161,7 @@ class MaticRobotOptionsFlow(config_entries.OptionsFlow):
     async def async_step_confirm_reset_history(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
-        """Require a named confirmation before resetting rotation history."""
+        """Require a named confirmation before resetting cleaning history."""
         if not self._is_loaded():
             return self._entry_unavailable()
         plans = self._manager.plans(self._serial_number)

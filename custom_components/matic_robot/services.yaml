@@ -87,6 +87,7 @@ intelligent_clean:
   target: *vacuum_target
   fields: &optional_plan
     plan:
+      example: Main floor
       selector:
         text:
 
@@ -98,6 +99,7 @@ run_selected_plan:
   target: *vacuum_target
   fields:
     plan:
+      example: Main floor
       selector:
         text:
     preview_token:
@@ -123,6 +125,7 @@ reset_plan_history:
   target: *vacuum_target
   fields:
     plan:
+      example: Main floor
       selector:
         text:
     all_plans:
@@ -135,6 +138,7 @@ reset_room_cadence:
   fields:
     plan:
       required: true
+      example: Main floor
       selector:
         text:
     room_id:
@@ -230,6 +234,7 @@ delete_plan:
   fields: &plan_reference
     plan:
       required: true
+      example: Main floor
       selector:
         text:
 
@@ -242,6 +247,7 @@ save_plan_room:
   fields:
     plan:
       required: true
+      example: Main floor
       selector:
         text:
     room:
@@ -258,6 +264,7 @@ delete_plan_room:
   fields:
     plan:
       required: true
+      example: Main floor
       selector:
         text:
     room:
@@ -270,6 +277,7 @@ move_plan_room:
   fields:
     plan:
       required: true
+      example: Main floor
       selector:
         text:
     room:

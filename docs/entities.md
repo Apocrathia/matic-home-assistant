@@ -16,12 +16,12 @@ plus two opt-in statistics sensors per mapped room.
 | --- | --- |
 | Vacuum | Start/resume, pause, stop, dock, and room or Area cleaning |
 | Cleaning mode | Default vacuum, mop, or vacuum-and-mop mode |
-| Vacuum coverage | Default Quick, Optimal, or Heavy Duty vacuum coverage |
+| Vacuum coverage | Default Quick, Optimal, or Heavy duty vacuum coverage |
 | Saved cleaning plan | Select the default plan |
 | Custom cleaning area | Select a saved custom area |
-| Plan buttons | Run the selected plan, use rotation, run top-to-bottom, or stop |
-| Clean selected area | Run the selected custom area |
-| Setting switches | Child lock, pet-waste avoidance, Matic Cues, double-pass mopping |
+| Plan buttons | Run plan, Run intelligent rotation, Run saved order, or Stop cleaning |
+| Clean custom area | Run the selected custom area |
+| Setting switches | Child lock, pet-waste avoidance, Cues voice assistant, double-pass mopping |
 | Water flow | Adjust the robot's water-flow setting |
 
 ## Maps
@@ -32,13 +32,13 @@ needed. Administrators can use the interactive **Matic Map** sidebar panel.
 
 ## State and diagnostics
 
-Sensors cover activity, battery, rooms, current area, active/next plan room,
-cleaning history, run duration, Cues lifecycle, firmware, update state, Wi-Fi,
+Sensors cover activity, battery, rooms, current room, active/next plan room,
+rooms cleaned by plans, last clean duration, Cues lifecycle, firmware, update state, Wi-Fi,
 schedules, dock/sink counts, and coverage time.
 
 Binary sensors expose cleaning, paused, returning, charging, low charge,
-fully charged, problem, update available, active session, Matter pairing,
-robot SSH permission, robot diagnostic upload, and following-person state.
+fully charged, problem, update available, cleaning run in progress, Matter pairing,
+support tunnel permission, diagnostic upload, and following-person state.
 **Fully charged** is on when the battery is full.
 
 The firmware update entity is read-only; Matic manages its own updates. While
@@ -64,7 +64,7 @@ firmware pulses. Recorded activity can help diagnose an error after it clears.
 
 Each room's **Last cleaned** and **Last clean duration** sensors are disabled
 by default. Enable them to retain room-specific history and duration statistics.
-**Last run duration** is recorded by default.
+The robot-level **Last clean duration** is recorded by default.
 
 Room lists, SSID, schedules, detailed session results, and plan history remain
 available to templates through `state_attr()` but are excluded from Recorder

@@ -9,14 +9,13 @@ Replace example entity IDs with those shown on your robot's device page.
 
 ## Ready-to-import blueprints
 
-- [Clean when everyone leaves](../blueprints/automation/matic_robot/clean_when_away.yaml)
-- [Quiet-hours cleaning](../blueprints/automation/matic_robot/quiet_hours.yaml)
-- [Pet-aware cleaning](../blueprints/automation/matic_robot/pet_aware.yaml)
-- [Scheduled intelligent cleaning](../blueprints/automation/matic_robot/room_rotation.yaml)
-- [Firmware intelligence](../blueprints/automation/matic_robot/firmware_intelligence.yaml)
+- [Matic: Clean when everyone leaves](../blueprints/automation/matic_robot/clean_when_away.yaml)
+- [Matic: Clean during quiet hours](../blueprints/automation/matic_robot/quiet_hours.yaml)
+- [Matic: Clean after pets leave](../blueprints/automation/matic_robot/pet_aware.yaml)
+- [Matic: Clean on a schedule](../blueprints/automation/matic_robot/room_rotation.yaml)
+- [Matic: Send firmware alerts](../blueprints/automation/matic_robot/firmware_intelligence.yaml)
 
-The away blueprint rechecks presence after its settle period and starts only
-when Matic is docked or idle.
+The away blueprint checks presence again after its delay before cleaning and starts only when the robot is docked or idle.
 
 ## Complete cleaning action
 
@@ -40,7 +39,7 @@ actions:
 ## Saved plans
 
 Create a plan in [Matic Map](cleaning.md#saved-plans), then call
-`matic_robot.run_selected_plan`. Use `plan` to choose a name or stable ID;
+`matic_robot.run_selected_plan`. Use `plan` to choose a name or ID;
 omit it to run the default plan. `matic_robot.preview_plan` returns the next
 room order and settings without starting a run.
 

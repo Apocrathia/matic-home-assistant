@@ -6,7 +6,8 @@ Run saved plans, preview room order, clean named areas, and manage per-room
 settings from Home Assistant automations or **Developer tools → Actions**.
 
 All actions use the `matic_robot` domain and target a Matic vacuum entity.
-Names and stable IDs are accepted where applicable; ambiguous names are rejected.
+Names and IDs are accepted where applicable; ambiguous names are rejected.
+The developer actions are listed with an **Advanced:** prefix in the action picker.
 The full field schema is in [services.yaml](../custom_components/matic_robot/services.yaml)
 and Home Assistant's **Developer tools → Actions**.
 
@@ -17,7 +18,7 @@ and Home Assistant's **Developer tools → Actions**.
 | `clean` | Optional `rooms`, `cleaning_mode`, `coverage_setting`, and `ordered`. Omit rooms for the whole floor. |
 | `clean_room_sequence` | Required `rooms` list with per-room settings; optional `return_to_base` (default `true`). |
 | `clean_area` | Required saved `area` name; optional `cleaning_mode` and `coverage_setting` overrides. |
-| `run_selected_plan` | Run optional `plan`, or the default plan, with its saved behavior. |
+| `run_selected_plan` | Run optional `plan`, or the default plan, the way it is saved. |
 | `intelligent_clean` | Run optional `plan` using intelligent rotation. |
 | `clean_entire_plan` | Run optional `plan` in saved room order. |
 | `stop_intelligent_cleaning` | Apply the active plan's stop policy and dock. Set `include_unmanaged: true` to also stop other cleaning. |

@@ -105,6 +105,10 @@ TARGET_KEYS = (
     ATTR_LABEL_ID,
 )
 
+# invalid_plan {error} details for a preview that no longer matches the run.
+_PREVIEW_STALE = "The preview is out of date. Preview again, then run it."
+_PREVIEW_CHANGED = "The rooms changed after the preview. Preview again, then run it."
+
 CLEAN_SERVICE_SCHEMA = cv.make_entity_service_schema(
     {
         vol.Optional("rooms"): vol.All(
@@ -628,6 +632,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 raise _validation_error(
                     "The saved-plan preview is stale; refresh it before starting",
                     "invalid_plan",
+                    {"error": _PREVIEW_STALE},
                 )
             plan, rooms, cadence_by_room = _saved_plan_execution(
                 manager, serial_number, execution_floor_plan, preview
@@ -664,6 +669,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 raise _validation_error(
                     "The saved-plan resolution changed before starting",
                     "invalid_plan",
+                    {"error": _PREVIEW_CHANGED},
                 )
 
         data = {
@@ -761,6 +767,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
             raise _validation_error(
                 "The room-sequence preview is stale; refresh it before starting",
                 "invalid_plan",
+                {"error": _PREVIEW_STALE},
             )
         rooms = resolved["effective_rooms"]
         cadence_by_room = resolved["cadence_by_room"]
@@ -833,6 +840,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
                     raise _validation_error(
                         "The room-sequence resolution changed before starting",
                         "invalid_plan",
+                        {"error": _PREVIEW_CHANGED},
                     )
 
             await _async_execute_rooms(
@@ -1072,7 +1080,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
     )
 
     async def async_reset_plan_history(call: ServiceCall) -> None:
-        """Reset selected or explicitly named durable rotation history."""
+        """Reset selected or explicitly named durable cleaning history."""
         _entity_id, _entry, serial_number, _room_map = _saved_plan_context(hass, call)
         plan_id: str | None = None
         if not call.data["all_plans"]:
@@ -1106,7 +1114,9 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 serial_number, plan["id"], room_ids=room_ids, modes=modes
             )
         except ValueError as err:
-            raise _validation_error(str(err), "cadence_reset_blocked") from err
+            raise _validation_error(
+                str(err), "cadence_reset_blocked", {"error": str(err)}
+            ) from err
         return {
             "plan_id": plan["id"],
             **receipt,
@@ -1180,7 +1190,9 @@ async def async_register_services(hass: HomeAssistant) -> None:
         except SavedPlanLimitError as err:
             raise _validation_error(str(err), "plan_limit_reached") from err
         except ValueError as err:
-            raise _validation_error(str(err), "invalid_plan") from err
+            raise _validation_error(
+                str(err), "invalid_plan", {"error": str(err)}
+            ) from err
         return {"plan": manager.plan(serial_number, plan_id)}
 
     hass.services.async_register(
@@ -1260,7 +1272,9 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 room_identities=room_identities,
             )
         except ValueError as err:
-            raise _validation_error(str(err), "invalid_plan") from err
+            raise _validation_error(
+                str(err), "invalid_plan", {"error": str(err)}
+            ) from err
         persisted = manager.plan(serial_number, plan_id)
         persisted_room = next(
             saved for saved in persisted["rooms"] if saved["room_id"] == room["room_id"]
