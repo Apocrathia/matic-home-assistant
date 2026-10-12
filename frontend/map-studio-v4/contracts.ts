@@ -154,6 +154,9 @@ export interface AdmittedManualRoomPreview {
   readonly preview: ManualRoomSequencePreview;
 }
 
+export type PlanView = "run" | "edit";
+export type PendingAction = "run-plan" | "save-plan";
+
 export interface PlanDraft {
   readonly id: string | null;
   readonly name: string;
@@ -164,6 +167,8 @@ export interface PlanDraft {
   readonly finishCurrentRoom: boolean;
   readonly finishCurrentRoomThreshold: number;
   readonly dirty: boolean;
+  /** Rooms unticked in Edit keep their settings and schedule here until Save; never sent. */
+  readonly parkedRooms: readonly import("./backend-contracts").PlanRoom[];
 }
 
 export interface AreaDraft {
@@ -300,6 +305,12 @@ export interface WorkspaceState {
   readonly manualRoomPreviewRetry: number;
   readonly selection: WorkspaceSelection;
   readonly planDraft: PlanDraft;
+  /** Inside the plan workflow: the saved plan's Run view or the draft's Edit view. */
+  readonly planView: PlanView;
+  /** The plan service write Home Assistant is handling while `command` is pending. */
+  readonly pendingAction: PendingAction | null;
+  /** The Edit row whose settings are open; one at a time. */
+  readonly expandedRoom: string | null;
   readonly areaDraft: AreaDraft;
   readonly notice: WorkspaceNotice | null;
   readonly robotLabel: string;
@@ -366,6 +377,8 @@ export type WorkspaceIntent =
   | { readonly type: "set-history"; readonly historyId: string | null }
   | { readonly type: "select-plan"; readonly planId: string | null }
   | { readonly type: "select-area"; readonly areaId: string | null; readonly workflow?: "areaReview" }
+  | { readonly type: "set-plan-view"; readonly view: PlanView; readonly roomId?: string | null }
+  | { readonly type: "set-plan-enabled"; readonly enabled: boolean }
   | { readonly type: "patch-plan-draft"; readonly patch: Partial<PlanDraft> }
   | { readonly type: "patch-area-draft"; readonly patch: Partial<AreaDraft> }
   | { readonly type: "set-notice"; readonly notice: WorkspaceNotice | null }
@@ -387,6 +400,10 @@ export interface PrimaryAction {
   readonly labelPlaceholders?: Readonly<Record<string, string | number>>;
   /** Translation key for `reason`; the view resolves `t(reasonKey, reason)`. */
   readonly reasonKey?: string;
+  /** Values for `{name}` placeholders in `reason`. */
+  readonly reasonPlaceholders?: Readonly<Record<string, string | number>>;
+  /** A link under the reason that opens the room the reason names (plan.md R3). */
+  readonly jump?: { readonly label: string; readonly labelKey: string; readonly roomId: string };
 }
 
 /**
@@ -504,6 +521,8 @@ const workspaceIntentTypes: Readonly<Record<WorkspaceIntent["type"], true>> = {
   "set-history": true,
   "select-plan": true,
   "select-area": true,
+  "set-plan-view": true,
+  "set-plan-enabled": true,
   "patch-plan-draft": true,
   "patch-area-draft": true,
   "set-notice": true,

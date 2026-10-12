@@ -152,7 +152,11 @@ export const initialWorkspaceState = (): WorkspaceState => ({
     finishCurrentRoom: false,
     finishCurrentRoomThreshold: 50,
     dirty: false,
+    parkedRooms: [],
   },
+  planView: "run",
+  pendingAction: null,
+  expandedRoom: null,
   areaDraft: {
     id: null,
     name: "",
@@ -251,7 +255,46 @@ export const draftForPlan = (plan: SavedPlan): WorkspaceState["planDraft"] => {
     finishCurrentRoom: plan.finishCurrentRoom,
     finishCurrentRoomThreshold: plan.finishCurrentRoomThreshold,
     dirty: false,
+    parkedRooms: [],
   };
+};
+
+/**
+ * Opens a plan (plan.md §5 State): Create opens in Edit; another saved plan,
+ * or entering the plan workflow, opens in Run. Reselecting the open plan, as a
+ * reload after a write does, keeps the view and the open row.
+ */
+export const planSelection = (
+  state: WorkspaceState,
+  planId: string | null,
+  preserveNotice: boolean,
+): Partial<WorkspaceState> => {
+  const plan = state.resources.plans.value?.plans.find((candidate) => candidate.id === planId);
+  const reselect = planId !== null && state.workflow === "plan" && state.selection.planId === planId;
+  return {
+    workflow: "plan",
+    notice: !preserveNotice && state.notice?.tone === "success" ? null : state.notice,
+    selection: { ...state.selection, planId },
+    planDraft: plan ? draftForPlan(plan) : initialWorkspaceState().planDraft,
+    planView: reselect ? state.planView : planId === null ? "edit" : "run",
+    expandedRoom: reselect ? state.expandedRoom : null,
+  };
+};
+
+// Discarding a saved plan's edits returns to its Run view; a new plan has
+// none, so it returns to the picker (plan.md §5 Navigation).
+const discardPlanDraft = (state: WorkspaceState): WorkspaceState => {
+  const saved = state.resources.plans.value?.plans.find((plan) => plan.id === state.planDraft.id);
+  return saved
+    ? { ...state, planDraft: draftForPlan(saved), planView: "run", expandedRoom: null, dialog: null, precisionOpen: false }
+    : {
+      ...state,
+      planDraft: initialWorkspaceState().planDraft,
+      selection: { ...state.selection, planId: null },
+      dialog: null,
+      workflow: "plans",
+      precisionOpen: false,
+    };
 };
 
 
@@ -391,14 +434,7 @@ export const reduceWorkspace = (
       });
     }
     case "discard-draft":
-      if (state.workflow === "plan") return {
-        ...state,
-        planDraft: initialWorkspaceState().planDraft,
-        selection: { ...state.selection, planId: null },
-        dialog: null,
-        workflow: "plans",
-        precisionOpen: false,
-      };
+      if (state.workflow === "plan") return discardPlanDraft(state);
       return {
         ...updateDraw(state, {
           dirty: false,
@@ -416,20 +452,28 @@ export const reduceWorkspace = (
       };
     case "toggle-room": {
       if (state.workflow === "plan") {
-        const rooms = state.planDraft.rooms;
-        const selected = rooms.some((room) => room.roomId === intent.roomId);
-        if (!selected && rooms.length >= MAX_ROOM_SEQUENCE_SIZE) return state;
+        // Map taps never change the plan in Run (plan.md §5 Map).
+        if (state.planView === "run") return state;
+        const { rooms, parkedRooms } = state.planDraft;
+        const room = rooms.find((candidate) => candidate.roomId === intent.roomId);
+        if (!room && rooms.length >= MAX_ROOM_SEQUENCE_SIZE) return state;
+        // An unticked room keeps its settings and schedule until Save, so
+        // ticking it again restores them.
+        const parked = parkedRooms.find((candidate) => candidate.roomId === intent.roomId);
+        const others = (list: typeof rooms) => list.filter((candidate) => candidate.roomId !== intent.roomId);
         return {
           ...state,
           planDraft: {
             ...state.planDraft,
             dirty: true,
-            rooms: selected
-              ? rooms.filter((room) => room.roomId !== intent.roomId)
-              : [...rooms, { roomId: intent.roomId, cleaningMode: "vacuum", coverageSetting: "standard" }],
+            rooms: room
+              ? others(rooms)
+              : [...rooms, parked ?? { roomId: intent.roomId, cleaningMode: "vacuum", coverageSetting: "standard" }],
+            parkedRooms: room ? [...others(parkedRooms), room] : others(parkedRooms),
           },
         };
       }
+      if (state.workflow === "rooms" && !canSelectRooms(state)) return state;
       const selected = state.selection.roomIds.includes(intent.roomId);
       if (!selected && state.selection.roomIds.length >= MAX_ROOM_SEQUENCE_SIZE) return state;
       return {
@@ -516,16 +560,25 @@ export const reduceWorkspace = (
         dataMode: intent.historyId ? "history" : "live",
         selection: { ...state.selection, historyId: intent.historyId },
       };
-    case "select-plan": {
-      const plan = state.resources.plans.value?.plans.find((candidate) => candidate.id === intent.planId);
-      return {
+    case "select-plan":
+      return { ...state, ...planSelection(state, intent.planId, false) };
+    case "set-plan-view":
+      if (state.workflow !== "plan") return state;
+      if (intent.view === "edit") return {
         ...state,
-        workflow: "plan",
-        notice: state.notice?.tone === "success" ? null : state.notice,
-        selection: { ...state.selection, planId: intent.planId },
-        planDraft: plan ? draftForPlan(plan) : initialWorkspaceState().planDraft,
+        planView: "edit",
+        expandedRoom: intent.roomId === undefined ? state.expandedRoom : intent.roomId,
       };
-    }
+      // Run never shows a dirty or unsaved draft: Save or discard first.
+      return state.planDraft.id !== null && !state.planDraft.dirty
+        ? { ...state, planView: "run", expandedRoom: null }
+        : state;
+    case "set-plan-enabled":
+      // Reflects the Run switch; the effect owns the request.
+      return state.workflow === "plan" && state.planView === "run"
+        && state.planDraft.id !== null && !state.planDraft.dirty
+        ? { ...state, planDraft: { ...state.planDraft, enabled: intent.enabled, dirty: false } }
+        : state;
     case "select-area":
       return {
         ...state,
@@ -565,6 +618,11 @@ export const reduceWorkspace = (
       if (state.dialog) return { ...state, dialog: null };
       if (state.precisionOpen) return { ...state, precisionOpen: false };
       if (state.fullMap) return { ...state, fullMap: false };
+      // A saved plan's Edit steps back to its Run view; Run and a new plan's
+      // Edit step back to the picker.
+      if (state.workflow === "plan" && state.planView === "edit" && state.planDraft.id !== null) {
+        return { ...state, planView: "run", expandedRoom: null, precisionOpen: false };
+      }
       if (state.workflow !== "none") {
         return {
           ...state,
@@ -639,11 +697,16 @@ export class WorkspaceStore {
   // not, keeps the last catalog (effects.ts loadPlans, loadAreas), so only a
   // ready read without the item, or a reset that empties the catalog, closes
   // it; a dialog left with nothing to name would block the workspace unseen.
+  // Every way out of the plan workflow, an effect's included, resets its view
+  // to Run with no open row (plan.md §5 State).
   replace(next: WorkspaceState): WorkspaceState {
     if (next === this.#state) return next;
-    const noticed = next.notice && next.notice !== this.#state.notice
-      ? { ...next, notice: readWorkspaceNotice(next.notice) ?? this.#state.notice }
+    const left = next.workflow !== "plan" && (next.planView !== "run" || next.expandedRoom !== null)
+      ? { ...next, planView: "run" as const, expandedRoom: null }
       : next;
+    const noticed = left.notice && left.notice !== this.#state.notice
+      ? { ...left, notice: readWorkspaceNotice(left.notice) ?? this.#state.notice }
+      : left;
     const committed = noticed.dialog?.startsWith("confirmDelete") && !deleteSubject(noticed)
       ? { ...noticed, dialog: null } : noticed;
     this.#state = committed;
@@ -862,7 +925,7 @@ const disabledAction = (
 
 const noButton = (id: string): NoButtonAction => ({ id, enabled: false });
 
-const hasStoppableWork = (state: WorkspaceState): boolean =>
+export const hasStoppableWork = (state: WorkspaceState): boolean =>
   state.command === "starting"
   || state.activity === "cleaning" || state.activity === "paused"
   || state.activity === "returning" || state.activity === "recharging"
@@ -870,6 +933,9 @@ const hasStoppableWork = (state: WorkspaceState): boolean =>
     && (state.resources.entry?.runnerLocked === true
       || state.resources.entry?.activePlan === true
       || state.resources.entry?.nativeSessionActive === true));
+
+/** Rooms can be picked only on an editable map with no robot work to stop (home-rooms.md §5). */
+export const canSelectRooms = (state: WorkspaceState): boolean => canEditCoordinates(state) && !hasStoppableWork(state);
 
 export const canStopMotion = (state: WorkspaceState): boolean =>
   state.pageActive && state.host.connected && state.host.administrator && state.host.robotConnected

@@ -894,7 +894,9 @@ test("Escape from the plan editor returns to the picker", async ({ page }) => {
   await expect(gallery.getByRole("heading", { name: "Your plans", exact: true })).toBeVisible();
 });
 
-test("discarding plan edits through Escape returns to the picker", async ({ page }) => {
+// plan.md §5 Navigation: discarding a saved plan's edits returns to its Run
+// view; Escape from Run then goes to the picker.
+test("discarding plan edits through Escape returns to the plan, then the picker", async ({ page }) => {
   await page.goto("/map-studio-v4-audit");
   const gallery = page.locator("matic-map-studio-gallery-v0-4-0");
   await gallery.getByRole("button", { name: /^Run a plan/ }).click();
@@ -904,7 +906,11 @@ test("discarding plan edits through Escape returns to the picker", async ({ page
   const dialog = gallery.getByRole("dialog", { name: "Discard plan changes?" });
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "Discard", exact: true }).click();
-  await expect(gallery.getByRole("heading", { name: "Your plans", exact: true })).toBeVisible();
-  await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
   await expect(gallery.getByRole("textbox", { name: "Plan name" })).toHaveValue("Daily clean");
+  expect(await gallery.evaluate((element) => {
+    const { workflow, planView, planDraft } = element.getWorkspaceSnapshot();
+    return { workflow, planView, dirty: planDraft.dirty };
+  })).toEqual({ workflow: "plan", planView: "run", dirty: false });
+  await page.keyboard.press("Escape");
+  await expect(gallery.getByRole("heading", { name: "Your plans", exact: true })).toBeVisible();
 });

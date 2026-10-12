@@ -6,7 +6,7 @@ import type {
   RoomCadenceProgress,
   SavedPlan,
 } from "./backend-contracts";
-import type { DialogKind, WorkspaceNotice, WorkspaceState } from "./contracts";
+import type { DialogKind, PlanView, WorkspaceNotice, WorkspaceState } from "./contracts";
 import { draftForPlan, initialWorkspaceState, manualRoomPreviewKey } from "./state";
 import {
   syntheticAreas,
@@ -137,13 +137,15 @@ const catalogWith = (
   ...overrides,
 });
 
-const planEditor = (
+const openPlan = (
   state: WorkspaceState,
   plan: SavedPlan,
+  planView: PlanView,
   catalog: PlansCatalog = catalogWith([plan]),
 ): WorkspaceState => ({
   ...withPlans(state, catalog),
   workflow: "plan",
+  planView,
   selection: { ...state.selection, planId: plan.id },
   planDraft: draftForPlan(plan),
 });
@@ -326,7 +328,7 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
       };
     }
     case "plan-saved-intelligent":
-      return planEditor(state, savedDailyPlan());
+      return openPlan(state, savedDailyPlan(), "run");
     case "plan-saved-ordered": {
       const daily = savedDailyPlan();
       const byId = new Map(daily.rooms.map((room) => [room.roomId, room]));
@@ -334,17 +336,18 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
         const room = byId.get(roomId);
         return room ? [room] : [];
       });
-      return planEditor(state, planWithRooms(daily, ordered, { runBehavior: "ordered" }));
+      return openPlan(state, planWithRooms(daily, ordered, { runBehavior: "ordered" }), "run");
     }
     case "plan-new":
       return {
         ...withPlans(state, catalogWith([savedDailyPlan()])),
         workflow: "plan",
+        planView: "edit",
         selection: { ...state.selection, planId: null },
         planDraft: initialWorkspaceState().planDraft,
       };
     case "plan-dirty": {
-      const edited = planEditor(state, savedDailyPlan());
+      const edited = openPlan(state, savedDailyPlan(), "edit");
       return {
         ...edited,
         planDraft: {
@@ -363,7 +366,7 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
         cadenceProgress: sharedCadenceProgress(),
       });
       const catalog = catalogWith([plan]);
-      return planEditor(state, plan, {
+      return openPlan(state, plan, "edit", {
         ...catalog,
         rooms: catalog.rooms.map((room) => room.roomId === "room-a"
           ? { ...room, sharedCadence: sharedCadencePolicy(), sharedCadenceProgress: sharedCadenceProgress() }
@@ -378,9 +381,9 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
           cadenceReasons: ["invalid_cadence_policy", "mop_progress_unverified"],
         }
         : room);
-      return planEditor(state, planWithRooms(savedDailyPlan(), rooms, {
+      return openPlan(state, planWithRooms(savedDailyPlan(), rooms, {
         nextRunPreview: previewFor(rooms, { blocker: "invalid_cadence_policy" }),
-      }));
+      }), "edit");
     }
     case "plan-legacy-oversized": {
       const catalogRooms = galleryRooms(101);
@@ -392,7 +395,7 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
       const plan = planWithRooms(savedDailyPlan(), rooms, {
         nextRunPreview: previewFor([], { blocker: "plan_room_limit" }),
       });
-      return planEditor(state, plan, catalogWith([plan], { rooms: catalogRooms }));
+      return openPlan(state, plan, "edit", catalogWith([plan], { rooms: catalogRooms }));
     }
     case "area-review-new":
       return {

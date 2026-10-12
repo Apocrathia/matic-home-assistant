@@ -245,6 +245,10 @@ export class MaticMapPanelV4 extends LitElement {
       this.#effects?.selectPlan(intent.planId);
       return;
     }
+    if (intent.type === "set-plan-enabled") {
+      this.#effects?.setPlanEnabled(intent.enabled);
+      return;
+    }
     if (intent.type === "select-area") {
       this.#effects?.selectArea(intent.areaId);
       if (intent.workflow === "areaReview") void this.#effects?.openWorkflow("areaReview");

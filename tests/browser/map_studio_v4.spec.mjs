@@ -74,7 +74,7 @@ async function loadGallery(page, { scenario = "ready", narrow = false } = {}) {
 async function loadEffectHarness(page) {
   const bundle = await build({
     stdin: {
-    contents: 'export { EffectController } from "./frontend/map-studio-v4/effects"; export { LayerHistoryController } from "./frontend/map-studio-v4/layer-history"; export { WorkspaceStore, captureCoordinateEdit, canEditCoordinates, canReadFloorResources } from "./frontend/map-studio-v4/state"; export { createGalleryState, withGalleryRoomPreview } from "./frontend/map-studio-v4/gallery-state";',
+    contents: 'export { EffectController } from "./frontend/map-studio-v4/effects"; export { LayerHistoryController, layerDepth } from "./frontend/map-studio-v4/layer-history"; export { WorkspaceStore, captureCoordinateEdit, canEditCoordinates, canReadFloorResources } from "./frontend/map-studio-v4/state"; export { createGalleryState, withGalleryRoomPreview } from "./frontend/map-studio-v4/gallery-state";',
     resolveDir: process.cwd(),
     },
     bundle: true, format: "esm", write: false,
@@ -671,6 +671,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       element.replaceWorkspaceState({
         ...state,
         workflow: "plan",
+        planView: "edit",
         planDraft: { ...state.planDraft, id: null, name: "Capacity check", rooms: selected, dirty: false },
       });
     }, GALLERY_TAG);
@@ -725,6 +726,12 @@ test.describe("Map Studio v0.4 foundation", () => {
     await gallery.getByRole("button", { name: /Legacy plan.*Edit plan/ }).click();
 
     await expect(gallery.getByRole("button", { name: "Run plan", exact: true })).toBeDisabled();
+    // A saved plan opens in Run (plan.md §5 State); its rooms change in Edit.
+    await page.evaluate((tag) => {
+      document.querySelector(tag).shadowRoot.querySelector("matic-map-shell-v4").dispatchEvent(new CustomEvent("matic-workspace-intent", {
+        detail: { type: "set-plan-view", view: "edit" }, bubbles: true, composed: true,
+      }));
+    }, fixture.panelTag);
     const rooms = gallery.getByRole("group", { name: "Rooms in this plan" });
     const draftRoomCount = () => page.evaluate(
       (tag) => document.querySelector(tag).getWorkspaceSnapshot().planDraft.rooms.length,
@@ -8007,7 +8014,202 @@ test("late plan deletion clears the deleted identity without replacing another w
   ]);
 });
 
-test("browser Back closes the plan editor then picker before leaving the route", async ({ page }) => {
+// plan.md §5 State, Map, Navigation; home-rooms.md §5 selection gate.
+test.describe("plan view state", () => {
+  // Dispatches `intents` to a store holding the gallery scenario (with `patch`
+  // spread over it) and returns the fields these rules change.
+  async function run(page, scenario, intents, patch = {}) {
+    await loadEffectHarness(page);
+    return page.evaluate(async ({ scenario, intents, patch }) => {
+      const { WorkspaceStore, createGalleryState } = await import("/plan-recovery-test.js");
+      const store = new WorkspaceStore({ ...createGalleryState(scenario), ...patch });
+      const before = store.value;
+      for (const intent of intents) store.dispatch(intent);
+      const state = store.value;
+      return {
+        unchanged: state === before,
+        workflow: state.workflow,
+        planView: state.planView,
+        expandedRoom: state.expandedRoom,
+        dialog: state.dialog,
+        planId: state.selection.planId,
+        draft: { id: state.planDraft.id, dirty: state.planDraft.dirty, enabled: state.planDraft.enabled,
+          rooms: state.planDraft.rooms.map((room) => room.roomId), parked: state.planDraft.parkedRooms },
+        selectedRooms: state.selection.roomIds,
+      };
+    }, { scenario, intents, patch });
+  }
+
+  test("starts in Run with nothing pending and no open row", async ({ page }) => {
+    await loadEffectHarness(page);
+    const initial = await page.evaluate(async () => {
+      const { WorkspaceStore } = await import("/plan-recovery-test.js");
+      const { planView, pendingAction, expandedRoom, planDraft } = new WorkspaceStore().value;
+      return { planView, pendingAction, expandedRoom, parked: planDraft.parkedRooms };
+    });
+    expect(initial).toEqual({ planView: "run", pendingAction: null, expandedRoom: null, parked: [] });
+  });
+
+  test("select-plan opens Create in Edit and a saved plan in Run", async ({ page }) => {
+    expect(await run(page, "plans", [{ type: "select-plan", planId: null }]))
+      .toMatchObject({ workflow: "plan", planView: "edit", expandedRoom: null, planId: null });
+    expect(await run(page, "plans", [{ type: "select-plan", planId: "weekend" }]))
+      .toMatchObject({ workflow: "plan", planView: "run", expandedRoom: null, planId: "weekend" });
+    // Entering the plan workflow opens Run even for the plan already selected.
+    expect(await run(page, "plans", [{ type: "select-plan", planId: "daily" }]))
+      .toMatchObject({ workflow: "plan", planView: "run", planId: "daily" });
+    // Another saved plan from an open Edit opens in Run and closes the row.
+    expect(await run(page, "plans", [
+      { type: "select-plan", planId: "daily" },
+      { type: "set-plan-view", view: "edit", roomId: "room-a" },
+      { type: "select-plan", planId: "weekend" },
+    ])).toMatchObject({ workflow: "plan", planView: "run", expandedRoom: null, planId: "weekend" });
+  });
+
+  test("reselecting the open plan keeps its view and open row", async ({ page }) => {
+    expect(await run(page, "plan-saved-intelligent", [
+      { type: "set-plan-view", view: "edit", roomId: "room-b" },
+      { type: "select-plan", planId: "daily" },
+    ])).toMatchObject({ workflow: "plan", planView: "edit", expandedRoom: "room-b", planId: "daily" });
+  });
+
+  test("leaving the plan workflow resets the view, Try again keeps it", async ({ page }) => {
+    const edit = { type: "set-plan-view", view: "edit", roomId: "room-a" };
+    expect(await run(page, "plan-saved-intelligent", [edit, { type: "open-workflow", workflow: "rooms" }]))
+      .toMatchObject({ workflow: "rooms", planView: "run", expandedRoom: null });
+    expect(await run(page, "plan-saved-intelligent", [edit, { type: "open-workflow", workflow: "plan" }]))
+      .toMatchObject({ workflow: "plan", planView: "edit", expandedRoom: "room-a" });
+    expect(await run(page, "plan-saved-intelligent", [edit, { type: "return-live" }]))
+      .toMatchObject({ workflow: "none", planView: "run", expandedRoom: null });
+  });
+
+  test("set-plan-view edit opens, keeps or closes the room row", async ({ page }) => {
+    expect(await run(page, "plan-saved-intelligent", [{ type: "set-plan-view", view: "edit", roomId: "room-a" }]))
+      .toMatchObject({ planView: "edit", expandedRoom: "room-a" });
+    expect(await run(page, "plan-saved-intelligent", [
+      { type: "set-plan-view", view: "edit", roomId: "room-a" },
+      { type: "set-plan-view", view: "edit" },
+    ])).toMatchObject({ planView: "edit", expandedRoom: "room-a" });
+    expect(await run(page, "plan-saved-intelligent", [
+      { type: "set-plan-view", view: "edit", roomId: "room-a" },
+      { type: "set-plan-view", view: "edit", roomId: null },
+    ])).toMatchObject({ planView: "edit", expandedRoom: null });
+    expect(await run(page, "plans", [{ type: "set-plan-view", view: "edit", roomId: "room-a" }]))
+      .toMatchObject({ unchanged: true, workflow: "plans" });
+  });
+
+  test("set-plan-view run needs a saved, clean draft", async ({ page }) => {
+    expect(await run(page, "plan-saved-intelligent", [
+      { type: "set-plan-view", view: "edit", roomId: "room-a" },
+      { type: "set-plan-view", view: "run" },
+    ])).toMatchObject({ planView: "run", expandedRoom: null });
+    expect(await run(page, "plan-dirty", [{ type: "set-plan-view", view: "run" }]))
+      .toMatchObject({ unchanged: true, planView: "edit" });
+    expect(await run(page, "plan-new", [{ type: "set-plan-view", view: "run" }]))
+      .toMatchObject({ unchanged: true, planView: "edit" });
+  });
+
+  test("set-plan-enabled reflects the Run switch on a saved, clean draft only", async ({ page }) => {
+    expect(await run(page, "plan-saved-intelligent", [{ type: "set-plan-enabled", enabled: false }]))
+      .toMatchObject({ planView: "run", draft: { id: "daily", enabled: false, dirty: false } });
+    expect(await run(page, "plan-dirty", [{ type: "set-plan-enabled", enabled: false }]))
+      .toMatchObject({ unchanged: true });
+    expect(await run(page, "plan-cadence-shared", [{ type: "set-plan-enabled", enabled: false }]))
+      .toMatchObject({ unchanged: true });
+    expect(await run(page, "plan-new", [{ type: "set-plan-enabled", enabled: false }]))
+      .toMatchObject({ unchanged: true });
+    expect(await run(page, "plans", [{ type: "set-plan-enabled", enabled: false }]))
+      .toMatchObject({ unchanged: true });
+  });
+
+  test("discarding returns a saved plan to Run and a new plan to the picker", async ({ page }) => {
+    expect(await run(page, "plan-dirty", [
+      { type: "set-plan-view", view: "edit", roomId: "room-a" },
+      { type: "open-dialog", dialog: "discardDraft" },
+      { type: "discard-draft" },
+    ])).toMatchObject({ workflow: "plan", planView: "run", expandedRoom: null, dialog: null, planId: "daily",
+      draft: { id: "daily", dirty: false, rooms: ["room-a", "room-b", "room-c"], parked: [] } });
+    expect(await run(page, "plan-new", [
+      { type: "toggle-room", roomId: "room-a" },
+      { type: "discard-draft" },
+    ])).toMatchObject({ workflow: "plans", planView: "run", dialog: null, planId: null, draft: { id: null, dirty: false, rooms: [] } });
+  });
+
+  test("dismissing steps Edit to Run, then Run or a new plan to the picker", async ({ page }) => {
+    const dismiss = { type: "dismiss-top-layer" };
+    expect(await run(page, "plan-saved-intelligent", [{ type: "set-plan-view", view: "edit", roomId: "room-a" }, dismiss]))
+      .toMatchObject({ workflow: "plan", planView: "run", expandedRoom: null });
+    expect(await run(page, "plan-saved-intelligent", [dismiss])).toMatchObject({ workflow: "plans", planView: "run" });
+    expect(await run(page, "plan-new", [dismiss])).toMatchObject({ workflow: "plans", planView: "run" });
+    expect(await run(page, "plan-dirty", [dismiss])).toMatchObject({ workflow: "plan", planView: "edit", dialog: "discardDraft" });
+    expect(await run(page, "plans", [dismiss])).toMatchObject({ workflow: "none" });
+  });
+
+  test("map taps never change the plan in Run", async ({ page }) => {
+    expect(await run(page, "plan-saved-intelligent", [{ type: "toggle-room", roomId: "room-d" }]))
+      .toMatchObject({ unchanged: true });
+  });
+
+  test("unticking a room in Edit parks its settings until it is ticked again", async ({ page }) => {
+    const parked = await run(page, "plan-cadence-shared", [{ type: "toggle-room", roomId: "room-a" }]);
+    expect(parked.draft.rooms).toEqual(["room-b", "room-c"]);
+    expect(parked.draft.parked.map((room) => room.roomId)).toEqual(["room-a"]);
+    expect(parked.draft.parked[0].cadence).toBeTruthy();
+    const restored = await page.evaluate(async () => {
+      const { WorkspaceStore, createGalleryState } = await import("/plan-recovery-test.js");
+      const store = new WorkspaceStore(createGalleryState("plan-cadence-shared"));
+      const saved = store.value.planDraft.rooms[0];
+      store.dispatch({ type: "toggle-room", roomId: "room-b" });
+      store.dispatch({ type: "toggle-room", roomId: "room-a" });
+      store.dispatch({ type: "toggle-room", roomId: "room-a" });
+      store.dispatch({ type: "toggle-room", roomId: "room-d" });
+      const { rooms, parkedRooms, dirty } = store.value.planDraft;
+      return { rooms, parked: parkedRooms.map((room) => room.roomId), dirty, same: JSON.stringify(rooms[1]) === JSON.stringify(saved) };
+    });
+    expect(restored).toMatchObject({ parked: ["room-b"], dirty: true, same: true });
+    expect(restored.rooms.map((room) => room.roomId)).toEqual(["room-c", "room-a", "room-d"]);
+    expect(restored.rooms[2]).toEqual({ roomId: "room-d", cleaningMode: "vacuum", coverageSetting: "standard" });
+  });
+
+  test("the plan room limit still refuses a new room in Edit", async ({ page }) => {
+    expect(await run(page, "plan-legacy-oversized", [{ type: "toggle-room", roomId: "room-extra" }]))
+      .toMatchObject({ unchanged: true });
+  });
+
+  test("Rooms selection waits for an editable map with no robot work to stop", async ({ page }) => {
+    const toggle = [{ type: "open-workflow", workflow: "rooms" }, { type: "toggle-room", roomId: "room-a" }];
+    expect((await run(page, "ready", toggle)).selectedRooms).toEqual(["room-a"]);
+    expect((await run(page, "ready", toggle, { activity: "cleaning" })).selectedRooms).toEqual([]);
+    expect((await run(page, "ready", toggle, { coherence: "degraded" })).selectedRooms).toEqual([]);
+  });
+
+  test("a dirty plan draft asks before going to Run", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-dirty" });
+    await expect(gallery.getByRole("textbox", { name: "Plan name" })).toBeVisible();
+    await page.evaluate((tag) => {
+      const shell = document.querySelector(tag).shadowRoot.querySelector("matic-map-shell-v4");
+      const body = [...shell.shadowRoot.querySelectorAll("*")].find((element) => element.localName.startsWith("matic-map-workflow-v4"));
+      body.dispatchEvent(new CustomEvent("matic-workspace-intent", {
+        detail: { type: "set-plan-view", view: "run" }, bubbles: true, composed: true,
+      }));
+    }, GALLERY_TAG);
+    await expect(gallery.getByRole("dialog", { name: "Discard plan changes?" })).toBeVisible();
+    const state = await snapshot(page);
+    expect({ planView: state.planView, dirty: state.planDraft.dirty }).toEqual({ planView: "edit", dirty: true });
+  });
+
+  test("layerDepth puts Run and a new plan's Edit under a saved plan's Edit", async ({ page }) => {
+    await loadEffectHarness(page);
+    const depths = await page.evaluate(async () => {
+      const { createGalleryState, layerDepth } = await import("/plan-recovery-test.js");
+      return ["ready", "plans", "plan-saved-intelligent", "plan-new", "plan-dirty"]
+        .map((scenario) => layerDepth(createGalleryState(scenario)));
+    });
+    expect(depths).toEqual([0, 1, 2, 2, 3]);
+  });
+});
+
+test("browser Back steps from Edit to Run to the picker before leaving the route", async ({ page }) => {
   await loadEffectHarness(page);
   const route = page.url();
   await page.evaluate(async () => {
@@ -8017,9 +8219,14 @@ test("browser Back closes the plan editor then picker before leaving the route",
     layers.start();
     store.dispatch({ type: "open-workflow", workflow: "plans" });
     store.dispatch({ type: "select-plan", planId: "daily" });
+    store.dispatch({ type: "set-plan-view", view: "edit", roomId: "room-a" });
     window.__planLayers = { store, layers };
   });
-  expect(await page.evaluate(() => history.state.maticMapLayer.depth)).toBe(2);
+  expect(await page.evaluate(() => history.state.maticMapLayer.depth)).toBe(3);
+  await page.evaluate(() => history.back());
+  await expect.poll(() => page.evaluate(() => window.__planLayers.store.value.planView)).toBe("run");
+  expect(await page.evaluate(() => ({ workflow: window.__planLayers.store.value.workflow, depth: history.state.maticMapLayer.depth })))
+    .toEqual({ workflow: "plan", depth: 2 });
   await page.evaluate(() => history.back());
   await expect.poll(() => page.evaluate(() => window.__planLayers.store.value.workflow)).toBe("plans");
   expect(await page.evaluate(() => history.state.maticMapLayer.depth)).toBe(1);
@@ -8167,7 +8374,8 @@ test("map taps select run and plan rooms in both views and clear old deletion no
         document.body.append(element);
       }
       const initial = createGalleryState("rooms");
-      const store = new WorkspaceStore({ ...initial, workflow, view, selection: { ...initial.selection, roomIds: [], roomSettings: [] }, planDraft: { ...initial.planDraft, rooms: [] } });
+      // plan.md §5 Map: taps change the plan only in Edit.
+      const store = new WorkspaceStore({ ...initial, workflow, view, planView: "edit", selection: { ...initial.selection, roomIds: [], roomSettings: [] }, planDraft: { ...initial.planDraft, rooms: [] } });
       const renderer = new RendererController(canvas, overlay);
       renderer.setState(store.value);
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));

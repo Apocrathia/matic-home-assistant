@@ -31,6 +31,7 @@ import {
   initialWorkspaceState,
   draftForPlan,
   manualRoomPreviewKey,
+  planSelection,
   WorkspaceStore,
 } from "./state";
 import { PreferenceStore, type MapPreferences } from "./preferences";
@@ -2094,6 +2095,7 @@ export class EffectController {
           id: null,
           name: "",
           rooms: [],
+          parkedRooms: [],
           dirty: false,
         },
       });
@@ -2123,15 +2125,11 @@ export class EffectController {
   }
 
   selectPlan(planId: string | null, preserveNotice = false): void {
-    const plan = this.#store.value.resources.plans.value?.plans.find((candidate) => candidate.id === planId);
-    this.#store.patch({
-      workflow: "plan",
-      notice: !preserveNotice && this.#store.value.notice?.tone === "success" ? null : this.#store.value.notice,
-      selection: { ...this.#store.value.selection, planId },
-      planDraft: plan ? draftForPlan(plan) : {
-        ...initialWorkspaceState().planDraft,
-      },
-    });
+    this.#store.patch(planSelection(this.#store.value, planId, preserveNotice));
+  }
+
+  setPlanEnabled(enabled: boolean): void {
+    this.#store.dispatch({ type: "set-plan-enabled", enabled });
   }
 
   #resumeAreaCatalog(): void {

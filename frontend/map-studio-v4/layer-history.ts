@@ -2,8 +2,16 @@ import type { WorkspaceState } from "./contracts";
 import { WorkspaceStore } from "./state";
 import { needsDraftConfirmation } from "./draft-navigation";
 
+// The plan picker sits under Run, and Run under a saved plan's Edit, so
+// browser Back steps Edit → Run → picker → home.
+const workflowDepth = (state: WorkspaceState): number => {
+  if (state.workflow === "none") return 0;
+  if (state.workflow !== "plan") return 1;
+  return state.planView === "edit" && state.planDraft.id !== null ? 3 : 2;
+};
+
 const layerDepth = (state: WorkspaceState): number =>
-  (state.workflow === "none" ? 0 : state.workflow === "plan" ? 2 : 1)
+  workflowDepth(state)
   + (state.fullMap ? 1 : 0)
   + (state.precisionOpen ? 1 : 0)
   + (state.dialog ? 1 : 0);
