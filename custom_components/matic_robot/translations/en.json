@@ -393,6 +393,7 @@
     "v4_notice_plans_refresh_failed": "Home Assistant made the change but couldn't reload your plans, so open Your plans again.",
     "v4_notice_plan_save_failed": "Home Assistant can't confirm the plan was saved, so check your plans, then try again.",
     "v4_notice_plan_deleted": "Plan deleted",
+    "v4_notice_plan_removed": "This plan was removed elsewhere, so nothing was changed.",
     "v4_notice_plan_on": "Plan turned on",
     "v4_notice_plan_paused": "Plan paused",
     "v4_notice_plan_delete_failed": "The plan wasn't deleted; try again.",

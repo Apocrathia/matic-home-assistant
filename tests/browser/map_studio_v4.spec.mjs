@@ -9290,15 +9290,13 @@ test.describe("plan effects", () => {
     });
   });
 
-  for (const failure of ["reload", "send", "missing"]) {
-    test(`the switch reverts after a failed ${failure === "missing" ? "reload that lost the plan" : failure === "reload" ? "pre-send reload" : "send"}`, async ({ page }) => {
+  for (const failure of ["reload", "send"]) {
+    test(`the switch reverts after a failed ${failure === "reload" ? "pre-send reload" : "send"}`, async ({ page }) => {
       await loadPlanEffects(page);
       const result = await page.evaluate(async (failure) => {
         const run = await window.planEffects("plan-saved-intelligent");
         const { store, effects } = run;
-        const catalog = structuredClone(store.value.resources.plans.value);
         if (failure === "reload") run.plans = async () => { throw new Error("Unavailable"); };
-        if (failure === "missing") run.plans = async () => ({ ...catalog, plans: [] });
         if (failure === "send") run.service = async () => { throw new Error("Unavailable"); };
         const original = store.value.planDraft;
         await effects.setPlanEnabled(false);
@@ -9310,6 +9308,24 @@ test.describe("plan effects", () => {
         notice: "v4_notice_plan_save_failed", status: "ready" });
     });
   }
+
+  test("the switch leaves for Your plans when the pre-send reload lost the plan", async ({ page }) => {
+    await loadPlanEffects(page);
+    const result = await page.evaluate(async () => {
+      const run = await window.planEffects("plan-saved-intelligent");
+      const { store, effects } = run;
+      const catalog = structuredClone(store.value.resources.plans.value);
+      run.plans = async () => ({ ...catalog, plans: [] });
+      await effects.setPlanEnabled(false);
+      effects.dispose();
+      const state = store.value;
+      return { calls: run.calls.length, workflow: state.workflow, planView: state.planView, planId: state.selection.planId,
+        draft: { id: state.planDraft.id, dirty: state.planDraft.dirty }, command: state.command,
+        pendingAction: state.pendingAction, notice: state.notice?.key, tone: state.notice?.tone, status: state.resources.plans.status };
+    });
+    expect(result).toEqual({ calls: 0, workflow: "plans", planView: "run", planId: null, draft: { id: null, dirty: false },
+      command: "idle", pendingAction: null, notice: "v4_notice_plan_removed", tone: "warning", status: "ready" });
+  });
 
   // An in-place read keeps only a settled catalog: when it replaces a shown
   // read that was loading and then fails, it reports the failure itself.

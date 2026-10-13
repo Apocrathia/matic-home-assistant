@@ -229,6 +229,22 @@ export const setPlanEnabled = async (context: CatalogWriteContext, enabled: bool
   store.patch({ command: "pending", pendingAction: "save-plan", notice: null });
   const catalog = await effects.loadPlans({ force: true, inPlace: true });
   const plan = catalog?.plans.find((candidate) => candidate.id === id);
+  // Deleted elsewhere: there is nothing to switch, and Run has no plan to
+  // show, so leave it for Your plans as a delete here would.
+  if (catalog && !plan && writer.current()) {
+    const latest = store.value;
+    store.patch({
+      command: "idle",
+      notice: notice("warning", "v4_notice_plan_removed", "This plan was removed elsewhere, so nothing was changed."),
+      ...(latest.planDraft === switched ? {
+        workflow: "plans" as const,
+        precisionOpen: false,
+        selection: { ...latest.selection, planId: null },
+        planDraft: context.helpers.initialWorkspaceState().planDraft,
+      } : {}),
+    });
+    return;
+  }
   const sent = catalog && plan
     ? await writer.send("save_plan", planSaveRequest({ ...draftForPlan(plan), enabled }, catalog.selectedPlan === id))
     : writer.current() ? false : null;

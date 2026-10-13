@@ -158,3 +158,35 @@ test("a room removed by an acknowledged save comes back with defaults after a fa
     return { hall: rooms.find(room => room.roomId === "hall"), parked: parkedRooms.length };
   })).toEqual({ hall: { roomId: "hall", cleaningMode: "vacuum", coverageSetting: "standard" }, parked: 0 });
 });
+
+test("a switch on a plan deleted elsewhere goes back to Your plans and sends nothing", async ({ page }) => {
+  const fixture = await installPanelFixture(page, { moduleSource: "packaged", initialPlanCatalog: catalog });
+  await page.evaluate(() => {
+    const panel = window.__panelFixture.createPanel();
+    const fetch = panel.hass.fetchWithAuth;
+    const gone = { armed: false };
+    panel.hass = { ...panel.hass,
+      fetchWithAuth: async (path, ...args) => {
+        const response = await fetch(path, ...args);
+        if (!gone.armed || !path.endsWith("/plans/synthetic")) return response;
+        const body = await response.json();
+        return new Response(JSON.stringify({ ...body, plans: [], selected_plan: null }),
+          { status: 200, headers: { "content-type": "application/json" } });
+      },
+    };
+    window.__planGone = gone;
+    document.body.append(panel);
+  });
+  const panel = page.locator(fixture.panelTag);
+  await panel.getByRole("button", { name: /^Run a plan/ }).click();
+  await panel.getByRole("button", { name: /^Daily/ }).click();
+  await page.evaluate(() => { window.__planGone.armed = true; });
+  await panel.getByRole("switch", { name: "Plan enabled", exact: true }).click();
+  await expect(panel.getByRole("heading", { level: 2, name: "Your plans" })).toBeVisible();
+  await expect(panel.getByText("This plan was removed elsewhere, so nothing was changed.", { exact: true }).first()).toBeVisible();
+  expect(await page.evaluate(() => window.__panelFixture.serviceCalls.length)).toBe(0);
+  await expect.poll(() => panel.evaluate((element) => {
+    const state = element.getWorkspaceSnapshot();
+    return { command: state.command, workflow: state.workflow, id: state.planDraft.id, dirty: state.planDraft.dirty };
+  })).toEqual({ command: "idle", workflow: "plans", id: null, dirty: false });
+});
