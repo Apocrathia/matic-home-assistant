@@ -612,6 +612,13 @@ export class MaticMapShellV4 extends LitElement {
     // Protected reactive fields are not in `keyof this`, so the map is read
     // through the untyped view for those.
     const local = changed as PropertyValues;
+    const instant = this.renderRoot.querySelector<HTMLElement>(".mobile-sheet.instant");
+    if (instant) {
+      // Resolve the new height while transitions are off, so turning them
+      // back on starts none; detent steps and drags ease as before.
+      void getComputedStyle(instant).blockSize;
+      instant.classList.remove("instant");
+    }
     const focused = this.#focused;
     this.#focused = null;
     if (focused && (!focused.isConnected || focused.closest("[hidden]"))) this.#focusPanel();
@@ -739,7 +746,14 @@ export class MaticMapShellV4 extends LitElement {
       } else if (previous.workflow !== this.state.workflow || previous.planView !== this.state.planView) {
         // Only on a workflow or view CHANGE: a state tick inside a view must
         // not yank the sheet back to its default while the user is reading.
-        this._sheetDetent = startingDetent(this.state);
+        const detent = startingDetent(this.state);
+        if (detent !== this._sheetDetent) {
+          // The view, not the user, moved the sheet: it lands at the new
+          // height at once. An eased resize here would still be running
+          // under the next click and hold that click's frame back a vsync.
+          this.#sheet()?.classList.add("instant");
+          this._sheetDetent = detent;
+        }
         const state = this.state;
         // Leaving a plan view, the control that led there takes focus once
         // the views have rendered it (plan.md §5); else, at once, the heading,

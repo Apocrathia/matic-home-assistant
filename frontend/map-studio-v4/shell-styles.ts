@@ -328,7 +328,8 @@ export const shellStyles = [tokens, base, controls, css`
     }
     .narrow .mobile-sheet[data-detent="half"] { block-size: min(48%, 26rem); }
     .narrow .mobile-sheet[data-detent="full"] { block-size: min(92%, calc(100% - 9rem)); }
-    .narrow .mobile-sheet.dragging { transition: none; }
+    .narrow .mobile-sheet.dragging,
+    .narrow .mobile-sheet.instant { transition: none; }
     .narrow .mobile-sheet[data-detent="peek"] .sheet-panel { display: none; }
 
     .narrow .sheet-grip {

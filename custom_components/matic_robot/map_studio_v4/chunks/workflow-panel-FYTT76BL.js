@@ -405,6 +405,7 @@ inline-size: min(18rem, calc(100vw - 1.5rem));
     `}};customElements.get(se)||customElements.define(se,de);var me=class extends S{constructor(){super(...arguments);this.state=x();this._open=!1;this.#n=e=>{let a=this.renderRoot.querySelector(".more");a&&!e.composedPath().includes(a)&&(this._open=!1)}}static{this.properties={state:{attribute:!1},localize:{attribute:!1},_open:{state:!0}}}static{this.styles=[R,C,T,E`
 :host { display: contents; }
 .more { position: relative; margin-inline-start: auto; }
+.more > .ms-btn { transition: none; }
 .reason { flex-basis: 100%; margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); text-align: end; }
 .menu { position: absolute; z-index: 18; inset-block-start: calc(100% + var(--ms-space-1)); inset-inline-end: 0; display: grid; min-inline-size: 14rem; padding: var(--ms-space-1); }
 .menu .ms-row { justify-content: flex-start; inline-size: 100%; }

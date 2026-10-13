@@ -27,6 +27,9 @@ export class MaticPlanToolsV4 extends LitElement {
   static override styles = [tokens, base, controls, css`
 :host { display: contents; }
 .more { position: relative; margin-inline-start: auto; }
+/* It opens in Edit's place, under the pointer that just pressed Edit: a hover
+   fade would still be running when the next press lands. */
+.more > .ms-btn { transition: none; }
 .reason { flex-basis: 100%; margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); text-align: end; }
 .menu { position: absolute; z-index: 18; inset-block-start: calc(100% + var(--ms-space-1)); inset-inline-end: 0; display: grid; min-inline-size: 14rem; padding: var(--ms-space-1); }
 .menu .ms-row { justify-content: flex-start; inline-size: 100%; }
