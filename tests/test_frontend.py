@@ -293,7 +293,10 @@ def test_every_ms_custom_property_is_defined() -> None:
 
 
 def test_plan_row_lines_ship_without_schedule_lines() -> None:
-    """The home plan card shares the picker's line helpers, not the Edit schedules (home-rooms.md R1)."""
+    """The home plan card shares the picker's line helpers, not the Edit schedules.
+
+    home-rooms.md R1.
+    """
     startup = _startup_source()
     workflow = _STUDIO_V4_WORKFLOW_CHUNK_PATHS[0].read_text(encoding="utf-8")
     assert "v4_plan_row_rotation" in startup
@@ -302,7 +305,7 @@ def test_plan_row_lines_ship_without_schedule_lines() -> None:
 
 
 def test_rooms_view_ships_in_the_lazy_workflow_chunk() -> None:
-    """The Rooms view and its copy load with the other workflow views (home-rooms.md R25)."""
+    """The Rooms view and its copy load with the other workflow views (R25)."""
     startup = _startup_source()
     workflow = _STUDIO_V4_WORKFLOW_CHUNK_PATHS[0].read_text(encoding="utf-8")
     # The tag itself is in element-tags.ts, which startup already holds; the
