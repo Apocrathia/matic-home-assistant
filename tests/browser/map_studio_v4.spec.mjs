@@ -9938,7 +9938,7 @@ async function openEmptyPicker(gallery) {
 const axeFindings = (results) => results.map(({ id, nodes }) => `${id}: ${nodes.map(({ target }) => target.flat().join(" >> ")).join(" | ")}`);
 
 test.describe("Map Studio accessibility baselines", () => {
-  for (const scenario of ["ready", "rooms", "plans", "plan-saved-ordered", "plan-run-paused", "plan-run-blocked", "plan-new", "plan-dirty", "draw", "history", "cleaning", "access"]) {
+  for (const scenario of ["ready", "rooms", "plans", "plan-saved-intelligent", "plan-saved-ordered", "plan-edit-ordered", "plan-run-paused", "plan-run-blocked", "plan-new", "plan-dirty", "draw", "history", "cleaning", "access"]) {
     for (const [width, height] of [[390, 844], [1024, 768]]) {
       const narrow = width < 1024;
       test(`${scenario} at ${width} has no serious axe finding and no name on an unnamed role${narrow ? " @mobile" : ""}`, async ({ page }) => {
