@@ -314,9 +314,10 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
     case "plans": {
       // The picker's line 3 kinds (plan.md §3): due work, a blocked run, a paused plan.
       const saved = savedDailyPlan();
+      // Two rooms share mop due work, so the line joins them (plan.md §3).
       const daily = planWithRooms(saved, saved.rooms.map((room, index): PlanRoom => index === 0
         ? { ...room, cadenceReasons: ["mop_due", "coverage_due"] }
-        : room));
+        : index === 1 ? { ...room, cadenceReasons: ["mop_due"] } : room));
       const weekend = planWithRooms(
         { ...daily, id: "weekend", name: "Weekend refresh" },
         [

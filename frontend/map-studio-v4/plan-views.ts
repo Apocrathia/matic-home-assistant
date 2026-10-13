@@ -32,8 +32,10 @@ export class MaticPlanViewsV4 extends LitElement {
 :host { display: block; }
 .plain { display: grid; gap: var(--ms-space-2); margin: 0; padding: 0; list-style: none; }
 .plan-row .ms-row__body { display: grid; gap: 0.125rem; }
-.plan-title { display: flex; flex-wrap: wrap; gap: var(--ms-space-1) var(--ms-space-2); align-items: center; min-inline-size: 0; }
-.plan-title bdi { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Beats controls' .ms-row__body strong; a long name ellipsizes and its chips stay on line 1. */
+.plan-row .plan-title { display: flex; gap: var(--ms-space-1) var(--ms-space-2); align-items: center; min-inline-size: 0; }
+.plan-row .plan-title bdi { overflow: hidden; min-inline-size: 0; text-overflow: ellipsis; white-space: nowrap; }
+.plan-row .plan-title .ms-chip { flex: none; }
 .chip-default { border-color: transparent; background: color-mix(in srgb, var(--ms-accent) 12%, var(--ms-surface-card)); }
 .chip-attention { border-color: transparent; background: color-mix(in srgb, var(--ms-danger) 12%, var(--ms-surface-card)); }
 /* Line 3 keeps the text colour; the glyph carries the tone (design-system.md §5). */
@@ -101,7 +103,7 @@ export class MaticPlanViewsV4 extends LitElement {
     const line3 = !plan.enabled
       ? nothing
       : blocker && blocker !== "plan_disabled"
-        ? html`<span class="line" data-tone="warning">${icon(iconNoticeWarning)}<span>${this.#t("v4_plan_row_blocked", "Needs attention before it can run")}</span></span>`
+        ? html`<span class="lines"><span class="line" data-tone="warning">${icon(iconNoticeWarning)}<span>${this.#t("v4_plan_row_blocked", "Needs attention before it can run")}</span></span></span>`
         : this.#lines(dueLines(this.#t, this.state.locale, plan.nextRunPreview?.rooms ?? []));
     const hint = this.#t("v4_plan_default_hint", "Home Assistant's plan button and plan select run this plan.");
     return html`<li>

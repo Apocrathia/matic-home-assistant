@@ -181,7 +181,8 @@ const workflowCopy = (state: WorkspaceState, localize?: Localize): {
     case "draw":
       return { title: t("v4_draw_area", "Draw an area"), description: t("v4_draw_area_detail", "Outline or paint the area, then review it before saving.") };
     case "plans":
-      return { title: t("v4_your_plans", "Your plans"), description: t("v4_choose_plan_detail", "Tap a plan to see its next run.") };
+      // An empty picker is its card alone (plan.md §3).
+      return { title: t("v4_your_plans", "Your plans"), description: state.resources.plans.value?.plans.length === 0 ? "" : t("v4_choose_plan_detail", "Tap a plan to see its next run.") };
     case "plan":
       // Run is titled with the plan's saved name: Run never shows a dirty draft.
       return {

@@ -1032,11 +1032,15 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(daily.locator("strong .ms-chip")).toHaveAttribute("title", "Home Assistant's plan button and plan select run this plan.");
     await expect(daily).toHaveAccessibleDescription("Home Assistant's plan button and plan select run this plan.");
     await expect(daily.locator("small")).toHaveText("3 rooms · Longest-waiting rooms first");
-    await expect(daily.locator(".line")).toHaveText(["Mop due in Kitchen", "Optimal vacuum due in Kitchen"]);
+    // Intl.ListFormat joins the rooms that share a due kind (plan.md §3).
+    await expect(daily.locator(".line")).toHaveText(["Mop due in Kitchen and Living room", "Optimal vacuum due in Kitchen"]);
     const weekend = gallery.getByRole("button", { name: /^Weekend refresh/ });
     await expect(weekend.locator(".ms-chip")).toHaveCount(0);
     await expect(weekend.locator("small")).toHaveText("2 rooms · Top to bottom, as listed");
     await expect(weekend.locator(".line")).toHaveText("Needs attention before it can run");
+    // Line 3 is one size whatever it says (plan.md §3, --ms-t-xs).
+    const size = (row) => row.locator(".line").first().evaluate((element) => getComputedStyle(element).fontSize);
+    expect(await size(weekend)).toBe(await size(daily));
     await expect(weekend).toHaveAccessibleDescription("");
     const paused = gallery.getByRole("button", { name: /^Guest prep/ });
     await expect(paused.locator("strong .ms-chip")).toHaveText("Paused");
@@ -1045,6 +1049,52 @@ test.describe("Map Studio v0.4 foundation", () => {
     const items = gallery.locator("matic-map-plan-views-v4 li");
     await expect(items.last().getByRole("button")).toHaveText("Create a plan");
     await expect(items.last().getByRole("button")).not.toHaveClass(/ms-btn--primary/);
+  });
+
+  for (const [width, narrow] of [[390, true], [1024, false]]) {
+    test(`a long plan name ends in an ellipsis and keeps its chips on line 1 at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 844 });
+      const gallery = await loadGallery(page, { scenario: "plans", narrow });
+      await settleWorkspace(gallery);
+      await gallery.evaluate((element) => {
+        const state = element.getWorkspaceSnapshot();
+        const value = state.resources.plans.value;
+        const plans = value.plans.map((plan) => plan.id === "daily" ? { ...plan, name: "A very long plan name for every room on the ground floor and the stairs" } : plan);
+        element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...state.resources.plans, value: { ...value, plans } } } });
+      });
+      const row = gallery.locator('[data-plan-row="daily"]');
+      await expect(row.locator("bdi")).toHaveText(/^A very long plan name/);
+      const layout = await row.evaluate((button) => {
+        const bdi = button.querySelector(".plan-title bdi");
+        const chip = button.querySelector(".plan-title .ms-chip");
+        const body = button.querySelector(".ms-row__body").getBoundingClientRect();
+        const name = bdi.getBoundingClientRect();
+        const chipBox = chip.getBoundingClientRect();
+        return {
+          ellipsis: getComputedStyle(bdi).textOverflow,
+          truncated: bdi.scrollWidth > bdi.clientWidth,
+          inside: name.right <= body.right + 0.5 && chipBox.right <= body.right + 0.5,
+          sameLine: Math.abs(chipBox.top + chipBox.height / 2 - (name.top + name.height / 2)) < 4,
+        };
+      });
+      expect(layout).toEqual({ ellipsis: "ellipsis", truncated: true, inside: true, sameLine: true });
+    });
+  }
+
+  test("Rooms' preview gives each room its setting as one string", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "rooms" });
+    await settleWorkspace(gallery);
+    await page.evaluate((tag) => {
+      const { withGalleryRoomPreview } = window.__galleryModule;
+      const element = document.querySelector(tag);
+      const state = element.getWorkspaceSnapshot();
+      element.replaceWorkspaceState(withGalleryRoomPreview({ ...state, workflow: "rooms", selection: { ...state.selection,
+        roomIds: ["room-a"], roomSettings: [{ roomId: "room-a", cleaningMode: "vacuum", coverageSetting: "standard" }] } }));
+    }, GALLERY_TAG);
+    const rows = gallery.getByRole("list", { name: "Effective room order" }).locator("li");
+    await expect(rows.first()).toBeVisible();
+    // home-rooms.md §6 v4_room_setting_*: the whole string, not mode + coverage text.
+    await expect(rows.first().locator(".subtle").first()).toHaveText("Vacuum · Optimal");
   });
 
   test("a picker with no plans offers one filled Create a plan", async ({ page }) => {
@@ -1056,6 +1106,8 @@ test.describe("Map Studio v0.4 foundation", () => {
     });
     await expect(gallery.getByRole("heading", { level: 3, name: "No plans yet" })).toBeVisible();
     await expect(gallery.getByText("Save a plan to repeat a set of rooms.", { exact: true })).toBeVisible();
+    // The card stands alone: no "Tap a plan" description above it.
+    await expect(gallery.getByText("Tap a plan to see its next run.")).toHaveCount(0);
     await expect(gallery.locator("[data-plan-row]")).toHaveCount(0);
     const create = gallery.getByRole("button", { name: "Create a plan", exact: true });
     await expect(create).toHaveClass(/ms-btn--primary/);
