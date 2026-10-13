@@ -1,9 +1,12 @@
 import { LitElement, css, html, nothing } from "lit";
+import type { PropertyValues } from "lit";
+import { repeat } from "lit/directives/repeat.js";
 import { controls } from "./controls";
-import { icon, iconChevronRight, iconDue, iconNoticeWarning, iconPlus } from "./icons";
+import { icon, iconChevronRight, iconDue, iconMoveDown, iconMoveUp, iconNoticeWarning, iconPlus } from "./icons";
 import { base, tokens } from "./tokens";
-import type { SavedPlan } from "./backend-contracts";
-import type { Localize, WorkspaceIntent, WorkspaceState } from "./contracts";
+import type { CadenceReason, CleaningMode, CoverageSetting, PlanRoom, SavedPlan } from "./backend-contracts";
+import { MAX_ROOM_SEQUENCE_SIZE, type Localize, type WorkspaceIntent, type WorkspaceState } from "./contracts";
+import { COVERAGES, MODES, cadenceControls, coverageLabel, modeLabel } from "./plan-cadence";
 import { PLAN_VIEWS_TAG } from "./element-tags";
 import { WORKSPACE_INTENT_EVENT } from "./map-canvas";
 import {
@@ -16,18 +19,19 @@ import {
   roomBlocker,
 } from "./state";
 import { translate } from "./localize";
-import { dueLines, formatNumber, settingLabel } from "./plan-copy";
+import { dueLines, formatNumber, scheduleLine, settingLabel } from "./plan-copy";
+
+/** The saved schedule reasons that keep a room's run from starting (plan.md R3). */
+const BLOCKING: readonly CadenceReason[] = [
+  "mop_progress_unverified", "coverage_progress_unverified", "identity_changed", "room_not_on_current_map",
+  "shared_schedule_unavailable", "invalid_cadence_policy", "coverage_requires_vacuum",
+];
 
 /**
  * The plan picker and a plan's Run view (plan.md §3). Their rows and copy
  * load with the workflow views, since only the plan workflows show them.
  */
 export class MaticPlanViewsV4 extends LitElement {
-  static override properties = {
-    state: { attribute: false },
-    localize: { attribute: false },
-  };
-
   static override styles = [tokens, base, controls, css`
 :host { display: block; }
 .plain { display: grid; gap: var(--ms-space-2); margin: 0; padding: 0; list-style: none; }
@@ -65,7 +69,56 @@ export class MaticPlanViewsV4 extends LitElement {
 .switch-copy { display: grid; flex: 1; gap: 0.125rem; min-inline-size: 0; font-size: var(--ms-t-md); }
 .switch-copy small, .reason { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
 .sr-only { position: absolute; overflow: hidden; inline-size: 1px; block-size: 1px; margin: -1px; padding: 0; border: 0; clip-path: inset(50%); white-space: nowrap; }
+/* Edit (plan.md §3, ported from mockups/plan.ts). */
+.edit { display: grid; gap: var(--ms-space-3); }
+.order { display: grid; gap: var(--ms-space-1); margin: 0; padding: 0; border: 0; font-size: var(--ms-t-sm); }
+.order .ms-segment { padding: 0; }
+.order .ms-btn { flex: 1; }
+.list-header { display: flex; align-items: baseline; justify-content: space-between; gap: var(--ms-space-2); }
+.list-header .heading { margin: 0; }
+.list-header small { color: var(--ms-text-quiet); font-size: var(--ms-t-xs); }
+.edit-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; padding: 0; }
+.edit-row:not([data-selected]) { --ms-local: var(--ms-surface-card); }
+.edit-check { display: grid; place-items: center; inline-size: var(--ms-control); block-size: var(--ms-control); cursor: pointer; }
+.edit-check input { inline-size: 1.2rem; block-size: 1.2rem; margin: 0; accent-color: var(--ms-resolved-indicator, var(--ms-accent)); cursor: pointer; }
+.edit-disclosure { display: flex; gap: var(--ms-space-2); align-items: center; min-inline-size: 0; min-block-size: var(--ms-control); padding: var(--ms-space-2) var(--ms-space-1); border: 0; border-radius: var(--ms-radius-sm); color: inherit; background: transparent; font: inherit; text-align: start; cursor: pointer; }
+.edit-disclosure:focus-visible { outline: 2px solid var(--ms-resolved-indicator, var(--ms-accent)); outline-offset: -2px; }
+.edit-disclosure > .ms-icon { flex: none; transition: rotate 120ms; }
+.edit-disclosure[aria-expanded="true"] > .ms-icon { rotate: 90deg; }
+.edit-disclosure:dir(rtl) > .ms-icon { scale: -1 1; }
+.edit-name { padding-inline: var(--ms-space-1); }
+.edit-moves { display: flex; }
+.row-expanded { display: grid; grid-column: 1 / -1; gap: var(--ms-space-2); padding: var(--ms-space-3); border-block-start: 1px solid var(--ms-line); }
+.run-end { display: grid; gap: var(--ms-space-2); }
+.run-end > summary { min-block-size: var(--ms-control); align-content: center; font-weight: var(--ms-w-bold); cursor: pointer; }
+.threshold { display: grid; gap: var(--ms-space-1); font-size: var(--ms-t-md); }
+.threshold input { inline-size: 100%; min-block-size: var(--ms-control-sm); accent-color: var(--ms-resolved-indicator, var(--ms-accent)); }
+/* The schedule block, moved unchanged from the old form (UX3 replaces it). */
+.subtle { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
+.split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--ms-space-2); }
+.toolbar { display: flex; flex-wrap: wrap; gap: var(--ms-space-2); }
+.plan-options { --ms-local: var(--ms-surface-sunken); display: grid; gap: var(--ms-space-3); padding: var(--ms-space-4); border-radius: var(--ms-radius-md); background: var(--ms-local); }
+.plan-option { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: var(--ms-space-2); }
+.plan-option input[type="checkbox"] { inline-size: 1.2rem; block-size: 1.2rem; margin: 0.1rem 0 0; accent-color: var(--ms-resolved-indicator, var(--ms-accent)); }
+.plan-option-copy { display: grid; gap: var(--ms-space-1); min-inline-size: 0; }
+.plan-option-copy strong { font-size: var(--ms-t-sm); line-height: var(--ms-lh-snug); }
+.cadence-config { grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr); display: grid; gap: var(--ms-space-2); }
+.cadence-config > summary { cursor: pointer; min-block-size: var(--ms-control-sm); font-weight: var(--ms-w-bold); }
+.cadence-fields { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--ms-space-2); min-inline-size: 0; }
+.cadence-fields > .ms-field { min-inline-size: 0; }
+@media (max-width: 25rem) { .split { grid-template-columns: 1fr; } }
 `];
+
+  static override properties = {
+    state: { attribute: false },
+    localize: { attribute: false },
+    _moved: { state: true },
+  };
+
+  /** The last move, said once in the polite region (plan.md §5 Order). */
+  protected _moved = "";
+  /** The arrow a move was made with, focused again once the rows have moved. */
+  #refocus: string | null = null;
 
   state: WorkspaceState = initialWorkspaceState();
   localize?: Localize;
@@ -262,9 +315,267 @@ export class MaticPlanViewsV4 extends LitElement {
     `;
   }
 
+  protected override willUpdate(changed: PropertyValues<this>): void {
+    if (changed.has("state") && (this.state.workflow !== "plan" || this.state.planView !== "edit")) this._moved = "";
+  }
+
+  // A keyed move re-inserts the row, which drops focus, so the arrow takes it
+  // back once the moved draft arrives (not on the announcement's own render).
+  protected override updated(changed: PropertyValues<this>): void {
+    if (!this.#refocus || !changed.has("state")) return;
+    this.renderRoot.querySelector<HTMLElement>(`[data-move="${CSS.escape(this.#refocus)}"]`)?.focus();
+    this.#refocus = null;
+  }
+
+  /** The id of the shared reason while a save holds every Edit control (plan.md §4 E5), else null. */
+  #held(): string | null {
+    return this.state.pendingAction === "save-plan" ? "edit-held" : null;
+  }
+
+  #patch(patch: Partial<WorkspaceState["planDraft"]>): void {
+    if (!this.#held()) this.#intent({ type: "patch-plan-draft", patch });
+  }
+
+  #patchRoom(index: number, patch: Partial<PlanRoom>): void {
+    this.#patch({ rooms: this.state.planDraft.rooms.map((room, at) => at === index ? { ...room, ...patch } : room) });
+  }
+
+  /** One place earlier or later; focus stays on the arrow and the move is said once. */
+  #move(index: number, delta: number, name: string, arrow: string): void {
+    const rooms = [...this.state.planDraft.rooms];
+    const next = index + delta;
+    if (this.#held() || next < 0 || next >= rooms.length) return;
+    const [room] = rooms.splice(index, 1);
+    if (!room) return;
+    rooms.splice(next, 0, room);
+    this.#refocus = arrow;
+    this._moved = this.#t("v4_room_moved", "{room} moved to position {position}", { room: name, position: this.#count(next + 1) });
+    this.#intent({ type: "patch-plan-draft", patch: { rooms } });
+  }
+
+  /** A form control's hold: aria-disabled and the shared reason while a save runs. */
+  #gate(held: string | null) {
+    return { disabled: held ? "true" : nothing, described: held ?? nothing };
+  }
+
+  #arrow(room: PlanRoom, index: number, name: string, delta: -1 | 1, end: boolean, held: string | null) {
+    const id = `${room.roomId}:${delta < 0 ? "up" : "down"}`;
+    const label = delta < 0
+      ? this.#t("move_room_up", "Move {room} earlier", { room: name })
+      : this.#t("move_room_down", "Move {room} later", { room: name });
+    const at = delta < 0
+      ? this.#t("v4_room_already_first", "{room} is already first", { room: name })
+      : this.#t("v4_room_already_last", "{room} is already last", { room: name });
+    const reason = end ? `${id}-end` : held;
+    return html`<button
+        class="ms-btn ms-btn--icon"
+        type="button"
+        data-move=${id}
+        aria-label=${label}
+        title=${end ? at : label}
+        aria-disabled=${end || held ? "true" : nothing}
+        aria-describedby=${reason ?? nothing}
+        @click=${() => { if (!end) this.#move(index, delta, name, id); }}
+      >${icon(delta < 0 ? iconMoveUp : iconMoveDown)}</button>
+      ${end ? html`<span class="sr-only" id=${`${id}-end`}>${at}</span>` : nothing}`;
+  }
+
+  /** One Edit room row (plan.md §3 Edit room row). */
+  #editRow(roomId: string, name: string, room: PlanRoom | null, index: number, ordered: boolean, atLimit: boolean, held: string | null) {
+    const draft = this.state.planDraft;
+    const open = room !== null && this.state.expandedRoom === roomId;
+    const last = draft.rooms.length - 1;
+    const gate = this.#gate(held);
+    const limited = room === null && atLimit;
+    const schedule = room ? scheduleLine(this.#t, this.state.locale, room.cadence) : null;
+    const blocked = room?.cadenceReasons?.some((reason) => BLOCKING.includes(reason));
+    return html`<li class="ms-row edit-row" data-selected=${room ? "true" : nothing}>
+      <label class="edit-check"><input
+        type="checkbox"
+        .checked=${room !== null}
+        aria-label=${this.#t("v4_room_include_named", "Include {room}", { room: name })}
+        aria-disabled=${held || limited ? "true" : nothing}
+        aria-describedby=${held ?? (limited ? "room-limit" : nothing)}
+        @click=${(event: Event) => { if (held || limited) event.preventDefault(); }}
+        @change=${() => this.#intent({ type: "toggle-room", roomId })}
+      ></label>
+      ${room ? html`<button
+          class="edit-disclosure"
+          type="button"
+          data-room-disclosure=${roomId}
+          aria-expanded=${String(open)}
+          aria-label=${this.#t("v4_room_settings_named", "Settings for {room}", { room: name })}
+          aria-disabled=${gate.disabled}
+          aria-describedby=${gate.described}
+          @click=${() => { if (!held) this.#intent({ type: "set-plan-view", view: "edit", roomId: open ? null : roomId }); }}
+        >
+          ${ordered ? html`<span class="pos-badge" aria-hidden="true">${this.#count(index + 1)}</span>` : nothing}
+          <span class="row-lines">
+            <bdi>${name}</bdi>
+            <small>${settingLabel(this.#t, room)}</small>
+            ${schedule ? html`<small>${schedule}</small>` : nothing}
+            ${blocked ? html`<span class="ms-chip chip-attention">${this.#t("v4_needs_attention", "Needs attention")}</span>` : nothing}
+          </span>
+          ${icon(iconChevronRight)}
+        </button>` : html`<span class="edit-name"><bdi>${name}</bdi></span>`}
+      ${room && ordered ? html`<span class="edit-moves">
+        ${this.#arrow(room, index, name, -1, index === 0, held)}
+        ${this.#arrow(room, index, name, 1, index === last, held)}
+      </span>` : html`<span></span>`}
+      ${open && room ? html`<div class="row-expanded">
+        <div class="split">
+          <label class="field ms-field">${this.#t("v4_cleaning_system", "Cleaning mode")}
+            <select
+              aria-label=${this.#t("v4_room_cleaning_system_named", "Cleaning mode for {room}", { room: name })}
+              aria-disabled=${gate.disabled}
+              aria-describedby=${gate.described}
+              .value=${room.cleaningMode}
+              @change=${(event: Event) => {
+                const select = event.currentTarget as HTMLSelectElement;
+                if (held) select.value = room.cleaningMode;
+                else this.#patchRoom(index, { cleaningMode: select.value as CleaningMode });
+              }}
+            >${MODES.map((mode) => html`<option value=${mode} ?selected=${mode === room.cleaningMode} ?disabled=${Boolean(room.cadence?.mopEveryN && mode !== "vacuum")}>${modeLabel(this.#t, mode)}</option>`)}</select>
+          </label>
+          <label class="field ms-field">${this.#t("vacuum_coverage", "Vacuum coverage")}
+            <select
+              aria-label=${this.#t("v4_room_vacuum_coverage_named", "Vacuum coverage for {room}", { room: name })}
+              aria-disabled=${gate.disabled}
+              aria-describedby=${gate.described}
+              ?disabled=${room.cleaningMode === "mop"}
+              .value=${room.coverageSetting}
+              @change=${(event: Event) => {
+                const select = event.currentTarget as HTMLSelectElement;
+                if (held) select.value = room.coverageSetting;
+                else this.#patchRoom(index, { coverageSetting: select.value as CoverageSetting });
+              }}
+            >${COVERAGES.map((option) => html`<option value=${option} ?selected=${option === room.coverageSetting}>${coverageLabel(this.#t, option)}</option>`)}</select>
+          </label>
+        </div>
+        ${room.cleaningMode === "vacuum" ? nothing : html`<p class="subtle">${this.#t("v4_mop_coverage_hint", "Vacuum coverage applies only when vacuuming. Use the robot's Double-pass mopping setting for an extra mop pass.")}</p>`}
+        ${cadenceControls({ t: this.#t, state: this.state, intent: (intent) => this.#intent(intent), held }, room, index, name)}
+      </div>` : nothing}
+    </li>`;
+  }
+
+  /** A run-end switch (plan.md §3 When a run ends). */
+  #endSwitch(id: string, label: string, hint: string | null, on: boolean, held: string | null, change: (on: boolean) => void) {
+    const described = [hint ? `${id}-hint` : "", held ?? ""].filter(Boolean).join(" ");
+    return html`<div class="switch-row">
+      <span class="switch-copy">
+        <span id=${`${id}-label`}>${label}</span>
+        ${hint ? html`<small id=${`${id}-hint`}>${hint}</small>` : nothing}
+      </span>
+      <button
+        class="ms-switch"
+        type="button"
+        role="switch"
+        aria-checked=${String(on)}
+        aria-labelledby=${`${id}-label`}
+        aria-describedby=${described || nothing}
+        aria-disabled=${held ? "true" : nothing}
+        @click=${() => { if (!held) change(!on); }}
+      ></button>
+    </div>`;
+  }
+
+  /** plan.md §3 Edit view. */
+  #edit() {
+    const state = this.state;
+    const draft = state.planDraft;
+    const catalog = state.resources.plans.value;
+    if (!catalog) return nothing;
+    const held = this.#held();
+    const gate = this.#gate(held);
+    const ordered = draft.runBehavior === "ordered";
+    const atLimit = draft.rooms.length >= MAX_ROOM_SEQUENCE_SIZE;
+    const nameOf = (roomId: string): string => catalog.rooms.find((room) => room.roomId === roomId)?.name ?? roomId;
+    const rows = [
+      ...draft.rooms.map((room, index) => ({ roomId: room.roomId, room, index })),
+      ...catalog.rooms
+        .filter((room) => !draft.rooms.some((candidate) => candidate.roomId === room.roomId))
+        .map((room) => ({ roomId: room.roomId, room: null, index: -1 })),
+    ];
+    const threshold = draft.finishCurrentRoomThreshold;
+    const percent = this.#count(threshold);
+    const order = (value: "intelligent" | "ordered", label: string) => html`<button
+      class="ms-btn"
+      type="button"
+      aria-pressed=${String(draft.runBehavior === value)}
+      aria-disabled=${gate.disabled}
+      aria-describedby=${gate.described}
+      @click=${() => this.#patch({ runBehavior: value })}
+    >${label}</button>`;
+    return html`<div class="edit">
+      ${held ? html`<p class="reason" id="edit-held">${this.#t("v4_reason_plan_saving", "Waiting for Home Assistant to save the plan.")}</p>` : nothing}
+      <label class="field ms-field">${this.#t("plan_name", "Plan name")}
+        <input
+          maxlength="128"
+          autocomplete="off"
+          ?readonly=${Boolean(held)}
+          aria-disabled=${gate.disabled}
+          aria-describedby=${gate.described}
+          .value=${draft.name}
+          @input=${(event: Event) => this.#patch({ name: (event.currentTarget as HTMLInputElement).value })}
+        >
+      </label>
+      <div class="order" role="group" aria-labelledby="order-label">
+        <span id="order-label">${this.#t("plan_run_behavior", "Cleaning order")}</span>
+        <div class="ms-segment">
+          ${order("intelligent", this.#t("plan_intelligent", "Intelligent rotation"))}
+          ${order("ordered", this.#t("plan_ordered", "Saved order"))}
+        </div>
+        <p class="quiet">${ordered
+          ? this.#t("v4_plan_order_ordered_hint", "Top to bottom, as listed")
+          : this.#t("v4_plan_order_intelligent_hint", "Longest-waiting rooms first")}</p>
+      </div>
+      <div class="list-header">
+        <h3 class="heading" id="edit-rooms">${this.#t("v4_rooms_heading", "Rooms")}</h3>
+        <small>${this.#t("v4_plan_rooms_selected", "{selected} of {total} selected", {
+          selected: this.#count(draft.rooms.length),
+          total: this.#count(catalog.rooms.length),
+        })}</small>
+      </div>
+      ${atLimit ? html`<p class="reason" id="room-limit">${this.#t("v4_plan_room_limit", "Can't add more rooms until you remove one; a plan holds up to {limit}.", {
+        limit: this.#count(MAX_ROOM_SEQUENCE_SIZE),
+      })}</p>` : nothing}
+      <ul class="plain" role="list" aria-labelledby="edit-rooms">
+        ${repeat(rows, (row) => row.roomId, (row) => this.#editRow(row.roomId, nameOf(row.roomId), row.room, row.index, ordered, atLimit, held))}
+      </ul>
+      <span class="sr-only" role="status">${this._moved}</span>
+      <details class="run-end">
+        <summary>${this.#t("v4_run_end_options", "When a run ends")}</summary>
+        ${this.#endSwitch("return-dock", this.#t("v4_plan_return_to_dock", "Return to the dock when finished"), null, draft.returnToBase, held,
+          (on) => this.#patch({ returnToBase: on }))}
+        ${this.#endSwitch("finish-room", this.#t("v4_plan_finish_room", "Finish the current room when you press Stop"),
+          this.#t("v4_plan_finish_room_hint", "Only if the room is at least {percent}% done; otherwise the robot stops right away.", { percent }),
+          draft.finishCurrentRoom, held, (on) => this.#patch({ finishCurrentRoom: on }))}
+        ${draft.finishCurrentRoom ? html`<div class="threshold">
+          <span id="finish-threshold-label">${this.#t("v4_plan_finish_threshold", "Finish if at least {percent}% done", { percent })}</span>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            step="5"
+            aria-labelledby="finish-threshold-label"
+            aria-valuetext=${`${percent}%`}
+            aria-disabled=${gate.disabled}
+            aria-describedby=${gate.described}
+            .value=${String(threshold)}
+            @input=${(event: Event) => {
+              const input = event.currentTarget as HTMLInputElement;
+              if (held) input.value = String(threshold);
+              else this.#patch({ finishCurrentRoomThreshold: Number(input.value) });
+            }}
+          >
+        </div>` : nothing}
+      </details>
+    </div>`;
+  }
+
   protected override render() {
     const { workflow, planView } = this.state;
-    return workflow === "plans" ? this.#picker() : workflow === "plan" && planView === "run" ? this.#run() : nothing;
+    return workflow === "plans" ? this.#picker() : workflow !== "plan" ? nothing : planView === "run" ? this.#run() : this.#edit();
   }
 }
 

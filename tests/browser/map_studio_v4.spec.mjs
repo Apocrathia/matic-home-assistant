@@ -420,7 +420,7 @@ test.describe("Map Studio v0.4 foundation", () => {
         detail: { type: "set-plan-view", view: "edit" }, bubbles: true, composed: true,
       }));
     }, fixture.panelTag);
-    await panel.getByRole("group", { name: "Rooms in this plan" }).locator(".plan-room-label input[type=checkbox]").first().uncheck();
+    await panel.getByRole("list", { name: "Rooms", exact: true }).getByRole("checkbox").first().uncheck();
     const save = panel.getByRole("button", { name: "Save", exact: true });
     await save.click();
 
@@ -592,6 +592,8 @@ test.describe("Map Studio v0.4 foundation", () => {
     await gallery.getByRole("button", { name: /^Daily clean/ }).click();
     await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
     const inspector = gallery.locator(".inspector");
+    // plan.md §3: a room's schedule is inside its settings.
+    await inspector.getByRole("button", { name: "Settings for Kitchen", exact: true }).click();
     const schedule = inspector.locator("details").first();
     await schedule.locator("summary").click();
     await expect(inspector.getByRole("button", { name: "Reset vacuum rotation progress for Kitchen" })).toBeVisible();
@@ -650,6 +652,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await gallery.getByRole("button", { name: /^Daily clean/ }).click();
     await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
     const inspector = gallery.locator(".inspector");
+    await inspector.getByRole("button", { name: "Settings for Kitchen", exact: true }).click();
     await inspector.locator("details").first().locator("summary").click();
     await expect(inspector).toContainText("Can't run this schedule until you reset its mopping progress, which Home Assistant can't confirm.");
     await expect(inspector).toContainText("Can't run this schedule until you reset its vacuum rotation progress, which Home Assistant can't confirm.");
@@ -746,13 +749,20 @@ test.describe("Map Studio v0.4 foundation", () => {
         planDraft: { ...state.planDraft, id: null, name: "Capacity check", rooms: selected, dirty: false },
       });
     }, GALLERY_TAG);
-    const planRooms = gallery.getByRole("group", { name: "Rooms in this plan" });
-    const planChoices = planRooms.locator(".plan-room-label input[type=checkbox]");
+    const planRooms = gallery.getByRole("list", { name: "Rooms", exact: true });
+    const planChoices = planRooms.getByRole("checkbox");
     await expect(planChoices).toHaveCount(101);
     await planChoices.nth(99).check();
     await expect(planChoices.nth(99)).toBeChecked();
-    await expect(planChoices.nth(100)).toBeDisabled();
-    await expect(gallery.getByRole("status").filter({ hasText: "Up to 100 rooms fit" })).toBeVisible();
+    // plan.md §3: the room past the limit stays focusable, says why, and
+    // doesn't change.
+    const limit = "Can't add more rooms until you remove one; a plan holds up to 100.";
+    await expect(gallery.getByText(limit, { exact: true })).toBeVisible();
+    await expect(planChoices.nth(100)).toHaveAttribute("aria-disabled", "true");
+    await expect(planChoices.nth(100)).toHaveAccessibleDescription(limit);
+    await planChoices.nth(100).dispatchEvent("click");
+    await expect(planChoices.nth(100)).not.toBeChecked();
+    await expect.poll(async () => (await snapshot(page)).planDraft.rooms.length).toBe(100);
   });
 
   test("blocks an oversized legacy plan with a clear recovery action", async ({ page }) => {
@@ -803,12 +813,12 @@ test.describe("Map Studio v0.4 foundation", () => {
         detail: { type: "set-plan-view", view: "edit" }, bubbles: true, composed: true,
       }));
     }, fixture.panelTag);
-    const rooms = gallery.getByRole("group", { name: "Rooms in this plan" });
+    const rooms = gallery.getByRole("list", { name: "Rooms", exact: true });
     const draftRoomCount = () => page.evaluate(
       (tag) => document.querySelector(tag).getWorkspaceSnapshot().planDraft.rooms.length,
       fixture.panelTag,
     );
-    await rooms.locator(".plan-room-label input[type=checkbox]").first().uncheck();
+    await rooms.getByRole("checkbox").first().uncheck();
     expect(await draftRoomCount()).toBe(101);
     await expect(gallery.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
 
@@ -861,8 +871,8 @@ test.describe("Map Studio v0.4 foundation", () => {
     await gallery.getByRole("button", { name: "Back to plans", exact: true }).click();
     await gallery.getByRole("button", { name: /^Legacy plan/ }).click();
     await gallery.getByRole("button", { name: "Edit Legacy plan", exact: true }).click();
-    await expect(gallery.getByRole("group", { name: "Rooms in this plan" })
-      .locator(".plan-room-label input[type=checkbox]:checked")).toHaveCount(100);
+    await expect(gallery.getByRole("list", { name: "Rooms", exact: true })
+      .getByRole("checkbox", { checked: true })).toHaveCount(100);
     await expect.poll(() => page.evaluate((tag) => {
       const state = document.querySelector(tag).getWorkspaceSnapshot();
       return state.planDraft.rooms.length;
@@ -1199,6 +1209,12 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(gallery.getByText("Can't run this plan until you reset Living room's schedule progress, which Home Assistant can't confirm.").first()).toBeVisible();
     await gallery.getByRole("button", { name: "Review Living room", exact: true }).click();
     expect(await gallery.evaluate((element) => element.getWorkspaceSnapshot().planView)).toBe("edit");
+    // plan.md §5: Edit opens with that room's settings open and focused.
+    const settings = gallery.getByRole("list", { name: "Rooms", exact: true })
+      .getByRole("button", { name: "Settings for Living room", exact: true });
+    await expect(settings).toHaveAttribute("aria-expanded", "true");
+    await expect(settings).toBeFocused();
+    await expect(settings).toContainText("Needs attention");
   });
 
   test("a next run that can't be checked says why and offers Try again", async ({ page }) => {
@@ -1441,11 +1457,11 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(gallery.getByRole("dialog")).toHaveCount(0);
 
     await page.evaluate((tag) => document.querySelector(tag).setScenario("plan-saved-intelligent"), GALLERY_TAG);
-    // Delete lives in Edit (plan.md §3); Run has none.
+    // Delete lives in Edit's More actions (plan.md §3); Run has none.
     await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
-    await expect(gallery.getByRole("button", { name: "Delete plan", exact: true })).toBeVisible();
+    await expect(gallery.getByRole("button", { name: "More actions", exact: true })).toBeVisible();
     expect(await unresolved("plan-gone"), "a delete dialog for a plan deleted elsewhere").toBeNull();
-    await expect(gallery.getByRole("button", { name: "Delete plan", exact: true })).toHaveCount(0);
+    await expect(gallery.getByRole("button", { name: "More actions", exact: true })).toHaveCount(0);
     await expect(gallery.getByRole("dialog")).toHaveCount(0);
   });
 
@@ -2068,7 +2084,11 @@ test.describe("Map Studio v0.4 foundation", () => {
     await page.evaluate((tag) => {
       const element = document.querySelector(tag);
       const state = element.getWorkspaceSnapshot();
-      element.replaceWorkspaceState({ ...state, workflow: "plan", planView: "edit", planDraft: { ...state.planDraft, dirty: true } });
+      // A room open with its settings makes the form long.
+      element.replaceWorkspaceState({
+        ...state, workflow: "plan", planView: "edit", expandedRoom: state.planDraft.rooms[0].roomId,
+        planDraft: { ...state.planDraft, dirty: true },
+      });
     }, GALLERY_TAG);
     const save = gallery.getByRole("button", { name: "Save", exact: true });
     await expect(save).toBeInViewport({ ratio: 1 });
@@ -2076,7 +2096,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     expect(await body.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
     await body.evaluate((element) => { element.scrollTop = element.scrollHeight; });
     await expect(save).toBeInViewport({ ratio: 1 });
-    await expect(gallery.getByRole("button", { name: "Delete plan", exact: true })).toBeInViewport();
+    await expect(gallery.getByText("When a run ends", { exact: true })).toBeInViewport();
   });
 
   test("a limited map while idle says so and offers one Try again that rechecks", async ({ page }) => {
@@ -2822,10 +2842,19 @@ test.describe("Map Studio v0.4 foundation", () => {
     await gallery.getByRole("button", { name: "Keep editing" }).click();
     await page.evaluate((tag) => {
       const element = document.querySelector(tag);
-      element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), command: "pending" });
+      const state = element.getWorkspaceSnapshot();
+      element.replaceWorkspaceState({ ...state, command: "pending", pendingAction: "save-plan", expandedRoom: state.planDraft.rooms[0].roomId });
     }, GALLERY_TAG);
-    await expect(gallery.getByRole("textbox", { name: "Plan name" })).toBeDisabled();
-    await expect(gallery.getByRole("combobox", { name: "Cleaning mode for Kitchen", exact: true })).toBeDisabled();
+    // plan.md §4 E5: every control stays readable and focusable, says why
+    // once, and doesn't change.
+    const held = "Waiting for Home Assistant to save the plan.";
+    const name = gallery.getByRole("textbox", { name: "Plan name" });
+    await expect(name).toHaveAttribute("aria-disabled", "true");
+    await expect(name).toHaveAttribute("readonly", "");
+    await expect(name).toHaveAccessibleDescription(held);
+    const mode = gallery.getByRole("combobox", { name: "Cleaning mode for Kitchen", exact: true });
+    await expect(mode).toHaveAttribute("aria-disabled", "true");
+    await expect(mode).toHaveAccessibleDescription(held);
   });
   test("preserves plan edits after a failed or blocked save and allows retry", async ({ page }) => {
     await loadEffectHarness(page);
@@ -4318,15 +4347,18 @@ test.describe("Map Studio v0.4 foundation", () => {
     await gallery.getByRole("button", { name: /^Run a plan/ }).click();
     await gallery.getByRole("button", { name: /^Daily clean/ }).click();
     await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
-    const deletePlan = gallery.getByRole("button", { name: "Delete plan" });
-    await expect(deletePlan).toBeVisible();
-    await deletePlan.click();
+    // plan.md §3: Delete is in the heading's More actions, which takes focus back.
+    const more = gallery.getByRole("button", { name: "More actions" });
+    await expect(more).toBeVisible();
+    await more.click();
+    await gallery.getByRole("menuitem", { name: "Delete" }).click();
     await expect(gallery.getByRole("dialog", { name: "Delete plan?" })).toBeVisible();
     expect(await page.evaluate(() => window.__mapStudioActions)).toEqual([]);
     await gallery.getByRole("dialog", { name: "Delete plan?" }).getByRole("button", { name: "Cancel" }).click();
-    await expect(deletePlan).toBeFocused();
+    await expect(more).toBeFocused();
 
-    await deletePlan.click();
+    await more.click();
+    await gallery.getByRole("menuitem", { name: "Delete" }).click();
     await gallery.getByRole("dialog", { name: "Delete plan?" })
       .getByRole("button", { name: "Delete", exact: true }).click();
     await expect(gallery.getByRole("dialog", { name: "Delete plan?" })).toHaveCount(0);
@@ -4360,12 +4392,13 @@ test.describe("Map Studio v0.4 foundation", () => {
     await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
     // Exactly one panel: two meant the launcher lookup could pick the hidden one.
     await expect(gallery.locator("matic-map-workflow-v4")).toHaveCount(1);
-    const deletePlan = gallery.getByRole("button", { name: "Delete plan" });
-    await expect(deletePlan).toBeVisible();
-    await deletePlan.click();
+    const more = gallery.getByRole("button", { name: "More actions" });
+    await expect(more).toBeVisible();
+    await more.click();
+    await gallery.getByRole("menuitem", { name: "Delete" }).click();
     await expect(gallery.getByRole("dialog", { name: "Delete plan?" })).toBeVisible();
     await gallery.getByRole("dialog", { name: "Delete plan?" }).getByRole("button", { name: "Cancel" }).click();
-    await expect(deletePlan).toBeFocused();
+    await expect(more).toBeFocused();
   });
 
   test("preserves Draw state through the workspace toggle and restores focus in Escape order", async ({ page }) => {
@@ -4606,30 +4639,216 @@ test.describe("Map Studio v0.4 foundation", () => {
     await gallery.getByRole("button", { name: /^Daily clean/ }).click();
     await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
     const inspector = gallery.locator(".inspector");
-    // Groups are named by a visible h3 (aria-labelledby), not a bare
-    // aria-label, so the outline is readable by sighted users as well.
-    await expect(inspector.getByRole("heading", { name: "Rooms in this plan", level: 3 })).toBeVisible();
-    const list = inspector.getByLabel("Rooms in this plan");
+    // plan.md §3 Edit: one list named by its visible "Rooms" heading, the
+    // plan's rooms first, then the rest.
+    await expect(inspector.getByRole("heading", { name: "Rooms", level: 3, exact: true })).toBeVisible();
+    await expect(inspector.getByText("3 of 4 selected", { exact: true })).toBeVisible();
+    const list = inspector.getByRole("list", { name: "Rooms", exact: true });
     await expect(list).toHaveCount(1);
-    await expect(list).toHaveAttribute("aria-labelledby", "plan-rooms-heading");
-    await expect(inspector.getByLabel("Room order and settings")).toHaveCount(0);
-    await expect(list.locator(".room")).toHaveCount(4);
-    await expect(list.locator('.room[data-selected="true"]')).toHaveCount(3);
-    await expect(list.getByLabel("Cleaning mode")).toHaveCount(3);
+    const rows = list.getByRole("listitem");
+    await expect(rows).toHaveCount(4);
+    await expect(list.getByRole("checkbox", { checked: true })).toHaveCount(3);
+    await expect(list.getByRole("checkbox").nth(3)).not.toBeChecked();
+    // Settings stay closed until a row is opened, and one row is open at a time.
+    await expect(list.getByLabel(/^Cleaning mode for /)).toHaveCount(0);
+    const kitchen = list.getByRole("button", { name: "Settings for Kitchen", exact: true });
+    await expect(kitchen).toHaveAttribute("aria-expanded", "false");
+    await kitchen.click();
+    await expect(kitchen).toHaveAttribute("aria-expanded", "true");
+    await expect(list.getByLabel(/^Cleaning mode for /)).toHaveCount(1);
     const cadenceSettings = list.locator("details");
-    await expect(cadenceSettings).toHaveCount(3);
-    await expect(cadenceSettings.first().locator("summary")).toHaveText("Room schedule for Kitchen");
-    await cadenceSettings.first().locator("summary").click();
-    await expect(cadenceSettings.first().getByLabel(/How often to mop .*, every 1 to 100 cleans/)).toHaveAttribute("min", "1");
-    await expect(cadenceSettings.first().getByLabel(/How often to add a vacuum rotation in .*, every 1 to 100 cleans/)).toHaveAttribute("max", "100");
-    // Completion options now FOLLOW the room list: choose what to clean first,
-    // then how the run should end.
-    await expect(inspector.getByRole("heading", { name: "When a run ends", level: 3 })).toBeVisible();
-    const options = inspector.locator('[aria-labelledby="completion-heading"]');
-    await expect(options).toHaveAttribute("role", "group");
-    expect(await options.evaluate((element) =>
-      Boolean(element.compareDocumentPosition(element.parentElement.querySelector('[aria-labelledby="plan-rooms-heading"]')) & Node.DOCUMENT_POSITION_PRECEDING),
+    await expect(cadenceSettings).toHaveCount(1);
+    await expect(cadenceSettings.locator("summary")).toHaveText("Room schedule for Kitchen");
+    await cadenceSettings.locator("summary").click();
+    await expect(cadenceSettings.getByLabel(/How often to mop .*, every 1 to 100 cleans/)).toHaveAttribute("min", "1");
+    await expect(cadenceSettings.getByLabel(/How often to add a vacuum rotation in .*, every 1 to 100 cleans/)).toHaveAttribute("max", "100");
+    const second = list.getByRole("button", { name: /^Settings for / }).nth(1);
+    await second.click();
+    await expect(second).toHaveAttribute("aria-expanded", "true");
+    await expect(kitchen).toHaveAttribute("aria-expanded", "false");
+    await expect(list.getByLabel(/^Cleaning mode for /)).toHaveCount(1);
+    await second.click();
+    await expect(list.getByLabel(/^Cleaning mode for /)).toHaveCount(0);
+    // When a run ends FOLLOWS the room list: what to clean, then how it ends.
+    const runEnd = inspector.locator("details", { has: page.getByText("When a run ends", { exact: true }) });
+    await expect(runEnd).toHaveCount(1);
+    expect(await runEnd.evaluate((element) =>
+      Boolean(element.compareDocumentPosition(element.parentElement.querySelector('[aria-labelledby="edit-rooms"]')) & Node.DOCUMENT_POSITION_PRECEDING),
     )).toBe(true);
+  });
+
+  // The ready plan in Edit, with `patch` over its draft and `extra` over the state.
+  const editDaily = async (page, patch = {}, extra = {}) => {
+    const gallery = await loadGallery(page, { scenario: "ready" });
+    await page.evaluate(({ tag, patch, extra }) => {
+      const element = document.querySelector(tag);
+      const state = element.getWorkspaceSnapshot();
+      element.replaceWorkspaceState({ ...state, workflow: "plan", planView: "edit", ...extra, planDraft: { ...state.planDraft, ...patch } });
+    }, { tag: GALLERY_TAG, patch, extra });
+    await settleWorkspace(gallery);
+    return { gallery, rooms: gallery.getByRole("list", { name: "Rooms", exact: true }) };
+  };
+
+  test("Edit's arrows say when a room is already at an end, keep focus, and announce a move", async ({ page }) => {
+    const { gallery, rooms } = await editDaily(page, { runBehavior: "ordered" });
+    const state = await snapshot(page);
+    const [first, second, last] = state.planDraft.rooms.map((room) =>
+      state.resources.plans.value.rooms.find((candidate) => candidate.roomId === room.roomId).name);
+    const up = rooms.getByRole("button", { name: `Move ${first} earlier`, exact: true });
+    await expect(up).toHaveAttribute("aria-disabled", "true");
+    await expect(up).toHaveAccessibleDescription(`${first} is already first`);
+    const down = rooms.getByRole("button", { name: `Move ${last} later`, exact: true });
+    await expect(down).toHaveAttribute("aria-disabled", "true");
+    await expect(down).toHaveAccessibleDescription(`${last} is already last`);
+    // An end arrow changes nothing and keeps focus.
+    await up.focus();
+    await page.keyboard.press("Enter");
+    await expect(up).toBeFocused();
+    expect((await snapshot(page)).planDraft.rooms.map((room) => room.roomId)).toHaveLength(3);
+    const before = (await snapshot(page)).planDraft.rooms.map((room) => room.roomId);
+    const later = rooms.getByRole("button", { name: `Move ${first} later`, exact: true });
+    await later.focus();
+    await page.keyboard.press("Enter");
+    await expect.poll(async () => (await snapshot(page)).planDraft.rooms.map((room) => room.roomId)).toEqual([before[1], before[0], before[2]]);
+    // Focus stays on the arrow, now in the second row, and the move is said once.
+    await expect(rooms.getByRole("button", { name: `Move ${first} later`, exact: true })).toBeFocused();
+    await expect(rooms.locator(".pos-badge")).toHaveText(["1", "2", "3"]);
+    await expect(rooms.getByRole("button", { name: /^Settings for / }).first()).toHaveAccessibleName(`Settings for ${second}`);
+    await expect(gallery.getByRole("status").filter({ hasText: `${first} moved to position 2` })).toHaveCount(1);
+  });
+
+  test("opening a room's settings doesn't change whether it is in the plan", async ({ page }) => {
+    const { rooms } = await editDaily(page);
+    const settings = rooms.getByRole("button", { name: "Settings for Kitchen", exact: true });
+    await settings.click();
+    await expect(settings).toHaveAttribute("aria-expanded", "true");
+    await expect(rooms.getByRole("checkbox", { name: "Include Kitchen", exact: true })).toBeChecked();
+    expect((await snapshot(page)).planDraft.rooms).toHaveLength(3);
+  });
+
+  test("a room ticked again gets back the settings it had", async ({ page }) => {
+    const { rooms } = await editDaily(page, {}, { expandedRoom: "room-a" });
+    await rooms.getByRole("combobox", { name: "Cleaning mode for Kitchen", exact: true }).selectOption("vacuum_and_mop");
+    const include = rooms.getByRole("checkbox", { name: "Include Kitchen", exact: true });
+    await include.uncheck();
+    await expect.poll(async () => (await snapshot(page)).planDraft.rooms.map((room) => room.roomId)).not.toContain("room-a");
+    // An unticked room shows only its name, with nothing to open.
+    await expect(rooms.getByRole("button", { name: "Settings for Kitchen", exact: true })).toHaveCount(0);
+    await include.check();
+    const kitchen = (await snapshot(page)).planDraft.rooms.find((room) => room.roomId === "room-a");
+    expect(kitchen).toMatchObject({ cleaningMode: "vacuum_and_mop" });
+    await expect(rooms.getByRole("button", { name: "Settings for Kitchen", exact: true })).toContainText("Vacuum + mop");
+  });
+
+  for (const [cadence, line] of [
+    [{ mopEveryN: 2, coverageEveryN: null, periodicCoverageSetting: null }, "Mop every 2 cleans"],
+    [{ mopEveryN: 1, coverageEveryN: null, periodicCoverageSetting: null }, "Mop every clean"],
+    [{ mopEveryN: null, coverageEveryN: 1, periodicCoverageSetting: "quick" }, "Quick vacuum every clean"],
+    [{ mopEveryN: null, coverageEveryN: 4, periodicCoverageSetting: "standard" }, "Optimal vacuum every 4 cleans"],
+    [{ mopEveryN: 1, coverageEveryN: 3, periodicCoverageSetting: "heavy_duty" }, "Mop every clean · Heavy duty vacuum every 3 cleans"],
+    [{ mopEveryN: 5, coverageEveryN: 1, periodicCoverageSetting: "quick" }, "Mop every 5 cleans · Quick vacuum every clean"],
+    [{ mopEveryN: 1, coverageEveryN: 1, periodicCoverageSetting: "standard" }, "Mop every clean · Optimal vacuum every clean"],
+  ]) {
+    test(`an Edit row says its schedule as "${line}"`, async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "ready" });
+      const rooms = await page.evaluate(({ tag, cadence }) => {
+        const element = document.querySelector(tag);
+        const state = element.getWorkspaceSnapshot();
+        const policy = { scope: "plan", doMopNext: false, doCoverageNext: false, ...cadence };
+        const draftRooms = state.planDraft.rooms.map((room, index) => index === 0 ? { ...room, cadence: policy } : room);
+        element.replaceWorkspaceState({ ...state, workflow: "plan", planView: "edit", planDraft: { ...state.planDraft, rooms: draftRooms } });
+        return draftRooms.length;
+      }, { tag: GALLERY_TAG, cadence });
+      expect(rooms).toBe(3);
+      const settings = gallery.getByRole("button", { name: "Settings for Kitchen", exact: true });
+      await expect(settings.getByText(line, { exact: true })).toBeVisible();
+      await expect(gallery.getByRole("button", { name: /^Settings for / }).nth(1).locator("small")).toHaveCount(1);
+    });
+  }
+
+  test("the finish threshold shows only while Finish the current room is on", async ({ page }) => {
+    const { gallery } = await editDaily(page, { finishCurrentRoom: false, finishCurrentRoomThreshold: 60 });
+    await gallery.getByText("When a run ends", { exact: true }).click();
+    const finish = gallery.getByRole("switch", { name: "Finish the current room when you press Stop" });
+    await expect(finish).toHaveAttribute("aria-checked", "false");
+    await expect(finish).toHaveAccessibleDescription("Only if the room is at least 60% done; otherwise the robot stops right away.");
+    await expect(gallery.getByRole("slider")).toHaveCount(0);
+    await finish.click();
+    await expect(finish).toHaveAttribute("aria-checked", "true");
+    const slider = gallery.getByRole("slider", { name: "Finish if at least 60% done" });
+    await expect(slider).toHaveAttribute("aria-valuetext", "60%");
+    await slider.fill("80");
+    await expect.poll(async () => (await snapshot(page)).planDraft.finishCurrentRoomThreshold).toBe(80);
+    await expect(gallery.getByRole("slider", { name: "Finish if at least 80% done" })).toHaveAttribute("aria-valuetext", "80%");
+    await finish.click();
+    await expect(gallery.getByRole("slider")).toHaveCount(0);
+    const dock = gallery.getByRole("switch", { name: "Return to the dock when finished" });
+    await expect(dock).toHaveAttribute("aria-checked", "true");
+    await dock.click();
+    expect((await snapshot(page)).planDraft.returnToBase).toBe(false);
+  });
+
+  test("a save holds every Edit control with one shared reason", async ({ page }) => {
+    const { gallery, rooms } = await editDaily(page, { runBehavior: "ordered", finishCurrentRoom: true, dirty: true },
+      { command: "pending", pendingAction: "save-plan", expandedRoom: "room-a" });
+    const held = "Waiting for Home Assistant to save the plan.";
+    await expect(gallery.getByText(held, { exact: true }).first()).toBeVisible();
+    await gallery.getByText("When a run ends", { exact: true }).click();
+    const controls = [
+      gallery.getByRole("textbox", { name: "Plan name" }),
+      gallery.getByRole("group", { name: "Cleaning order" }).getByRole("button", { name: "Intelligent rotation", exact: true }),
+      rooms.getByRole("checkbox", { name: "Include Kitchen", exact: true }),
+      rooms.getByRole("button", { name: "Settings for Kitchen", exact: true }),
+      rooms.getByRole("button", { name: "Move Kitchen later", exact: true }),
+      rooms.getByRole("combobox", { name: "Cleaning mode for Kitchen", exact: true }),
+      gallery.getByRole("switch", { name: "Return to the dock when finished" }),
+      gallery.getByRole("slider"),
+    ];
+    for (const control of controls) {
+      await expect(control).toHaveAttribute("aria-disabled", "true");
+      await expect(control).toHaveAccessibleDescription(new RegExp(held.replace(/\./gu, "\\.")));
+    }
+    const before = await snapshot(page);
+    await rooms.getByRole("checkbox", { name: "Include Kitchen", exact: true }).dispatchEvent("click");
+    await rooms.getByRole("button", { name: "Move Kitchen later", exact: true }).dispatchEvent("click");
+    await gallery.getByRole("switch", { name: "Return to the dock when finished" }).dispatchEvent("click");
+    const after = await snapshot(page);
+    expect(after.planDraft).toEqual(before.planDraft);
+    await expect(rooms.getByRole("checkbox", { name: "Include Kitchen", exact: true })).toBeChecked();
+  });
+
+  test("the workflow holds no fieldset; each control says why it is held", async ({ page }) => {
+    const { gallery } = await editDaily(page, {}, { command: "pending", pendingAction: "save-plan" });
+    await expect(gallery.locator("fieldset")).toHaveCount(0);
+    await gallery.evaluate((element) => element.setScenario("rooms"));
+    await settleWorkspace(gallery);
+    await expect(gallery.locator("fieldset")).toHaveCount(0);
+  });
+
+  test("Rooms' choices stay readable but don't change while the robot works", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "rooms" });
+    await settleWorkspace(gallery);
+    const group = gallery.getByRole("group", { name: "Rooms to clean" });
+    const busy = "Can't change rooms until the robot finishes or stops.";
+    await expect(gallery.getByText(busy, { exact: true })).toHaveCount(0);
+    await expect(group.getByRole("checkbox").first()).not.toHaveAttribute("aria-disabled", "true");
+    await page.evaluate((tag) => {
+      const element = document.querySelector(tag);
+      element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), activity: "cleaning" });
+    }, GALLERY_TAG);
+    await expect(gallery.getByText(busy, { exact: true })).toHaveCount(1);
+    const choices = group.getByRole("checkbox");
+    const count = await choices.count();
+    expect(count).toBeGreaterThan(1);
+    for (let index = 0; index < count; index += 1) {
+      await expect(choices.nth(index)).toHaveAttribute("aria-disabled", "true");
+      await expect(choices.nth(index)).toHaveAccessibleDescription(busy);
+    }
+    const before = (await snapshot(page)).selection.roomIds;
+    const wasChecked = await choices.first().isChecked();
+    await choices.first().dispatchEvent("click");
+    await expect(choices.first()).toBeChecked({ checked: wasChecked });
+    expect((await snapshot(page)).selection.roomIds).toEqual(before);
   });
 
   test("@safety keeps room schedule controls readable in desktop and narrow inspectors", async ({ page }) => {
@@ -4664,7 +4883,9 @@ test.describe("Map Studio v0.4 foundation", () => {
       await gallery.getByRole("button", { name: /^Run a plan/ }).click();
       await gallery.getByRole("button", { name: /^Daily clean/ }).click();
       await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
-      const cadence = gallery.getByLabel("Rooms in this plan").locator("details").first();
+      const rooms = gallery.getByRole("list", { name: "Rooms", exact: true });
+      await rooms.getByRole("button", { name: "Settings for Kitchen", exact: true }).click();
+      const cadence = rooms.locator("details").first();
       await cadence.locator("summary").click();
       await expect(cadence.getByText("A vacuum rotation counts only after the robot confirms the vacuum coverage and that the clean finished. If it can't confirm, the rotation stays due for the next clean.")).toBeVisible();
       const scope = cadence.getByLabel("Count cleans for Kitchen");
@@ -5486,7 +5707,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await gallery.getByRole("button", { name: /^Daily clean/ }).click();
     await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
     const inspector = gallery.locator(".inspector");
-    const rows = inspector.locator(".plan-room");
+    const rows = inspector.getByRole("list", { name: "Rooms", exact: true }).getByRole("listitem");
     await expect(rows.first()).toBeVisible();
     const distinct = await rows.evaluateAll((elements) => {
       const shade = (element) => {
@@ -7438,22 +7659,26 @@ for (const activity of ["docked", "idle"]) {
 }
 
 for (const ordered of [false, true]) {
-  test(`mixed-settings guidance respects ${ordered ? "saved order" : "rotation"}`, async ({ page }) => {
+  test(`the order segment switches numbers and arrows ${ordered ? "on for saved order" : "off for rotation"}`, async ({ page }) => {
     const gallery = await loadGallery(page);
     await page.evaluate(({ tag, ordered }) => {
       const module = window.__galleryModule;
       const state = module.createGalleryState("ready");
       document.querySelector(tag).replaceWorkspaceState({ ...state, workflow: "plan", planView: "edit", planDraft: {
-        ...state.planDraft, runBehavior: ordered ? "ordered" : "intelligent", rooms: [
-          { roomId: "room-one", cleaningMode: "vacuum", coverageSetting: "quick" },
-          { roomId: "room-two", cleaningMode: "vacuum", coverageSetting: "standard" },
-        ],
+        ...state.planDraft, runBehavior: ordered ? "intelligent" : "ordered",
       } });
     }, { tag: GALLERY_TAG, ordered });
-    await expect(gallery.locator(".plan-transition-hint")).toContainText("may be cleaned in separate parts");
-    await expect(gallery.locator(".plan-transition-hint")).toContainText(ordered
-      ? "Placing rooms with matching settings together" : "Longest-waiting rooms first, checked again when you run the plan");
-    expect((await snapshot(page)).planDraft.rooms.map((room) => room.roomId)).toEqual(["room-one", "room-two"]);
+    const order = gallery.getByRole("group", { name: "Cleaning order" });
+    const choice = order.getByRole("button", { name: ordered ? "Saved order" : "Intelligent rotation", exact: true });
+    await choice.click();
+    await expect(choice).toHaveAttribute("aria-pressed", "true");
+    await expect(order.getByRole("button", { name: ordered ? "Intelligent rotation" : "Saved order", exact: true })).toHaveAttribute("aria-pressed", "false");
+    // plan.md §3: the hint under the segment says what the order means.
+    await expect(order.getByText(ordered ? "Top to bottom, as listed" : "Longest-waiting rooms first", { exact: true })).toBeVisible();
+    expect((await snapshot(page)).planDraft.runBehavior).toBe(ordered ? "ordered" : "intelligent");
+    const rooms = gallery.getByRole("list", { name: "Rooms", exact: true });
+    await expect(rooms.getByRole("button", { name: /^Move .* (earlier|later)$/ })).toHaveCount(ordered ? 6 : 0);
+    await expect(rooms.locator(".pos-badge")).toHaveText(ordered ? ["1", "2", "3"] : []);
   });
 }
 
@@ -7515,9 +7740,10 @@ test("short phone keeps plan footer reachable below the reserved map controls", 
   await settleSheet(gallery);
   const sheet = gallery.locator(".mobile-sheet");
   await expect(sheet).toHaveAttribute("data-detent", "full");
-  const deletePlan = gallery.getByRole("button", { name: "Delete plan", exact: true });
-  await deletePlan.scrollIntoViewIfNeeded();
-  await expect(deletePlan).toBeInViewport();
+  // The form's last control, When a run ends, scrolls above the footer.
+  const runEnd = gallery.getByText("When a run ends", { exact: true });
+  await runEnd.scrollIntoViewIfNeeded();
+  await expect(runEnd).toBeInViewport();
   const footer = await gallery.locator(".action-bar").boundingBox();
   expect(footer.y + footer.height).toBeLessThanOrEqual(568);
   const body = await sheet.boundingBox();
@@ -10055,7 +10281,9 @@ test.describe("Map Studio resolved theme colours", () => {
     await expect.poll(() => enabled.evaluate((element) => getComputedStyle(element, "::before").backgroundColor), "checked switch").toBe(indicator);
     await gallery.evaluate((element) => element.setScenario("plan-new"));
     await settleWorkspace(gallery);
-    await expect.poll(() => style(gallery.getByRole("checkbox", { name: /^Return to the dock when finished/ }), "accentColor"), "plan option").toBe(indicator);
+    await expect.poll(() => style(gallery.getByRole("checkbox", { name: /^Include / }).first(), "accentColor"), "plan room").toBe(indicator);
+    const saved = gallery.getByRole("group", { name: "Cleaning order" }).locator('[aria-pressed="true"]');
+    await expect.poll(() => style(saved, "borderTopColor"), "pressed order").toBe(indicator);
 
     // The Room names checkbox sits in the phone sheet's Map display section.
     await page.setViewportSize({ width: 390, height: 844 });

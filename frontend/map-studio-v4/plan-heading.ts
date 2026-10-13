@@ -7,7 +7,7 @@ import { base, tokens } from "./tokens";
 import type { Localize, NoButtonAction, PrimaryAction, WorkspaceIntent, WorkspaceState } from "./contracts";
 import { PLAN_TOOLS_TAG, PLAN_VIEWS_TAG, WORKFLOW_TAG } from "./element-tags";
 import { WORKSPACE_INTENT_EVENT } from "./map-canvas";
-import { initialWorkspaceState } from "./state";
+import { deleteSubject, initialWorkspaceState } from "./state";
 import { translate } from "./localize";
 
 /**
@@ -116,7 +116,8 @@ export class MaticPlanToolsV4 extends LitElement {
         ${reason ? html`<p class="reason" id="edit-reason">${reason}</p>` : nothing}
       `;
     }
-    if (!planDraft.id) return nothing;
+    // Its one action is Delete, so it shows only while the catalog holds the plan.
+    if (!deleteSubject(this.state, "confirmDeletePlan")) return nothing;
     const dirty = planDraft.dirty;
     return html`
       <div class="more" @keydown=${this.#keydown} @focusout=${this.#focusout}>

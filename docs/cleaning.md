@@ -15,8 +15,10 @@ Each plan saves:
 - Intelligent rotation or saved-order execution.
 - Return-to-dock and finish-current-room preferences.
 
-Drag rooms or use their arrow controls to reorder them. Each room keeps its
-mode and coverage within one ordered mission, including mixed settings.
+Open a plan and choose **Edit** to change it. Tick the rooms to include, open a
+room for its settings and schedule, and, in **Saved order**, use its arrows to
+move it. Each room keeps its mode and coverage within one ordered mission,
+including mixed settings.
 The robot handles battery and water servicing as needed.
 [Mixed room missions](mixed-room-missions.md).
 
@@ -38,12 +40,14 @@ Cleaning started in the Matic app also contributes to this ordering.
 Completion history is separate: only confirmed completed work advances **Last
 cleaned** and successful durations. [How results are counted](native-cleaning-results.md).
 
-Choose **Saved order** in the plan editor to use that order every time.
+Choose **Saved order** under **Cleaning order** in Edit to use that order every
+time.
 
 ### Stopping a plan
 
 Stop normally ends cleaning and returns the robot to its dock. If **Finish the
-current room when stopping** is enabled, the plan uses its progress threshold:
+current room when you press Stop** is on (in Edit, under **When a run ends**),
+the plan uses its progress threshold:
 
 - Below the threshold: stop immediately.
 - At or above it: finish the active room, then dock without starting another.

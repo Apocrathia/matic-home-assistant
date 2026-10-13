@@ -5,7 +5,7 @@ test("keeps checkbox state attached to its room when selected rows move", async 
   const gallery = page.locator("matic-map-studio-gallery-v0-4-0");
   await gallery.getByRole("button", { name: /^Run a plan/ }).click();
   await gallery.getByRole("button", { name: "Create a plan", exact: true }).click();
-  const rows = gallery.locator(".plan-room");
+  const rows = gallery.getByRole("list", { name: "Rooms", exact: true }).getByRole("listitem");
   await rows.last().getByRole("checkbox").click();
   await expect(rows.first()).toHaveAttribute("data-selected", "true");
   const assertConsistent = async () => {
@@ -64,7 +64,7 @@ async function loadQualityModules(page) {
       export { WorkspaceStore } from "./frontend/map-studio-v4/state";
       export { createGalleryState, withGalleryRoomPreview } from "./frontend/map-studio-v4/gallery-state";
       export { PreferenceStore, preferencesKey } from "./frontend/map-studio-v4/preferences";
-      export { SHELL_TAG, WORKFLOW_TAG } from "./frontend/map-studio-v4/element-tags";
+      export { PLAN_TOOLS_TAG, PLAN_VIEWS_TAG, SHELL_TAG, WORKFLOW_TAG } from "./frontend/map-studio-v4/element-tags";
       import "./frontend/map-studio-v4/shell";`, resolveDir: process.cwd() },
     bundle: true, format: "esm", write: false,
   });
@@ -527,7 +527,7 @@ for (const kind of ["plan", "area"]) {
   test(`a ${kind} delete dialog stays open through a catalog reload, even a failed one, that does not prove the ${kind} gone`, async ({ page }) => {
     await loadQualityModules(page);
     const result = await page.evaluate(async (kind) => {
-      const { EffectController, WorkspaceStore, createGalleryState, SHELL_TAG, WORKFLOW_TAG } = await import("/quality-modules.js");
+      const { EffectController, WorkspaceStore, createGalleryState, PLAN_TOOLS_TAG, SHELL_TAG, WORKFLOW_TAG } = await import("/quality-modules.js");
       const plan = kind === "plan";
       const initial = createGalleryState(plan ? "plans" : "area-review-rebind");
       const store = new WorkspaceStore(initial);
@@ -564,7 +564,9 @@ for (const kind of ["plan", "area"]) {
       store.subscribe((state) => { shell.state = state; });
       document.body.append(shell);
       const dialogName = plan ? "confirmDeletePlan" : "confirmDeleteArea";
-      const launcher = () => shell.shadowRoot.querySelector(WORKFLOW_TAG)?.shadowRoot
+      // A plan's Delete is in the heading's More actions (plan.md §3); an
+      // area's is in the area review.
+      const launcher = () => shell.shadowRoot.querySelector(plan ? PLAN_TOOLS_TAG : WORKFLOW_TAG)?.shadowRoot
         ?.querySelector(`[data-dialog-launcher="${dialogName}"]`) ?? null;
       const settle = async () => {
         await shell.updateComplete;
@@ -619,8 +621,9 @@ for (const kind of ["plan", "area"]) {
     expect(result.reloaded, "after a reload that still holds the item").toEqual({ dialog, detail, sameButton: true });
     // A failed read proves nothing: the dialog still names the item, and the
     // plan view behind it shows the problem (area review lists no catalog).
+    // The heading's More actions stays, so the dialog keeps its launcher.
     expect(result.failed, "after a reload that fails").toEqual(kind === "plan"
-      ? { status: "error", problem: "Home Assistant couldn't load rooms and plans. Try again shortly.", dialog, detail, sameButton: false }
+      ? { status: "error", problem: "Home Assistant couldn't load rooms and plans. Try again shortly.", dialog, detail, sameButton: true }
       : { status: "error", problem: null, dialog, detail, sameButton: true });
     expect(result.removed, "a ready catalog without the item closes the dialog").toEqual({ dialog: null });
   });
@@ -628,11 +631,11 @@ for (const kind of ["plan", "area"]) {
 
 for (const way of ["Escape", "Cancel", "outside"]) {
   test(way === "outside"
-    ? "closing a plan delete dialog whose Delete button a failed reload removed leaves focus that moved outside the shell alone"
-    : `${way} on a plan delete dialog whose Delete button a failed reload removed leaves focus on the panel heading`, async ({ page }) => {
+    ? "closing a plan delete dialog after a failed reload leaves focus that moved outside the shell alone"
+    : `${way} on a plan delete dialog after a failed reload returns focus to More actions`, async ({ page }) => {
     await loadQualityModules(page);
     await page.evaluate(async () => {
-      const { EffectController, WorkspaceStore, createGalleryState, SHELL_TAG, WORKFLOW_TAG } = await import("/quality-modules.js");
+      const { EffectController, WorkspaceStore, createGalleryState, PLAN_TOOLS_TAG, SHELL_TAG, WORKFLOW_TAG } = await import("/quality-modules.js");
       const initial = createGalleryState("plans");
       const store = new WorkspaceStore(initial);
       const gate = { fail: false };
@@ -660,10 +663,14 @@ for (const way of ["Escape", "Cancel", "outside"]) {
       shell.addEventListener("matic-workspace-intent", (event) => store.dispatch(event.detail));
       document.body.append(shell);
       const workflow = () => shell.shadowRoot.querySelector(WORKFLOW_TAG);
-      const launcher = () => workflow()?.shadowRoot?.querySelector('[data-dialog-launcher="confirmDeletePlan"]') ?? null;
+      // plan.md §3: Delete is in the heading's More actions.
+      const launcher = () => shell.shadowRoot.querySelector(PLAN_TOOLS_TAG)?.shadowRoot?.querySelector('[data-dialog-launcher="confirmDeletePlan"]') ?? null;
       for (let frame = 0; frame < 200 && !launcher(); frame += 1) await new Promise(requestAnimationFrame);
-      launcher().focus();
-      store.dispatch({ type: "open-dialog", dialog: "confirmDeletePlan" });
+      // Opened as a person does: More actions, then its Delete.
+      launcher().click();
+      const tools = launcher().getRootNode().host;
+      await tools.updateComplete;
+      tools.shadowRoot.querySelector('[role="menuitem"]').click();
       await shell.updateComplete;
       gate.fail = true;
       await effects.loadPlans({ force: true });
@@ -672,8 +679,7 @@ for (const way of ["Escape", "Cancel", "outside"]) {
       window.__ux0Fix10 = { effects, shell, store };
     });
     const dialog = page.getByRole("dialog");
-    await expect(dialog, "the dialog stays over the problem box").toBeVisible();
-    await expect(page.getByRole("button", { name: "Try again" }), "the Delete button is gone, the problem box shows").toBeVisible();
+    await expect(dialog, "the dialog stays over the problem box").toBeVisible();    await expect(page.getByRole("button", { name: "Try again" }), "the problem box shows behind the dialog").toBeVisible();
     if (way === "outside") {
       await page.evaluate(() => {
         const button = Object.assign(document.createElement("button"), { textContent: "Outside the studio" });
@@ -689,8 +695,7 @@ for (const way of ["Escape", "Cancel", "outside"]) {
     if (way === "outside") {
       await expect(page.getByRole("button", { name: "Outside the studio" }), "focus the user moved elsewhere stays there").toBeFocused();
     } else {
-      // plan.md §3: Delete is in Edit, headed "Edit plan".
-      await expect(page.getByRole("heading", { name: "Edit plan", level: 2 }), "focus lands on the panel heading").toBeFocused();
+      // A failed read proves nothing, so the launcher stays and takes focus back.      await expect(page.getByRole("button", { name: "More actions" }), "focus returns to the launcher").toBeFocused();
     }
     await page.evaluate(() => { window.__ux0Fix10.effects.dispose(); window.__ux0Fix10.shell.remove(); });
   });
@@ -699,7 +704,7 @@ for (const way of ["Escape", "Cancel", "outside"]) {
 test("a catalog a suspended page sets back to idle keeps showing its value and Delete", async ({ page }) => {
   await loadQualityModules(page);
   const result = await page.evaluate(async () => {
-    const { createGalleryState, SHELL_TAG, WORKFLOW_TAG } = await import("/quality-modules.js");
+    const { createGalleryState, PLAN_TOOLS_TAG, PLAN_VIEWS_TAG, SHELL_TAG, WORKFLOW_TAG } = await import("/quality-modules.js");
     const initial = createGalleryState("plan-saved-intelligent");
     const shell = document.createElement(SHELL_TAG);
     shell.state = { ...initial, planView: "edit", resources: { ...initial.resources, plans: { ...initial.resources.plans, status: "idle" } } };
@@ -711,12 +716,15 @@ test("a catalog a suspended page sets back to idle keeps showing its value and D
     }
     await view?.updateComplete;
     const root = view?.shadowRoot;
+    const tools = shell.shadowRoot.querySelector(PLAN_TOOLS_TAG);
+    await tools?.updateComplete;
     return {
       loading: root?.querySelector(".loading")?.textContent ?? null,
-      deleteLauncher: Boolean(root?.querySelector('[data-dialog-launcher="confirmDeletePlan"]')),
+      edit: Boolean(root?.querySelector(PLAN_VIEWS_TAG)),
+      deleteLauncher: Boolean(tools?.shadowRoot?.querySelector('[data-dialog-launcher="confirmDeletePlan"]')),
     };
   });
-  expect(result, "only an empty load waits (workflow-panel.ts #resource)").toEqual({ loading: null, deleteLauncher: true });
+  expect(result, "only an empty load waits (workflow-panel.ts #resource)").toEqual({ loading: null, edit: true, deleteLauncher: true });
 });
 
 test("external Area deletion preserves a dirty draft and turns later save into a create", async ({ page }) => {

@@ -94,11 +94,14 @@ const exerciseCadenceRoundtrip = async ({ page }) => {
     await expect(sheet.locator(".sheet-body")).toBeVisible();
   }
 
-  const schedule = panel.getByLabel("Rooms in this plan").locator("details").first();
+  const rooms = panel.getByRole("list", { name: "Rooms", exact: true });
+  const schedule = rooms.locator("details").first();
   // A saved plan opens in Run, and Save returns there (plan.md §5); its
-  // schedules change in Edit.
+  // schedules change in Edit, inside the room's settings (plan.md §3).
   const openSchedule = async () => {
     await panel.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
+    const settings = rooms.getByRole("button", { name: "Settings for Kitchen", exact: true });
+    if ((await settings.getAttribute("aria-expanded")) !== "true") await settings.click();
     if (!(await schedule.evaluate((details) => details.open))) await schedule.locator("summary").click();
   };
   await openSchedule();
@@ -163,7 +166,8 @@ const exerciseCadenceRoundtrip = async ({ page }) => {
   await expect(panel.getByRole("button", { name: /^Daily clean/ })).toBeVisible();
   await panel.getByRole("button", { name: /^Daily clean/ }).click();
   await panel.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
-  const reopenedSchedule = panel.getByLabel("Rooms in this plan").locator("details").first();
+  await rooms.getByRole("button", { name: "Settings for Kitchen", exact: true }).click();
+  const reopenedSchedule = rooms.locator("details").first();
   await reopenedSchedule.locator("summary").click();
   await expect(reopenedSchedule.getByLabel("Count cleans for Kitchen")).toHaveValue("shared");
   await expect(reopenedSchedule.getByLabel("How often to mop Kitchen, every 1 to 100 cleans")).toHaveValue("7");
@@ -245,7 +249,9 @@ test("mop-only legacy vacuum rules stay visible and can leave shared participati
   await expect(panel.getByRole("button", { name: "Run plan Daily clean", exact: true })).toBeDisabled();
   // The schedule changes in Edit, which opens at full height (plan.md §3).
   await panel.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
-  const schedule = panel.getByLabel("Rooms in this plan").locator("details").first();
+  const rooms = panel.getByRole("list", { name: "Rooms", exact: true });
+  await rooms.getByRole("button", { name: "Settings for Kitchen", exact: true }).click();
+  const schedule = rooms.locator("details").first();
   await schedule.locator("summary").click();
   await expect(schedule.getByLabel("How often to add a vacuum rotation in Kitchen, every 1 to 100 cleans")).toHaveValue("3");
   await expect(schedule.getByLabel("How often to add a vacuum rotation in Kitchen, every 1 to 100 cleans")).toBeDisabled();
