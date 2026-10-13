@@ -537,7 +537,10 @@ test.describe("the plan card", () => {
     }
   });
 
-  test("a plan deleted while its Run is open from home leaves to home", async ({ page }) => {
+  // The host moves a Run whose plan was deleted to the picker itself
+  // (effects.ts, catalog-writes.ts); this pins the shell's own Back when the
+  // plan is already gone.
+  test("Escape from a Run whose plan is gone returns home with focus on the card or heading", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "ready" });
     await planCard(gallery).click();
     await expect(gallery.getByRole("heading", { level: 2, name: "Daily clean" })).toBeFocused();
@@ -600,6 +603,15 @@ test.describe("the plan card", () => {
     await back();
     await expect.poll(() => focusedText(page)).toMatch(/^button Map diagnostics/);
 
+    await gallery.getByRole("button", { name: "Map options" }).click();
+    await gallery.getByRole("menu", { name: "Map options" }).getByRole("menuitem", { name: "Map diagnostics" }).click();
+    await expect(gallery.getByRole("heading", { level: 2, name: "Map diagnostics" })).toBeVisible();
+    await back();
+    await expect.poll(() => focusedText(page)).toMatch(/^h2 Choose what to clean/);
+
+    // R18: a workflow opened another way after a card press drops the card.
+    await cards(gallery).nth(0).click();
+    await expect(gallery.getByRole("heading", { level: 2, name: "Choose rooms" })).toBeVisible();
     await gallery.getByRole("button", { name: "Map options" }).click();
     await gallery.getByRole("menu", { name: "Map options" }).getByRole("menuitem", { name: "Map diagnostics" }).click();
     await expect(gallery.getByRole("heading", { level: 2, name: "Map diagnostics" })).toBeVisible();
@@ -914,6 +926,15 @@ for (const narrow of [true, false]) {
       await gallery.getByRole("combobox", { name: "Cleaning mode for Office" }).selectOption("mop");
       await expect.poll(async () => (await snapshot(page)).selection.roomSettings.find((room) => room.roomId === "room-c").cleaningMode).toBe("mop");
       await expect(settingsRow(gallery)).toHaveAccessibleName("Cleaning settings Different per room");
+      // One selected room changed on its own: the value is still "Different
+      // per room", since the selects keep showing the whole-clean setting.
+      const state = await snapshot(page);
+      await patchState(gallery, { selection: { ...state.selection, roomIds: ["room-c"] } });
+      await expect(settingsRow(gallery)).toHaveAccessibleName("Cleaning settings Different per room");
+      await settingsRow(gallery).click();
+      await expect(gallery.locator("#clean-settings").getByRole("combobox", { name: "Cleaning mode" })).toHaveValue("vacuum_and_mop");
+      await patchState(gallery, { selection: { ...state.selection, roomIds: ["room-a"] } });
+      await expect(settingsRow(gallery)).toHaveAccessibleName("Cleaning settings Vacuum + mop · Optimal");
     });
 
     test("one disclosure opens at a time, and Mop holds the coverage select with its hint (R28)", async ({ page }) => {

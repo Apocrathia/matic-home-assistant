@@ -679,12 +679,14 @@ export const withGalleryRoomPreview = (state: WorkspaceState, overrides?: Galler
   const rooms = state.resources.plans.value?.rooms ?? [];
   // New overrides merge over the ones the preview carries, so a test can add
   // a blocker to a scenario's due work.
-  const carried = overridesByToken.get(state.manualRoomPreview.value?.preview.previewToken ?? "") ?? {};
+  const carriedToken = state.manualRoomPreview.value?.preview.previewToken ?? GALLERY_PREVIEW_TOKEN;
+  const carried = overridesByToken.get(carriedToken) ?? {};
   const applied: GalleryPreviewOverrides = overrides ? { ...carried, ...overrides } : carried;
   const preview: ManualRoomSequencePreview = {
     entryId: state.selection.entryId,
     floorToken: "f".repeat(64),
-    previewToken: tokenFor(applied),
+    // A re-application without new overrides keeps its token.
+    previewToken: overrides ? tokenFor(applied) : carriedToken,
     rooms: state.selection.roomIds.flatMap((roomId) => {
       const settings = state.selection.roomSettings.find((room) => room.roomId === roomId);
       if (!settings) return [];

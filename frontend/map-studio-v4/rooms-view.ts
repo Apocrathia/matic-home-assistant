@@ -204,14 +204,15 @@ export class MaticRoomsViewV4 extends LitElement {
   #settingsRow(state: WorkspaceState, held: string | null, anyDue: boolean) {
     const t = this.#t;
     const open = this._open === "settings";
-    const selected = state.selection.roomSettings.filter((room) => state.selection.roomIds.includes(room.roomId));
-    const first = selected[0];
-    const mixed = selected.some((room) => room.cleaningMode !== first?.cleaningMode || room.coverageSetting !== first?.coverageSetting);
-    const value = mixed
-      ? t("v4_settings_mixed", "Different per room")
-      : settingLabel(t, first ?? { cleaningMode: state.selection.cleaningMode, coverageSetting: state.selection.coverageSetting });
     const mode = state.selection.cleaningMode;
     const coverage = state.selection.coverageSetting;
+    // The row's value is the whole-clean setting its selects show, unless a
+    // selected room was changed on its own (home-rooms.md §5 Settings).
+    const mixed = state.selection.roomSettings.some((room) => state.selection.roomIds.includes(room.roomId)
+      && (room.cleaningMode !== mode || room.coverageSetting !== coverage));
+    const value = mixed
+      ? t("v4_settings_mixed", "Different per room")
+      : settingLabel(t, { cleaningMode: mode, coverageSetting: coverage });
     const mop = mode === "mop";
     const locked = held !== null;
     return html`
@@ -284,7 +285,7 @@ export class MaticRoomsViewV4 extends LitElement {
     return html`
       <div class="check-lines">
         ${due.map((line) => html`<p class="line" data-tone="due">${icon(iconDue)}<span>${line}</span></p>`)}
-        ${boundaries ? html`<p class="line" data-tone="info">${icon(iconDue)}<span>${t("v4_room_parts", "The robot cleans these rooms in {count} parts and may stop at the dock between parts.", { count: boundaries + 1 })}</span></p>` : nothing}
+        ${boundaries ? html`<p class="line" data-tone="info">${icon(iconDue)}<span>${t("v4_room_parts", "The robot cleans these rooms in {count} parts and may stop at the dock between parts.", { count: formatNumber(state.locale, boundaries + 1) })}</span></p>` : nothing}
         ${failed ? html`
           <p class="line" data-tone="warning">${icon(iconNoticeWarning)}<span>${t("v4_room_preview_unavailable", "Home Assistant couldn't check the room settings.")}</span>
             <button class="ms-btn ms-btn--sm ms-btn--secondary" type="button" @click=${() => this.#intent({ type: "retry-room-preview" })}>${t("v4_retry", "Try again")}</button>

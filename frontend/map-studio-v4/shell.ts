@@ -873,7 +873,11 @@ export class MaticMapShellV4 extends LitElement {
     this.#dispatchAction(action.id);
   }
 
+  // Opening a workflow any other way than from a home launcher clears the
+  // launcher, so Back lands on the heading (home-rooms.md R18). Back itself
+  // comes through here with "none" and must keep it.
   #workflow(workflow: Workflow, launcher?: EventTarget | null): void {
+    if (workflow !== "none") this.#homeLauncher = null;
     this.#leave({ type: "open-workflow", workflow }, launcher);
   }
 
@@ -1212,7 +1216,9 @@ export class MaticMapShellV4 extends LitElement {
   // intent and handed back the state (a task later, after its render): a
   // refused one repeats the reason on screen (the state is the same), an
   // accepted one names the change. The list's own controls speak for
-  // themselves.
+  // themselves. This relies on the host dispatching the intent to its store
+  // synchronously in its listener and setting `state` in its own render (a
+  // microtask), so a macrotask always sees the handed-back state.
   readonly #mapIntent = (event: Event): void => {
     const intent = (event as CustomEvent<WorkspaceIntent>).detail;
     const before = this.state;
@@ -1348,8 +1354,8 @@ export class MaticMapShellV4 extends LitElement {
     if (!disabled) this.#launchers.add(workflow);
     return () => {
       if (disabled) return;
-      this.#homeLauncher = launcher;
       this.#workflow(workflow);
+      this.#homeLauncher = launcher;
     };
   }
 
@@ -1363,14 +1369,13 @@ export class MaticMapShellV4 extends LitElement {
     else this.#focusPanel();
   }
 
-  #shelfRow(label: string, glyph: string, workflow: Workflow, detail?: string, disabled = false, describedBy?: string) {
+  #shelfRow(label: string, glyph: string, workflow: Workflow, detail?: string, disabled = false) {
     return html`
       <button
         class="ms-row"
         type="button"
         data-launcher=${workflow}
         aria-disabled=${disabled ? "true" : nothing}
-        aria-describedby=${disabled && describedBy ? describedBy : nothing}
         @click=${this.#launch(workflow, disabled)}
       >
         <span class="ms-row__lead">${icon(glyph)}</span>
@@ -1507,9 +1512,10 @@ export class MaticMapShellV4 extends LitElement {
     const loading = plansResource.status === "loading";
     const unavailable = plansResource.status === "error";
     const third = plan ? planRowLine3(t, state.locale, plan) : null;
-    // Only the name is isolated (copy-style <bdi>), so the label is split around it.
-    const title = plan ? t("v4_run_named_plan", "Run {plan}", { plan: plan.name }) : "";
-    const at = plan ? title.indexOf(plan.name) : -1;
+    // Only the name is isolated (copy-style <bdi>): the label is formatted
+    // around a marker and split there, so a name that repeats the label's
+    // own words still lands in the <bdi>.
+    const [before = "", after = ""] = plan ? t("v4_run_named_plan", "Run {plan}", { plan: "\u0000" }).split("\u0000") : [];
     const open = () => {
       if (held) return;
       this.#homeLauncher = "plan";
@@ -1529,7 +1535,7 @@ export class MaticMapShellV4 extends LitElement {
         <span class="ms-row__lead">${icon(iconPlan)}</span>
         <span class="ms-row__body">
           ${plan ? html`
-            <strong class="card-title"><span class="card-name">${at < 0 ? title : html`${title.slice(0, at)}<bdi>${plan.name}</bdi>${title.slice(at + plan.name.length)}`}</span>${plan.enabled ? nothing : html`<span class="ms-chip">${t("v4_paused", "Paused")}</span>`}</strong>
+            <strong class="card-title"><span class="card-name">${before}<bdi>${plan.name}</bdi>${after}</span>${plan.enabled ? nothing : html`<span class="ms-chip">${t("v4_paused", "Paused")}</span>`}</strong>
             <small>${planRowLine2(t, state.locale, plan)}</small>
             ${third === null ? nothing : "blocked" in third
               ? html`<span class="card-lines"><span class="line" data-tone="warning">${icon(iconNoticeWarning)}${third.blocked}</span></span>`
