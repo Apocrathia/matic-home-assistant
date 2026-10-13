@@ -1617,6 +1617,7 @@ export class MaticMapShellV4 extends LitElement {
       .localize=${this.localize}
       .dates=${this.dates}
       .retry=${this.#retry}
+      .narrow=${narrow}
       @matic-workspace-intent=${this.#captureDialogLauncher}
     ></${workflowTag}>`;
   }
@@ -1746,24 +1747,13 @@ export class MaticMapShellV4 extends LitElement {
         <button class="skip-link ms-btn ms-btn--primary" type="button" @click=${this.#skipToWorkspace}>${this.#t("v4_skip_to_workspace", "Skip to the panel")}</button>
         <div class="app" ?inert=${Boolean(dialog)}>
           <header class="app-bar">
-            ${!state.precisionOpen ? html`
-              <button
-                class="nav nav--menu ms-btn ms-btn--icon"
-                type="button"
-                aria-label=${this.#t("v4_open_navigation", "Open Home Assistant sidebar")}
-                title=${this.#t("v4_open_navigation", "Open Home Assistant sidebar")}
-                @click=${this.#toggleNavigation}
-              >${icon(iconMenu)}</button>
-            ` : nothing}
-
-            ${state.precisionOpen ? html`
-              <button
-                class="nav ms-btn ms-btn--icon"
-                type="button"
-                aria-label=${this.#t("v4_back", "Back")}
-                @click=${() => this.#intent({ type: "dismiss-top-layer" })}
-              >${icon(iconBack)}</button>
-            ` : nothing}
+            <button
+              class="nav nav--menu ms-btn ms-btn--icon"
+              type="button"
+              aria-label=${this.#t("v4_open_navigation", "Open Home Assistant sidebar")}
+              title=${this.#t("v4_open_navigation", "Open Home Assistant sidebar")}
+              @click=${this.#toggleNavigation}
+            >${icon(iconMenu)}</button>
             <h1 class="title">${this.#t("map_studio_title", "Matic Map")}</h1>
             ${state.robots.length > 1 || selectedRobotUnavailable ? html`
               <select
@@ -1839,11 +1829,6 @@ export class MaticMapShellV4 extends LitElement {
                   ></button>
                 ` : nothing}
               </${mapCanvasTag}>
-              ${!narrow && precisionOpen ? html`
-                <div class="precision-popover">
-                  <${precisionControlsTag} compact .state=${state} .localize=${this.localize}></${precisionControlsTag}>
-                </div>
-              ` : nothing}
             </div>
 
             <!--
@@ -1893,12 +1878,8 @@ export class MaticMapShellV4 extends LitElement {
                 ${showDrawTools ? html`
                   <div class="sheet-tools">
                     ${chunkStatus(this.#tools("draw"), this.localize, this.#retry)}
+                    ${precisionOpen ? html`<${precisionControlsTag} class="sheet-precision" .state=${state} .localize=${this.localize}></${precisionControlsTag}>` : nothing}
                     ${renderDrawTools(state, { intent: (intent) => this.#intent(intent), openBrush: () => this.#openBrush(), t: (key, fallback, placeholders) => this.#t(key, fallback, placeholders) }, "grid")}
-                    ${precisionOpen ? html`
-                      <div class="precision-popover">
-                        <${precisionControlsTag} compact inline .state=${state} .localize=${this.localize}></${precisionControlsTag}>
-                      </div>
-                    ` : nothing}
                   </div>
                 ` : nothing}
                 <div

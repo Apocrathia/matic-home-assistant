@@ -13,7 +13,7 @@ import {
   type WorkspaceIntent,
   type WorkspaceState,
 } from "./contracts";
-import { PLAN_VIEWS_TAG, ROOMS_VIEW_TAG, WORKFLOW_TAG } from "./element-tags";
+import { PLAN_VIEWS_TAG, PRECISION_CONTROLS_TAG, ROOMS_VIEW_TAG, WORKFLOW_TAG } from "./element-tags";
 import { WORKSPACE_INTENT_EVENT } from "./map-canvas";
 import { deleteSubject, initialWorkspaceState } from "./state";
 import { formatDateTime, translate } from "./localize";
@@ -41,6 +41,7 @@ export { formControls } from "./form-controls";
 
 const planViewsTag = unsafeStatic(PLAN_VIEWS_TAG);
 const roomsViewTag = unsafeStatic(ROOMS_VIEW_TAG);
+const precisionControlsTag = unsafeStatic(PRECISION_CONTROLS_TAG);
 
 const eventValue = (event: Event): string => (event.currentTarget as HTMLInputElement).value;
 
@@ -50,6 +51,7 @@ export class MaticMapWorkflowV4 extends LitElement {
     localize: { attribute: false },
     dates: { attribute: false },
     _historyPreviewPosition: { state: true },
+    narrow: { type: Boolean },
   };
 
   static override styles = [tokens, base, controls, formControls, css`
@@ -90,6 +92,8 @@ line-height: var(--ms-lh-snug);
 
   state: WorkspaceState = initialWorkspaceState();
   localize?: Localize;
+  // The phone sheet holds the brush settings itself, above the tool row.
+  narrow = false;
   dates?: DateFormat;
   /** The shell's Try again (shell.ts #retry), for the diagnostics chunk. */
   retry!: (event: Event) => void;
@@ -231,6 +235,7 @@ line-height: var(--ms-lh-snug);
     return html`
       <div class="stack">
         ${hint ? html`<p class="subtle draw-hint">${hint}</p>` : nothing}
+        ${this.state.precisionOpen && !this.narrow ? staticHtml`<${precisionControlsTag} .state=${this.state} .localize=${this.localize}></${precisionControlsTag}>` : nothing}
         ${this.#resource(areas, html`
           <div class="group">
             <h3 class="ms-section-heading" id="areas-heading">${this.#t("area_workspace_title", "Custom areas")}</h3>

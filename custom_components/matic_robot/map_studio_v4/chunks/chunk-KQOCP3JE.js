@@ -46,15 +46,9 @@ transition: translate var(--ms-fast) var(--ms-ease);
 .ms-switch[aria-checked="true"]::after { background: HighlightText; }
 }
 .ms-field { display: grid; gap: var(--ms-space-1); color: var(--ms-text-quiet); font-size: var(--ms-t-xs); font-weight: var(--ms-w-medium); }
-`;var a=e`
-    .precision-popover {
-      position: absolute;
-      z-index: 9;
-      inset-inline-end: var(--ms-space-3);
-      inset-block-end: 5.5rem;
-      inline-size: 0;
-      block-size: 0;
-    }
+.ms-range { display: block; inline-size: 100%; min-block-size: var(--ms-control); margin: 0; accent-color: var(--ms-resolved-indicator, var(--ms-accent)); }
+.ms-range:focus-visible { outline: 2px solid var(--ms-resolved-indicator, var(--ms-accent)); outline-offset: 2px; }
+`;var i=e`
 
     .overflow-menu {
       position: absolute;
@@ -92,6 +86,6 @@ transition: translate var(--ms-fast) var(--ms-ease);
     }
 
     .narrow .sheet-grip:has(.sheet-back) { grid-template-columns: auto minmax(0, 1fr) auto auto; }
-    .narrow .precision-popover { position: static; inline-size: auto; block-size: auto; }
+    .narrow .sheet-precision { display: block; margin-block-end: var(--ms-space-2); }
 
-`;export{s as a,a as b};
+`;export{s as a,i as b};

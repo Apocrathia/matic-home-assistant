@@ -2,18 +2,10 @@ import { css } from "lit";
 
 // Shell rules for markup that renders only once the workflow chunk is ready
 // (the Back button, the action bar's summary and jump, the grip's Back
-// column, the Map options menu and the precision popover). The discard dialog stays with the shell:
+// column, the Map options menu and the sheet's brush settings). The discard dialog stays with the shell:
 // a Draw draft can be dirty while this chunk failed. The shell adopts them with its
 // own styles when the chunk loads, so startup does not carry them.
 export const shellWorkflowStyles = css`
-    .precision-popover {
-      position: absolute;
-      z-index: 9;
-      inset-inline-end: var(--ms-space-3);
-      inset-block-end: 5.5rem;
-      inline-size: 0;
-      block-size: 0;
-    }
 
     /* The Map options menu renders only from this chunk. */
     .overflow-menu {
@@ -53,6 +45,6 @@ export const shellWorkflowStyles = css`
     }
 
     .narrow .sheet-grip:has(.sheet-back) { grid-template-columns: auto minmax(0, 1fr) auto auto; }
-    .narrow .precision-popover { position: static; inline-size: auto; block-size: auto; }
+    .narrow .sheet-precision { display: block; margin-block-end: var(--ms-space-2); }
 
 `;

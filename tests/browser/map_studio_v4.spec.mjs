@@ -4441,11 +4441,11 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(gallery.getByLabel("Map zoom percent")).toHaveCount(0);
     await brushButton.click();
     await expect(brushButton).toHaveAttribute("aria-expanded", "true");
-    const brush = gallery.getByLabel("Brush width in meters");
+    const brush = gallery.getByLabel("Brush width in centimeters");
     await expect(brush).toBeVisible();
     await expect(gallery.getByRole("slider", { name: "Brush width slider" })).toBeVisible();
     await expect(gallery.getByRole("button", { name: /Zoom in|Zoom out/ })).toHaveCount(0);
-    await brush.fill("0.20");
+    await brush.fill("20");
     await brush.press("Tab");
     await expect.poll(async () => (await snapshot(page)).draw.brushMeters).toBe(0.2);
     await brush.press("Escape");
@@ -4468,7 +4468,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect.poll(async () => (await snapshot(page)).precisionOpen).toBe(true);
 
     // Escape order: brush field -> Brush button -> expanded map.
-    await gallery.getByLabel("Brush width in meters").press("Escape");
+    await gallery.getByLabel("Brush width in centimeters").press("Escape");
     await expect.poll(async () => (await snapshot(page)).precisionOpen).toBe(false);
     await expect.poll(async () => (await snapshot(page)).fullMap).toBe(true);
     await expect(precision).toBeFocused();

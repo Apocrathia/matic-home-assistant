@@ -617,3 +617,118 @@ test.describe("Draw bar and Custom areas", () => {
     expect((await snapshot(page)).areaDraft.id).toBe("entryway");
   });
 });
+
+// ---- Precision (map-surfaces.md §5 Precision; design-system.md §4 .ms-stepper, .ms-range) ----
+const brushOf = (scope) => scope.getByRole("button", { name: /^Brush width, / });
+const precisionOf = (scope) => scope.getByRole("group", { name: "Drawing precision" });
+const brushField = (scope) => scope.getByRole("spinbutton", { name: "Brush width in centimeters" });
+
+test.describe("Precision", () => {
+  test("the Brush button docks the settings in the Draw body above Custom areas, and Escape returns to it", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "draw", viewport: { width: 1024, height: 768 } });
+    const brush = brushOf(canvasOf(gallery));
+    await expect(brush).toHaveAttribute("aria-expanded", "false");
+    await expect(precisionOf(gallery)).toHaveCount(0);
+    await brush.click();
+    await expect(brush).toHaveAttribute("aria-expanded", "true");
+    const panel = panelOf(gallery);
+    const group = precisionOf(panel);
+    await expect(group).toBeVisible();
+    await expect(precisionOf(canvasOf(gallery))).toHaveCount(0);
+    const heading = panel.getByRole("heading", { level: 3, name: "Custom areas" });
+    const groupBox = await group.boundingBox();
+    const headingBox = await heading.boundingBox();
+    expect(groupBox.y + groupBox.height).toBeLessThanOrEqual(headingBox.y + 1);
+    const hint = panel.locator(".draw-hint");
+    expect((await hint.boundingBox()).y).toBeLessThan(groupBox.y);
+    await expect(group).toContainText("Strokes follow the map's resolution. Zooming changes the view, not the area.");
+    // Docked settings are a section, not a layer: the app bar keeps its menu.
+    await expect(gallery.getByRole("button", { name: "Open Home Assistant sidebar", exact: true })).toBeVisible();
+    await brushField(group).press("Escape");
+    await expect.poll(async () => (await snapshot(page)).precisionOpen).toBe(false);
+    await expect(group).toHaveCount(0);
+    await expect(brush).toBeFocused();
+    await expect(brush).toHaveAttribute("aria-expanded", "false");
+  });
+
+  test("on a phone the settings sit above the tool row while the sheet stays at peek @mobile", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "draw", narrow: true });
+    const sheet = gallery.locator(".mobile-sheet");
+    await expect(sheet).toHaveAttribute("data-detent", "peek");
+    const toolbar = toolbarOf(gallery.locator(".sheet-tools"));
+    const brush = brushOf(toolbar);
+    await brush.click();
+    const group = precisionOf(gallery.locator(".sheet-tools"));
+    await expect(group).toBeVisible();
+    await expect(sheet).toHaveAttribute("data-detent", "peek");
+    const groupBox = await group.boundingBox();
+    const toolbarBox = await toolbar.boundingBox();
+    expect(groupBox.y + groupBox.height).toBeLessThanOrEqual(toolbarBox.y + 1);
+    const slider = group.getByRole("slider");
+    const sliderBox = await slider.boundingBox();
+    expect(sliderBox.x + sliderBox.width).toBeLessThanOrEqual(groupBox.x + groupBox.width + 0.5);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= 390)).toBe(true);
+    await brush.click();
+    await expect(group).toHaveCount(0);
+    await expect(brush).toBeFocused();
+  });
+
+  test("the stepper works in centimetres: 5 cm steps, snapped ends with reasons, a 44 px range", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "draw", viewport: { width: 1024, height: 768 } });
+    await brushOf(canvasOf(gallery)).click();
+    const group = precisionOf(panelOf(gallery));
+    const field = brushField(group);
+    const minus = group.getByRole("button", { name: "Decrease Brush width", exact: true });
+    const plus = group.getByRole("button", { name: "Increase Brush width", exact: true });
+    await expect(field).toHaveValue("60");
+    await expect(field).toHaveAttribute("inputmode", "numeric");
+    await expect(field).toHaveAttribute("min", "20");
+    await expect(field).toHaveAttribute("max", "250");
+    await expect(plus).toHaveAttribute("aria-controls", await field.getAttribute("id"));
+    await plus.click();
+    await expect(field).toHaveValue("65");
+    await expect.poll(async () => (await snapshot(page)).draw.brushMeters).toBeCloseTo(0.65, 6);
+    await expect(brushOf(canvasOf(gallery))).toHaveText("Brush · 65 cm");
+    await minus.click();
+    await expect(field).toHaveValue("60");
+    // A brush off the 5 cm grid steps to the next multiple.
+    const state = await snapshot(page);
+    await patchState(gallery, { draw: { ...state.draw, brushMeters: 0.63 } });
+    await expect(field).toHaveValue("63");
+    await plus.click();
+    await expect(field).toHaveValue("65");
+    await patchState(gallery, { draw: { ...state.draw, brushMeters: 0.63 } });
+    await minus.click();
+    await expect(field).toHaveValue("60");
+    await patchState(gallery, { draw: { ...state.draw, brushMeters: 2.5 } });
+    await expect(plus).toHaveAttribute("aria-disabled", "true");
+    expect(await describedBy(plus)).toBe("250 cm is the largest brush.");
+    await expect(minus).not.toHaveAttribute("aria-disabled", "true");
+    await plus.click({ force: true });
+    expect((await snapshot(page)).draw.brushMeters).toBe(2.5);
+    await patchState(gallery, { draw: { ...state.draw, brushMeters: 0.2 } });
+    await expect(minus).toHaveAttribute("aria-disabled", "true");
+    expect(await describedBy(minus)).toBe("20 cm is the smallest brush.");
+    await expect(plus).not.toHaveAttribute("aria-disabled", "true");
+    await field.fill("7");
+    await field.press("Tab");
+    await expect(field).toHaveValue("20");
+    await field.fill("300");
+    await field.press("Enter");
+    await expect(field).toHaveValue("250");
+    await expect.poll(async () => (await snapshot(page)).draw.brushMeters).toBe(2.5);
+    await field.fill("42");
+    await field.press("Tab");
+    await expect(field).toHaveValue("42");
+    await expect.poll(async () => (await snapshot(page)).draw.brushMeters).toBeCloseTo(0.42, 6);
+    const slider = group.getByRole("slider", { name: "Brush width slider" });
+    await expect(slider).toHaveAttribute("aria-valuetext", "42 cm");
+    await expect(slider).toHaveClass(/ms-range/);
+    const sliderBox = await slider.boundingBox();
+    expect(sliderBox.height).toBeGreaterThanOrEqual(44);
+    expect(await slider.evaluate((element) => getComputedStyle(element).marginInline)).toBe("0px");
+    const groupBox = await group.boundingBox();
+    expect(sliderBox.x + sliderBox.width).toBeLessThanOrEqual(groupBox.x + groupBox.width + 0.5);
+    expect(await slider.evaluate((element) => [element.min, element.max, element.step])).toEqual(["20", "250", "1"]);
+  });
+});

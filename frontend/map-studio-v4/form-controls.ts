@@ -52,4 +52,7 @@ transition: translate var(--ms-fast) var(--ms-ease);
 .ms-switch[aria-checked="true"]::after { background: HighlightText; }
 }
 .ms-field { display: grid; gap: var(--ms-space-1); color: var(--ms-text-quiet); font-size: var(--ms-t-xs); font-weight: var(--ms-w-medium); }
+/* design-system.md §4 .ms-range: 44 px tall, no UA margin (MS-RESP-09), the indicator colour. */
+.ms-range { display: block; inline-size: 100%; min-block-size: var(--ms-control); margin: 0; accent-color: var(--ms-resolved-indicator, var(--ms-accent)); }
+.ms-range:focus-visible { outline: 2px solid var(--ms-resolved-indicator, var(--ms-accent)); outline-offset: 2px; }
 `;
