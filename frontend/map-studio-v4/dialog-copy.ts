@@ -1,6 +1,8 @@
-import type { DialogKind, Localize } from "./contracts";
+import { isWorkspaceIntent } from "./contracts";
+import type { DialogKind, Localize, ResetCadenceAction, WorkspaceIntent, WorkspaceState } from "./contracts";
+import { needsDraftConfirmation } from "./draft-navigation";
 import { translate } from "./localize";
-import type { DeleteSubject } from "./state";
+import { deleteSubject } from "./state";
 
 export interface DialogPresentation {
   readonly title: string;
@@ -21,14 +23,22 @@ export type WorkflowDialog = Exclude<DialogKind, "discardDraft">;
 
 export const dialogCopy = (
   dialog: WorkflowDialog,
+  state: WorkspaceState,
   localize?: Localize,
-  resetRoomName = "room",
-  sharedCadence = false,
-  resetMode: "mop" | "coverage" = "mop",
-  subject?: DeleteSubject,
 ): DialogPresentation | undefined => {
   const t = (key: string, fallback: string, placeholders?: Record<string, string | number>): string =>
     translate(localize, key, fallback, placeholders);
+  // Automations name the saved plan or area, never an unsaved rename.
+  const subject = deleteSubject(state);
+  const request = state.cadenceResetRequest;
+  const plans = state.resources.plans.value;
+  const resetRoomName = (request && plans?.rooms.find((room) => room.roomId === request.roomId)?.name)
+    || request?.roomId || "room";
+  const sharedCadence = request
+    ? plans?.plans.find((plan) => plan.id === request.planId)
+      ?.rooms.find((room) => room.roomId === request.roomId)?.cadence?.scope === "shared"
+    : false;
+  const resetMode = request?.mode ?? "mop";
   switch (dialog) {
     case "confirmDeletePlan":
       return subject && {
@@ -69,4 +79,42 @@ export const dialogCopy = (
         action: "reset-room-cadence",
       };
   }
+};
+
+/**
+ * The shell's look at each intent the views send: one that would lose a draft
+ * asks first, in place of the intent; a dialog's explicit launcher is returned
+ * for focus to come back to.
+ */
+export const dialogLauncher = (
+  event: Event,
+  state: WorkspaceState,
+  ask: (intent: WorkspaceIntent) => void,
+): HTMLElement | undefined => {
+  const intent = event as CustomEvent<WorkspaceIntent>;
+  if (!isWorkspaceIntent(intent.detail)) return;
+  if (needsDraftConfirmation(state, intent.detail)) {
+    event.stopPropagation();
+    ask(intent.detail);
+    return;
+  }
+  if (intent.detail?.type !== "open-dialog") return;
+  // Safari does not focus a button when it is clicked with a pointing device.
+  // The composed path may be retargeted, so keep only an explicit launcher.
+  const launcher = intent.composedPath().find((candidate) => candidate instanceof HTMLElement
+    && candidate.hasAttribute("data-dialog-launcher"));
+  return launcher instanceof HTMLElement ? launcher : undefined;
+};
+
+/** A workflow dialog's confirm closes it, then asks for its write. */
+export const confirmDialog = (
+  state: WorkspaceState,
+  action: Exclude<DialogPresentation["action"], "discard">,
+  emit: (intent: WorkspaceIntent) => void,
+  dispatch: (action: string | ResetCadenceAction) => void,
+): void => {
+  const request = state.cadenceResetRequest;
+  emit({ type: "dismiss-top-layer" });
+  if (action !== "reset-room-cadence") dispatch(action);
+  else if (request) dispatch({ id: action, planId: request.planId, roomId: request.roomId, mode: request.mode });
 };

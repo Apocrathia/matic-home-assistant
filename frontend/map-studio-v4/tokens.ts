@@ -55,7 +55,6 @@ export const tokens = css`
 --ms-control-sm: 2.25rem;
 --ms-control-lg: 3.25rem;
 --ms-icon: 1.25rem;
---ms-icon-sm: 1rem;
 --ms-font: var(--ha-font-family-body, Roboto, system-ui, sans-serif);
 --ms-w-regular: 400;
 --ms-w-medium: 500;
@@ -135,5 +134,4 @@ export const base = css`
 *, *::before, *::after { box-sizing: border-box; }
 button, input, select, textarea { font: inherit; }
 .ms-icon { display: block; flex: none; inline-size: var(--ms-icon); block-size: var(--ms-icon); }
-.ms-icon--sm { inline-size: var(--ms-icon-sm); block-size: var(--ms-icon-sm); }
 `;

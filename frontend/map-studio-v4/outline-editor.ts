@@ -1,17 +1,63 @@
 import { html, nothing } from "lit";
 import type { AreaOutline, AreaPoint } from "./area-outline";
-import { outlineCircles, validOutline } from "./area-outline";
+import type { AreaCircle } from "./backend-contracts";
 import type { CoordinateEditCapture, WorkspaceIntent, WorkspaceState } from "./contracts";
 import { translate } from "./localize";
 import type { MaticMapCanvasV4 } from "./map-canvas";
 import type { RendererController } from "./renderer-controller";
 import { captureCoordinateEdit, hasCoordinateEditAdmission } from "./state";
 
+/**
+ * The startup outline checks, passed in by the shell. Importing area-outline
+ * here would split it into a chunk of its own, shared with startup.
+ */
+export type OutlineGeometry = Pick<typeof import("./area-outline"), "edgeDistance" | "validOutline">;
+
+export const insideOutline = (p: AreaPoint, points: readonly AreaPoint[]): boolean => {
+  let inside = false;
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    const a = points[i]!, b = points[j]!;
+    if ((a.y > p.y) !== (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
+};
+
+/** Use only the already verified circle command. All preview circles are
+ * inscribed; rounding may shrink them but must never expand past the outline.
+ * A bounded grid keeps editing independent of polygon size or input density. */
+export const outlineCircles = (
+  { edgeDistance, validOutline }: OutlineGeometry,
+  outline: AreaOutline,
+  contains: (point: AreaPoint) => boolean,
+): AreaCircle[] => {
+  if (!outline.closed || !validOutline(outline)) return [];
+  const { points } = outline;
+  const minX = Math.min(...points.map((p) => p.x)), maxX = Math.max(...points.map((p) => p.x));
+  const minY = Math.min(...points.map((p) => p.y)), maxY = Math.max(...points.map((p) => p.y));
+  const candidates: AreaCircle[] = [];
+  for (let row = 0; row < 32; row++) for (let column = 0; column < 32; column++) {
+    const p = { x: Math.round((minX + (column + .5) * (maxX - minX) / 32) * 10000) / 10000,
+      y: Math.round((minY + (row + .5) * (maxY - minY) / 32) * 10000) / 10000 };
+    if (!insideOutline(p, points) || !contains(p)) continue;
+    const clearance = Math.min(...points.map((a, i) => edgeDistance(p, a, points[(i + 1) % points.length]!)));
+    const radius = Math.floor(Math.min(2.5, clearance - .0001) * 10000) / 10000;
+    if (radius >= .05) candidates.push({ ...p, radius });
+  }
+  candidates.sort((a, b) => b.radius - a.radius);
+  const circles: AreaCircle[] = [];
+  for (const circle of candidates) {
+    if (circles.length >= 512) break;
+    if (!circles.some((other) => Math.hypot(other.x - circle.x, other.y - circle.y) + circle.radius * .5 <= other.radius)) circles.push(circle);
+  }
+  return circles;
+};
+
 /** Perimeter handles own only their pointer gesture. Map navigation, draft
  * history and persistence remain in the existing controllers. The shell builds
  * the editor; the canvas showing it attaches before it renders or forwards a
  * point. */
 export class OutlineEditor {
+  readonly #geometry: OutlineGeometry;
   #canvas!: MaticMapCanvasV4;
   #renderer!: () => RendererController | null;
   #intent!: (intent: WorkspaceIntent) => void;
@@ -25,6 +71,10 @@ export class OutlineEditor {
   } | null = null;
   #message = "";
   #selected: number | null = null;
+  constructor(geometry: OutlineGeometry) {
+    this.#geometry = geometry;
+  }
+
   attach(
     canvas: MaticMapCanvasV4,
     renderer: () => RendererController | null,
@@ -54,12 +104,12 @@ export class OutlineEditor {
   #commit(outline: AreaOutline, capture?: CoordinateEditCapture): void {
     const admitted = capture ?? captureCoordinateEdit(this.#canvas.state, "outline");
     if (!hasCoordinateEditAdmission(this.#canvas.state, admitted)) return;
-    if (!validOutline(outline)) {
+    if (!this.#geometry.validOutline(outline)) {
       this.#message = this.#t("v4_zone_invalid", "Keep the outline from crossing itself.");
       this.#canvas.requestUpdate();
       return;
     }
-    const circles = outlineCircles(outline, (p) => this.#renderer()?.containsMapPoint(p) ?? false);
+    const circles = outlineCircles(this.#geometry, outline, (p) => this.#renderer()?.containsMapPoint(p) ?? false);
     // Keep a small but valid outline editable so the next point can widen it.
     // Saving remains disabled until it contains verified cleaning coverage.
     this.#message = outline.closed && !circles.length
@@ -168,7 +218,7 @@ export class OutlineEditor {
     const points = outline?.points ?? [];
     const projected = points.map((p) => this.#renderer()?.mapToScreen(p));
     const path = projected.map((p, i) => p ? `${i ? "L" : "M"}${p.x},${p.y}` : "").join(" ");
-    const valid = !outline || validOutline(outline);
+    const valid = !outline || this.#geometry.validOutline(outline);
     const selected = this.#selected !== null && this.#selected < points.length ? this.#selected : null;
     return html`
       <div class="zone-overlay">

@@ -36,7 +36,6 @@ import{N as C,O as L}from"./chunk-3DL3AR46.js";var W=C`
 --ms-control-sm: 2.25rem;
 --ms-control-lg: 3.25rem;
 --ms-icon: 1.25rem;
---ms-icon-sm: 1rem;
 --ms-font: var(--ha-font-family-body, Roboto, system-ui, sans-serif);
 --ms-w-regular: 400;
 --ms-w-medium: 500;
@@ -113,7 +112,6 @@ import{N as C,O as L}from"./chunk-3DL3AR46.js";var W=C`
 *, *::before, *::after { box-sizing: border-box; }
 button, input, select, textarea { font: inherit; }
 .ms-icon { display: block; flex: none; inline-size: var(--ms-icon); block-size: var(--ms-icon); }
-.ms-icon--sm { inline-size: var(--ms-icon-sm); block-size: var(--ms-icon-sm); }
 `;var G=C`
 .ms-btn, .ms-row {
 border: 1px solid transparent;
@@ -149,7 +147,6 @@ white-space: nowrap;
 .ms-btn--lg { min-block-size: var(--ms-control-lg); font-size: var(--ms-t-md); }
 .ms-btn--block { display: flex; inline-size: 100%; }
 .ms-btn--icon { padding-inline: 0; inline-size: var(--ms-control); }
-.ms-btn--pill { border-radius: var(--ms-radius-pill); }
 .ms-btn--primary { --ms-local: var(--ms-resolved-accent-fill, var(--ms-accent)); color: var(--ms-resolved-on-accent-fill, var(--ms-on-accent)); background: var(--ms-local); box-shadow: var(--ms-shadow-1); }
 .ms-btn--secondary { --ms-local: var(--ms-surface-card); border-color: var(--ms-line-strong); background: var(--ms-local); }
 .ms-btn--danger { color: color-mix(in srgb, var(--ms-danger) 82%, var(--ms-text)); border-color: currentColor; }

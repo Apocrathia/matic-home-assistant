@@ -30,10 +30,11 @@ import { LazyChunk, chunkStatus } from "./lazy-chunk";
 import "./precision-controls";
 // The plan heading's tools, which the shell renders once these views load,
 // and the shell's other plan-only pieces.
-export { actionReason, planCancel, planFocusTarget, planTitle, planTools } from "./plan-heading";
+export { actionReason, focusPlanTarget, planCancel, planTitle, planTools } from "./plan-heading";
 
-// Dialogs that only these views' controls open carry their copy here.
-export { dialogCopy } from "./dialog-copy";
+// Dialogs that only these views' controls open carry their copy, launcher and
+// confirm here.
+export { confirmDialog, dialogCopy, dialogLauncher } from "./dialog-copy";
 
 const modes: readonly CleaningMode[] = ["vacuum", "mop", "vacuum_and_mop"];
 const coverage: readonly CoverageSetting[] = ["quick", "standard", "heavy_duty"];

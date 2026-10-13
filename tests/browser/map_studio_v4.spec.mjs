@@ -7802,13 +7802,13 @@ test("saved areas recover when Draw opens before the live scene is ready", async
 });
 
 test("zone geometry and saved perimeter survive the authenticated backend round trip", async ({ page }) => {
-  const bundle = await build({ stdin: { contents: `export * from "./frontend/map-studio-v4/area-outline"; export { MaticBackend } from "./frontend/map-studio-v4/backend"; export { EffectController } from "./frontend/map-studio-v4/effects"; export { WorkspaceStore, selectPrimaryAction } from "./frontend/map-studio-v4/state"; export { createGalleryState } from "./frontend/map-studio-v4/gallery-state";`, resolveDir: process.cwd() }, bundle: true, format: "esm", write: false });
+  const bundle = await build({ stdin: { contents: `export * from "./frontend/map-studio-v4/area-outline"; export { insideOutline, outlineCircles } from "./frontend/map-studio-v4/outline-editor"; export { MaticBackend } from "./frontend/map-studio-v4/backend"; export { EffectController } from "./frontend/map-studio-v4/effects"; export { WorkspaceStore, selectPrimaryAction } from "./frontend/map-studio-v4/state"; export { createGalleryState } from "./frontend/map-studio-v4/gallery-state";`, resolveDir: process.cwd() }, bundle: true, format: "esm", write: false });
   await page.route("**/zone-contract.js", (route) => route.fulfill({ contentType: "text/javascript", body: bundle.outputFiles[0].text }));
   await page.goto("/");
   const result = await page.evaluate(async () => {
     const m = await import("/zone-contract.js");
     const outline = { closed: true, points: [{x:1,y:1},{x:3,y:1},{x:3,y:3},{x:1,y:3}] };
-    const circles = m.outlineCircles(outline, () => true);
+    const circles = m.outlineCircles(m, outline, () => true);
     const inscribed = circles.every(c => m.insideOutline(c, outline.points) && outline.points.every((a,i) => m.edgeDistance(c,a,outline.points[(i+1)%4]) >= c.radius));
     const crossed = m.validOutline({closed:true,points:[outline.points[0],outline.points[2],outline.points[1],outline.points[3]]});
     const store = new m.WorkspaceStore(); store.replace(m.createGalleryState("draw"));

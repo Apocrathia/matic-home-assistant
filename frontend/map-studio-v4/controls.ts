@@ -55,7 +55,6 @@ white-space: nowrap;
 .ms-btn--lg { min-block-size: var(--ms-control-lg); font-size: var(--ms-t-md); }
 .ms-btn--block { display: flex; inline-size: 100%; }
 .ms-btn--icon { padding-inline: 0; inline-size: var(--ms-control); }
-.ms-btn--pill { border-radius: var(--ms-radius-pill); }
 .ms-btn--primary { --ms-local: var(--ms-resolved-accent-fill, var(--ms-accent)); color: var(--ms-resolved-on-accent-fill, var(--ms-on-accent)); background: var(--ms-local); box-shadow: var(--ms-shadow-1); }
 .ms-btn--secondary { --ms-local: var(--ms-surface-card); border-color: var(--ms-line-strong); background: var(--ms-local); }
 .ms-btn--danger { color: color-mix(in srgb, var(--ms-danger) 82%, var(--ms-text)); border-color: currentColor; }

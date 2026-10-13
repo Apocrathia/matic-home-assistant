@@ -2,7 +2,6 @@ import { LitElement, nothing } from "lit";
 import { shellStyles } from "./shell-styles";
 import { html, unsafeStatic } from "lit/static-html.js";
 import type { PropertyValues } from "lit";
-import { isWorkspaceIntent } from "./contracts";
 
 import type {
   DateFormat,
@@ -23,6 +22,7 @@ import {
   SHELL_TAG,
   WORKFLOW_TAG,
 } from "./element-tags";
+import { edgeDistance, validOutline } from "./area-outline";
 import { renderDrawTools } from "./draw-tools";
 import { LazyChunk, chunkStatus, reloadInto, takeResume, type ChunkStatus } from "./lazy-chunk";
 import { isNativeSelectControl } from "./gesture-controller";
@@ -364,7 +364,7 @@ export class MaticMapShellV4 extends LitElement {
   // editor and hands it to the canvas, so the sheet is the one place a failure
   // of either, building included, is said.
   readonly #views = new LazyChunk(this, () => import("./workflow-panel"));
-  readonly #outline = new LazyChunk(this, async () => new (await import("./outline-editor")).OutlineEditor());
+  readonly #outline = new LazyChunk(this, async () => new (await import("./outline-editor")).OutlineEditor({ edgeDistance, validOutline }));
   // The workflow a Try again reload was pressed in (lazy-chunk.ts).
   #resume = takeResume();
   #toastTimer: ReturnType<typeof setTimeout> | undefined;
@@ -730,10 +730,7 @@ export class MaticMapShellV4 extends LitElement {
         void this.updateComplete.then(() => {
           if (previous.workflow !== "plan") return this.#focusPanel();
           requestAnimationFrame(() => {
-            const target = this.#views.value?.planFocusTarget(previous, state, this.renderRoot);
-            if (!isVisible(target)) return this.#focusPanel();
-            target.scrollIntoView({ block: "nearest" });
-            target.focus({ preventScroll: true });
+            if (!this.#views.value?.focusPlanTarget(previous, state, this.renderRoot, isVisible)) this.#focusPanel();
           });
         });
       }
@@ -903,28 +900,10 @@ export class MaticMapShellV4 extends LitElement {
     }));
   }
 
-  #confirmDelete(id: "delete-plan" | "delete-area"): void {
-    this.#intent({ type: "dismiss-top-layer" });
-    this.#dispatchAction(id);
-  }
-
+  // Every dialog but Discard changes? comes from the views, which confirm it.
   #confirmDialog(presentation: DialogPresentation): void {
-    if (presentation.action === "discard") {
-      this.#discardAndContinue();
-      return;
-    }
-    if (presentation.action === "delete-plan" || presentation.action === "delete-area") {
-      this.#confirmDelete(presentation.action);
-      return;
-    }
-    const resetRequest = this.state.cadenceResetRequest;
-    this.#intent({ type: "dismiss-top-layer" });
-    if (resetRequest) this.#dispatchAction({
-      id: "reset-room-cadence",
-      planId: resetRequest.planId,
-      roomId: resetRequest.roomId,
-      mode: resetRequest.mode,
-    });
+    if (presentation.action === "discard") this.#discardAndContinue();
+    else this.#views.value?.confirmDialog(this.state, presentation.action, (intent) => this.#intent(intent), (action) => this.#dispatchAction(action));
   }
 
   // ---- Bottom sheet -------------------------------------------------------
@@ -1138,20 +1117,10 @@ export class MaticMapShellV4 extends LitElement {
     this._helpOpen = true;
   }
 
+  // Only the views send intents through here (dialog-copy.ts dialogLauncher).
   #captureDialogLauncher(event: Event): void {
-    const intent = event as CustomEvent<WorkspaceIntent>;
-    if (!isWorkspaceIntent(intent.detail)) return;
-    if (needsDraftConfirmation(this.state, intent.detail)) {
-      event.stopPropagation();
-      this.#intent(intent.detail);
-      return;
-    }
-    if (intent.detail?.type !== "open-dialog") return;
-    // Safari does not focus a button when it is clicked with a pointing device.
-    // The composed path may be retargeted, so keep only an explicit launcher.
-    const launcher = intent.composedPath().find((candidate) => candidate instanceof HTMLElement
-      && candidate.hasAttribute("data-dialog-launcher"));
-    if (launcher instanceof HTMLElement) this.#dialogLauncher = launcher;
+    const launcher = this.#views.value?.dialogLauncher(event, this.state, (intent) => this.#intent(intent));
+    if (launcher) this.#dialogLauncher = launcher;
   }
 
   #dialogLauncherFor(dialog: NonNullable<WorkspaceState["dialog"]>): HTMLElement | null {
@@ -1632,13 +1601,6 @@ export class MaticMapShellV4 extends LitElement {
     const canToggleWorkspace = state.fullMap || (
       state.host.administrator && state.host.robotCount > 0 && state.map.available
     );
-    const resetRoom = state.cadenceResetRequest
-      ? state.resources.plans.value?.rooms.find((room) => room.roomId === state.cadenceResetRequest?.roomId)
-      : undefined;
-    const resetPlanRoom = state.cadenceResetRequest
-      ? state.resources.plans.value?.plans.find((plan) => plan.id === state.cadenceResetRequest?.planId)
-        ?.rooms.find((room) => room.roomId === state.cadenceResetRequest?.roomId)
-      : undefined;
     const plan = state.workflow === "plan";
     // The shell asks before a draft is lost, so its copy is here: a draft can
     // be dirty in Draw while the views chunk failed. Every other dialog opens
@@ -1658,15 +1620,7 @@ export class MaticMapShellV4 extends LitElement {
       cancelLabel: this.#t("v4_keep_area_editing", "Keep editing"),
       confirmLabel: this.#t("v4_discard", "Discard"),
       action: "discard",
-    } : state.dialog === null ? undefined : this.#views.value?.dialogCopy(
-      state.dialog,
-      this.localize,
-      resetRoom?.name || state.cadenceResetRequest?.roomId || "room",
-      resetPlanRoom?.cadence?.scope === "shared",
-      state.cadenceResetRequest?.mode,
-      // Automations name the saved plan or area, never an unsaved rename.
-      deleteSubject(state),
-    );
+    } : state.dialog === null ? undefined : this.#views.value?.dialogCopy(state.dialog, state, this.localize);
     // Discard changes? offers the save the primary would make, and holds every
     // button while that save is in flight.
     const busy = discard && state.command === "pending";

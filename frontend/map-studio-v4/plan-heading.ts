@@ -226,7 +226,7 @@ export const planCancel = (
  * button, a step back to the picker to that plan's row. Anything else, or a
  * launcher that is gone, leaves the shell to take the heading.
  */
-export const planFocusTarget = (previous: WorkspaceState, state: WorkspaceState, root: ParentNode): HTMLElement | null | undefined => {
+const planFocusTarget = (previous: WorkspaceState, state: WorkspaceState, root: ParentNode): HTMLElement | null | undefined => {
   const views = root.querySelector(WORKFLOW_TAG)?.shadowRoot;
   // Run's rows are never open, so an open row on entering Edit is Review's.
   if (state.workflow === "plan" && state.planView === "edit" && state.expandedRoom) {
@@ -237,4 +237,18 @@ export const planFocusTarget = (previous: WorkspaceState, state: WorkspaceState,
   }
   const row = previous.selection.planId;
   return state.workflow === "plans" && row ? views?.querySelector(`[data-plan-row="${CSS.escape(row)}"]`) : null;
+};
+
+/** Focuses that control when the shell's `visible` test passes; false leaves focus to the shell. */
+export const focusPlanTarget = (
+  previous: WorkspaceState,
+  state: WorkspaceState,
+  root: ParentNode,
+  visible: (element: HTMLElement | null | undefined) => element is HTMLElement,
+): boolean => {
+  const target = planFocusTarget(previous, state, root);
+  if (!visible(target)) return false;
+  target.scrollIntoView({ block: "nearest" });
+  target.focus({ preventScroll: true });
+  return true;
 };
