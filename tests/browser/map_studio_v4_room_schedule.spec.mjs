@@ -168,14 +168,51 @@ test.describe("room schedule model", () => {
         mopOff: [mopOff.mopEveryN, mopOff.doMopNext],
       };`);
     expect(result).toEqual({
-      dueMop: { label: "Heavy duty vacuum on the next clean", on: false, mop: false, coverage: true },
+      dueMop: { label: "Heavy duty vacuum on the next clean", on: false, mop: false, coverage: true, blocked: null },
       dueMopOn: expect.objectContaining({ doMopNext: false, doCoverageNext: true }),
       neither: "Mop and heavy duty vacuum on the next clean",
       everyClean: null, everyCleanSwitch: null,
-      on: { label: "Mop on the next clean", on: true, mop: true, coverage: false },
+      on: { label: "Mop on the next clean", on: true, mop: true, coverage: false, blocked: null },
       onStatus: "Due next clean",
       off: expect.objectContaining({ doMopNext: false, doCoverageNext: false }),
       mopOff: [null, false],
+    });
+  });
+
+  // Codex P2 (#253): while on, the switch names the work it brought forward,
+  // so a row edited afterwards never joins a checked label it wouldn't do.
+  test("while on, the switch names only the work it brought forward", async ({ page }) => {
+    const result = await run(page, `
+      const saved = p({ mopEveryN: 3, coverageEveryN: 5, periodicCoverageSetting: "heavy_duty" });
+      const progress = g({ nextMopIn: 2, nextCoverageIn: 1 });
+      const forced = m.withNextClean(input(saved, room(saved), progress), true);
+      const edited = input({ ...forced, coverageEveryN: 6 }, room(saved), progress);
+      const model = m.scheduleModel(t, "en", edited);
+      const off = m.withNextClean(edited, false);
+      const again = m.withNextClean(input(off, room(saved), progress), true);
+      return { forced: [forced.doMopNext, forced.doCoverageNext], next: model.next, coverageStatus: model.coverage.status,
+        off: [off.doMopNext, off.doCoverageNext], again: [again.doMopNext, again.doCoverageNext],
+        againLabel: m.scheduleModel(t, "en", input(again, room(saved), progress)).next.label };`);
+    expect(result).toEqual({
+      forced: [true, false],
+      next: { label: "Mop on the next clean", on: true, mop: true, coverage: false, blocked: null },
+      coverageStatus: "Keeps the progress so far",
+      off: [false, false], again: [true, true],
+      againLabel: "Mop and heavy duty vacuum on the next clean",
+    });
+  });
+
+  // Codex P2 (#253): work whose row a mode conflict holds can't be brought forward.
+  test("the switch is held while the work it names has a mode conflict", async ({ page }) => {
+    const result = await run(page, `
+      const legacy = p({ coverageEveryN: 3, periodicCoverageSetting: "heavy_duty" });
+      const mopRoom = input(legacy, room(legacy), g({ nextCoverageIn: 2 }), undefined, { room: { cleaningMode: "mop" } });
+      const fine = input(legacy, room(legacy), g({ nextCoverageIn: 2 }));
+      return { next: m.scheduleModel(t, "en", mopRoom).next, on: m.withNextClean(mopRoom, true),
+        fine: m.scheduleModel(t, "en", fine).next.blocked, fineOn: m.withNextClean(fine, true).doCoverageNext };`);
+    expect(result).toEqual({
+      next: { label: "Heavy duty vacuum on the next clean", on: false, mop: false, coverage: true, blocked: "coverage" },
+      on: null, fine: null, fineOn: true,
     });
   });
 
@@ -194,8 +231,8 @@ test.describe("room schedule model", () => {
         dueNext: b.next, dueStatus: b.mop.status, again: m.withNextClean(offFresh, true).doMopNext };`);
     expect(result).toEqual({
       off: [false, false],
-      next: { label: "Mop on the next clean", on: false, mop: true, coverage: false }, status: "Due in 3 cleans",
-      dueNext: { label: "Mop on the next clean", on: false, mop: true, coverage: false }, dueStatus: "Due next clean",
+      next: { label: "Mop on the next clean", on: false, mop: true, coverage: false, blocked: null }, status: "Due in 3 cleans",
+      dueNext: { label: "Mop on the next clean", on: false, mop: true, coverage: false, blocked: null }, dueStatus: "Due next clean",
       again: true,
     });
   });
@@ -396,6 +433,13 @@ test.describe("Schedule block", () => {
     const rotation = schedule.getByRole("spinbutton", { name: "Heavy duty vacuum every 3 cleans" });
     await expect(rotation).toHaveAttribute("aria-disabled", "true");
     await expect(rotation).toHaveAccessibleDescription("The vacuum rotation needs a cleaning mode that includes vacuuming, so change the mode or turn the rotation off.");
+    // Codex P2 (#253): the switch can't bring forward work its row holds.
+    const next = schedule.getByRole("switch", { name: "Heavy duty vacuum on the next clean" });
+    await expect(next).toHaveAttribute("aria-disabled", "true");
+    await expect(next).toHaveAccessibleDescription("Brings it forward once; the schedule then continues as usual. The vacuum rotation needs a cleaning mode that includes vacuuming, so change the mode or turn the rotation off.");
+    await next.click({ force: true });
+    await expect(next).toHaveAttribute("aria-checked", "false");
+    expect((await snapshot(page)).planDraft.dirty).toBe(false);
     const turnOff = schedule.getByRole("button", { name: "Turn off the vacuum rotation in Kitchen", exact: true });
     await expect(turnOff).toHaveText("Turn off");
     await turnOff.click();
@@ -574,6 +618,24 @@ test.describe("next clean, Advanced and joining", () => {
     await expect(schedule.getByRole("switch")).toHaveAccessibleName("Mop and heavy duty vacuum on the next clean");
     await patchState(page, `{ ...s, planDraft: { ...s.planDraft, rooms: s.planDraft.rooms.map((room, index) => index ? room : { ...room, cadenceProgress: { ...room.cadenceProgress, nextMopIn: 1, nextCoverageIn: 1 }, cadence: { ...room.cadence, mopEveryN: 1 } }) } }`);
     await expect(schedule.getByRole("switch")).toHaveCount(0);
+  });
+
+  test("a row edited while the switch is on stays out of its checked label", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-cadence-shared" });
+    // The mop is due in 2 and the rotation is due next clean, so only the mop can come forward.
+    await patchState(page, `{ ...s, planDraft: { ...s.planDraft, rooms: s.planDraft.rooms.map((room, index) => index ? room : { ...room, cadenceProgress: { ...room.cadenceProgress, nextMopIn: 2, nextCoverageIn: 1 } }) } }`);
+    const schedule = gallery.getByRole("group", { name: "Room schedule for Kitchen" });
+    const next = schedule.getByRole("switch");
+    await expect(next).toHaveAccessibleName("Mop on the next clean");
+    await next.click();
+    await schedule.getByRole("button", { name: /^Increase Heavy duty vacuum/ }).click();
+    expect((await snapshot(page)).planDraft.rooms[0].cadence).toMatchObject({ doMopNext: true, doCoverageNext: false });
+    await expect(next).toHaveAttribute("aria-checked", "true");
+    await expect(next).toHaveAccessibleName("Mop on the next clean");
+    await next.click();
+    await expect(next).toHaveAccessibleName("Mop and heavy duty vacuum on the next clean");
+    await next.click();
+    expect((await snapshot(page)).planDraft.rooms[0].cadence).toMatchObject({ doMopNext: true, doCoverageNext: true });
   });
 
   test("turning off a saved next-clean switch keeps it in place to turn back on", async ({ page }) => {

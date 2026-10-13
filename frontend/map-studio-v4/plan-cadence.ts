@@ -128,8 +128,11 @@ export interface ScheduleRow {
 export interface NextClean {
   readonly label: string;
   readonly on: boolean;
+  /** The label names mopping: the work brought forward while on, else the work it can bring forward. */
   readonly mop: boolean;
   readonly coverage: boolean;
+  /** The row whose mode conflict holds the switch, as it holds that row's stepper; else null. */
+  readonly blocked: ScheduleKind | null;
 }
 
 export interface ScheduleModel {
@@ -272,6 +275,16 @@ const named = (f: Facts, kind: ScheduleKind): boolean => {
     && (f.policy[FIELDS[kind].flag] || countedFlag(f, kind) || edited(f, kind) || nextIn(f, kind) !== 1);
 };
 
+/**
+ * The rows a mode conflict holds (room-schedule.md §4 S10): a new mop
+ * schedule needs Vacuum, and a rotation needs a mode that includes vacuuming.
+ * Progress Home Assistant can't confirm shows its own reason instead.
+ */
+const modeBlocked = ({ room }: ScheduleInput, f: Facts): { readonly mop: boolean; readonly coverage: boolean } => ({
+  mop: !f.reasons.includes("mop_progress_unverified") && room.cleaningMode !== "vacuum" && f.policy.mopEveryN === null,
+  coverage: !f.reasons.includes("coverage_progress_unverified") && room.cleaningMode === "mop",
+});
+
 const statusLine = (t: Translate, locale: string, f: Facts, kind: ScheduleKind): string | null => {
   const every = f.policy[FIELDS[kind].every];
   const due = nextIn(f, kind);
@@ -317,17 +330,16 @@ export const scheduleModel = (t: Translate, locale: string, input: ScheduleInput
   const level = (coverageOn ? null : input.offLevel) ?? policy.periodicCoverageSetting ?? "heavy_duty";
   const has = (reason: CadenceReason): boolean => reasons.includes(reason);
   const mopUnverified = has("mop_progress_unverified");
-  const mopBlocked = !mopUnverified && room.cleaningMode !== "vacuum" && policy.mopEveryN === null;
+  const { mop: mopBlocked, coverage: coverageBlocked } = modeBlocked(input, f);
   const coverageUnverified = has("coverage_progress_unverified");
   const legacyCoverage = !coverageUnverified && room.cleaningMode === "mop" && coverageOn;
-  const coverageBlocked = !coverageUnverified && room.cleaningMode === "mop";
   const block = roomBlockReason(reasons.filter((reason) => ROOM_REASONS.includes(reason)), name);
-  const namedMop = named(f, "mop");
-  const namedCoverage = named(f, "coverage");
   const on = policy.doMopNext || policy.doCoverageNext;
-  // With nothing left to bring forward, a set flag keeps the switch so it can be turned off.
-  const labelMop = namedMop || (!namedCoverage && policy.doMopNext);
-  const labelCoverage = namedCoverage || (!namedMop && policy.doCoverageNext);
+  // While on, the label names the work brought forward (its flags), so a row
+  // edited afterwards never joins a checked label it wouldn't do; off, it
+  // names the work it can bring forward.
+  const labelMop = on ? policy.doMopNext : named(f, "mop");
+  const labelCoverage = on ? policy.doCoverageNext : named(f, "coverage");
   const savedHas = (count: number | undefined, flag: boolean | undefined, reason: CadenceReason): boolean =>
     saved !== undefined && ((count ?? 0) > 0 || Boolean(flag) || Boolean(saved.cadenceReasons?.includes(reason)));
   return {
@@ -366,8 +378,9 @@ export const scheduleModel = (t: Translate, locale: string, input: ScheduleInput
       ? {
         label: labelCoverage ? NEXT[level](t, labelMop) : t("v4_cadence_next_mop", "Mop on the next clean"),
         on,
-        mop: namedMop,
-        coverage: namedCoverage,
+        mop: labelMop,
+        coverage: labelCoverage,
+        blocked: labelMop && mopBlocked ? "mop" : labelCoverage && coverageBlocked ? "coverage" : null,
       }
       : null,
     explanation: explanation(t, f, name),
@@ -424,6 +437,9 @@ export const withNextClean = (input: ScheduleInput, on: boolean): RoomCadencePol
   const mop = named(f, "mop");
   const coverage = named(f, "coverage");
   if (!mop && !coverage && !f.policy.doMopNext && !f.policy.doCoverageNext) return null;
+  const blocked = modeBlocked(input, f);
+  // Work its row holds for a mode conflict can't be brought forward (cadence.py:45-46, 66-70).
+  if (on && ((mop && blocked.mop) || (coverage && blocked.coverage))) return null;
   return on
     ? { ...f.policy, doMopNext: mop, doCoverageNext: coverage }
     : { ...f.policy, doMopNext: false, doCoverageNext: false };
@@ -623,9 +639,9 @@ export const scheduleBlock = (context: ScheduleContext, room: PlanRoom, index: n
         role="switch"
         aria-checked=${String(next.on)}
         aria-labelledby="sched-next-label"
-        aria-describedby=${ids("sched-next-hint", held ?? (model.joinPending ? "sched-join" : null)) ?? nothing}
-        aria-disabled=${held || model.joinPending ? "true" : nothing}
-        @click=${() => patch(withNextClean(input, !next.on))}
+        aria-describedby=${ids("sched-next-hint", held ?? (model.joinPending ? "sched-join" : next.blocked ? `sched-${next.blocked}-status` : null)) ?? nothing}
+        aria-disabled=${held || model.joinPending || next.blocked ? "true" : nothing}
+        @click=${() => { if (!next.blocked) patch(withNextClean(input, !next.on)); }}
       ></button>
     </div>` : nothing}
     ${model.joinPending ? html`<p class="schedule-note" id="sched-join">${withRoom(t("v4_cadence_join_pending", "Uses {room}'s shared schedule; change it after you save, or choose \"In this plan only\" under Advanced.", { room: ROOM_MARK }), name)}</p>` : nothing}
