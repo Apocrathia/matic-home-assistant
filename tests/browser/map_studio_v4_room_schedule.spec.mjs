@@ -156,7 +156,8 @@ test.describe("room schedule model", () => {
       const policy = p({ mopEveryN: 3, coverageEveryN: 5, periodicCoverageSetting: "heavy_duty" });
       const dueMop = input(policy, room(policy), g({ nextMopIn: 1, nextCoverageIn: 4 }));
       const neither = input(policy, room(policy), g({ nextMopIn: 2, nextCoverageIn: 4 }));
-      const everyClean = input(p({ mopEveryN: 1, coverageEveryN: 5, periodicCoverageSetting: "quick" }), undefined, g({ nextMopIn: 1, nextCoverageIn: 1 }));
+      // A new row counts from the server's count: the rotation is due at 4 of 5.
+      const everyClean = input(p({ mopEveryN: 1, coverageEveryN: 5, periodicCoverageSetting: "quick" }), undefined, g({ coverageProgress: 4, nextMopIn: 1, nextCoverageIn: 1 }));
       const flagged = p({ ...policy, doMopNext: true });
       const on = input(flagged, room(flagged), g({ nextMopIn: 1, nextCoverageIn: 1 }));
       const mopOff = m.withInterval(on, "mop", null);
@@ -335,6 +336,46 @@ test.describe("room schedule model", () => {
       coverageOne: [1, false, true, "quick"],
       mopTwo: [2, true],
       back: { label: "Mop on the next clean", on: false, mop: true, coverage: false, blocked: null },
+    });
+  });
+
+  // Codex P2 (#253): the server's next_*_in belongs to the saved row. Once the
+  // draft turns a row on, changes how often, moves its flag or its scope, the
+  // count the save keeps decides (cadence.py:94-131): due at interval - 1.
+  test("a draft that changes what the server counted derives due from the kept count", async ({ page }) => {
+    const result = await run(page, `
+      const paused = room(p({}), g({ mopProgress: 2, coverageProgress: 3 }));
+      const resumed = input(p({ mopEveryN: 3 }), paused, g({ mopProgress: 2, coverageProgress: 3 }));
+      const resumedModel = m.scheduleModel(t, "en", resumed);
+      const partly = m.scheduleModel(t, "en", input(p({ mopEveryN: 4 }), paused, g({ mopProgress: 2, coverageProgress: 3 })));
+      const rotation = m.scheduleModel(t, "en", input(p({ coverageEveryN: 4, periodicCoverageSetting: "quick" }), paused, g({ mopProgress: 2, coverageProgress: 3 })));
+      const counting = room(p({ mopEveryN: 5 }), g({ mopProgress: 3, nextMopIn: 2 }));
+      const shorter = m.scheduleModel(t, "en", input(p({ mopEveryN: 2 }), counting, g({ mopProgress: 3, nextMopIn: 2 })));
+      const exact = m.scheduleModel(t, "en", input(p({ mopEveryN: 4 }), counting, g({ mopProgress: 3, nextMopIn: 2 })));
+      const longer = m.scheduleModel(t, "en", input(p({ mopEveryN: 8 }), counting, g({ mopProgress: 3, nextMopIn: 2 })));
+      const unchanged = m.scheduleModel(t, "en", input(p({ mopEveryN: 5 }), counting, g({ mopProgress: 3, nextMopIn: 2 })));
+      const sharing = m.scheduleModel(t, "en", input(p({ scope: "shared", mopEveryN: 3 }), paused, g({ mopProgress: 2, coverageProgress: 3 })));
+      const flagged = m.scheduleModel(t, "en", input(p({ mopEveryN: 8, doMopNext: true }), counting, g({ mopProgress: 3, nextMopIn: 2 })));
+      const every = m.scheduleModel(t, "en", input(p({ mopEveryN: 1 }), paused, g({ mopProgress: 2, coverageProgress: 3 })));
+      return {
+        resumed: [resumedModel.mop.status, resumedModel.next, m.withNextClean(resumed, true)],
+        partly: [partly.mop.status, partly.next?.label],
+        rotation: [rotation.coverage.status, rotation.next],
+        shorter: [shorter.mop.status, shorter.next], exact: [exact.mop.status, exact.next],
+        longer: [longer.mop.status, longer.next?.label], unchanged: [unchanged.mop.status, unchanged.next?.label],
+        sharing: [sharing.mop.status, sharing.next?.label],
+        flagged: [flagged.mop.status, flagged.next?.on],
+        every: [every.mop.status, every.next],
+      };`);
+    expect(result).toEqual({
+      resumed: ["Due next clean", null, null],
+      partly: ["Due in 2 cleans", "Mop on the next clean"],
+      rotation: ["Due next clean", null],
+      shorter: ["Due next clean", null], exact: ["Due next clean", null],
+      longer: ["Keeps the progress so far", "Mop on the next clean"], unchanged: ["Due in 2 cleans", "Mop on the next clean"],
+      sharing: [null, "Mop on the next clean"],
+      flagged: ["Due next clean", true],
+      every: ["Due every clean", null],
     });
   });
 

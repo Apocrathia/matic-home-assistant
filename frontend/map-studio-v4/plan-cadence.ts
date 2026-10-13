@@ -254,24 +254,30 @@ const countedFlag = (f: Facts, kind: ScheduleKind): boolean =>
   Boolean((f.joinPending ? f.shared : f.savedPolicy)?.[FIELDS[kind].flag]);
 
 /**
- * The server's `next_*_in`, unless the draft turned off a flag it counted:
- * then the count since the last time decides (cadence.py:94-131).
- */
-const nextIn = (f: Facts, kind: ScheduleKind): number | null => {
-  const { every, flag, next, count } = FIELDS[kind];
-  const interval = f.policy[every];
-  if (!f.progress || interval === null || f.policy[flag] || !countedFlag(f, kind)) return f.progress?.[next] ?? null;
-  const done = f.progress[count];
-  return done >= interval - 1 ? 1 : Math.max(1, interval - done);
-};
-
-/**
  * Saving starts fresh progress: leaving a shared schedule resets this plan's
  * own (plans.py reset_private_progress), and a new shared one starts at zero.
  * A join keeps the shared progress instead.
  */
 const scopeChanged = (f: Facts): boolean =>
   !f.joinPending && f.savedPolicy !== undefined && f.savedPolicy.scope !== f.policy.scope;
+
+/**
+ * The server's `next_*_in` as Save will leave it. Its value stands while the
+ * draft keeps what it counted (a join reads the shared count as counted);
+ * once the draft turns the row on, changes how often, moves its flag or its
+ * scope, the count the save keeps decides (cadence.py:94-131): due with the
+ * flag or at interval - 1 cleans, else the rest of the interval.
+ */
+const nextIn = (f: Facts, kind: ScheduleKind): number | null => {
+  const { every, flag, next, count } = FIELDS[kind];
+  const interval = f.policy[every];
+  if (!f.progress || interval === null) return null;
+  const recount = !f.joinPending
+    && (scopeChanged(f) || interval !== (f.savedPolicy?.[every] ?? null) || f.policy[flag] !== countedFlag(f, kind));
+  if (!recount) return f.progress[next];
+  const done = scopeChanged(f) ? 0 : f.progress[count];
+  return f.policy[flag] || done >= interval - 1 ? 1 : interval - done;
+};
 
 /** How often changed from a saved value (a join is not an edit). */
 const edited = (f: Facts, kind: ScheduleKind): boolean => {
@@ -281,15 +287,14 @@ const edited = (f: Facts, kind: ScheduleKind): boolean => {
 };
 
 /**
- * The work the switch can bring forward: on, not every clean, and not already
- * due next clean. Fresh progress after a scope change is never due, and a
- * saved flag keeps naming its work after the switch is turned off, so the
- * switch stays to be turned back on.
+ * The work the switch can bring forward: on, not every clean, and not due
+ * next clean once saved (`nextIn`, so fresh progress after a scope change
+ * is never due). A saved flag keeps naming its work after the switch is
+ * turned off, so the switch stays to be turned back on.
  */
 const named = (f: Facts, kind: ScheduleKind): boolean => {
   const every = f.policy[FIELDS[kind].every];
-  return every !== null && every > 1
-    && (f.policy[FIELDS[kind].flag] || countedFlag(f, kind) || edited(f, kind) || scopeChanged(f) || nextIn(f, kind) !== 1);
+  return every !== null && every > 1 && (countedFlag(f, kind) || nextIn(f, kind) !== 1);
 };
 
 /**
@@ -307,12 +312,11 @@ const statusLine = (t: Translate, locale: string, f: Facts, kind: ScheduleKind):
   const due = nextIn(f, kind);
   if (every === null) return t("v4_cadence_status_off", "Not scheduled");
   if (every === 1) return t("v4_cadence_status_every", "Due every clean");
-  if (f.policy[FIELDS[kind].flag]) return t("v4_cadence_status_next", "Due next clean");
+  // Due next clean (the flag, or the count the save keeps) wins over "Keeps the progress so far".
+  if (f.policy[FIELDS[kind].flag] || due === 1) return t("v4_cadence_status_next", "Due next clean");
   if (edited(f, kind)) return t("v4_cadence_status_edited", "Keeps the progress so far");
   if (scopeChanged(f) || due === null) return null;
-  return due <= 1
-    ? t("v4_cadence_status_next", "Due next clean")
-    : t("v4_cadence_status_in", "Due in {count} cleans", { count: formatNumber(locale, due) });
+  return t("v4_cadence_status_in", "Due in {count} cleans", { count: formatNumber(locale, due) });
 };
 
 const explanation = (t: Translate, f: Facts, name: string): string | null => {
