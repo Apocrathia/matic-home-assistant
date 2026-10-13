@@ -1,16 +1,3 @@
-// Stylesheet implementation notes (outside CSS to avoid shipping comments).
-// An outline on .map-root repaints the whole page layer on every canvas
-// frame; a positioned overlay keeps the ring out of the frame path.
-// Navigation has stable corners; only orbit controls follow the sheet.
-// Four labelled buttons span most of the map at desktop width; icons with tooltips keep the rail a narrow column.
-// Collapse the label to assistive text, never display:none. Hiding it would
-// delete the accessible name and break every getByRole({ name }) query at
-// narrow widths -- which is what the previous font-size:0 plus ::first-letter
-// trick did, while also rendering the toolbar as "P E M U R D".
-// The map is painted to canvas, so the UA would otherwise invert it. The
-// previous block here targeted the mock-map layer that the renderer replaced,
-// which meant the map had no forced-colors treatment at all.
-
 import { LitElement, css, html, nothing } from "lit";
 import { controls } from "./controls";
 import { renderDrawTools } from "./draw-tools";
@@ -109,7 +96,8 @@ export class MaticMapCanvasV4 extends LitElement {
     .map-root[data-workflow="draw"][data-draw-tool="pan"] { cursor: grab; }
     .map-root[data-workflow="draw"][data-draw-tool="pan"].navigating { cursor: grabbing; }
 
-
+    /* An outline on .map-root repaints the whole page layer on every canvas
+       frame; a positioned overlay keeps the ring out of the frame path. */
     .map-root:focus-visible::after {
       content: "";
       position: absolute;
@@ -119,7 +107,7 @@ export class MaticMapCanvasV4 extends LitElement {
       pointer-events: none;
     }
 
-
+    /* Navigation has stable corners; only orbit controls follow the sheet. */
     .map-rail { --help-top: calc(44px + 2 * var(--ms-space-2)); --help-bottom: 116px; position: absolute; inset: 0.75rem; inset-inline: max(0.75rem, var(--ms-safe-left)) max(0.75rem, var(--ms-safe-right)); z-index: 4; pointer-events: none; }
     .map-rail > * { pointer-events: auto; }
     slot[name="scrim"] { display: contents; pointer-events: none; }
@@ -265,15 +253,20 @@ export class MaticMapCanvasV4 extends LitElement {
       white-space: nowrap;
     }
 
-
+/* Four labelled buttons span most of the map at desktop width; icons with tooltips keep the rail a narrow column. */
 .map-tools .ms-btn__label { position: absolute; overflow: hidden; inline-size: 1px; block-size: 1px; margin: -1px; padding: 0; border: 0; clip-path: inset(50%); white-space: nowrap; }
 @container (max-width: 29rem) {
 .map-tools button, .map-dock .draw-tools button { padding-inline: 0; inline-size: var(--ms-control); }
-
+/* Collapse the label to assistive text, never display:none. Hiding it would
+   delete the accessible name and break every getByRole({ name }) query at
+   narrow widths -- which is what the previous font-size:0 plus ::first-letter
+   trick did, while also rendering the toolbar as "P E M U R D". */
 .map-dock .draw-tools .ms-btn__label { position: absolute; overflow: hidden; inline-size: 1px; block-size: 1px; margin: -1px; padding: 0; border: 0; clip-path: inset(50%); white-space: nowrap; }
 }
 @media (forced-colors: active) {
-
+/* The map is painted to canvas, so the UA would otherwise invert it. The
+   previous block here targeted the mock-map layer that the renderer replaced,
+   which meant the map had no forced-colors treatment at all. */
 .scene-canvas, .overlay-canvas { forced-color-adjust: none; }
 .map-root { border: 1px solid CanvasText; }
 .map-root:focus-visible::after { border-color: Highlight; }

@@ -174,6 +174,20 @@ def test_the_chip_ships_once_as_a_shared_control() -> None:
     assert ".ms-chip" not in modules["workflow-panel.ts"]
 
 
+def test_style_comments_stay_in_the_sources_and_out_of_the_bundle() -> None:
+    """Developer notes sit beside their CSS rules; the build drops them."""
+    notes = [
+        " ".join(comment.split())
+        for path in (_REPOSITORY / "frontend" / "map-studio-v4").glob("*.ts")
+        for template in re.findall(r"\bcss`([^`]*)`", path.read_text(encoding="utf-8"))
+        for comment in re.findall(r"^[ \t]*/\*(.*?)\*/[ \t]*$", template, re.MULTILINE | re.DOTALL)
+    ]
+    assert len(notes) >= 16
+    shipped = " ".join(_STUDIO_V4_JS.split())
+    for note in notes:
+        assert note not in shipped, note
+
+
 def test_v4_bundle_is_ascii_safe_for_home_assistant_file_editor() -> None:
     """Prevent File Editor uploads from corrupting UTF-8 UI glyphs."""
     for path in _STUDIO_V4_DIRECTORY.rglob("*.js"):

@@ -255,7 +255,6 @@ transition: translate var(--ms-fast) var(--ms-ease);
 .ms-surface--floating { box-shadow: var(--ms-shadow-2); }
 .ms-surface--overlay { border-radius: var(--ms-radius-md); box-shadow: var(--ms-shadow-3); }
 .ms-field { display: grid; gap: var(--ms-space-1); color: var(--ms-text-quiet); font-size: var(--ms-t-xs); font-weight: var(--ms-w-medium); }
-
 .ms-field > input, .ms-field > select, .ms-select {
 --ms-local: var(--ms-surface-card);
 inline-size: 100%;

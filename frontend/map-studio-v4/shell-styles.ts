@@ -1,22 +1,3 @@
-// Stylesheet implementation notes (outside CSS to avoid shipping comments).
-// The wide inspector's width, shared by its grid column and the toast's offset.
-// Notice slot and toast (shell.md §4, design-system.md .ms-notice): the
-// text stays --ms-text on the tone's tint; the glyph and the inline-start
-// rule carry the tone, never the text colour.
-// Wide: bottom centre of the canvas, above the dock.
-// Narrow: the sheet's top edge.
-// Full map: above the HUD, in its column.
-// The featured card is tinted with the accent, which drops the quiet
-// text below AA (4.3:1 on the default light theme). Pull it towards
-// the body text colour so it clears 4.5:1 on both schemes.
-// The map dock (the Draw tools, or the rooms selection chip -- one 44px
-// row) sits bottom-centre; on a wide layout the HUD is bottom-right and
-// the two collide below about 1400px. Lift the HUD clear of the dock.
-// Programmatic focus after a workflow change is for assistive tech; a ring on a heading reads as a control.
-// The step buttons are compact on the grip line but still touch targets:
-// full control height (44px) on a phone, not the 36px --sm size.
-// On a short sheet the pinned heading and notice give the body at least half.
-
 import { css } from "lit";
 import { base, tokens } from "./tokens";
 import { controls } from "./controls";
@@ -34,7 +15,7 @@ export const shellStyles = [tokens, base, controls, css`
       container-type: size;
     }
 
-
+    /* The wide inspector's width, shared by its grid column and the toast's offset. */
     .root { --ms-inspector: 22.5rem; position: relative; min-block-size: 0; block-size: 100%; }
 
     .sr-only, .skip-link:not(:focus) {
@@ -195,7 +176,9 @@ export const shellStyles = [tokens, base, controls, css`
     .panel-back { flex: none; }
     .panel-description { margin: var(--ms-space-1) 0 var(--ms-space-4); color: var(--ms-text-quiet); font-size: var(--ms-t-sm); line-height: var(--ms-lh-normal); }
 
-
+    /* Notice slot and toast (shell.md §4, design-system.md .ms-notice): the
+       text stays --ms-text on the tone's tint; the glyph and the inline-start
+       rule carry the tone, never the text colour. */
     .notice {
       --notice-tone: var(--ms-accent);
       --ms-local: color-mix(in srgb, var(--notice-tone) 12%, var(--ms-surface-card));
@@ -217,7 +200,7 @@ export const shellStyles = [tokens, base, controls, css`
     .notice > .ms-btn { flex: none; }
     .notice-text { flex: 1; min-inline-size: 0; padding-block: var(--ms-space-2); }
     [data-notice-slot] { margin-block-start: var(--ms-space-3); }
-
+    /* Wide: bottom centre of the canvas, above the dock. */
     .notice-toast {
       position: absolute;
       z-index: 10;
@@ -229,9 +212,9 @@ export const shellStyles = [tokens, base, controls, css`
       box-shadow: var(--ms-shadow-2);
     }
     .notice-toast[hidden] { display: none; }
-
+    /* Narrow: the sheet's top edge. */
     .narrow > .notice-toast { inset-inline: 0; inset-block-end: calc(var(--map-sheet-offset, 0px) + var(--ms-space-2)); max-inline-size: calc(100% - 2 * var(--ms-space-3)); }
-
+    /* Full map: above the HUD, in its column. */
     .root:has(.full-map-hud) > .notice-toast {
       inset-inline: auto var(--ms-space-3);
       inset-block-end: calc(max(var(--ms-space-3), var(--ms-safe-bottom)) + var(--ms-control-lg) + 3 * var(--ms-space-3));
@@ -242,7 +225,9 @@ export const shellStyles = [tokens, base, controls, css`
 
     .quick-actions, .shelf { display: grid; gap: var(--ms-space-2); }
     .quick-actions .ms-row__body small { color: var(--ms-text-quiet); }
-
+    /* The featured card is tinted with the accent, which drops the quiet
+       text below AA (4.3:1 on the default light theme). Pull it towards
+       the body text colour so it clears 4.5:1 on both schemes. */
     .quick-actions .ms-row--featured .ms-row__body small { color: color-mix(in srgb, var(--ms-text-quiet) 70%, var(--ms-text)); }
     .quick-actions .ms-row[aria-disabled="true"] .ms-row__lead { color: var(--ms-text-disabled); background: color-mix(in srgb, var(--ms-text) 6%, var(--ms-local)); }
     .quick-actions .ms-row[aria-disabled="true"] .ms-row__body strong { color: var(--ms-text-disabled); }
@@ -280,7 +265,9 @@ export const shellStyles = [tokens, base, controls, css`
       background: var(--ms-local);
     }
     .full-map-hud.has-secondary { grid-template-columns: minmax(0, 1fr) auto auto; }
-
+    /* The map dock (the Draw tools, or the rooms selection chip -- one 44px
+       row) sits bottom-centre; on a wide layout the HUD is bottom-right and
+       the two collide below about 1400px. Lift the HUD clear of the dock. */
     .wide .full-map-hud.above-dock { inset-block-end: calc(var(--ms-space-3) + 3.5rem + var(--ms-space-2)); }
     .hud-copy { min-inline-size: 0; }
     .hud-copy strong, .hud-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -317,7 +304,7 @@ export const shellStyles = [tokens, base, controls, css`
     .dialog dd { margin: 0; color: var(--ms-text-quiet); }
     .dialog-actions { display: flex; justify-content: flex-end; gap: var(--ms-space-2); }
 
-
+    /* Programmatic focus after a workflow change is for assistive tech; a ring on a heading reads as a control. */
     h2[tabindex="-1"]:focus { outline: 0; }
     .narrow .app { grid-template-rows: calc(3.35rem + var(--ms-safe-top)) minmax(0, 1fr); min-block-size: 28rem; }
     .narrow .workspace { grid-template-columns: minmax(0, 1fr); }
@@ -359,7 +346,8 @@ export const shellStyles = [tokens, base, controls, css`
     }
     .narrow .sheet-grip:has(.sheet-back) { grid-template-columns: auto minmax(0, 1fr) auto auto; }
     .narrow .sheet-grip:active { cursor: grabbing; }
-
+    /* The step buttons are compact on the grip line but still touch targets:
+       full control height (44px) on a phone, not the 36px --sm size. */
     .narrow .sheet-grip .ms-btn--sm { min-block-size: var(--ms-control); min-inline-size: var(--ms-control); }
     .narrow .sheet-handle {
       position: absolute;
@@ -411,7 +399,7 @@ export const shellStyles = [tokens, base, controls, css`
       white-space: nowrap;
     }
     .narrow .sheet-panel { display: flex; flex: 1; flex-direction: column; min-block-size: 0; }
-
+    /* On a short sheet the pinned heading and notice give the body at least half. */
     .narrow .panel-top { max-block-size: 50%; padding-block-start: var(--ms-space-1); overflow: auto; overscroll-behavior: contain; }
     .narrow .sheet-body { flex: 1; min-block-size: 0; padding-block-end: var(--ms-space-1); overflow: auto; overscroll-behavior: contain; }
     .narrow .mobile-sheet .action-bar { flex: none; margin-block-start: 0; padding-block-start: var(--ms-space-2); }
