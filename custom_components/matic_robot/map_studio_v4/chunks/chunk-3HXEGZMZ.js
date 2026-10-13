@@ -255,13 +255,7 @@ transition: translate var(--ms-fast) var(--ms-ease);
 .ms-surface--floating { box-shadow: var(--ms-shadow-2); }
 .ms-surface--overlay { border-radius: var(--ms-radius-md); box-shadow: var(--ms-shadow-3); }
 .ms-field { display: grid; gap: var(--ms-space-1); color: var(--ms-text-quiet); font-size: var(--ms-t-xs); font-weight: var(--ms-w-medium); }
-/* Child combinator, not descendant: .ms-field wraps a label and ITS
-   control. A descendant selector at (0,1,1) also matched inputs nested
-   inside composite controls -- precision-controls' .stepper > .number >
-   input -- and beat that component's own input { border: 0; background:
-   transparent } at (0,0,1), painting a second border and background
-   inside a wrapper that already had them, forcing 44px onto the inner
-   input, and drawing a second focus ring over .number:focus-within. */
+
 .ms-field > input, .ms-field > select, .ms-select {
 --ms-local: var(--ms-surface-card);
 inline-size: 100%;

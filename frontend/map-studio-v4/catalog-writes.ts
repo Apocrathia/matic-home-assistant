@@ -138,7 +138,7 @@ export const savePlan = async (context: CatalogWriteContext): Promise<void> => {
       // The saved draft is clean, so the plan returns to Run (plan.md §5).
       store.dispatch({ type: "set-plan-view", view: "run" });
     }
-    const catalog = await effects.loadPlans({ force: true, inPlace: true });
+    const catalog = await refreshPlansAfterWrite(context);
     if (savedDraft && store.value.workflow === "plan"
       && store.value.planDraft === savedDraft
       && store.value.selection.entryId === state.selection.entryId
@@ -165,7 +165,7 @@ export const deletePlan = async (context: CatalogWriteContext): Promise<void> =>
       });
       if (current.workflow === "plan") store.patch({ workflow: "plans", precisionOpen: false });
     }
-    await context.effects.loadPlans({ force: true, inPlace: true });
+    await refreshPlansAfterWrite(context);
   }
 };
 
@@ -184,7 +184,7 @@ export const resetRoomCadence = async (context: CatalogWriteContext, action: Res
       : notice("success", "v4_notice_reset_vacuum", "Vacuum rotation progress reset"),
   );
   if (!reset) return;
-  const catalog = await context.effects.loadPlans({ force: true, inPlace: true });
+  const catalog = await refreshPlansAfterWrite(context);
   const latest = store.value;
   if (!context.disposed() && latest.selection.entryId === state.selection.entryId
     && latest.selection.planId === action.planId && !latest.planDraft.dirty
@@ -224,7 +224,18 @@ export const setPlanEnabled = async (context: CatalogWriteContext, enabled: bool
       : notice("success", "v4_notice_plan_paused", "Plan paused"),
     ...(!sent && store.value.planDraft === switched ? { planDraft: state.planDraft } : {}),
   });
-  if (sent) await effects.loadPlans({ force: true, inPlace: true });
+  if (sent) await refreshPlansAfterWrite(context);
+};
+
+// A read failure does not undo an acknowledged write. The loader calls this
+// only for a current, non-aborted read; a newer notice belongs to its own action.
+const refreshPlansAfterWrite = (context: CatalogWriteContext) => {
+  const acknowledged = context.store.value.notice;
+  return context.effects.loadPlans({ force: true, inPlace: true, onError: () => {
+    if (context.store.value.notice === acknowledged) context.store.patch({
+      notice: context.helpers.notice("warning", "v4_notice_plans_refresh_failed", "Your change was saved, but Home Assistant couldn't reload the plans. Reopen Plans to try again."),
+    });
+  } });
 };
 
 /** The one `save_plan` request shape, for Save and the Run switch. Parked rooms are never sent. */

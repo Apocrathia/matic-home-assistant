@@ -154,6 +154,8 @@ export async function installPanelFixture(page, {
     const serviceFailures = [];
     let deferredServices = 0;
     const pendingServices = [];
+    let deferredAreaWrites = 0;
+    const pendingAreaWrites = [];
     let planReads = 0;
     let deltaReads = 0;
     let deltaPayloadResponses = 0;
@@ -192,8 +194,16 @@ export async function installPanelFixture(page, {
       if (data.select || !planCatalog.selected_plan) planCatalog.selected_plan = plan.id;
       return { response: { plan: { id: plan.id } } };
     };
-    const fetchWithAuth = async (path) => {
+    const fetchWithAuth = async (path, options = {}) => {
       const entryB = path.endsWith("-b");
+      if (/areas\/synthetic(?:-b)?$/.test(path) && options.method === "POST") {
+        const result = json({ id: "synthetic-area" });
+        if (deferredAreaWrites > 0) {
+          deferredAreaWrites -= 1;
+          return new Promise((resolve, reject) => pendingAreaWrites.push({ release: () => resolve(result), reject }));
+        }
+        return result;
+      }
       if (path.endsWith("slam_entries")) {
         catalogReads += 1;
         const result = json({ entries: structuredClone(catalogEntries) });
@@ -270,8 +280,9 @@ export async function installPanelFixture(page, {
           };
           if (deferredServices > 0) {
             deferredServices -= 1;
-            return new Promise((resolve, reject) => pendingServices.push(() => {
-              try { resolve(apply()); } catch (error) { reject(error); }
+            return new Promise((resolve, reject) => pendingServices.push({
+              release: () => { try { resolve(apply()); } catch (error) { reject(error); } },
+              reject,
             }));
           }
           return apply();
@@ -295,9 +306,26 @@ export async function installPanelFixture(page, {
       deferNextService: () => { deferredServices += 1; },
       pendingServiceCount: () => pendingServices.length,
       releaseService: (index = 0) => {
-        const release = pendingServices.splice(index, 1)[0];
-        if (!release) throw new Error("no deferred service call");
-        release();
+        const pending = pendingServices.splice(index, 1)[0];
+        if (!pending) throw new Error("no deferred service call");
+        pending.release();
+      },
+      rejectService: (index = 0, error = new Error("synthetic deferred service failure")) => {
+        const pending = pendingServices.splice(index, 1)[0];
+        if (!pending) throw new Error("no deferred service call");
+        pending.reject(error);
+      },
+      deferNextAreaWrite: () => { deferredAreaWrites += 1; },
+      pendingAreaWriteCount: () => pendingAreaWrites.length,
+      releaseAreaWrite: (index = 0) => {
+        const pending = pendingAreaWrites.splice(index, 1)[0];
+        if (!pending) throw new Error("no deferred area write");
+        pending.release();
+      },
+      rejectAreaWrite: (index = 0, error = new Error("synthetic deferred area failure")) => {
+        const pending = pendingAreaWrites.splice(index, 1)[0];
+        if (!pending) throw new Error("no deferred area write");
+        pending.reject(error);
       },
       // Record the next call to `service`, then reject it once with `error`.
       failNextService: (service, error = new Error("synthetic failure")) => {

@@ -117,4 +117,85 @@ test.describe("UX2 discard dialog navigation", () => {
     await expect(panel.getByRole("textbox", { name: "Plan name" })).toHaveValue("Kept draft");
   });
 
+  for (const outcome of ["resolve", "reject"]) {
+    test(`disconnect cancels a deferred dialog save and ignores late ${outcome}`, async ({ page }) => {
+      const { panel } = await setup(page);
+      await panel.getByRole("textbox", { name: "Plan name" }).fill("Kept after disconnect");
+      await panel.getByRole("button", { name: "Cancel", exact: true }).click();
+      const dialog = panel.getByRole("dialog", { name: "Discard changes?" });
+      await page.evaluate(() => window.__panelFixture.deferNextService());
+      await dialog.getByRole("button", { name: "Save", exact: true }).click();
+      await expect.poll(() => page.evaluate(() => window.__panelFixture.pendingServiceCount())).toBe(1);
+
+      await page.evaluate(() => {
+        const panel = document.querySelector(window.__panelFixture.panelTag);
+        panel.hass = { ...panel.hass, connected: false };
+      });
+      await expect.poll(() => panel.evaluate((element) => {
+        const state = element.getWorkspaceSnapshot();
+        return { command: state.command, dialog: state.dialog, notice: state.notice?.tone ?? null, dirty: state.planDraft.dirty, view: state.planView };
+      })).toEqual({ command: "idle", dialog: null, notice: null, dirty: true, view: "edit" });
+
+      await page.evaluate((result) => {
+        if (result === "resolve") window.__panelFixture.releaseService();
+        else window.__panelFixture.rejectService();
+      }, outcome);
+      await expect.poll(() => panel.evaluate((element) => {
+        const state = element.getWorkspaceSnapshot();
+        return { dialog: state.dialog, notice: state.notice?.tone ?? null, dirty: state.planDraft.dirty, view: state.planView };
+      })).toEqual({ dialog: null, notice: null, dirty: true, view: "edit" });
+      await expect(panel.getByRole("textbox", { name: "Plan name" })).toHaveValue("Kept after disconnect");
+    });
+
+    test(`disconnect cancels a deferred area dialog save and ignores late ${outcome}`, async ({ page }) => {
+      const { panel, fixture } = await setup(page);
+      await page.evaluate((tag) => {
+        const panel = document.querySelector(tag);
+        const shell = panel.shadowRoot.querySelector("matic-map-shell-v4");
+        const send = (detail) => shell.dispatchEvent(new CustomEvent("matic-workspace-intent", { detail, bubbles: true, composed: true }));
+        send({ type: "open-workflow", workflow: "draw" });
+      }, fixture.panelTag);
+      await expect.poll(() => panel.evaluate((element) => element.getWorkspaceSnapshot().workflow)).toBe("draw");
+      await page.evaluate((tag) => {
+        const panel = document.querySelector(tag);
+        const shell = panel.shadowRoot.querySelector("matic-map-shell-v4");
+        const state = panel.getWorkspaceSnapshot();
+        shell.dispatchEvent(new CustomEvent("matic-workspace-intent", {
+          detail: { type: "set-draft-circles", circles: [{ x: 1, y: 1, radius: 0.2 }], coordinateEdit: {
+            generation: state.generation, tool: state.draw.tool, baselineCircles: state.draw.circles, baselineOutline: state.draw.outline ?? null,
+          } }, bubbles: true, composed: true,
+        }));
+        shell.dispatchEvent(new CustomEvent("matic-workspace-intent", {
+          detail: { type: "patch-area-draft", patch: { name: "Kept area" } }, bubbles: true, composed: true,
+        }));
+        shell.dispatchEvent(new CustomEvent("matic-workspace-intent", { detail: { type: "open-workflow", workflow: "areaReview" }, bubbles: true, composed: true }));
+        shell.dispatchEvent(new CustomEvent("matic-workspace-intent", { detail: { type: "open-dialog", dialog: "discardDraft" }, bubbles: true, composed: true }));
+      }, fixture.panelTag);
+      const dialog = panel.getByRole("dialog", { name: "Discard changes?" });
+      await expect(dialog).toBeVisible();
+      await page.evaluate(() => window.__panelFixture.deferNextAreaWrite());
+      await dialog.getByRole("button", { name: "Save", exact: true }).click();
+      await expect.poll(() => page.evaluate(() => window.__panelFixture.pendingAreaWriteCount())).toBe(1);
+
+      await page.evaluate(() => {
+        const element = document.querySelector(window.__panelFixture.panelTag);
+        element.hass = { ...element.hass, connected: false };
+      });
+      await expect.poll(() => panel.evaluate((element) => {
+        const state = element.getWorkspaceSnapshot();
+        return { command: state.command, dialog: state.dialog, notice: state.notice?.tone ?? null, dirty: state.areaDraft.dirty, circles: state.draw.circles.length, workflow: state.workflow };
+      })).toEqual({ command: "idle", dialog: null, notice: null, dirty: true, circles: 1, workflow: "areaReview" });
+
+      await page.evaluate((result) => {
+        if (result === "resolve") window.__panelFixture.releaseAreaWrite();
+        else window.__panelFixture.rejectAreaWrite();
+      }, outcome);
+      await expect.poll(() => panel.evaluate((element) => {
+        const state = element.getWorkspaceSnapshot();
+        return { dialog: state.dialog, notice: state.notice?.tone ?? null, dirty: state.areaDraft.dirty, workflow: state.workflow };
+      })).toEqual({ dialog: null, notice: null, dirty: true, workflow: "areaReview" });
+      await expect(panel.getByRole("textbox", { name: "Area name" })).toHaveValue("Kept area");
+    });
+  }
+
 });

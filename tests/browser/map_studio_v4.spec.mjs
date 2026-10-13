@@ -4977,7 +4977,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       });
     }, GALLERY_TAG);
     // The shell's static alert region is always present, so filter to the panel's message.
-    await expect(gallery.getByRole("alert").filter({ hasText: "Map history is unavailable" })).toContainText("Map history is unavailable right now. Try again shortly.");
+    await expect(gallery.getByRole("alert").filter({ hasText: "Map history is unavailable" })).toHaveText("Map history is unavailable right now.");
   });
 
   test("keeps a saved-area destination intact through cancel and discard", async ({ page }) => {

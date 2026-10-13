@@ -620,11 +620,11 @@ for (const kind of ["plan", "area"]) {
     expect(result.loading, "while the catalog reloads, the dialog and its Delete button stay").toEqual({ status: "loading", dialog, detail, sameButton: true });
     expect(result.reloaded, "after a reload that still holds the item").toEqual({ dialog, detail, sameButton: true });
     // A failed read proves nothing: the dialog still names the item, and the
-    // plan view behind it shows the problem (area review lists no catalog).
+    // The view behind it shows the resource problem for plans and saved areas.
     // The heading's More actions stays, so the dialog keeps its launcher.
     expect(result.failed, "after a reload that fails").toEqual(kind === "plan"
-      ? { status: "error", problem: "Home Assistant couldn't load rooms and plans. Try again shortly.", dialog, detail, sameButton: true }
-      : { status: "error", problem: null, dialog, detail, sameButton: true });
+      ? { status: "error", problem: "Home Assistant couldn't load rooms and plans.", dialog, detail, sameButton: true }
+      : { status: "error", problem: "Saved areas are unavailable right now.", dialog, detail, sameButton: true });
     expect(result.removed, "a ready catalog without the item closes the dialog").toEqual({ dialog: null });
   });
 }
@@ -679,7 +679,8 @@ for (const way of ["Escape", "Cancel", "outside"]) {
       window.__ux0Fix10 = { effects, shell, store };
     });
     const dialog = page.getByRole("dialog");
-    await expect(dialog, "the dialog stays over the problem box").toBeVisible();    await expect(page.getByRole("button", { name: "Try again" }), "the problem box shows behind the dialog").toBeVisible();
+    await expect(dialog, "the dialog stays over the problem box").toBeVisible();
+    await expect(page.getByRole("button", { name: "Try again" }), "the problem box shows behind the dialog").toBeVisible();
     if (way === "outside") {
       await page.evaluate(() => {
         const button = Object.assign(document.createElement("button"), { textContent: "Outside the studio" });
@@ -695,7 +696,8 @@ for (const way of ["Escape", "Cancel", "outside"]) {
     if (way === "outside") {
       await expect(page.getByRole("button", { name: "Outside the studio" }), "focus the user moved elsewhere stays there").toBeFocused();
     } else {
-      // A failed read proves nothing, so the launcher stays and takes focus back.      await expect(page.getByRole("button", { name: "More actions" }), "focus returns to the launcher").toBeFocused();
+      // A failed read proves nothing, so the launcher stays and takes focus back.
+      await expect(page.getByRole("button", { name: "More actions" }), "focus returns to the launcher").toBeFocused();
     }
     await page.evaluate(() => { window.__ux0Fix10.effects.dispose(); window.__ux0Fix10.shell.remove(); });
   });

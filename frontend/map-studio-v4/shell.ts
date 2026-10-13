@@ -18,6 +18,7 @@ import type {
 } from "./contracts";
 import {
   MAP_CANVAS_TAG,
+  PLAN_TOOLS_TAG,
   PRECISION_CONTROLS_TAG,
   SHELL_TAG,
   WORKFLOW_TAG,
@@ -673,11 +674,11 @@ export class MaticMapShellV4 extends LitElement {
       // shell.md §5: a save started from Discard changes? has settled. Saved,
       // the dialog closes and the navigation that asked goes on without
       // discarding; not saved, it closes and the user stays with the draft.
-      const dialogSaveSettled = previous?.dialog === "discardDraft"
-        && this.#dialogSaveRequested
+      const dialogSaveSettled = this.#dialogSaveRequested
         && this.state.command !== "pending"
-        && this.state.notice !== previous.notice
-        && (this.state.notice?.tone === "success" || this.state.notice?.tone === "error");
+        && ((this.state.notice !== previous?.notice
+          && (this.state.notice?.tone === "success" || this.state.notice?.tone === "error"))
+          || (previous?.command === "pending" && !this.state.notice));
       if (dialogSaveSettled) {
         this.#dialogSaveRequested = false;
         const pending = this.#pendingNavigation;
@@ -731,6 +732,13 @@ export class MaticMapShellV4 extends LitElement {
         // user moved elsewhere in the document is left alone.
         void this.updateComplete.then(() => {
           requestAnimationFrame(() => {
+            const active = deepActiveElement(document);
+            let target: Node | null = active;
+            while (target && target !== this) {
+              const root = target.getRootNode();
+              target = root instanceof ShadowRoot ? root.host : null;
+            }
+            if (active && active !== document.body && target !== this) return;
             launcher?.focus({ preventScroll: true });
             const body = !document.activeElement || document.activeElement === document.body;
             if (!this.shadowRoot?.activeElement && body) this.#focusPanel();
@@ -1144,6 +1152,11 @@ export class MaticMapShellV4 extends LitElement {
   }
 
   #dialogLauncherFor(dialog: NonNullable<WorkspaceState["dialog"]>): HTMLElement | null {
+    if (dialog === "confirmDeletePlan") {
+      const tools = this.renderRoot.querySelector<HTMLElement>(PLAN_TOOLS_TAG);
+      const launcher = tools?.shadowRoot?.querySelector<HTMLElement>(`[data-dialog-launcher="${dialog}"]`);
+      if (launcher) return launcher;
+    }
     const workflow = this.renderRoot.querySelector<HTMLElement>(WORKFLOW_TAG);
     return workflow?.shadowRoot?.querySelector<HTMLElement>(
       `[data-dialog-launcher="${dialog}"]`,

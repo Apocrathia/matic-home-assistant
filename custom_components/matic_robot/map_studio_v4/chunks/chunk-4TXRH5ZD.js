@@ -1,4 +1,4 @@
-import{C as Ye,P,a as Le,b as Be,c as $e,l as Ie,m as ze,n as Fe,o as De,p as Ne,q as Oe,r as Ue,s as He,t as qe,u as Xe,v as Ve,w as We,x as Ge}from"./chunk-PG5OXYTZ.js";import{A as Q,B as R,O as Se,Q as Ee,R as y,S as Re,T as Ae,V as w,X as Te,Y as F,c as he,d as ue,n as Pe,w as pe,y as J,z as me}from"./chunk-LTYYE5LG.js";var Ze=Symbol.for(""),Pt=r=>{if(r?.r===Ze)return r?._$litStatic$},dn=r=>({_$litStatic$:r,r:Ze});var Ke=new Map,fe=r=>(e,...n)=>{let t=n.length,i,o,a=[],s=[],l,c=0,d=!1;for(;c<t;){for(l=e[c];c<t&&(o=n[c],(i=Pt(o))!==void 0);)l+=i+e[++c],d=!0;c!==t&&s.push(o),a.push(l),c++}if(c===t&&a.push(e[t]),d){let m=a.join("$$lit$$");(e=Ke.get(m))===void 0&&(a.raw=a,Ke.set(m,e=a)),n=s}return r(e,...n)},hn=fe(y),un=fe(Re),pn=fe(Ae);var je=import.meta.url.match(/\/matic_robot\/[^/]+-([a-f0-9]{12})\/map-studio-v4(?:\/|$)/u)?.[1]??"dev",D=je==="dev"?"":`-${je}`,ve=`matic-map-canvas-v4${D}`,yn=`matic-precision-controls-v4${D}`,bn=`matic-map-workflow-v4${D}`,gn=`matic-map-plan-tools-v4${D}`,wn=`matic-map-plan-views-v4${D}`,_n=`matic-map-shell-v4${D}`,xn=`matic-map-panel-v0-4-0${D}`;var St=2e4,Je=class{constructor(e,n){this.status="idle";this.#o=e,this.#t=n,e.addController(this)}#o;#t;#n;#r;request(){this.status==="idle"&&this.#s()}hostConnected(){this.status==="loading"&&this.#v()}hostDisconnected(){clearTimeout(this.#r)}#v(){this.#r=setTimeout(()=>this.#n?.(),St)}async#s(){this.status="loading",this.#v();try{this.value=await Promise.race([this.#t(),new Promise((e,n)=>{this.#n=n})]),this.status="ready"}catch{this.status="failed"}clearTimeout(this.#r),this.#o.requestUpdate()}},ye="matic-map-resume",Et=3e4,Pn=r=>{try{sessionStorage.setItem(ye,JSON.stringify({workflow:r,at:Date.now()}))}catch{}let e=history.state?.maticMapLayer?.depth;if(!e){location.reload();return}addEventListener("popstate",n=>{n.stopImmediatePropagation(),location.reload()},{capture:!0,once:!0}),history.go(-e)},Sn=()=>{try{let r=sessionStorage.getItem(ye);sessionStorage.removeItem(ye);let{workflow:e,at:n}=JSON.parse(r??"null")??{},t=Date.now()-n;return typeof e=="string"&&t>=0&&t<=Et?e:null}catch{return null}},En=(r,e,n)=>r==="ready"?w:r==="failed"?y`<div class="problem" role="alert"><p>${F(e,"v4_workflow_load_failed","The cleaning tools didn't load. Reload the page to try again.")}</p><button class="ms-btn ms-btn--secondary" type="button" data-dialog-launcher="discardDraft" @click=${n}>${F(e,"v4_retry","Try again")}</button></div>`:y`<p class="loading" role="status">${F(e,"v4_workflow_loading","Loading\u2026")}</p>`;var Rt=["outline","paint","erase","pan"],Qe=(r,e,n)=>{let{draw:t}=r,i=`${t.brushMeters.toFixed(2)} m`;return y`
+import{C as Ye,P,a as Le,b as Be,c as $e,l as Ie,m as ze,n as Fe,o as De,p as Ne,q as Oe,r as Ue,s as He,t as qe,u as Xe,v as Ve,w as We,x as Ge}from"./chunk-3HXEGZMZ.js";import{A as Q,B as R,O as Se,Q as Ee,R as y,S as Re,T as Ae,V as w,X as Te,Y as F,c as he,d as ue,n as Pe,w as pe,y as J,z as me}from"./chunk-LTYYE5LG.js";var Ze=Symbol.for(""),Pt=r=>{if(r?.r===Ze)return r?._$litStatic$},dn=r=>({_$litStatic$:r,r:Ze});var Ke=new Map,fe=r=>(e,...n)=>{let t=n.length,i,o,a=[],s=[],l,c=0,d=!1;for(;c<t;){for(l=e[c];c<t&&(o=n[c],(i=Pt(o))!==void 0);)l+=i+e[++c],d=!0;c!==t&&s.push(o),a.push(l),c++}if(c===t&&a.push(e[t]),d){let m=a.join("$$lit$$");(e=Ke.get(m))===void 0&&(a.raw=a,Ke.set(m,e=a)),n=s}return r(e,...n)},hn=fe(y),un=fe(Re),pn=fe(Ae);var je=import.meta.url.match(/\/matic_robot\/[^/]+-([a-f0-9]{12})\/map-studio-v4(?:\/|$)/u)?.[1]??"dev",D=je==="dev"?"":`-${je}`,ve=`matic-map-canvas-v4${D}`,yn=`matic-precision-controls-v4${D}`,bn=`matic-map-workflow-v4${D}`,gn=`matic-map-plan-tools-v4${D}`,wn=`matic-map-plan-views-v4${D}`,_n=`matic-map-shell-v4${D}`,xn=`matic-map-panel-v0-4-0${D}`;var St=2e4,Je=class{constructor(e,n){this.status="idle";this.#o=e,this.#t=n,e.addController(this)}#o;#t;#n;#r;request(){this.status==="idle"&&this.#s()}hostConnected(){this.status==="loading"&&this.#v()}hostDisconnected(){clearTimeout(this.#r)}#v(){this.#r=setTimeout(()=>this.#n?.(),St)}async#s(){this.status="loading",this.#v();try{this.value=await Promise.race([this.#t(),new Promise((e,n)=>{this.#n=n})]),this.status="ready"}catch{this.status="failed"}clearTimeout(this.#r),this.#o.requestUpdate()}},ye="matic-map-resume",Et=3e4,Pn=r=>{try{sessionStorage.setItem(ye,JSON.stringify({workflow:r,at:Date.now()}))}catch{}let e=history.state?.maticMapLayer?.depth;if(!e){location.reload();return}addEventListener("popstate",n=>{n.stopImmediatePropagation(),location.reload()},{capture:!0,once:!0}),history.go(-e)},Sn=()=>{try{let r=sessionStorage.getItem(ye);sessionStorage.removeItem(ye);let{workflow:e,at:n}=JSON.parse(r??"null")??{},t=Date.now()-n;return typeof e=="string"&&t>=0&&t<=Et?e:null}catch{return null}},En=(r,e,n)=>r==="ready"?w:r==="failed"?y`<div class="problem" role="alert"><p>${F(e,"v4_workflow_load_failed","The cleaning tools didn't load. Reload the page to try again.")}</p><button class="ms-btn ms-btn--secondary" type="button" data-dialog-launcher="discardDraft" @click=${n}>${F(e,"v4_retry","Try again")}</button></div>`:y`<p class="loading" role="status">${F(e,"v4_workflow_loading","Loading\u2026")}</p>`;var Rt=["outline","paint","erase","pan"],Qe=(r,e,n)=>{let{draw:t}=r,i=`${t.brushMeters.toFixed(2)} m`;return y`
     <div
       class=${`draw-tools draw-tools--${n} ms-segment`}
       data-zone=${String(t.tool==="outline")}
@@ -101,8 +101,7 @@ import{C as Ye,P,a as Le,b as Be,c as $e,l as Ie,m as ze,n as Fe,o as De,p as Ne
     .map-root[data-workflow="draw"][data-draw-tool="pan"] { cursor: grab; }
     .map-root[data-workflow="draw"][data-draw-tool="pan"].navigating { cursor: grabbing; }
 
-    /* An outline on .map-root repaints the whole page layer on every canvas
-       frame; a positioned overlay keeps the ring out of the frame path. */
+
     .map-root:focus-visible::after {
       content: "";
       position: absolute;
@@ -112,7 +111,7 @@ import{C as Ye,P,a as Le,b as Be,c as $e,l as Ie,m as ze,n as Fe,o as De,p as Ne
       pointer-events: none;
     }
 
-    /* Navigation has stable corners; only orbit controls follow the sheet. */
+
     .map-rail { --help-top: calc(44px + 2 * var(--ms-space-2)); --help-bottom: 116px; position: absolute; inset: 0.75rem; inset-inline: max(0.75rem, var(--ms-safe-left)) max(0.75rem, var(--ms-safe-right)); z-index: 4; pointer-events: none; }
     .map-rail > * { pointer-events: auto; }
     slot[name="scrim"] { display: contents; pointer-events: none; }
@@ -258,20 +257,15 @@ import{C as Ye,P,a as Le,b as Be,c as $e,l as Ie,m as ze,n as Fe,o as De,p as Ne
       white-space: nowrap;
     }
 
-/* Four labelled buttons span most of the map at desktop width; icons with tooltips keep the rail a narrow column. */
+
 .map-tools .ms-btn__label { position: absolute; overflow: hidden; inline-size: 1px; block-size: 1px; margin: -1px; padding: 0; border: 0; clip-path: inset(50%); white-space: nowrap; }
 @container (max-width: 29rem) {
 .map-tools button, .map-dock .draw-tools button { padding-inline: 0; inline-size: var(--ms-control); }
-/* Collapse the label to assistive text, never display:none. Hiding it would
-   delete the accessible name and break every getByRole({ name }) query at
-   narrow widths -- which is what the previous font-size:0 plus ::first-letter
-   trick did, while also rendering the toolbar as "P E M U R D". */
+
 .map-dock .draw-tools .ms-btn__label { position: absolute; overflow: hidden; inline-size: 1px; block-size: 1px; margin: -1px; padding: 0; border: 0; clip-path: inset(50%); white-space: nowrap; }
 }
 @media (forced-colors: active) {
-/* The map is painted to canvas, so the UA would otherwise invert it. The
-   previous block here targeted the mock-map layer that the renderer replaced,
-   which meant the map had no forced-colors treatment at all. */
+
 .scene-canvas, .overlay-canvas { forced-color-adjust: none; }
 .map-root { border: 1px solid CanvasText; }
 .map-root:focus-visible::after { border-color: Highlight; }

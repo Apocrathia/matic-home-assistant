@@ -2062,7 +2062,7 @@ export class EffectController {
   // A catalog that is not ready is shown as any read shows it, so a read that
   // replaces a loading one reports its own outcome. A read without `force` is
   // skipped while another, shown or not, is in flight.
-  async loadPlans({ force = false, inPlace = false }: { force?: boolean; inPlace?: boolean } = {}): Promise<PlansCatalog | null> {
+  async loadPlans({ force = false, inPlace = false, onError }: { force?: boolean; inPlace?: boolean; onError?: () => void } = {}): Promise<PlansCatalog | null> {
     const shown = !inPlace || this.#store.value.resources.plans.status !== "ready";
     if (!this.#pageLifecycle.active) {
       this.#controllers.get("plans")?.abort();
@@ -2131,6 +2131,7 @@ export class EffectController {
           plans: resource("error", this.#store.value.resources.plans.value, problem),
         },
       });
+      onError?.();
       return null;
     } finally {
       this.#release("plans", controller);

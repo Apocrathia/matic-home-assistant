@@ -40,8 +40,9 @@ child lock, pet-waste avoidance, and the Cues voice assistant.
 [Map and area guide](cleaning.md) · [Entity reference](entities.md)
 
 Open a plan in **Run** to review its next run, pause it with **Plan enabled**, or
-choose **Run plan**. Choose **Edit** to change it; **Cancel** discards changes,
-**Save** keeps them, and **More actions > Delete** removes the plan.
+choose **Run plan**. Choose **Edit** to change it; **Cancel** asks before
+discarding unsaved changes, **Save** keeps them, and **More actions > Delete**
+removes the plan.
 
 ## Saved areas and Home Assistant routines
 

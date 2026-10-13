@@ -390,6 +390,7 @@
     "v4_notice_status_refreshed": "Status refreshed, so check the robot before trying again.",
     "v4_notice_saving": "Saving…",
     "v4_notice_plan_saved": "Plan saved",
+    "v4_notice_plans_refresh_failed": "Your change was saved, but Home Assistant couldn't reload the plans. Reopen Plans to try again.",
     "v4_notice_plan_save_failed": "Home Assistant can't confirm the plan was saved, so check your plans, then try again.",
     "v4_notice_plan_deleted": "Plan deleted",
     "v4_notice_plan_on": "Plan turned on",
