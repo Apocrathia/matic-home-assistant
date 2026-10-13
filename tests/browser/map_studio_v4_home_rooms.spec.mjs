@@ -34,7 +34,7 @@ async function loadGallery(page, { scenario = "ready", narrow = false, viewport 
 async function loadStoreHarness(page) {
   const bundle = await build({
     stdin: {
-      contents: 'export { WorkspaceStore, selectPrimaryAction, canSelectRooms } from "./frontend/map-studio-v4/state"; export { createGalleryState, withGalleryRoomPreview } from "./frontend/map-studio-v4/gallery-state";',
+      contents: 'export { WorkspaceStore, selectPrimaryAction, canSelectRooms } from "./frontend/map-studio-v4/state"; export { createGalleryState, withGalleryRoomPreview } from "./frontend/map-studio-v4/gallery-state"; export { RendererController } from "./frontend/map-studio-v4/renderer-controller"; export { GestureController } from "./frontend/map-studio-v4/gesture-controller"; export { roomsSummary, roomTapAnnouncement } from "./frontend/map-studio-v4/rooms-view";',
       resolveDir: process.cwd(),
     },
     bundle: true, format: "esm", write: false,
@@ -1113,5 +1113,272 @@ test.describe("the Rooms view: RTL and forced colors", () => {
     });
     await expect(row).toHaveCSS("background-color", highlight);
     await expect(roomBox(gallery, "Kitchen")).toBeVisible();
+  });
+});
+
+// Task 6: the map and list stay in step, map taps are announced, the summary
+// names the run and the chip Clear shares the gate.
+const polite = (gallery) => gallery.locator(".root > .sr-only[aria-live=polite]");
+const mapTap = (gallery, roomId) => gallery.locator("matic-map-canvas-v4").evaluate((canvas, id) => {
+  canvas.dispatchEvent(new CustomEvent("matic-workspace-intent", { detail: { type: "toggle-room", roomId: id }, bubbles: true, composed: true }));
+}, roomId);
+// Counts the non-empty texts the polite region takes from now on.
+const watchPolite = (gallery) => polite(gallery).evaluate((region) => {
+  region.__spoken = [];
+  new MutationObserver(() => { if (region.textContent) region.__spoken.push(region.textContent); }).observe(region, { childList: true, characterData: true, subtree: true });
+});
+const spoken = (gallery) => polite(gallery).evaluate((region) => region.__spoken);
+const listFormat = (page, locale, items) => page.evaluate(({ language, names }) =>
+  new Intl.ListFormat(language, { style: "long", type: "conjunction" }).format(names), { language: locale, names: items });
+const numberFormat = (page, locale, value) => page.evaluate(({ language, count }) => new Intl.NumberFormat(language).format(count), { language: locale, count: value });
+
+test.describe("map parity and announcements (home-rooms.md §5 Parity, Selection gate; §8 Screen readers; R7-R9)", () => {
+  test("a map tap announces the room added, then removed; a list click announces nothing", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "rooms", viewport: { width: 1024, height: 768 } });
+    await expect(roomBox(gallery, "Kitchen")).not.toBeChecked();
+    await watchPolite(gallery);
+    await mapTap(gallery, "room-a");
+    await expect(roomBox(gallery, "Kitchen")).toBeChecked();
+    await expect(polite(gallery)).toHaveText("Kitchen added");
+    await mapTap(gallery, "room-a");
+    await expect(roomBox(gallery, "Kitchen")).not.toBeChecked();
+    await expect(polite(gallery)).toHaveText("Kitchen removed");
+    await roomBox(gallery, "Living room").click();
+    await expect(roomBox(gallery, "Living room")).toBeChecked();
+    await expect(gallery.locator(".selection-chip")).toContainText("1 selected");
+    expect(await spoken(gallery)).toEqual(["Kitchen added", "Kitchen removed"]);
+  });
+
+  test("a tap on a busy map announces the reason once and changes nothing (R7, R10)", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "rooms-busy", viewport: { width: 1024, height: 768 } });
+    await expect(description(gallery)).toHaveText("Can't change rooms until the robot finishes or stops.");
+    const before = await snapshot(page);
+    const toasts = await gallery.locator("[data-notice-toast]").count();
+    await watchPolite(gallery);
+    await mapTap(gallery, "room-a");
+    await expect(polite(gallery)).toHaveText("Can't change rooms until the robot finishes or stops.");
+    const after = await snapshot(page);
+    expect(after.selection.roomIds).toEqual(before.selection.roomIds);
+    expect(after.notice).toEqual(before.notice);
+    await expect(gallery.locator("[data-notice-toast]")).toHaveCount(toasts);
+    expect(await spoken(gallery)).toEqual(["Can't change rooms until the robot finishes or stops."]);
+  });
+
+  test("a tap while the map is not ready announces the rows' held reason", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "rooms-ready", viewport: { width: 1024, height: 768 } });
+    await patchState(gallery, { coherence: "verifying" });
+    await expect(roomBox(gallery, "Kitchen")).toHaveAccessibleDescription("Waiting for the map to be ready.");
+    const before = (await snapshot(page)).selection.roomIds;
+    await mapTap(gallery, "room-a");
+    await expect(polite(gallery)).toHaveText("Waiting for the map to be ready.");
+    expect((await snapshot(page)).selection.roomIds).toEqual(before);
+  });
+
+  test("a tap at the limit gives the slot notice and no added announcement (R8)", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "room-limit", viewport: { width: 1024, height: 768 } });
+    await gallery.evaluate((element) => {
+      const state = element.getWorkspaceSnapshot();
+      const plans = state.resources.plans.value;
+      element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...state.resources.plans,
+        value: { ...plans, rooms: [...plans.rooms, { roomId: "room-extra", name: "Pantry" }] } } } });
+    });
+    await expect(roomBox(gallery, "Pantry")).toHaveAttribute("aria-disabled", "true");
+    await watchPolite(gallery);
+    await mapTap(gallery, "room-extra");
+    const limit = "Up to 100 rooms fit in one clean, so remove one to add another.";
+    await expect(gallery.locator("[data-notice-slot]")).toContainText(limit);
+    await expect(polite(gallery)).toHaveText(limit);
+    expect((await snapshot(page)).selection.roomIds).toHaveLength(100);
+    expect(await spoken(gallery)).toEqual([limit]);
+  });
+
+  test("the summary lists the rooms in preview order with the dock, and hides on a landscape phone (R27)", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "rooms-ready", viewport: { width: 1024, height: 768 } });
+    await expect(primary(gallery)).not.toHaveAttribute("aria-disabled", "true");
+    const four = await listFormat(page, "en", ["Kitchen", "Living room", "2 more"]);
+    await expect(gallery.locator(".action-summary")).toHaveText(`${four}, then back to the dock`);
+    const state = await snapshot(page);
+    await patchState(gallery, { selection: { ...state.selection, roomIds: ["room-a", "room-b"] } });
+    await expect(gallery.locator(".action-summary")).toHaveText("Kitchen and Living room, then back to the dock");
+    await page.setViewportSize({ width: 844, height: 390 });
+    await expect(gallery.locator(".action-summary")).toBeHidden();
+  });
+
+  test("@mobile the grip names the selected rooms at peek", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "rooms", narrow: true });
+    await patchState(gallery, twoRooms(await snapshot(page)));
+    await panelOf(gallery).getByRole("button", { name: "Collapse panel", exact: true }).click();
+    await expect(gallery.locator(".sheet-status")).toHaveText("2 selected · Kitchen and Living room");
+  });
+
+  test("the chip keeps the count but drops Clear while the selection is held (R17, Task 6 ruling)", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "rooms-busy", viewport: { width: 1024, height: 768 } });
+    const chip = gallery.locator(".selection-chip");
+    const clear = chip.getByRole("button", { name: "Clear" });
+    await expect(chip).toContainText("4 selected");
+    await expect(clear).toHaveCount(0);
+    // The panel's Clear carries the reason (R22).
+    await expect(listHeader(gallery).getByRole("button", { name: "Clear" })).toHaveAccessibleDescription("Can't change rooms until the robot finishes or stops.");
+    await patchState(gallery, { activity: "docked" });
+    await expect(clear).toBeVisible();
+    await clear.click();
+    expect((await snapshot(page)).selection.roomIds).toEqual([]);
+    await expect(chip).toHaveCount(0);
+  });
+
+  test("@mobile both Clear buttons are 44 px under a coarse pointer", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "rooms-ready", viewport: { width: 1024, height: 768 } });
+    expect(await page.evaluate(() => matchMedia("(any-pointer: coarse)").matches)).toBe(true);
+    for (const clear of [listHeader(gallery).getByRole("button", { name: "Clear" }), gallery.locator(".selection-chip").getByRole("button", { name: "Clear" })]) {
+      const box = await clear.boundingBox();
+      expect(box.width).toBeGreaterThanOrEqual(44);
+      expect(box.height).toBeGreaterThanOrEqual(44);
+    }
+  });
+
+  test("Arabic counts and a bidi room name (Review Focus 5)", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "rooms-ready", viewport: { width: 1024, height: 768 } });
+    await gallery.evaluate((element) => {
+      const state = element.getWorkspaceSnapshot();
+      const plans = state.resources.plans.value;
+      element.replaceWorkspaceState({ ...state, locale: "ar", resources: { ...state.resources, plans: { ...state.resources.plans,
+        value: { ...plans, rooms: plans.rooms.map((room) => room.roomId === "room-a" ? { ...room, name: "مطبخ" } : room) } } } });
+    });
+    const four = await numberFormat(page, "ar", 4);
+    const two = await numberFormat(page, "ar", 2);
+    await expect(listHeader(gallery).locator("small")).toHaveText(`${four} selected`);
+    await expect(gallery.locator(".selection-chip")).toContainText(`${four} selected`);
+    await expect(gallery.locator(".action-summary")).toContainText(`${two} more`);
+    await expect(gallery.locator(".room-row bdi", { hasText: "مطبخ" })).toBeVisible();
+  });
+
+  test("the summary and the tap announcement follow the preview and the gate", async ({ page }) => {
+    await loadStoreHarness(page);
+    const result = await page.evaluate(async (harness) => {
+      const { createGalleryState, withGalleryRoomPreview, roomsSummary, roomTapAnnouncement } = await import(harness);
+      const t = (key, fallback, placeholders = {}) => Object.entries(placeholders).reduce((text, [name, value]) => text.replaceAll(`{${name}}`, String(value)), fallback);
+      const ready = createGalleryState("rooms-ready");
+      const out = {};
+      out.four = roomsSummary(t, ready);
+      // Preview order wins over selection order.
+      const reversed = structuredClone(ready);
+      reversed.manualRoomPreview.value.preview.rooms.reverse();
+      out.reversed = roomsSummary(t, reversed);
+      const two = withGalleryRoomPreview({ ...ready, selection: { ...ready.selection, roomIds: ["room-a", "room-b"] } });
+      out.two = roomsSummary(t, two);
+      out.none = roomsSummary(t, { ...ready, selection: { ...ready.selection, roomIds: [] } });
+      const busy = { ...ready, activity: "cleaning" };
+      out.busy = roomTapAnnouncement(t, busy, busy, "room-a");
+      const verifying = { ...ready, coherence: "verifying" };
+      out.verifying = roomTapAnnouncement(t, verifying, verifying, "room-a");
+      out.removed = roomTapAnnouncement(t, ready, two, "room-c");
+      out.added = roomTapAnnouncement(t, two, ready, "room-c");
+      out.unknown = roomTapAnnouncement(t, two, ready, "scene-9");
+      out.same = roomTapAnnouncement(t, ready, ready, "room-a");
+      return out;
+    }, HARNESS);
+    expect(result.four).toBe("Kitchen, Living room, and 2 more, then back to the dock");
+    expect(result.reversed).toBe("Bedroom, Office, and 2 more, then back to the dock");
+    expect(result.two).toBe("Kitchen and Living room, then back to the dock");
+    expect(result.none).toBe("");
+    expect(result.busy).toBe("Can't change rooms until the robot finishes or stops.");
+    expect(result.verifying).toBe("Waiting for the map to be ready.");
+    expect(result.removed).toBe("Office removed");
+    expect(result.added).toBe("Office added");
+    expect(result.unknown).toBeNull();
+    expect(result.same).toBeNull();
+  });
+
+  test("an uncatalogued room cannot be tapped, a held tap reaches the reducer, and the selection draws with Room names off (R9, Review Focus 1)", async ({ page }) => {
+    await loadStoreHarness(page);
+    const result = await page.evaluate(async (harness) => {
+      const { RendererController, GestureController, WorkspaceStore, createGalleryState } = await import(harness);
+      const out = {};
+      const mount = (state) => {
+        const canvas = document.createElement("canvas"), overlay = document.createElement("canvas");
+        for (const element of [canvas, overlay]) {
+          Object.assign(element.style, { position: "absolute", left: "31px", top: "47px", width: "720px", height: "540px" });
+          document.body.append(element);
+        }
+        canvas.setPointerCapture = () => {}; canvas.releasePointerCapture = () => {};
+        const store = new WorkspaceStore(state);
+        const renderer = new RendererController(canvas, overlay);
+        renderer.setState(store.value);
+        let taps = 0;
+        const gestures = new GestureController(canvas, renderer, { state: () => store.value, onRoom: (roomId) => { taps += 1; store.dispatch({ type: "toggle-room", roomId }); }, onCircles: () => {}, onCirclePreview: () => {} });
+        const bounds = canvas.getBoundingClientRect();
+        const tap = (x, y) => {
+          for (const type of ["pointerdown", "pointerup"]) canvas.dispatchEvent(new PointerEvent(type, { pointerId: 1, isPrimary: true, pointerType: "mouse", clientX: x, clientY: y, bubbles: true }));
+        };
+        const settle = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const scan = (want) => {
+          for (let y = 20; y < 520; y += 10) for (let x = 20; x < 700; x += 10) {
+            const room = renderer.roomAt(bounds.left + x, bounds.top + y);
+            const inRoom = renderer.containsMapPoint(renderer.screenToMap(bounds.left + x, bounds.top + y));
+            if (want === "hit" ? room : (!room && inRoom)) return { x: bounds.left + x, y: bounds.top + y, room };
+          }
+          return null;
+        };
+        const alphaAt = (point) => {
+          const ratio = window.devicePixelRatio || 1;
+          return overlay.getContext("2d").getImageData(Math.round((point.x - bounds.left) * ratio), Math.round((point.y - bounds.top) * ratio), 1, 1).data[3];
+        };
+        const dispose = () => { gestures.dispose(); renderer.dispose(); canvas.remove(); overlay.remove(); };
+        return { store, renderer, tap, settle, scan, alphaAt, taps: () => taps, dispose };
+      };
+      const base = createGalleryState("rooms");
+      const bare = { ...base, view: "top", labelsVisible: false, appearance: "photo", selection: { ...base.selection, roomIds: [], roomSettings: [] } };
+      // Kitchen loses its catalog entry.
+      const plans = bare.resources.plans.value;
+      const uncatalogued = { ...bare, resources: { ...bare.resources, plans: { ...bare.resources.plans, value: { ...plans, rooms: plans.rooms.map((room) => room.roomId === "room-a" ? { ...room, name: "Elsewhere" } : room) } } } };
+      let h = mount(uncatalogued);
+      await h.settle();
+      const orphan = h.scan("orphan");
+      out.orphanFound = Boolean(orphan);
+      if (orphan) h.tap(orphan.x, orphan.y);
+      out.orphanTaps = h.taps();
+      out.orphanSelection = h.store.value.selection.roomIds;
+      h.dispose();
+
+      h = mount(bare);
+      await h.settle();
+      const hit = h.scan("hit");
+      out.hit = hit?.room ?? null;
+      out.alphaBefore = h.alphaAt(hit);
+      h.tap(hit.x, hit.y);
+      out.selected = h.store.value.selection.roomIds;
+      h.renderer.setState(h.store.value);
+      await h.settle();
+      out.alphaSelected = h.alphaAt(hit);
+      h.renderer.setState({ ...h.store.value, workflow: "none" });
+      await h.settle();
+      out.alphaHome = h.alphaAt(hit);
+      h.dispose();
+
+      h = mount({ ...bare, coherence: "verifying" });
+      await h.settle();
+      h.tap(hit.x, hit.y);
+      out.heldTaps = h.taps();
+      out.heldSelection = h.store.value.selection.roomIds;
+      h.dispose();
+
+      h = mount({ ...bare, workflow: "plan", planView: "edit", coherence: "verifying", planDraft: { ...bare.planDraft, rooms: [] } });
+      await h.settle();
+      h.tap(hit.x, hit.y);
+      out.planTaps = h.taps();
+      h.dispose();
+      return out;
+    }, HARNESS);
+    expect(result.orphanFound).toBe(true);
+    expect(result.orphanTaps).toBe(0);
+    expect(result.orphanSelection).toEqual([]);
+    expect(result.hit).toMatch(/^room-/);
+    expect(result.alphaBefore).toBe(0);
+    expect(result.selected).toEqual([result.hit]);
+    expect(result.alphaSelected).toBeGreaterThan(0);
+    expect(result.alphaHome).toBe(0);
+    expect(result.heldTaps).toBe(1);
+    expect(result.heldSelection).toEqual([]);
+    expect(result.planTaps).toBe(0);
   });
 });

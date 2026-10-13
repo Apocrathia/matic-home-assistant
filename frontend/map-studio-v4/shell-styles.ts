@@ -261,6 +261,8 @@ export const shellStyles = [tokens, base, controls, css`
 
     .action-bar { display: grid; gap: var(--ms-space-2); margin-block-start: auto; padding-block-start: var(--ms-space-4); }
     .action-summary { margin: 0; overflow: hidden; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); text-overflow: ellipsis; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+    /* A landscape phone keeps the bar to its button (home-rooms.md §7). */
+    @media (max-height: 479px) { .action-summary { display: none; } }
     .action-reason { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); text-align: center; }
     .action-jump { text-decoration: underline; }
     .paired { grid-template-columns: 1fr 1fr; align-items: center; }

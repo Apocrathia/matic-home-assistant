@@ -7,17 +7,15 @@ import type { CadenceReason, CleaningMode, CoverageSetting, NextRunPreviewRoom, 
 import {
   MAX_ROOM_SEQUENCE_SIZE,
   type Localize,
-  type NoButtonAction,
-  type PrimaryAction,
   type WorkspaceIntent,
   type WorkspaceState,
 } from "./contracts";
 import { ROOMS_VIEW_TAG } from "./element-tags";
 import { isNativeSelectControl } from "./gesture-controller";
 import { WORKSPACE_INTENT_EVENT } from "./map-canvas";
-import { translate } from "./localize";
+import { formatList, translate } from "./localize";
 import { COVERAGES, MODES, cadenceProblem, coverageLabel, modeLabel, settingLabel } from "./plan-cadence";
-import { dueLines, type Translate } from "./plan-copy";
+import { dueLines, formatNumber, type Translate } from "./plan-copy";
 import { admittedManualRoomPreview, canSelectRooms, hasStoppableWork, initialWorkspaceState } from "./state";
 
 const DUE: readonly CadenceReason[] = ["mop_due", "coverage_due"];
@@ -27,20 +25,59 @@ type CatalogRoom = NonNullable<WorkspaceState["resources"]["plans"]["value"]>["r
 const roomName = (state: WorkspaceState, roomId: string): string | null =>
   state.resources.plans.value?.rooms.find((room) => room.roomId === roomId)?.name ?? null;
 
-/** The catalog names of the selected rooms, in selection order (shell summary and grip). */
-export const selectedRoomNames = (state: WorkspaceState): string[] =>
-  state.selection.roomIds.map((roomId) => roomName(state, roomId) ?? roomId);
+const catalogNames = (state: WorkspaceState, roomIds: readonly string[]): string[] =>
+  roomIds.flatMap((roomId) => {
+    const name = roomName(state, roomId);
+    return name === null ? [] : [name];
+  });
 
-// Task 6 fills the summary line and the map-tap announcement.
-export const roomsSummary = (_t: Translate, _state: WorkspaceState): string => "";
+/** The catalog names of the selected rooms, in selection order, never a scene id (R9). */
+export const selectedRoomNames = (state: WorkspaceState): string[] => catalogNames(state, state.selection.roomIds);
 
-export const roomTapAnnouncement = (
-  _t: Translate,
-  _before: WorkspaceState,
-  _after: WorkspaceState,
-  _roomId: string,
-  _primary: PrimaryAction | NoButtonAction | null,
-): string | null => null;
+/** The grip line while rooms are selected: the count and the names (shell.md Sheet). */
+export const roomsGripLine = (t: Translate, state: WorkspaceState): string | null => {
+  const names = selectedRoomNames(state);
+  if (names.length === 0) return null;
+  return t("v4_rooms_selected_names", "{count} selected · {rooms}", {
+    count: formatNumber(state.locale, names.length),
+    rooms: formatList(state.locale, names),
+  });
+};
+
+/**
+ * The action bar's line: the rooms in preview order once a preview is
+ * admitted, else selection order, as one list of up to three entries, then
+ * the dock the request always returns to (home-rooms.md §5 Clean, §6).
+ */
+export const roomsSummary = (t: Translate, state: WorkspaceState): string => {
+  const admitted = admittedManualRoomPreview(state)?.preview;
+  const names = catalogNames(state, admitted ? admitted.rooms.map((room) => room.roomId) : state.selection.roomIds);
+  if (names.length === 0) return "";
+  const rooms = names.length <= 3
+    ? formatList(state.locale, names)
+    : formatList(state.locale, [...names.slice(0, 2), t("v4_rooms_more", "{count} more", { count: formatNumber(state.locale, names.length - 2) })]);
+  return t("v4_clean_rooms_summary", "{rooms}, then back to the dock", { rooms });
+};
+
+/**
+ * What the polite region says after a map tap (R7): a refused tap repeats the
+ * rows' reason on screen (the description while work runs, else the held
+ * reason), an accepted one names the change; a room with no catalog name, or
+ * a tap that changed nothing (the limit's notice speaks), says nothing.
+ */
+export const roomTapAnnouncement = (t: Translate, before: WorkspaceState, after: WorkspaceState, roomId: string): string | null => {
+  const name = roomName(after, roomId) ?? roomName(before, roomId);
+  if (name === null) return null;
+  if (!canSelectRooms(before)) {
+    return hasStoppableWork(before)
+      ? t("v4_rooms_busy", "Can't change rooms until the robot finishes or stops.")
+      : t("v4_reason_clean_rooms_verification", "Waiting for the map to be ready.");
+  }
+  const was = before.selection.roomIds.includes(roomId);
+  const is = after.selection.roomIds.includes(roomId);
+  if (was === is) return null;
+  return is ? t("v4_room_added", "{room} added", { room: name }) : t("v4_room_removed", "{room} removed", { room: name });
+};
 
 const eventValue = (event: Event): string => (event.currentTarget as HTMLSelectElement).value;
 
@@ -362,7 +399,7 @@ export class MaticRoomsViewV4 extends LitElement {
           <div class="list-header">
             <h3 class="ms-section-heading" id="rooms-heading">${t("v4_rooms_to_clean", "Rooms to clean")}</h3>
             ${count ? html`
-              <small>${t("v4_rooms_selected", "{count} selected", { count })}</small>
+              <small>${t("v4_rooms_selected", "{count} selected", { count: formatNumber(state.locale, count) })}</small>
               <button
                 class="ms-btn ms-btn--sm ms-btn--secondary clear"
                 type="button"

@@ -60,7 +60,7 @@ import {
   WORKSPACE_INTENT_EVENT,
 } from "./map-canvas";
 import "./map-canvas";
-import { formatList, translate } from "./localize";
+import { translate } from "./localize";
 import { planRowLine2, planRowLine3 } from "./plan-copy";
 import { needsDraftConfirmation } from "./draft-navigation";
 import {
@@ -1208,6 +1208,21 @@ export class MaticMapShellV4 extends LitElement {
   }
 
   // Only the views send intents through here (dialog-copy.ts dialogLauncher).
+  // A map tap in Rooms (R7) is announced once the host has handled the
+  // intent and handed back the state (a task later, after its render): a
+  // refused one repeats the reason on screen (the state is the same), an
+  // accepted one names the change. The list's own controls speak for
+  // themselves.
+  readonly #mapIntent = (event: Event): void => {
+    const intent = (event as CustomEvent<WorkspaceIntent>).detail;
+    const before = this.state;
+    if (before.workflow !== "rooms" || intent?.type !== "toggle-room") return;
+    setTimeout(() => {
+      const text = this.#views.value?.roomTapAnnouncement(this.#tr, before, this.state, intent.roomId);
+      if (text) this.#announce("_polite", text);
+    });
+  };
+
   #captureDialogLauncher(event: Event): void {
     const launcher = this.#views.value?.dialogLauncher(event, this.state, (intent) => this.#intent(intent));
     if (launcher) this.#dialogLauncher = launcher;
@@ -1308,20 +1323,10 @@ export class MaticMapShellV4 extends LitElement {
 
   readonly #tr = (key: string, fallback: string, placeholders?: NoticePlaceholders): string => this.#t(key, fallback, placeholders);
 
-  #rooms(state: WorkspaceState): string {
-    const rooms = state.resources.plans.value?.rooms
-      ?? state.resources.areas.value?.rooms
-      ?? [];
-    return formatList(state.locale, state.selection.roomIds.map((roomId) =>
-      rooms.find((room) => room.roomId === roomId)?.name ?? roomId));
-  }
-
   #actionBar(state: WorkspaceState, primary: PrimaryAction | NoButtonAction | null, secondary: PrimaryAction | null) {
-    const rooms = this.#rooms(state);
+    // The rooms in run order, then the dock (home-rooms.md §5 Clean).
     const summary = primary?.enabled && state.workflow === "rooms" && primary.id === "clean-rooms"
-      ? (state.planDraft.returnToBase && rooms
-        ? this.#t("v4_rooms_summary_dock", "{rooms} · returns to the dock", { rooms })
-        : rooms)
+      ? this.#views.value?.roomsSummary(this.#tr, state) ?? ""
       : "";
     const editing = state.workflow === "plan" && state.planView === "edit";
     // No bar when it would be empty: idle home has none (home-rooms.md §3).
@@ -1620,13 +1625,7 @@ export class MaticMapShellV4 extends LitElement {
 
   #sheetStatus(state: WorkspaceState, status: StatusPresentation): string {
     const workflow = workflowCopy(state, this.localize);
-    let line = workflow.title;
-    if (state.workflow === "rooms" && state.selection.roomIds.length) {
-      line = this.#t("v4_rooms_selected_names", "{count} selected · {rooms}", {
-        count: state.selection.roomIds.length,
-        rooms: this.#rooms(state),
-      });
-    }
+    const line = (state.workflow === "rooms" ? this.#views.value?.roomsGripLine(this.#tr, state) : null) ?? workflow.title;
     // With the body open the h2 already names the workflow, so the grip line
     // carries the robot instead of repeating the title directly above it.
     if (this._sheetDetent !== "peek") return status.detail ? `${status.title} · ${status.detail}` : status.title;
@@ -1776,6 +1775,7 @@ export class MaticMapShellV4 extends LitElement {
               <${mapCanvasTag}
                 class="map-canvas"
                 style=${sheetOffset}
+                @matic-workspace-intent=${this.#mapIntent}
                 .state=${state}
                 .localize=${this.localize}
                 .dates=${this.dates}

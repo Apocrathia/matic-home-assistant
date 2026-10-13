@@ -13,6 +13,7 @@ import { MAP_CANVAS_TAG } from "./element-tags";
 import { GestureController, isNativeSelectControl } from "./gesture-controller";
 import { RendererController, type RendererDiagnostics } from "./renderer-controller";
 import {
+  canSelectRooms,
   canShowExactPose,
   canShowLiveMap,
   initialWorkspaceState,
@@ -128,10 +129,10 @@ export class MaticMapCanvasV4 extends LitElement {
     :host([narrow]) ::slotted(.floor-switcher) { inline-size: 7rem; }
     :host([narrow]) .fit { min-inline-size: 44px; padding-inline: var(--ms-space-2); }
     :host([narrow]) .fit .ms-btn__label { display: none; }
-    /* Phone: the full detent leaves two rows, so "?" takes the bottom-left. */
+    /* Phone: the full detent leaves two rows, so "?" takes the bottom-left;
+       its popover keeps the top-right slot under Fit, above the camera steps. */
     :host([narrow]) .map-extras { inset-inline-end: auto; inset-inline-start: 0; inset-block-end: var(--map-sheet-offset, 0px); }
     :host([narrow]) .map-rail { --help-bottom: calc(var(--map-sheet-offset, 0px) + 44px + var(--ms-space-2)); }
-    :host([narrow]) .navigation-help { inset-block-start: auto; inset-inline-end: auto; inset-inline-start: 0; inset-block-end: var(--help-bottom); max-block-size: calc(100% - var(--help-top) - var(--help-bottom)); }
 
     .map-tools, .view-switch, .appearance-switch, .camera-steps { display: flex; }
 
@@ -145,6 +146,7 @@ export class MaticMapCanvasV4 extends LitElement {
     }
     .map-dock .draw-tools--row { flex-direction: row; gap: var(--ms-space-1); }
     .map-dock .draw-tools button { padding-inline: var(--ms-space-2); }
+    @media (any-pointer: coarse) { .selection-chip .ms-btn--sm { min-inline-size: var(--ms-control); min-block-size: var(--ms-control); } }
     .selection-chip {
       display: flex;
       align-items: center;
@@ -690,11 +692,14 @@ export class MaticMapCanvasV4 extends LitElement {
     // chip would only duplicate it.
     const count = state.selection.roomIds.length;
     if (state.workflow === "rooms" && count > 0 && !this.narrow) {
+      // Clear shares the rows' gate (home-rooms.md §5 Selection gate): while
+      // the selection is held the chip keeps the count and the panel's Clear
+      // says why (startup budget, Task 6 ruling).
       return html`
         <div class="map-dock ms-surface ms-surface--floating" data-map-control>
           <div class="selection-chip ms-surface ms-surface--floating" data-map-control>
-            <span>${this.#t("v4_rooms_selected", "{count} selected", { count })}</span>
-            <button class="ms-btn ms-btn--sm" type="button" @click=${() => this.#clearSelection()}>${this.#t("v4_clear", "Clear")}</button>
+            <span>${this.#t("v4_rooms_selected", "{count} selected", { count: new Intl.NumberFormat(state.locale).format(count) })}</span>
+            ${canSelectRooms(state) ? html`<button class="ms-btn ms-btn--sm" type="button" @click=${() => this.#clearSelection()}>${this.#t("v4_clear", "Clear")}</button>` : nothing}
           </div>
         </div>
       `;

@@ -1416,7 +1416,10 @@ export class RendererController {
         return new Map(state.planDraft.rooms.map((room, index) => [room.roomId, format.format(index + 1)]));
       })()
       : null;
-    if (state.labelsVisible || (state.view === "top" && state.appearance === "rooms")) {
+    // Every room draws with Room names on or in Room colors; otherwise only
+    // the selected ones (home-rooms.md §5 Parity, R9).
+    const allRooms = state.labelsVisible || (state.view === "top" && state.appearance === "rooms");
+    if (allRooms || selectedNames.size) {
       context.lineWidth = 1.5;
       context.font = "600 12px system-ui, sans-serif";
       context.textAlign = "center";
@@ -1424,6 +1427,7 @@ export class RendererController {
       const occupied: DOMRect[] = [];
       for (const room of scene.metadata.rooms) {
         const selected = selectedNames.has(room.name.toLocaleLowerCase());
+        if (!allRooms && !selected) continue;
         context.strokeStyle = selected ? rgba(palette.accent, 1) : rgba(palette.quiet, .7);
         context.fillStyle = selected
           ? rgba(palette.accent, .26)
@@ -1540,9 +1544,10 @@ export class RendererController {
 
   #selectedRoomNames(state: WorkspaceState): Set<string> {
     const rooms = state.resources.plans.value?.rooms || state.resources.areas.value?.rooms || [];
+    // Rooms and plan draw their own selections; home draws none (R9).
     const selectedRoomIds = new Set(state.workflow === "plan"
       ? state.planDraft.rooms.map((room) => room.roomId)
-      : state.selection.roomIds);
+      : state.workflow === "rooms" ? state.selection.roomIds : []);
     const selectedNames = new Set<string>();
     for (const room of rooms) {
       if (selectedRoomIds.has(room.roomId)) selectedNames.add(room.name.toLocaleLowerCase());
@@ -1637,10 +1642,11 @@ export class RendererController {
     return scene.metadata.rooms.some((room) => pointInPolygon(cellX, cellY, room.boundary));
   }
 
-  #roomId(room: SceneRoom, state: WorkspaceState): string {
+  // A scene room with no catalog entry has no id to select (R9).
+  #roomId(room: SceneRoom, state: WorkspaceState): string | null {
     const candidates = state.resources.plans.value?.rooms || state.resources.areas.value?.rooms || [];
     return candidates.find((candidate) => candidate.name.localeCompare(room.name, undefined, { sensitivity: "base" }) === 0)?.roomId
-      || room.id;
+      ?? null;
   }
 
   selectRoomAt(clientX: number, clientY: number): void {

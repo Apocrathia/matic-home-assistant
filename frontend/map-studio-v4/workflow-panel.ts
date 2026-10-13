@@ -32,7 +32,7 @@ export { actionReason, focusPlanTarget, planCancel, planTitle, planTools } from 
 // confirm here.
 export { confirmDialog, dialogCopy, dialogLauncher, dialogReturnTarget } from "./dialog-copy";
 export { MapOptions } from "./map-options";
-export { roomTapAnnouncement, roomsSummary, selectedRoomNames } from "./rooms-view";
+export { roomTapAnnouncement, roomsGripLine, roomsSummary } from "./rooms-view";
 
 const planViewsTag = unsafeStatic(PLAN_VIEWS_TAG);
 const roomsViewTag = unsafeStatic(ROOMS_VIEW_TAG);
