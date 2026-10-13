@@ -9847,10 +9847,17 @@ test.describe("plan shell", () => {
 
   test("Save in Discard changes? waits while saving, then goes on, or keeps the draft after a failure", async ({ page }) => {
     const gallery = await wide(page, "plan-dirty");
+    // The gallery has no writes: the test plays the write, which answers the
+    // dialog through the action's `settled` callback, as effects.ts does.
     await page.evaluate((tag) => {
       window.__actions = [];
-      document.querySelector(tag).addEventListener("matic-workspace-action", (event) => window.__actions.push(event.detail.id));
+      window.__settled = [];
+      document.querySelector(tag).addEventListener("matic-workspace-action", (event) => {
+        window.__actions.push(event.detail.id);
+        window.__settled.push(event.detail.settled);
+      });
     }, GALLERY_TAG);
+    const settle = (saved) => page.evaluate((value) => window.__settled.shift()(value), saved);
     const cancel = gallery.getByRole("button", { name: "Cancel", exact: true });
     const dialog = gallery.getByRole("dialog", { name: "Discard changes?" });
     const pending = { command: "pending", pendingAction: "save-plan" };
@@ -9869,6 +9876,8 @@ test.describe("plan shell", () => {
       tone: "error", key: "v4_notice_plan_save_failed",
       fallback: "Home Assistant can't confirm the plan was saved, so check your plans, then try again.",
     } });
+    await expect(dialog, "the notice alone does not answer the dialog's save").toBeVisible();
+    await settle(false);
     await expect(dialog).toHaveCount(0);
     expect(await snapshot(page)).toMatchObject({ workflow: "plan", planView: "edit", planDraft: { dirty: true } });
     await expect(cancel).toBeFocused();
@@ -9880,6 +9889,7 @@ test.describe("plan shell", () => {
       command: "idle", notice: { tone: "success", key: "v4_notice_plan_saved", fallback: "Plan saved" },
       planDraft: { dirty: false, name: "Saved name" },
     });
+    await settle(true);
     await expect(dialog).toHaveCount(0);
     expect(await snapshot(page)).toMatchObject({ planView: "run", planDraft: { dirty: false, name: "Saved name" } });
     expect(await page.evaluate(() => window.__actions)).toEqual(["save-plan", "save-plan"]);
