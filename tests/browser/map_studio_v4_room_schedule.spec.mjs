@@ -861,15 +861,20 @@ test.describe("Reset through Home Assistant", () => {
 });
 
 test.describe("Schedule block appearance", () => {
-  for (const [label, setup] of [
-    ["dark", async (page) => page.emulateMedia({ colorScheme: "dark" })],
-    ["right-to-left", async (page) => page.evaluate(() => { document.documentElement.dir = "rtl"; })],
-    ["forced colors", async (page) => page.emulateMedia({ forcedColors: "active" })],
+  // Media emulation survives the gallery's navigation; the document's
+  // direction doesn't, so it is set once the gallery is in the page.
+  const none = async () => {};
+  for (const [label, before, after] of [
+    ["dark", async (page) => page.emulateMedia({ colorScheme: "dark" }), none],
+    ["right-to-left", none, async (page) => page.evaluate(() => { document.documentElement.dir = "rtl"; })],
+    ["forced colors", async (page) => page.emulateMedia({ forcedColors: "active" }), none],
   ]) {
     test(`in ${label} at 390 it has no serious axe finding and stays inside the card`, async ({ page }) => {
       await page.setViewportSize({ width: 390, height: 844 });
-      await setup(page);
+      await before(page);
       const gallery = await loadGallery(page, { scenario: "plan-cadence-shared", narrow: true });
+      await after(page);
+      expect(await page.evaluate(() => getComputedStyle(document.body).direction)).toBe(label === "right-to-left" ? "rtl" : "ltr");
       const schedule = gallery.getByRole("group", { name: "Room schedule for Kitchen" });
       await schedule.getByText("Advanced", { exact: true }).click();
       await expect(schedule.getByRole("radio", { name: "Across all plans (recommended)" })).toBeChecked();
