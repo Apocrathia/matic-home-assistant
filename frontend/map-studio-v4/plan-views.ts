@@ -501,7 +501,8 @@ export class MaticPlanViewsV4 extends LitElement {
           held,
           offLevel: this.#offLevels.get(roomId) ?? null,
           setOffLevel: (level) => {
-            this.#offLevels.set(roomId, level);
+            if (level) this.#offLevels.set(roomId, level);
+            else this.#offLevels.delete(roomId);
             this.requestUpdate();
           },
           menu: this.#roomMenu,

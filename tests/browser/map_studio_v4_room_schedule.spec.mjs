@@ -419,6 +419,30 @@ test.describe("Schedule block", () => {
     });
   });
 
+  // Codex P2 (#253): a level chosen while the rotation is on replaces the
+  // one remembered from while it was Off, so turning it off shows the latest.
+  test("the latest level wins after the rotation is turned off again", async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    const gallery = await loadGallery(page, { scenario: "plan-cadence-shared" });
+    const schedule = gallery.getByRole("group", { name: "Room schedule for Kitchen" });
+    const rotation = schedule.getByRole("spinbutton", { name: /vacuum/ });
+    const level = schedule.getByRole("combobox", { name: "Vacuum level for Kitchen" });
+    const cadence = async () => (await snapshot(page)).planDraft.rooms[0].cadence;
+    await rotation.fill("");
+    await rotation.press("Tab");
+    await level.selectOption("quick");
+    await schedule.getByRole("button", { name: "Increase Quick vacuum", exact: true }).click();
+    expect(await cadence()).toMatchObject({ coverageEveryN: 1, periodicCoverageSetting: "quick" });
+    await level.selectOption("standard");
+    expect(await cadence()).toMatchObject({ periodicCoverageSetting: "standard" });
+    await schedule.getByRole("button", { name: "Decrease Optimal vacuum every clean", exact: true }).click();
+    expect(await cadence()).toMatchObject({ coverageEveryN: null });
+    await expect(level).toHaveValue("standard");
+    await expect(schedule.getByRole("spinbutton", { name: "Optimal vacuum", exact: true })).toBeVisible();
+    await schedule.getByRole("button", { name: "Increase Optimal vacuum", exact: true }).click();
+    expect(await cadence()).toMatchObject({ coverageEveryN: 1, periodicCoverageSetting: "standard" });
+  });
+
   test("mode conflicts hold their control with one reason", async ({ page }) => {
     await page.setViewportSize({ width: 1024, height: 768 });
     const gallery = await loadGallery(page, { scenario: "plan-schedule-conflict" });
@@ -937,6 +961,10 @@ test.describe("Schedule block appearance", () => {
       const gallery = await loadGallery(page, { scenario: "plan-cadence-shared", narrow: true });
       await after(page);
       expect(await page.evaluate(() => getComputedStyle(document.body).direction)).toBe(label === "right-to-left" ? "rtl" : "ltr");
+      const forced = label === "forced colors";
+      // The emulated media is in force before anything is read (as the
+      // acceptance spec waits for it); the forced-colors CSS is checked too.
+      await expect.poll(() => page.evaluate(() => matchMedia("(forced-colors: active)").matches)).toBe(forced);
       const schedule = gallery.getByRole("group", { name: "Room schedule for Kitchen" });
       await schedule.getByText("Advanced", { exact: true }).click();
       await expect(schedule.getByRole("radio", { name: "Across all plans (recommended)" })).toBeChecked();
@@ -944,8 +972,20 @@ test.describe("Schedule block appearance", () => {
       expect(await schedule.locator(".advanced > summary .ms-icon").evaluate((icon) => getComputedStyle(icon).rotate))
         .toBe(label === "right-to-left" ? "-90deg" : "90deg");
       await expect(schedule.locator(".schedule-note bdi")).toHaveText("Kitchen");
-      const { violations } = await new AxeBuilder({ page }).analyze();
+      // Under forced colors the platform owns every colour, and axe 4.13 has
+      // no forced-colors handling: emulated system colours on Linux WebKit
+      // fail its contrast rule, so that rule is not a finding there. The
+      // forced-colors styles themselves are asserted instead.
+      const builder = new AxeBuilder({ page });
+      const { violations } = await (forced ? builder.disableRules(["color-contrast"]) : builder).analyze();
       expect(violations.filter(({ impact }) => impact === "serious" || impact === "critical").map(({ id, nodes }) => ({ id, nodes: nodes.map((node) => node.target) }))).toEqual([]);
+      // Forced colors: the stepper's border and the open row's text are both
+      // CanvasText, and the open row paints Canvas (WebKit doesn't expose
+      // forced-color-adjust, so the colours themselves are compared).
+      expect(await schedule.evaluate((element) => {
+        const row = getComputedStyle(element.closest(".row-expanded"));
+        return getComputedStyle(element.querySelector(".ms-stepper")).borderTopColor === row.color && row.backgroundColor !== "rgba(0, 0, 0, 0)";
+      })).toBe(forced);
       const escaped = await schedule.evaluate((element) => {
         const card = element.closest(".edit-row").getBoundingClientRect();
         return [...element.querySelectorAll(".ms-stepper button, .advanced > summary .ms-icon, .room-more > button")]

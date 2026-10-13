@@ -481,7 +481,8 @@ export interface ScheduleContext {
   readonly held: string | null;
   /** The rotation level chosen while it is Off, for this room (view state). */
   readonly offLevel: CoverageSetting | null;
-  readonly setOffLevel: (level: CoverageSetting) => void;
+  /** Remembers a level chosen while Off; null forgets it once the draft carries the choice. */
+  readonly setOffLevel: (level: CoverageSetting | null) => void;
   /** The room's "More for {room}" menu. */
   readonly menu: MenuController;
 }
@@ -608,10 +609,12 @@ export const scheduleBlock = (context: ScheduleContext, room: PlanRoom, index: n
         select.value = model.level;
         return;
       }
+      // While on, the draft carries the choice and an older one remembered
+      // from Off is forgotten, so turning off shows the latest level.
       const chosen = select.value as CoverageSetting;
       const next = withLevel(input, chosen);
+      context.setOffLevel(next ? null : chosen);
       if (next) patch(next);
-      else context.setOffLevel(chosen);
     }}
   >${COVERAGES.map((option) => html`<option value=${option} ?selected=${option === model.level}>${coverageLabel(t, option)}</option>`)}</select>`;
   return html`<section class="schedule" role="group" aria-label=${t("v4_room_cadence_named", "Room schedule for {room}", { room: name })}>
