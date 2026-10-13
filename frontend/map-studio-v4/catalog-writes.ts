@@ -237,7 +237,7 @@ const refreshPlansAfterWrite = (context: CatalogWriteContext) => {
   const acknowledged = context.store.value.notice;
   return context.effects.loadPlans({ force: true, inPlace: true, onError: () => {
     if (context.store.value.notice === acknowledged) context.store.patch({
-      notice: context.helpers.notice("warning", "v4_notice_plans_refresh_failed", "Your change was saved, but Home Assistant couldn't reload the plans. Reopen Plans to try again."),
+      notice: context.helpers.notice("warning", "v4_notice_plans_refresh_failed", "Home Assistant made the change but couldn't reload your plans, so open Your plans again."),
     });
   } });
 };

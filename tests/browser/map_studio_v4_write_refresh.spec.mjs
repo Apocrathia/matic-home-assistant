@@ -52,7 +52,7 @@ async function edit(page, panel) {
 }
 
 for (const operation of ["save", "delete", "reset", "switch"]) {
-  test(`acknowledged ${operation} reports a failed refresh and recovers in Plans`, async ({ page }) => {
+  test(`acknowledged ${operation} reports a failed refresh and recovers by opening Your plans again`, async ({ page }) => {
     const panel = await mount(page);
     if (operation === "switch") await panel.getByRole("switch", { name: "Plan enabled", exact: true }).click();
     else if (operation === "save") {
@@ -75,11 +75,24 @@ for (const operation of ["save", "delete", "reset", "switch"]) {
       const state = element.getWorkspaceSnapshot();
       return { command: state.command, status: state.resources.plans.status, tone: state.notice?.tone };
     })).toEqual({ command: "idle", status: "ready", tone: "warning" });
-    await expect(panel.getByText("Your change was saved, but Home Assistant couldn't reload the plans. Reopen Plans to try again.", { exact: true }).first()).toBeVisible();
+    await expect(panel.getByText("Home Assistant made the change but couldn't reload your plans, so open Your plans again.", { exact: true }).first()).toBeVisible();
     expect(await page.evaluate(() => window.__panelFixture.serviceCalls.length)).toBe(1);
-    await panel.evaluate(element => element.shadowRoot.querySelector("matic-map-shell-v4")
-      .dispatchEvent(new CustomEvent("matic-workspace-intent", { bubbles: true, composed: true,
-        detail: { type: "open-workflow", workflow: "plans" } })));
+    // Follow the notice: open Your plans again from wherever the write left
+    // the user (Run, Edit or the picker itself).
+    const reads = await page.evaluate(() => window.__panelFixture.planReads);
+    const yourPlans = panel.getByRole("button", { name: "Back to plans", exact: true });
+    const editCancel = panel.getByRole("button", { name: "Cancel", exact: true });
+    if (await editCancel.isVisible()) await editCancel.click();
+    if (await yourPlans.isVisible()) {
+      await expect(yourPlans).toContainText("Your plans");
+      await yourPlans.click();
+    } else {
+      await expect(panel.getByRole("heading", { level: 2, name: "Your plans" })).toBeVisible();
+      await panel.getByRole("button", { name: "Back to all tasks", exact: true }).click();
+      await panel.getByRole("button", { name: /^Run a plan/ }).click();
+    }
+    await expect(panel.getByRole("heading", { level: 2, name: "Your plans" })).toBeVisible();
+    await expect.poll(() => page.evaluate(() => window.__panelFixture.planReads)).toBeGreaterThan(reads);
     await expect.poll(() => panel.evaluate(element => element.getWorkspaceSnapshot().resources.plans.status)).toBe("ready");
     if (operation === "delete") await expect(panel.getByRole("button", { name: /^Daily/ })).toHaveCount(0);
     if (operation === "save") await expect(panel.getByRole("button", { name: /^Daily edited/ })).toBeVisible();
@@ -97,7 +110,7 @@ test("an aborted post-write refresh cannot replace the disconnected state with a
   await page.evaluate(() => window.__writeRefresh.release());
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   await expect.poll(() => panel.evaluate(element => element.getWorkspaceSnapshot().command)).toBe("idle");
-  await expect(panel.getByText("Your change was saved, but Home Assistant couldn't reload the plans. Reopen Plans to try again.", { exact: true })).toHaveCount(0);
+  await expect(panel.getByText("Home Assistant made the change but couldn't reload your plans, so open Your plans again.", { exact: true })).toHaveCount(0);
 });
 
 test("an older refresh failure cannot replace a newer failed save's notice or draft", async ({ page }) => {
