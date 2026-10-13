@@ -1,4 +1,4 @@
-import { LitElement, css, html, nothing } from "lit";
+import { LitElement, adoptStyles, css, html, nothing } from "lit";
 import { controls } from "./controls";
 import { renderDrawTools } from "./draw-tools";
 import { icon, iconFit, iconHelp, iconOrbitLeft, iconOrbitRight, iconRoomNames, iconTiltDown, iconTiltUp } from "./icons";
@@ -170,28 +170,6 @@ export class MaticMapCanvasV4 extends LitElement {
     .navigation-help dt { font-weight: 750; }
     .navigation-help dd { margin: 0; color: var(--ms-text-quiet); }
 
-    .zone-overlay { position: absolute; inset: 0; z-index: 4; pointer-events: none; overflow: hidden; }
-    .zone-overlay svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
-    .zone-overlay path { stroke: var(--ms-resolved-indicator, var(--ms-accent)); stroke-width: 2; fill-opacity: .08; }
-    .zone-overlay path.invalid { stroke: var(--error-color, #b3261e); }
-    .zone-point { position: absolute; translate: -50% -50%; width: 44px; height: 44px; border: 0; border-radius: 50%; background: transparent; color: var(--ms-accent); pointer-events: auto; touch-action: none; cursor: grab; font: 700 12px system-ui; isolation: isolate; }
-    .zone-point::before { content: ""; position: absolute; inset: 10px; z-index: -1; border-radius: 50%; background: var(--ms-surface-card); border: 2px solid var(--ms-resolved-indicator, var(--ms-accent)); box-shadow: 0 1px 4px #0008; }
-    .zone-point[data-selected="true"] { color: var(--ms-on-accent); }
-    .zone-point[data-selected="true"]::before { background: var(--ms-accent); border-color: var(--ms-surface-card); }
-    .zone-point:focus-visible { outline: 3px solid var(--ms-resolved-indicator, var(--ms-accent)); outline-offset: 0; }
-    .zone-midpoint { font-size: 18px; }
-    .zone-midpoint::before { inset: 13px; background: var(--ms-surface-card); }
-    .zone-midpoint { color: var(--ms-accent); }
-    .zone-help { position: absolute; inset: auto auto 88px 50%; translate: -50% 0; width: max-content; max-width: calc(100% - 24px); display: grid; justify-items: center; gap: 6px; font-size: 12px; pointer-events: none; }
-    .zone-point-actions, .zone-guidance { display: flex; align-items: center; gap: 4px; max-width: 100%; padding: 4px; border-radius: 14px; pointer-events: auto; }
-    .zone-selection { padding-inline: 8px; color: var(--ms-text-quiet); white-space: nowrap; font-weight: 650; }
-    .zone-point-actions .ms-btn { white-space: nowrap; padding-inline: 10px; border-radius: 10px; font-size: 12px; }
-    .zone-point-actions .ms-btn + .ms-btn { border-inline-start: 1px solid var(--ms-line); }
-    .zone-guidance { padding: 6px 12px; gap: 8px; color: var(--ms-text-quiet); line-height: 1.4; }
-    .zone-guidance .ms-btn { flex-shrink: 0; }
-    .zone-feedback { max-width: 100%; padding: 8px 12px; border-radius: 12px; color: var(--ms-resolved-danger-text, var(--ms-danger)); pointer-events: auto; }
-    .zone-feedback[hidden] { display: none; }
-    .map-root[data-narrow="true"] .zone-help { bottom: 12px; }
     .keyboard-aim { display: none; position: absolute; z-index: 3; inset: 50% auto auto 50%; inline-size: 20px; block-size: 20px; translate: -50% -50%; border: 2px solid white; outline: 2px solid #111; border-radius: 50%; pointer-events: none; }
     .keyboard-aim::after { content: "+"; position: absolute; inset: 50% auto auto 50%; translate: -50% -50%; color: #111; font: bold 20px/1 sans-serif; text-shadow: 0 0 2px white; }
     .map-root:focus-visible .keyboard-aim { display: block; }
@@ -283,6 +261,7 @@ export class MaticMapCanvasV4 extends LitElement {
   localize?: Localize;
   dates?: DateFormat;
   outlineEditor?: OutlineEditor;
+  #zoneStyled = false;
   narrow = false;
   #helpLauncher: HTMLElement | null = null;
   #renderer: RendererController | null = null;
@@ -391,6 +370,12 @@ export class MaticMapCanvasV4 extends LitElement {
 
   protected override willUpdate(changed: PropertyValues<this>): void {
     if (changed.has("outlineEditor")) this.outlineEditor?.attach(this, () => this.#renderer, (intent) => this.#intent(intent));
+    // The editor's own rules (outline-editor.ts) arrive with it and are
+    // adopted before its handles render, so startup does not carry them.
+    if (this.outlineEditor && !this.#zoneStyled) {
+      this.#zoneStyled = true;
+      adoptStyles(this.renderRoot as ShadowRoot, [...MaticMapCanvasV4.styles, this.outlineEditor.styles]);
+    }
   }
 
   protected override updated(changed: PropertyValues<this>): void {

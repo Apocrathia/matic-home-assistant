@@ -92,7 +92,6 @@ font-size: var(--ms-t-sm);
 .ms-row--card { min-block-size: var(--ms-control-lg); padding: var(--ms-space-3); }
 .ms-section-heading { margin: var(--ms-space-5) 0 var(--ms-space-2); color: var(--ms-text-quiet); font-size: var(--ms-t-md); font-weight: var(--ms-w-bold); line-height: var(--ms-lh-tight); }
 .ms-section-heading:first-child { margin-block-start: 0; }
-.ms-row--stack { display: grid; gap: var(--ms-space-2); }
 .ms-row--menu { --ms-local: var(--ms-surface-card); border-color: transparent; border-radius: var(--ms-radius-sm); }
 .ms-row--featured { --ms-local: color-mix(in srgb, var(--ms-accent) 10%, var(--ms-surface-sunken)); border-color: color-mix(in srgb, var(--ms-accent) 30%, var(--ms-line)); }
 .ms-row__lead {
@@ -114,57 +113,10 @@ background: color-mix(in srgb, var(--ms-accent) 12%, var(--ms-local));
 .ms-row:hover:not(:disabled):not([aria-disabled="true"]) { border-color: color-mix(in srgb, var(--ms-accent) 45%, var(--ms-line)); background: color-mix(in srgb, var(--ms-text) 7%, var(--ms-local)); }
 }
 .ms-row[aria-pressed="true"], .ms-row[aria-current="true"], .ms-row[data-selected="true"] { border-color: var(--ms-resolved-indicator, var(--ms-accent)); background: color-mix(in srgb, var(--ms-accent) 12%, var(--ms-local)); }
-.ms-switch {
-position: relative;
-flex: none;
-inline-size: 3.25rem;
-block-size: var(--ms-control);
-padding: 0;
-border: 0;
-background: transparent;
-cursor: pointer;
--webkit-tap-highlight-color: transparent;
-}
-.ms-switch::before {
-content: "";
-position: absolute;
-inset-inline: 0.25rem;
-inset-block-start: 50%;
-block-size: 1.5rem;
-translate: 0 -50%;
-border: 1px solid var(--ms-line-strong);
-border-radius: var(--ms-radius-pill);
-background: color-mix(in srgb, var(--ms-text) 14%, var(--ms-local));
-transition: background-color var(--ms-fast) var(--ms-ease), border-color var(--ms-fast) var(--ms-ease);
-}
-.ms-switch::after {
-content: "";
-position: absolute;
-inset-inline-start: 0.4375rem;
-inset-block-start: 50%;
-inline-size: 1.125rem;
-block-size: 1.125rem;
-translate: 0 -50%;
-border-radius: 50%;
-background: var(--ms-surface-card);
-box-shadow: var(--ms-shadow-1);
-transition: translate var(--ms-fast) var(--ms-ease);
-}
-.ms-switch[aria-checked="true"]::before { border-color: var(--ms-resolved-indicator, var(--ms-accent)); background: var(--ms-resolved-indicator, var(--ms-accent)); }
-.ms-switch[aria-checked="true"]::after { translate: 1.25rem -50%; background: var(--ms-on-accent); }
-.ms-switch:focus-visible { outline: 0; }
-.ms-switch:focus-visible::before { outline: 2px solid var(--ms-resolved-indicator, var(--ms-accent)); outline-offset: 2px; }
-.ms-switch:disabled, .ms-switch[aria-disabled="true"] { cursor: default; opacity: 0.55; }
-@media (forced-colors: active) {
-.ms-switch::before { border-color: ButtonBorder; }
-.ms-switch[aria-checked="true"]::before { forced-color-adjust: none; background: Highlight; border-color: Highlight; }
-.ms-switch[aria-checked="true"]::after { background: HighlightText; }
-}
 .ms-chip { display: inline-flex; align-items: center; block-size: 1.5rem; padding-inline: var(--ms-space-2); border: 1px solid var(--ms-line); border-radius: var(--ms-radius-pill); background: var(--ms-surface-sunken); color: var(--ms-text); font-size: var(--ms-t-xs); font-weight: var(--ms-w-regular); letter-spacing: normal; vertical-align: middle; }
 .ms-surface { --ms-local: var(--ms-surface-card); border: 1px solid var(--ms-line); border-radius: var(--ms-radius-lg); background: var(--ms-local); }
 .ms-surface--floating { box-shadow: var(--ms-shadow-2); }
 .ms-surface--overlay { border-radius: var(--ms-radius-md); box-shadow: var(--ms-shadow-3); }
-.ms-field { display: grid; gap: var(--ms-space-1); color: var(--ms-text-quiet); font-size: var(--ms-t-xs); font-weight: var(--ms-w-medium); }
 /* Child combinator, not descendant: .ms-field wraps a label and ITS
    control. A descendant selector at (0,1,1) also matched inputs nested
    inside composite controls -- precision-controls' .stepper > .number >

@@ -8,6 +8,7 @@ import "./index";
 import { LitElement, css, html, nothing } from "lit";
 import type { PropertyValues, TemplateResult } from "lit";
 import { controls } from "./controls";
+import { formControls } from "./form-controls";
 import { base, tokens } from "./tokens";
 import { DEFAULT_VARIANTS, layoutFor } from "./mockups/frame";
 import type { DetentChoice, MockChange, StageFrame, Variants } from "./mockups/frame";
@@ -224,7 +225,7 @@ const galleryCss = css`
 /** The gallery: toolbar, caption and the resizable stage. */
 export class MapStudioMockups extends LitElement {
   static override properties = { _state: { state: true } };
-  static override styles = [tokens, base, controls, previewTokens, previewControls, galleryCss];
+  static override styles = [tokens, base, controls, formControls, previewTokens, previewControls, galleryCss];
 
   protected _state: GalleryState = fromHash(globalThis.location?.hash ?? "");
   #observer: ResizeObserver | null = null;

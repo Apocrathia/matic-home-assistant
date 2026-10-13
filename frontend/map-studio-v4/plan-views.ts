@@ -2,6 +2,7 @@ import { LitElement, css, html, nothing } from "lit";
 import type { PropertyValues } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { controls } from "./controls";
+import { formControls } from "./form-controls";
 import { icon, iconChevronRight, iconDue, iconMoveDown, iconMoveUp, iconNoticeWarning, iconPlus } from "./icons";
 import { base, tokens } from "./tokens";
 import type { CadenceReason, CleaningMode, CoverageSetting, PlanRoom, SavedPlan } from "./backend-contracts";
@@ -35,7 +36,7 @@ const BLOCKING: readonly CadenceReason[] = [
  * load with the workflow views, since only the plan workflows show them.
  */
 export class MaticPlanViewsV4 extends LitElement {
-  static override styles = [tokens, base, controls, stepperStyles, css`
+  static override styles = [tokens, base, controls, formControls, stepperStyles, css`
 :host { display: block; }
 .plain { display: grid; gap: var(--ms-space-2); margin: 0; padding: 0; list-style: none; }
 .plan-row .ms-row__body { display: grid; gap: 0.125rem; }

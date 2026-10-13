@@ -118,15 +118,6 @@ export const shellStyles = [tokens, base, controls, css`
     .canvas { position: relative; min-inline-size: 0; min-block-size: 0; }
     .map-canvas { block-size: 100%; }
 
-    .precision-popover {
-      position: absolute;
-      z-index: 9;
-      inset-inline-end: var(--ms-space-3);
-      inset-block-end: 5.5rem;
-      inline-size: 0;
-      block-size: 0;
-    }
-
     .inspector {
       --ms-local: var(--ms-surface-card);
       display: flex;
@@ -179,7 +170,6 @@ export const shellStyles = [tokens, base, controls, css`
     .panel-heading bdi { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .panel-heading h2:focus { outline: none; }
     .panel-heading h2:focus-visible { outline: 2px solid var(--ms-resolved-indicator, var(--ms-accent)); outline-offset: 4px; border-radius: var(--ms-radius-xs); }
-    .panel-back { flex: none; }
     .panel-description { margin: var(--ms-space-1) 0 var(--ms-space-4); color: var(--ms-text-quiet); font-size: var(--ms-t-sm); line-height: var(--ms-lh-normal); }
 
     /* Notice slot and toast (shell.md §4, design-system.md .ms-notice): the
@@ -254,15 +244,9 @@ export const shellStyles = [tokens, base, controls, css`
     .problem { display: grid; gap: var(--ms-space-2); padding: var(--ms-space-4); border: 1px solid var(--ms-line); border-radius: var(--ms-radius-md); }
     .problem p, .loading { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-sm); line-height: var(--ms-lh-normal); }
     .problem .ms-btn { justify-self: start; text-decoration: none; }
-    .ms-checkbox { display: flex; gap: var(--ms-space-2); align-items: center; min-block-size: var(--ms-control); font-size: var(--ms-t-sm); }
-    .ms-checkbox input { inline-size: 1.25rem; block-size: 1.25rem; margin: 0; accent-color: var(--ms-resolved-indicator, var(--ms-accent)); }
 
     .action-bar { display: grid; gap: var(--ms-space-2); margin-block-start: auto; padding-block-start: var(--ms-space-4); }
-    .action-summary { margin: 0; overflow: hidden; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); text-overflow: ellipsis; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-    /* A landscape phone keeps the bar to its button (home-rooms.md §7). */
-    @media (max-height: 479px) { .action-summary { display: none; } }
     .action-reason { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); text-align: center; }
-    .action-jump { text-decoration: underline; }
     .paired { grid-template-columns: 1fr 1fr; align-items: center; }
     .paired .action-reason { grid-column: 1 / -1; order: 1; }
     .ms-btn--primary[aria-disabled="true"] { --ms-local: var(--ms-surface-sunken); background: var(--ms-local); border-color: transparent; }
@@ -359,7 +343,6 @@ export const shellStyles = [tokens, base, controls, css`
       user-select: none;
       -webkit-user-select: none;
     }
-    .narrow .sheet-grip:has(.sheet-back) { grid-template-columns: auto minmax(0, 1fr) auto auto; }
     .narrow .sheet-grip:active { cursor: grabbing; }
     /* The step buttons are compact on the grip line but still touch targets:
        full control height (44px) on a phone, not the 36px --sm size. */
@@ -418,16 +401,6 @@ export const shellStyles = [tokens, base, controls, css`
     .narrow .panel-top { max-block-size: 50%; padding-block-start: var(--ms-space-1); overflow: auto; overscroll-behavior: contain; }
     .narrow .sheet-body { flex: 1; min-block-size: 0; padding-block-end: var(--ms-space-1); overflow: auto; overscroll-behavior: contain; }
     .narrow .mobile-sheet .action-bar { flex: none; margin-block-start: 0; padding-block-start: var(--ms-space-2); }
-    .narrow .panel-back { inline-size: var(--ms-control); padding-inline: 0; }
-    .narrow .panel-back .ms-btn__label {
-      position: absolute;
-      overflow: hidden;
-      inline-size: 1px;
-      block-size: 1px;
-      margin: -1px;
-      clip-path: inset(50%);
-      white-space: nowrap;
-    }
     .narrow .title { font-size: var(--ms-t-md); }
     .narrow .context-switcher { max-inline-size: 7rem; }
     .narrow .robot-switcher { flex: 1 1 auto; min-inline-size: 0; max-inline-size: none; }
@@ -444,7 +417,6 @@ export const shellStyles = [tokens, base, controls, css`
       cursor: pointer;
     }
     .narrow .sheet-scrim:focus-visible { outline: 3px solid var(--ms-resolved-indicator, var(--ms-accent)); outline-offset: -3px; }
-    .narrow .precision-popover { position: static; inline-size: auto; block-size: auto; }
 
     @media (forced-colors: active) {
       .dialog, .full-map-hud, .mobile-sheet, .problem, .notice { border: 1px solid CanvasText; }

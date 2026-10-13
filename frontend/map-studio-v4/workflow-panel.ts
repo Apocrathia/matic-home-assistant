@@ -2,6 +2,7 @@ import { LitElement, css, html, nothing } from "lit";
 import type { PropertyValues } from "lit";
 import { html as staticHtml, unsafeStatic } from "lit/static-html.js";
 import { controls } from "./controls";
+import { formControls } from "./form-controls";
 import { base, tokens } from "./tokens";
 
 import type { CleaningMode, CoverageSetting } from "./backend-contracts";
@@ -33,6 +34,8 @@ export { actionReason, focusPlanTarget, planCancel, planTitle, planTools } from 
 export { confirmDialog, dialogCopy, dialogLauncher, dialogReturnTarget } from "./dialog-copy";
 export { MapOptions } from "./map-options";
 export { roomTapAnnouncement, roomsGripLine, roomsSummary } from "./rooms-view";
+export { shellWorkflowStyles } from "./workflow-styles";
+export { formControls } from "./form-controls";
 
 const planViewsTag = unsafeStatic(PLAN_VIEWS_TAG);
 const roomsViewTag = unsafeStatic(ROOMS_VIEW_TAG);
@@ -47,7 +50,7 @@ export class MaticMapWorkflowV4 extends LitElement {
     _historyPreviewPosition: { state: true },
   };
 
-  static override styles = [tokens, base, controls, css`
+  static override styles = [tokens, base, controls, formControls, css`
 :host { display: block; min-inline-size: 0; container-type: inline-size; }
 .workflow-fields { border: 0; margin: 0; padding: 0; min-inline-size: 0; }
 button, select, input[type="checkbox"] { cursor: pointer; }

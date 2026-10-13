@@ -1,4 +1,4 @@
-import { LitElement, nothing } from "lit";
+import { LitElement, adoptStyles, nothing } from "lit";
 import { shellStyles } from "./shell-styles";
 import { html, unsafeStatic } from "lit/static-html.js";
 import type { PropertyValues } from "lit";
@@ -184,6 +184,11 @@ const statusCopy = (state: WorkspaceState, localize?: Localize): StatusPresentat
 type HomeKind =
   | "ready" | "locating" | "busy" | "paused" | "problem" | "map-unavailable" | "map-limited"
   | "offline" | "reconnecting" | "administrator" | "robot-unavailable" | "read-only" | "setup";
+
+// Home reads the catalog only once it is ready (home-rooms.md §4 H2): a read
+// in flight or failed keeps the last catalog (loadPlans) but shows as such,
+// as the picker's own loading and unavailable lines do.
+const readyPlans = (state: WorkspaceState) => (state.resources.plans.status === "ready" ? state.resources.plans.value : null);
 
 const homeState = (state: WorkspaceState): HomeKind => {
   const { host } = state;
@@ -426,12 +431,12 @@ export class MaticMapShellV4 extends LitElement {
   // with any workflow, the outline editor with Draw. The shell builds the
   // editor and hands it to the canvas, so the sheet is the one place a failure
   // of either, building included, is said.
-  readonly #views = new LazyChunk(this, () => import("./workflow-panel"));
+  readonly #views = new LazyChunk(this, () => this.#workflowModule());
   readonly #outline = new LazyChunk(this, async () => new (await import("./outline-editor")).OutlineEditor({ edgeDistance, validOutline }));
   // The Map options menu (map-options.ts) ships in the views chunk, which a
   // module of its own would split the shared lit chunk for, and loads on its
   // first press; that press opens it once the load has settled.
-  readonly #options: LazyChunk<MapOptions> = new LazyChunk(this, async () => new (await import("./workflow-panel")).MapOptions(this));
+  readonly #options: LazyChunk<MapOptions> = new LazyChunk(this, async () => new (await this.#workflowModule()).MapOptions(this));
   #optionsPending = false;
   // The workflow a Try again reload was pressed in (lazy-chunk.ts).
   #resume = takeResume();
@@ -460,6 +465,19 @@ export class MaticMapShellV4 extends LitElement {
   #launchers = new Set<string>();
   /** The home launcher last pressed; it takes focus back when its workflow closes (home-rooms.md §5 Keyboard). */
   #homeLauncher: string | null = null;
+  #workflowStyled = false;
+
+  // The views chunk brings the shell rules its markup needs (workflow-styles.ts,
+  // and form-controls.ts for the Map options switch); either loader adopts
+  // them once, before the chunk's own update renders that markup.
+  async #workflowModule(): Promise<typeof import("./workflow-panel")> {
+    const views = await import("./workflow-panel");
+    if (!this.#workflowStyled) {
+      this.#workflowStyled = true;
+      adoptStyles(this.renderRoot as ShadowRoot, [...shellStyles, views.shellWorkflowStyles, views.formControls]);
+    }
+    return views;
+  }
   #drag: SheetDrag | null = null;
   #bodySwipe: BodySwipe | null = null;
 
@@ -1461,8 +1479,7 @@ export class MaticMapShellV4 extends LitElement {
         break;
     }
     const held = kind !== "ready";
-    const plansResource = state.resources.plans;
-    const plans = plansResource.value;
+    const plans = readyPlans(state);
     const noRooms = plans !== null && plans.rooms.length === 0;
     const roomsDisabled = held || noRooms;
     // A card disabled on its own (no named rooms) carries its reason in its
@@ -1500,7 +1517,7 @@ export class MaticMapShellV4 extends LitElement {
   #planCard(state: WorkspaceState, held: boolean) {
     const t = this.#tr;
     const plansResource = state.resources.plans;
-    const plans = plansResource.value;
+    const plans = readyPlans(state);
     const plan = plans?.plans.find((candidate) => candidate.id === plans.selectedPlan);
     const planCount = plans?.plans.length ?? 0;
     const loading = plansResource.status === "loading";
@@ -1560,7 +1577,7 @@ export class MaticMapShellV4 extends LitElement {
   // row under the card (R4 amended by the owner, 2026-10-13). Without a
   // default plan the card itself opens the picker, so the row is not shown.
   #plansRow(state: WorkspaceState, held: boolean) {
-    const plans = state.resources.plans.value;
+    const plans = readyPlans(state);
     if (!plans?.plans.some((candidate) => candidate.id === plans.selectedPlan)) return nothing;
     return this.#shelfRow(this.#t("v4_your_plans", "Your plans"), iconPlan, "plans", undefined, held, held);
   }

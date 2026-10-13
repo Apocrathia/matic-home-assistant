@@ -10095,9 +10095,35 @@ test.describe("Map Studio accessibility baselines", () => {
       const button = await kitchen.boundingBox();
       expect(button.x).toBeGreaterThanOrEqual(row.x - 0.5);
       expect(button.x + button.width).toBeLessThanOrEqual(row.x + row.width + 0.5);
-      const { violations, incomplete } = await new AxeBuilder({ page }).analyze();
+      // Under forced colors the platform owns every colour and axe 4.13 has
+      // no forced-colors handling: Linux WebKit's emulated system colours
+      // fail its contrast rule (UX3 R34), so that rule is not a finding
+      // there; the forced-colors styles are asserted instead. Dark and RTL
+      // keep the full rule set.
+      const forced = label === "forced colors";
+      await expect.poll(() => page.evaluate(() => matchMedia("(forced-colors: active)").matches)).toBe(forced);
+      const builder = new AxeBuilder({ page });
+      const { violations, incomplete } = await (forced ? builder.disableRules(["color-contrast"]) : builder).analyze();
       expect(axeFindings(violations.filter(({ impact }) => impact === "serious" || impact === "critical"))).toEqual([]);
       expect(axeFindings(incomplete.filter(({ id }) => id === "aria-prohibited-attr"))).toEqual([]);
+      // Forced colors: the Settings button's edge is ButtonBorder and the
+      // primary paints the Highlight pair (WebKit doesn't expose
+      // forced-color-adjust, so the colours themselves are compared).
+      const system = (name) => page.evaluate((color) => {
+        const probe = document.createElement("i");
+        probe.style.cssText = `color: ${color}; forced-color-adjust: none`;
+        document.body.append(probe);
+        const value = getComputedStyle(probe).color;
+        probe.remove();
+        return value;
+      }, name);
+      const primary = gallery.locator(".action-bar .ms-btn--primary");
+      await expect(primary).toBeVisible();
+      expect(await kitchen.evaluate((element) => getComputedStyle(element).borderTopColor) === await system("ButtonBorder")).toBe(forced);
+      expect(await primary.evaluate((element) => {
+        const { color, backgroundColor } = getComputedStyle(element);
+        return [color, backgroundColor];
+      })).toEqual(forced ? [await system("HighlightText"), await system("Highlight")] : expect.not.arrayContaining([await system("Highlight")]));
     });
   }
 

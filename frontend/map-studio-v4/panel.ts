@@ -242,7 +242,7 @@ export class MaticMapPanelV4 extends LitElement {
       return;
     }
     if (intent.type === "select-plan") {
-      this.#effects?.selectPlan(intent.planId);
+      this.#effects?.selectPlan(intent.planId, false, intent.origin);
       return;
     }
     if (intent.type === "set-plan-enabled") {

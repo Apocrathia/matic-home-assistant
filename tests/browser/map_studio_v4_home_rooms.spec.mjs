@@ -5,7 +5,7 @@
 import { expect, test } from "@playwright/test";
 import { build } from "esbuild";
 
-import { openPlanPicker } from "./map_studio_v4_panel_fixture.mjs";
+import { installPanelFixture, openPlanPicker } from "./map_studio_v4_panel_fixture.mjs";
 
 const GALLERY_TAG = "matic-map-studio-gallery-v0-4-0";
 const HARNESS = "/home-rooms-test.js";
@@ -515,6 +515,64 @@ test.describe("the plan card", () => {
     expect((await snapshot(page)).workflow).toBe("none");
     await expect.poll(() => focusedText(page)).toMatch(/^button Run Daily clean/);
   });
+
+  // The installed panel routes select-plan through EffectController, so the
+  // origin has to survive that path too (Codex, #254): Back from Run lands on
+  // home with the card focused, not in the picker.
+  test("the installed panel keeps the card's home origin: Back from Run returns home and refocuses the card", async ({ page }) => {
+    const rooms = ["kitchen", "hall"].map((id, index) => ({
+      room_id: id, name: id === "kitchen" ? "Kitchen" : "Hall",
+      boundary: [[index * 6, 0], [index * 6 + 6, 0], [index * 6 + 6, 5], [index * 6, 5]],
+    }));
+    const planRooms = rooms.map((room) => ({ room_id: room.room_id, cleaning_mode: "vacuum", coverage_setting: "standard" }));
+    const fixture = await installPanelFixture(page, { moduleSource: "packaged", initialPlanCatalog: {
+      rooms, selected_plan: "daily",
+      plans: [{
+        id: "daily", name: "Daily", enabled: true, run_behavior: "ordered", rooms: planRooms,
+        room_order: planRooms.map((room) => room.room_id), return_to_base: true,
+        finish_current_room: false, finish_current_room_threshold: 50,
+      }],
+    } });
+    const panel = page.locator(fixture.panelTag);
+    const state = () => page.evaluate((tag) => {
+      const { workflow, planView, planOrigin } = document.querySelector(tag).getWorkspaceSnapshot();
+      return { workflow, planView, planOrigin };
+    }, fixture.panelTag);
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+    const card = panel.getByRole("button", { name: /^Run Daily/ });
+    await expect(card).toBeVisible();
+    await card.click();
+    await expect.poll(state).toEqual({ workflow: "plan", planView: "run", planOrigin: "home" });
+    await panel.getByRole("button", { name: "Back to all tasks" }).click();
+    await expect.poll(state).toMatchObject({ workflow: "none" });
+    await expect.poll(() => focusedText(page)).toMatch(/^button Run Daily/);
+  });
+
+  // home-rooms.md §4 H2: a catalog being read or failed reads as such on the
+  // card even when the last catalog is retained (loadPlans keeps it), as the
+  // picker's own loading and unavailable lines do.
+  for (const [status, title, hint] of [
+    ["loading", "Checking saved plans", "Reading plans for this floor"],
+    ["error", "Plans unavailable", "Try again to load your plans."],
+  ]) {
+    test(`a retained catalog while ${status} shows the card as ${title} and no Your plans row`, async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "ready" });
+      await expect(planCard(gallery)).toHaveAccessibleName(/^Run Daily clean/);
+      await expect(plansRow(gallery)).toHaveCount(1);
+      const setStatus = (next) => gallery.evaluate((element, applied) => {
+        const state = element.getWorkspaceSnapshot();
+        element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...state.resources.plans, ...applied } } });
+      }, next);
+      await setStatus({ status, problem: status === "error" ? "plans-unavailable" : null });
+      await expect(planCard(gallery)).toHaveAccessibleName(`${title} ${hint}`);
+      await expect(plansRow(gallery)).toHaveCount(0);
+      await expect(cards(gallery).nth(0)).not.toHaveAttribute("aria-disabled", "true");
+      await setStatus({ status: "ready", problem: null });
+      await expect(planCard(gallery)).toHaveAccessibleName(/^Run Daily clean/);
+      await expect(plansRow(gallery)).toHaveCount(1);
+    });
+  }
 
   for (const narrow of [true, false]) {
     test(`a Your plans row under the card opens the picker and takes focus back (R4 amended, narrow: ${narrow})${narrow ? " @mobile" : ""}`, async ({ page }) => {

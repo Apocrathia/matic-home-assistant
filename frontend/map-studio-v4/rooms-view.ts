@@ -1,6 +1,7 @@
 import { LitElement, css, html, nothing } from "lit";
 import type { PropertyValues } from "lit";
 import { controls } from "./controls";
+import { formControls } from "./form-controls";
 import { icon, iconChevronDown, iconChevronRight, iconChevronUp, iconDue, iconNoticeWarning } from "./icons";
 import { base, tokens } from "./tokens";
 import type { CadenceReason, CleaningMode, CoverageSetting, NextRunPreviewRoom } from "./backend-contracts";
@@ -95,7 +96,7 @@ export class MaticRoomsViewV4 extends LitElement {
     _open: { state: true },
   };
 
-  static override styles = [tokens, base, controls, css`
+  static override styles = [tokens, base, controls, formControls, css`
 :host { display: block; min-inline-size: 0; }
 .stack { display: grid; gap: var(--ms-space-3); }
 .description { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-sm); line-height: var(--ms-lh-normal); }
