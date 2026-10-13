@@ -5,6 +5,8 @@
 import { expect, test } from "@playwright/test";
 import { build } from "esbuild";
 
+import { openPlanPicker } from "./map_studio_v4_panel_fixture.mjs";
+
 const GALLERY_TAG = "matic-map-studio-gallery-v0-4-0";
 const HARNESS = "/home-rooms-test.js";
 
@@ -239,7 +241,7 @@ const BUSY = "You can start a new clean when it's done.";
 
 test.describe("home by state", () => {
   for (const narrow of [true, false]) {
-    test(`ready: one heading, three cards, Maps and no idle action bar (narrow: ${narrow})`, async ({ page }) => {
+    test(`ready: one heading, three cards, Maps and no idle action bar (narrow: ${narrow})${narrow ? " @mobile" : ""}`, async ({ page }) => {
       const gallery = await loadGallery(page, { scenario: "ready", narrow });
       await expect(gallery.getByRole("heading", { name: "Choose what to clean", level: 2 })).toBeVisible();
       await expect(panelOf(gallery).locator(".panel-description")).toHaveCount(0);
@@ -255,11 +257,8 @@ test.describe("home by state", () => {
       await expect(mapsRows(gallery).nth(1)).toHaveAccessibleName(/^Map diagnostics Check the map and copy details for support\./);
       await expect(panelOf(gallery).locator(".action-bar")).toHaveCount(0);
       await expect(gallery.getByRole("heading", { name: "Map tools" })).toHaveCount(0);
-      // The narrow Map display group moves into Map options in Task 4.
-      if (!narrow) {
-        await expect(panelOf(gallery).getByRole("group", { name: "Map display" })).toHaveCount(0);
-        await expect(panelOf(gallery).locator("h3")).toHaveText(["Maps"]);
-      }
+      await expect(panelOf(gallery).getByRole("group", { name: "Map display" })).toHaveCount(0);
+      await expect(panelOf(gallery).locator("h3")).toHaveText(["Maps"]);
     });
   }
 
@@ -452,5 +451,344 @@ test.describe("home by state", () => {
     expect(await title.evaluate((element) => getComputedStyle(element).color)).toBe(probe);
     const border = await cards(gallery).nth(0).evaluate((element) => getComputedStyle(element).borderTopStyle);
     expect(border).not.toBe("none");
+  });
+});
+
+// ---- The plan card (home-rooms.md §5 Cards D1; plan.md §5 Navigation) -------
+
+// The deepest focused element, through shadow roots, as name-ish text.
+const focusedText = (page) => page.evaluate(() => {
+  let active = document.activeElement;
+  while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+  return active ? `${active.tagName.toLowerCase()} ${active.getAttribute("aria-label") ?? active.textContent.replace(/\s+/g, " ").trim()}` : null;
+});
+
+const planCard = (gallery) => cards(gallery).nth(1);
+
+test.describe("the plan card", () => {
+  test("names the default plan with the picker's lines", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "ready" });
+    await expect(planCard(gallery)).toHaveAccessibleName(/^Run Daily clean 3 rooms · Longest-waiting rooms first$/);
+    await expect(planCard(gallery).locator("strong bdi")).toHaveText("Daily clean");
+    await expect(planCard(gallery).locator(".line")).toHaveCount(0);
+  });
+
+  test("shows due work on a third line, clamped to two lines, all of it in the name", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "home-plan-due" });
+    const lines = planCard(gallery).locator(".line");
+    await expect(lines).toHaveText(["Mop due in Kitchen and Living room", "Heavy duty vacuum due in Living room"]);
+    await expect(lines.first().locator("svg")).toHaveCount(1);
+    expect(await planCard(gallery).locator(".card-lines").evaluate((element) => getComputedStyle(element).webkitLineClamp)).toBe("2");
+    await expect(planCard(gallery)).toHaveAccessibleName(/Mop due in Kitchen and Living room Heavy duty vacuum due in Living room$/);
+  });
+
+  test("shows a blocked plan's one line with the warning glyph", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "home-plan-blocked" });
+    const line = planCard(gallery).locator(".line");
+    await expect(line).toHaveText(["Needs attention before it can run"]);
+    await expect(line).toHaveAttribute("data-tone", "warning");
+  });
+
+  test("shows a paused plan's chip and no third line", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "home-plan-paused" });
+    await expect(planCard(gallery).locator(".ms-chip")).toHaveText("Paused");
+    await expect(planCard(gallery).locator(".line")).toHaveCount(0);
+    await expect(planCard(gallery)).toHaveAccessibleName(/^Run Daily clean Paused 3 rooms/);
+  });
+
+  test("opens Run from home and comes back to the card by Back and by Escape", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "ready" });
+    await planCard(gallery).click();
+    expect(await snapshot(page)).toMatchObject({ workflow: "plan", planView: "run", planOrigin: "home" });
+    await expect(gallery.getByRole("heading", { level: 2, name: "Daily clean" })).toBeFocused();
+    await gallery.getByRole("button", { name: "Back to all tasks" }).click();
+    expect((await snapshot(page)).workflow).toBe("none");
+    await expect.poll(() => focusedText(page)).toMatch(/^button Run Daily clean/);
+
+    await page.keyboard.press("Enter");
+    await expect(gallery.getByRole("heading", { level: 2, name: "Daily clean" })).toBeFocused();
+    await page.keyboard.press("Escape");
+    expect((await snapshot(page)).workflow).toBe("none");
+    await expect.poll(() => focusedText(page)).toMatch(/^button Run Daily clean/);
+  });
+
+  test("the picker still returns to its row (plan.md §5)", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plans" });
+    await openPlanPicker(gallery);
+    await expect(gallery.getByRole("heading", { level: 2, name: "Your plans" })).toBeVisible();
+    await gallery.getByRole("button", { name: /^Daily clean/ }).click();
+    expect((await snapshot(page)).planOrigin).toBe("plans");
+    await gallery.getByRole("button", { name: "Back to plans" }).click();
+    await expect(gallery.getByRole("heading", { level: 2, name: "Your plans" })).toBeVisible();
+    await expect.poll(() => focusedText(page)).toMatch(/^button Daily clean/);
+  });
+
+  test("falls back to the picker when the default plan is missing or on another floor", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "ready" });
+    for (const selectedPlan of ["gone", null]) {
+      await gallery.evaluate((element, selected) => {
+        const state = element.getWorkspaceSnapshot();
+        const plans = state.resources.plans;
+        element.replaceWorkspaceState({ ...state, workflow: "none", resources: { ...state.resources, plans: { ...plans, value: { ...plans.value, selectedPlan: selected } } } });
+      }, selectedPlan);
+      await expect(planCard(gallery)).toHaveAccessibleName(/^Run a plan 1 saved plan$/);
+      await planCard(gallery).click();
+      expect((await snapshot(page)).workflow).toBe("plans");
+    }
+  });
+
+  test("a plan deleted while its Run is open from home leaves to home", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "ready" });
+    await planCard(gallery).click();
+    await expect(gallery.getByRole("heading", { level: 2, name: "Daily clean" })).toBeFocused();
+    await gallery.evaluate((element) => {
+      const state = element.getWorkspaceSnapshot();
+      const plans = state.resources.plans;
+      element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...plans, value: { ...plans.value, plans: [], selectedPlan: null } } } });
+    });
+    await page.keyboard.press("Escape");
+    expect((await snapshot(page)).workflow).toBe("none");
+    // The card now reads "Create a plan"; it is still the launcher, so it or the heading takes focus.
+    await expect.poll(() => focusedText(page)).toMatch(/^(button Create a plan|h2 Choose what to clean)/);
+  });
+
+  test("a long plan name stays on one line and keeps its full name", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "ready", narrow: true });
+    const short = await planCard(gallery).boundingBox();
+    const name = "A very long plan name that goes on and on past the width of the card";
+    await gallery.evaluate((element, longName) => {
+      const state = element.getWorkspaceSnapshot();
+      const plans = state.resources.plans;
+      element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...plans, value: { ...plans.value, plans: plans.value.plans.map((plan) => ({ ...plan, name: longName })) } } } });
+    }, name);
+    await expect(planCard(gallery)).toHaveAccessibleName(new RegExp(`^Run ${name} 3 rooms`));
+    await expect(planCard(gallery).locator("strong bdi")).toHaveText(name);
+    const title = planCard(gallery).locator(".card-name");
+    const widths = await title.evaluate((element) => ({ scroll: element.scrollWidth, client: element.clientWidth }));
+    expect(widths.scroll, JSON.stringify(widths)).toBeGreaterThan(widths.client);
+    // The card itself stays inside the sheet.
+    const sheet = await panelOf(gallery).boundingBox();
+    const card = await planCard(gallery).boundingBox();
+    expect(card.x + card.width).toBeLessThanOrEqual(sheet.x + sheet.width);
+    expect((await planCard(gallery).boundingBox()).height).toBe(short.height);
+  });
+
+  test("every home launcher takes focus back when its workflow closes (MS-KEY-01)", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "ready" });
+    const back = async () => {
+      await gallery.getByRole("button", { name: /^Back to all tasks$/ }).first().click();
+      expect((await snapshot(page)).workflow).toBe("none");
+    };
+    await cards(gallery).nth(0).focus();
+    await page.keyboard.press("Enter");
+    await expect(gallery.getByRole("heading", { level: 2, name: "Choose rooms" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect.poll(() => focusedText(page)).toMatch(/^button Clean rooms/);
+
+    await cards(gallery).nth(2).click();
+    await expect(gallery.getByRole("heading", { level: 2, name: "Draw an area" })).toBeVisible();
+    await back();
+    await expect.poll(() => focusedText(page)).toMatch(/^button Clean custom area/);
+
+    await mapsRows(gallery).nth(0).click();
+    await expect(gallery.getByRole("heading", { level: 2, name: "Map history" })).toBeVisible();
+    await back();
+    await expect.poll(() => focusedText(page)).toMatch(/^button Map history/);
+
+    await mapsRows(gallery).nth(1).click();
+    await expect(gallery.getByRole("heading", { level: 2, name: "Map diagnostics" })).toBeVisible();
+    await back();
+    await expect.poll(() => focusedText(page)).toMatch(/^button Map diagnostics/);
+
+    await gallery.getByRole("button", { name: "Map options" }).click();
+    await gallery.getByRole("menu", { name: "Map options" }).getByRole("menuitem", { name: "Map diagnostics" }).click();
+    await expect(gallery.getByRole("heading", { level: 2, name: "Map diagnostics" })).toBeVisible();
+    await back();
+    await expect.poll(() => focusedText(page)).toMatch(/^h2 Choose what to clean/);
+  });
+
+  test("the diagnostics button of a robot problem takes focus back", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "problem" });
+    await panelOf(gallery).getByRole("button", { name: "Open map diagnostics" }).click();
+    await gallery.getByRole("button", { name: /^Back to all tasks$/ }).first().click();
+    await expect.poll(() => focusedText(page)).toMatch(/^button Open map diagnostics/);
+  });
+
+  test("all three cards fit the half sheet at 390 and the third card starts on screen at 320 (§7) @mobile", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "home-plan-due", narrow: true });
+    const body = await panelOf(gallery).locator(".sheet-body").boundingBox();
+    for (const index of [0, 1, 2]) {
+      const box = await cards(gallery).nth(index).boundingBox();
+      expect(box.y, `card ${index} top`).toBeGreaterThanOrEqual(body.y);
+      expect(box.y + box.height, `card ${index} bottom`).toBeLessThanOrEqual(body.y + body.height + 0.5);
+    }
+    const small = await loadGallery(page, { scenario: "home-plan-due", viewport: { width: 320, height: 844 } });
+    const smallBody = await panelOf(small).locator(".sheet-body").boundingBox();
+    const third = await cards(small).nth(2).boundingBox();
+    expect(third.y).toBeGreaterThanOrEqual(smallBody.y);
+    expect(third.y).toBeLessThan(smallBody.y + smallBody.height);
+  });
+});
+
+// Map options is an ARIA menu (design-system.md §5 Menus, MS-KEY-02) that
+// holds the phone's Map display rows (home-rooms.md §5 Display); help lives
+// in the map rail on every width (MS-HOME-04).
+const optionsButton = (gallery) => gallery.getByRole("button", { name: "Map options", exact: true });
+const optionsMenu = (gallery) => gallery.getByRole("menu", { name: "Map options" });
+const openOptions = async (gallery) => {
+  await optionsButton(gallery).click();
+  await expect(optionsMenu(gallery)).toBeVisible();
+  return optionsMenu(gallery);
+};
+const rowNames = (menu) => menu.locator("[role^=menuitem]").evaluateAll((rows) => rows.map((row) => row.textContent.replace(/\s+/g, " ").trim()));
+
+test.describe("Map options and the rail (home-rooms.md §5 Display, §11 MS-HOME-04, MS-RESP-05)", () => {
+  test("opens as a menu named Map options with its first row focused @mobile", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "ready", narrow: true });
+    const button = optionsButton(gallery);
+    await expect(button).toHaveAttribute("aria-haspopup", "menu");
+    await expect(button).toHaveAttribute("aria-expanded", "false");
+    await expect(button).toHaveAttribute("aria-controls", "map-options");
+    const menu = await openOptions(gallery);
+    await expect(button).toHaveAttribute("aria-expanded", "true");
+    await expect(menu).toHaveId("map-options");
+    await expect.poll(() => focusedText(page)).toBe("button Photo");
+    expect(await rowNames(menu)).toEqual([
+      "Photo", "Room colors", "Room names", "Auto detail", "Efficient", "Balanced", "Maximum", "Map diagnostics", "Full screen",
+    ]);
+    await expect(menu.getByRole("group", { name: "Map display" })).toBeVisible();
+    await expect(menu.getByRole("group", { name: "Map detail" })).toBeVisible();
+    await expect(menu.getByRole("menuitemradio", { name: "Photo" })).toHaveAttribute("aria-checked", "true");
+    await expect(menu.getByRole("menuitemradio", { name: "Auto detail" })).toHaveAttribute("aria-checked", "true");
+    await expect(menu.getByRole("menuitemcheckbox", { name: "Room names" })).toHaveAttribute("aria-checked", "true");
+    await expect(menu.getByRole("menuitemcheckbox", { name: "Room names" }).locator(".ms-switch")).toHaveCount(1);
+    for (const tabindex of await menu.locator("[role^=menuitem]").evaluateAll((rows) => rows.map((row) => row.getAttribute("tabindex")))) {
+      expect(tabindex).toBe("-1");
+    }
+  });
+
+  test("Up, Down, Home and End move over every row, wrapping", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "ready", narrow: true });
+    await openOptions(gallery);
+    const names = [];
+    for (let step = 0; step < 9; step += 1) {
+      await page.keyboard.press("ArrowDown");
+      names.push((await focusedText(page)).replace(/^button /, ""));
+    }
+    expect(names).toEqual(["Room colors", "Room names", "Auto detail", "Efficient", "Balanced", "Maximum", "Map diagnostics", "Full screen", "Photo"]);
+    await page.keyboard.press("ArrowUp");
+    await expect.poll(() => focusedText(page)).toBe("button Full screen");
+    await page.keyboard.press("Home");
+    await expect.poll(() => focusedText(page)).toBe("button Photo");
+    await page.keyboard.press("End");
+    await expect.poll(() => focusedText(page)).toBe("button Full screen");
+  });
+
+  test("display and detail rows change the map and keep the menu open; action rows close it", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "ready", narrow: true });
+    const menu = await openOptions(gallery);
+    await menu.getByRole("menuitemradio", { name: "Room colors" }).click();
+    await expect.poll(async () => (await snapshot(page)).appearance).toBe("rooms");
+    await expect(menu.getByRole("menuitemradio", { name: "Room colors" })).toHaveAttribute("aria-checked", "true");
+    await expect(menu.getByRole("menuitemradio", { name: "Photo" })).toHaveAttribute("aria-checked", "false");
+    await expect(menu).toBeVisible();
+
+    await menu.getByRole("menuitemcheckbox", { name: "Room names" }).click();
+    await expect.poll(async () => (await snapshot(page)).labelsVisible).toBe(false);
+    await expect(menu.getByRole("menuitemcheckbox", { name: "Room names" })).toHaveAttribute("aria-checked", "false");
+    await expect(menu.getByRole("menuitemcheckbox", { name: "Room names" }).locator(".ms-switch")).toHaveAttribute("aria-checked", "false");
+    await expect(menu).toBeVisible();
+
+    await menu.getByRole("menuitemradio", { name: "Maximum" }).click();
+    await expect.poll(async () => (await snapshot(page)).quality).toBe("maximum");
+    await expect(menu.getByRole("menuitemradio", { name: "Maximum" })).toHaveAttribute("aria-checked", "true");
+    await expect(menu).toBeVisible();
+
+    await menu.getByRole("menuitem", { name: "Map diagnostics" }).click();
+    await expect(menu).toHaveCount(0);
+    await expect(gallery.getByRole("heading", { level: 2, name: "Map diagnostics" })).toBeVisible();
+  });
+
+  test("Escape closes the menu and returns focus to its button", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "ready", narrow: true });
+    const menu = await openOptions(gallery);
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(optionsButton(gallery)).toBeFocused();
+    await expect(optionsButton(gallery)).toHaveAttribute("aria-expanded", "false");
+    expect((await snapshot(page)).workflow).toBe("none");
+  });
+
+  test("3D drops the Photo and Room colors rows; a desk keeps them in the rail and has no Map display group", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "ready", narrow: true });
+    await patchState(gallery, { view: "three" });
+    const menu = await openOptions(gallery);
+    expect(await rowNames(menu)).toEqual(["Room names", "Auto detail", "Efficient", "Balanced", "Maximum", "Map diagnostics", "Full screen"]);
+    await page.keyboard.press("Escape");
+
+    const wide = await loadGallery(page, { scenario: "ready", viewport: { width: 1180, height: 760 } });
+    const wideMenu = await openOptions(wide);
+    expect(await rowNames(wideMenu)).toEqual(["Auto detail", "Efficient", "Balanced", "Maximum", "Map diagnostics", "Full screen"]);
+    await expect(wideMenu.getByRole("group", { name: "Map display" })).toHaveCount(0);
+    await expect.poll(() => focusedText(page)).toBe("button Auto detail");
+    await page.keyboard.press("Escape");
+    const style = wide.getByRole("group", { name: "Map style" });
+    await expect(style.getByRole("button")).toHaveText(["Photo", "Room colors"]);
+    await expect(wide.getByRole("button", { name: "Room names", exact: true })).toBeVisible();
+  });
+
+  test("a phone keeps help in the rail with a Touch row first and no help button on home @mobile", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "ready", narrow: true });
+    const help = gallery.locator("matic-map-canvas-v4").getByRole("button", { name: "How to move the map" });
+    await expect(help).toBeVisible();
+    await expect(panelOf(gallery).getByRole("button", { name: "How to move the map" })).toHaveCount(0);
+    await expect(panelOf(gallery).getByRole("group", { name: "Map display" })).toHaveCount(0);
+    await expect(panelOf(gallery).locator("h3")).toHaveText(["Maps"]);
+    await expect(gallery.locator("matic-map-canvas-v4").getByRole("button", { name: "Room names" })).toHaveCount(0);
+    await help.click();
+    const popover = gallery.getByRole("dialog", { name: "How to move the map" });
+    await expect(popover.locator("dt")).toHaveText(["Touch", "Trackpad", "Mouse", "Keyboard"]);
+    await expect(popover).toContainText("Drag to explore · pinch to zoom · twist two fingers to rotate");
+    await expect(popover.getByRole("button", { name: "Close" })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(popover).toHaveCount(0);
+    await expect(help).toBeFocused();
+  });
+
+  test("the rail shows no floor, Fit or help without a scene (MS-HOME-04)", async ({ page }) => {
+    for (const scenario of ["empty", "access"]) {
+      const gallery = await loadGallery(page, { scenario });
+      await expect(gallery.getByRole("combobox", { name: "Choose floor" })).toHaveCount(0);
+      await expect(gallery.getByRole("button", { name: "Fit the whole map on screen" })).toHaveCount(0);
+      await expect(gallery.getByRole("button", { name: "How to move the map" })).toHaveCount(0);
+    }
+    const locating = await loadGallery(page, { scenario: "transition" });
+    await expect(locating.getByRole("button", { name: "Fit the whole map on screen" })).toHaveCount(0);
+    await expect(locating.getByRole("button", { name: "How to move the map" })).toHaveCount(0);
+  });
+
+  test("Escape closes the menu first and leaves Rooms second (shell.md §5)", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "ready", narrow: true });
+    await cards(gallery).nth(0).click();
+    await expect(gallery.getByRole("heading", { level: 2, name: "Choose rooms" })).toBeVisible();
+    const menu = await openOptions(gallery);
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(optionsButton(gallery)).toBeFocused();
+    expect((await snapshot(page)).workflow).toBe("rooms");
+    await page.keyboard.press("Escape");
+    await expect.poll(async () => (await snapshot(page)).workflow).toBe("none");
+  });
+
+  test("the multi-robot header at 320 keeps a 44 px robot select and an unclipped title (R24)", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "multi-robot", viewport: { width: 320, height: 844 } });
+    const robot = gallery.getByRole("combobox", { name: "Choose robot" });
+    await expect(robot).toBeVisible();
+    expect((await robot.boundingBox()).height).toBeGreaterThanOrEqual(44);
+    const title = gallery.getByRole("heading", { level: 1, name: "Matic Map" });
+    expect(await title.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    const bar = gallery.locator(".app-bar");
+    expect(await bar.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await expect(robot).toHaveCSS("text-overflow", "ellipsis");
   });
 });

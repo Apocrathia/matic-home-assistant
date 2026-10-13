@@ -173,11 +173,18 @@ try {
           await settle(page, label, measured);
         };
         const journeys = new Set();
+        // From UX4 on the home card opens the default plan's Run view
+        // (home-rooms.md D1), so Edit is one step away and every hop is
+        // measured.
         const planJourney = async () => {
-          await step(/^(Run a plan|Plans)/, "plan:open-picker");
-          const pickerEdits = await button(/Daily clean.*Edit plan/).count() > 0;
-          journeys.add(pickerEdits ? "picker-edit" : "run-edit");
-          if (pickerEdits) {
+          await step(/^(Run a plan|Plans|Run Daily clean)/, "plan:open");
+          const homeRun = await button("Edit Daily clean").count() > 0;
+          const pickerEdits = !homeRun && await button(/Daily clean.*Edit plan/).count() > 0;
+          journeys.add(homeRun ? "home-run-edit" : pickerEdits ? "picker-edit" : "run-edit");
+          if (homeRun) {
+            await step("Edit Daily clean", "plan:open-editor");
+            await step("Cancel", "plan:leave-editor");
+          } else if (pickerEdits) {
             await step(/Daily clean.*Edit plan/, "plan:open-editor");
             await step("Back to plans", "plan:leave-editor");
           } else {
@@ -277,14 +284,14 @@ try {
       logicalCpus: cpus().length, tracing: Boolean(traceDirectory),
       viewport: "1280x900", dpr: 1, headless, network: "loopback, unthrottled", cpuThrottle: 1,
       cache: "new browser context per sample; no-store assets", order: "AB BA AB",
-      journey: "60 2D/3D toggles, 5 four-action plan editor loops (home → picker → saved plan's Edit → out of Edit → home, by the picker's own route), 10 room-list/back loops; lazy workflow warmed first; unmeasured Run hops excluded" },
+      journey: "60 2D/3D toggles, 5 four-action plan editor loops (home → the saved plan's Edit → out of Edit → home, by the route the home card or picker offers), 10 room-list/back loops; lazy workflow warmed first; unmeasured Run hops excluded" },
     limits: ["Synthetic lab proxy; not field INP or mobile/robot acceptance", "Scene hash must match between builds",
       "Event Timing threshold 16 ms; unreported interactions imputed at 16 ms; browser quantization retained",
       "Tracing adds diagnostic overhead; trace-enabled timings do not qualify the untraced performance gate",
       "Gzip bytes are offline size estimates; the loopback server sends uncompressed JavaScript",
       "Candidate review-only assets are reported separately; shared compiled production chunks serve the synthetic journey",
       "Candidate includes actual registered HA extra modules; historical baseline is panel-only and has no host-wide byte total",
-      "Both variants measure opening and leaving the saved plan's Edit view by the route their picker offers (each sample records it); from UX2 on that route passes Run, and those Run hops are taken but not measured",
+      "Both variants measure opening and leaving the saved plan's Edit view by the route their home offers (each sample records it): a UX1 picker row, UX2's Run hops (taken but not measured), or from UX4 the home card's Run view",
       "Heap is one observation after each journey, not a leak bound; no GPU FPS or transport latency measurement"],
     summary, samples }, null, 2));
 } finally {

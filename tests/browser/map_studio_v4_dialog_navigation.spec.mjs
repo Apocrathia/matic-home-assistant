@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { installPanelFixture } from "./map_studio_v4_panel_fixture.mjs";
+import { installPanelFixture, openPlanPicker } from "./map_studio_v4_panel_fixture.mjs";
 
 const plan = (id, name) => ({
   id, name, enabled: true, run_behavior: "ordered",
@@ -15,7 +15,7 @@ async function setup(page, plans = [plan("daily", "Daily")]) {
   });
   await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
   const panel = page.locator(fixture.panelTag);
-  await panel.getByRole("button", { name: /^Run a plan/ }).click();
+  await openPlanPicker(panel);
   await panel.getByRole("button", { name: new RegExp(`^${plans[0].name}`) }).click();
   await panel.getByRole("button", { name: `Edit ${plans[0].name}`, exact: true }).click();
   // Opening Edit moves focus to its heading a frame later; typing before
@@ -58,7 +58,7 @@ test.describe("UX2 discard dialog navigation", () => {
     await back(page);
     await expect(panel.getByRole("heading", { level: 2, name: "Your plans" })).toBeVisible();
     await back(page);
-    await expect(panel.getByRole("button", { name: /^Run a plan/ })).toBeVisible();
+    await expect(panel.getByRole("heading", { level: 2, name: "Choose what to clean" })).toBeVisible();
   });
 
   test("Back-opened dialog save on a saved plan continues to Run, then Back reaches the picker and home", async ({ page }) => {
@@ -73,7 +73,7 @@ test.describe("UX2 discard dialog navigation", () => {
     await back(page);
     await expect(panel.getByRole("heading", { level: 2, name: "Your plans" })).toBeVisible();
     await back(page);
-    await expect(panel.getByRole("button", { name: /^Run a plan/ })).toBeVisible();
+    await expect(panel.getByRole("heading", { level: 2, name: "Choose what to clean" })).toBeVisible();
   });
 
   test("Back from a dirty new plan holds through real Save and Back while pending", async ({ page }) => {
@@ -112,7 +112,7 @@ test.describe("UX2 discard dialog navigation", () => {
     // completed its native traversal before issuing the next browser Back.
     await expect.poll(() => page.evaluate(() => history.state?.maticMapLayer?.depth)).toBe(1);
     await back(page);
-    await expect(panel.getByRole("button", { name: /^Run a plan/ })).toBeVisible();
+    await expect(panel.getByRole("heading", { level: 2, name: "Choose what to clean" })).toBeVisible();
   });
 
   test("Escape on a dirty new plan, then Save in the dialog, lands on the picker", async ({ page }) => {
@@ -214,7 +214,7 @@ test.describe("UX2 discard dialog navigation", () => {
     await panel.getByRole("dialog", { name: "Delete plan?" }).getByRole("button", { name: "Delete", exact: true }).click();
     await expect(panel.getByRole("heading", { level: 2, name: "Your plans" })).toBeVisible();
     await back(page);
-    await expect(panel.getByRole("button", { name: /^Run a plan/ })).toBeVisible();
+    await expect(panel.getByRole("heading", { level: 2, name: "Choose what to clean" })).toBeVisible();
   });
 
   test("a rejected dialog save closes and keeps the draft", async ({ page }) => {

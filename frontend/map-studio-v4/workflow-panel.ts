@@ -18,7 +18,7 @@ import { WORKSPACE_INTENT_EVENT } from "./map-canvas";
 import { admittedManualRoomPreview, canSelectRooms, deleteSubject, hasStoppableWork, initialWorkspaceState } from "./state";
 import { formatDateTime, translate } from "./localize";
 import { LazyChunk, chunkStatus } from "./lazy-chunk";
-import { settingLabel } from "./plan-copy";
+import { settingLabel } from "./plan-cadence";
 import { COVERAGES, MODES, cadenceSummary, coverageLabel, modeLabel } from "./plan-cadence";
 // The plan picker, Run and Edit.
 import "./plan-views";
@@ -32,6 +32,7 @@ export { actionReason, focusPlanTarget, planCancel, planTitle, planTools } from 
 // Dialogs that only these views' controls open carry their copy, launcher and
 // confirm here.
 export { confirmDialog, dialogCopy, dialogLauncher, dialogReturnTarget } from "./dialog-copy";
+export { MapOptions } from "./map-options";
 
 const planViewsTag = unsafeStatic(PLAN_VIEWS_TAG);
 

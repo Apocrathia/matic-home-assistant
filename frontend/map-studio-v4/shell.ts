@@ -27,6 +27,7 @@ import {
 import { edgeDistance, validOutline } from "./area-outline";
 import { renderDrawTools } from "./draw-tools";
 import { LazyChunk, chunkStatus, reloadInto, takeResume, type ChunkStatus } from "./lazy-chunk";
+import type { MapOptions } from "./map-options";
 import { isNativeSelectControl } from "./gesture-controller";
 import { RovingFocusController } from "./roving-focus";
 import { opaque, readColors, resolveFill, resolveTone, rgba, watchTheme, type Channel } from "./theme-probe";
@@ -40,6 +41,7 @@ import {
   iconCleaning,
   iconClose,
   iconDiagnostics,
+  iconDue,
   iconHistory,
   iconMenu,
   iconPlan,
@@ -59,6 +61,7 @@ import {
 } from "./map-canvas";
 import "./map-canvas";
 import { formatList, translate } from "./localize";
+import { planRowLine2, planRowLine3 } from "./plan-copy";
 import { needsDraftConfirmation } from "./draft-navigation";
 import {
   deleteSubject,
@@ -381,8 +384,6 @@ export class MaticMapShellV4 extends LitElement {
     dates: { attribute: false },
     _measuredNarrow: { state: true },
     _sheetOffset: { state: true },
-    _overflowOpen: { state: true },
-    _helpOpen: { state: true },
     _browserFullscreen: { state: true },
     _sheetDetent: { state: true },
     _polite: { state: true },
@@ -410,8 +411,6 @@ export class MaticMapShellV4 extends LitElement {
   }
   protected _measuredNarrow = false;
   protected _sheetOffset = 0;
-  protected _overflowOpen = false;
-  protected _helpOpen = false;
   protected _browserFullscreen = false;
   protected _sheetDetent: SheetDetent = "half";
   // The two live regions (shell.md §4 rule 6). Each holds only its newest
@@ -428,6 +427,11 @@ export class MaticMapShellV4 extends LitElement {
   // of either, building included, is said.
   readonly #views = new LazyChunk(this, () => import("./workflow-panel"));
   readonly #outline = new LazyChunk(this, async () => new (await import("./outline-editor")).OutlineEditor({ edgeDistance, validOutline }));
+  // The Map options menu (map-options.ts) ships in the views chunk, which a
+  // module of its own would split the shared lit chunk for, and loads on its
+  // first press; that press opens it once the load has settled.
+  readonly #options: LazyChunk<MapOptions> = new LazyChunk(this, async () => new (await import("./workflow-panel")).MapOptions(this));
+  #optionsPending = false;
   // The workflow a Try again reload was pressed in (lazy-chunk.ts).
   #resume = takeResume();
   #toastTimer: ReturnType<typeof setTimeout> | undefined;
@@ -443,7 +447,6 @@ export class MaticMapShellV4 extends LitElement {
   #observedSheet: Element | null = null;
   #dialogLauncher: HTMLElement | null = null;
   #workspaceLauncher: HTMLElement | null = null;
-  #helpLauncher: HTMLElement | null = null;
   // What Discard goes on to: the intent that asked, or Try again's reload.
   #pendingNavigation: WorkspaceIntent | "reload" | null = null;
   // The save Discard changes? started; only that save's own answer settles it.
@@ -454,6 +457,8 @@ export class MaticMapShellV4 extends LitElement {
   // The workflows the entry screen's enabled rows offered at its last render
   // (#launch), plus Map diagnostics, which Map options offers on any screen.
   #launchers = new Set<string>();
+  /** The home launcher last pressed; it takes focus back when its workflow closes (home-rooms.md §5 Keyboard). */
+  #homeLauncher: string | null = null;
   #drag: SheetDrag | null = null;
   #bodySwipe: BodySwipe | null = null;
 
@@ -483,12 +488,6 @@ export class MaticMapShellV4 extends LitElement {
     return false;
   }
 
-  readonly #outsidePointer = (event: PointerEvent): void => {
-    if (!this._overflowOpen) return;
-    const overflow = this.renderRoot.querySelector(".overflow-wrap");
-    if (!overflow || !event.composedPath().includes(overflow)) this._overflowOpen = false;
-  };
-
   override connectedCallback(): void {
     super.connectedCallback();
     this.#resizeObserver = new ResizeObserver(([entry]) => {
@@ -497,7 +496,6 @@ export class MaticMapShellV4 extends LitElement {
       if (next !== this._measuredNarrow) this._measuredNarrow = next;
     });
     this.#resizeObserver.observe(this);
-    window.addEventListener("pointerdown", this.#outsidePointer, true);
     document.addEventListener("fullscreenchange", this.#fullscreenChange);
     // Reads the box height, which a translateY drag does not change, so a
     // drag never relayouts the canvas. Only the committed detent does.
@@ -551,7 +549,6 @@ export class MaticMapShellV4 extends LitElement {
     this.#unwatchTheme?.();
     this.#unwatchTheme = null;
     this.#observedSheet = null;
-    window.removeEventListener("pointerdown", this.#outsidePointer, true);
     document.removeEventListener("fullscreenchange", this.#fullscreenChange);
     super.disconnectedCallback();
   }
@@ -669,9 +666,6 @@ export class MaticMapShellV4 extends LitElement {
   }
 
   protected override updated(changed: PropertyValues<this>): void {
-    // Protected reactive fields are not in `keyof this`, so the map is read
-    // through the untyped view for those.
-    const local = changed as PropertyValues;
     const instant = this.renderRoot.querySelector<HTMLElement>(".mobile-sheet.instant");
     if (instant) {
       // Resolve the new height while transitions are off, so turning them
@@ -695,23 +689,9 @@ export class MaticMapShellV4 extends LitElement {
     for (const scroller of this.renderRoot.querySelectorAll(SCROLLERS)) {
       for (const element of [scroller, ...scroller.children]) this.#scrollerResizeObserver?.observe(element);
     }
-    if (local.has("_overflowOpen") && this._overflowOpen) {
-      void this.updateComplete.then(() => {
-        this.renderRoot.querySelector<HTMLElement>("#map-options select, #map-options button")?.focus();
-      });
-    }
-    if (local.has("_helpOpen")) {
-      if (this._helpOpen) {
-        void this.updateComplete.then(() => {
-          this.renderRoot.querySelector<HTMLElement>(".help-dialog [data-dialog-initial-focus]")?.focus();
-        });
-      } else if (local.get("_helpOpen")) {
-        const launcher = this.#helpLauncher;
-        this.#helpLauncher = null;
-        void this.updateComplete.then(() => {
-          requestAnimationFrame(() => launcher?.focus({ preventScroll: true }));
-        });
-      }
+    if (this.#optionsPending && this.#options.status !== "loading") {
+      this.#optionsPending = false;
+      this.#options.value?.menu.toggle();
     }
     if (changed.has("state")) {
       this.#resumeWorkflow();
@@ -816,6 +796,7 @@ export class MaticMapShellV4 extends LitElement {
         // the views have rendered it (plan.md §5); else, at once, the heading,
         // so a key pressed straight away still reaches the shell.
         void this.updateComplete.then(() => {
+          if (state.workflow === "none") return this.#focusHomeLauncher();
           if (previous.workflow !== "plan") return this.#focusPanel();
           requestAnimationFrame(() => {
             if (!this.#views.value?.focusPlanTarget(previous, state, this.renderRoot, isVisible)) this.#focusPanel();
@@ -1193,36 +1174,36 @@ export class MaticMapShellV4 extends LitElement {
     this.#intent({ type: this.state.fullMap ? "exit-full-map" : "enter-full-map" });
   }
 
-  #closeOverflow(restoreFocus: boolean): void {
-    this._overflowOpen = false;
-    if (restoreFocus) {
-      void this.updateComplete.then(() => {
-        this.renderRoot.querySelector<HTMLElement>(".overflow")?.focus();
-      });
-    }
-  }
-
-  #overflowAction(id: "support" | "fullscreen"): void {
-    this.#closeOverflow(id === "fullscreen");
-    if (id === "support") {
-      this.#workflow("support");
+  // A failed menu load gets the chunk recovery every other chunk has.
+  readonly #toggleOptions = (event: Event): void => {
+    const options = this.#options.value;
+    if (options) {
+      options.menu.toggle();
       return;
     }
+    if (this.#options.status === "failed") {
+      this.#retry(event);
+      return;
+    }
+    this.#optionsPending = true;
+    this.#options.request();
+  };
+
+  readonly #openDiagnostics = (): void => {
+    this.#workflow("support");
+  };
+
+  readonly #toggleFullscreen = (): void => {
     const app = this.renderRoot.querySelector<HTMLElement>(".app");
     if (this.#fullscreenElement()) void document.exitFullscreen();
     else void app?.requestFullscreen();
-  }
+  };
 
   #openBrush(): void {
     this.#intent({
       type: "set-precision-open",
       value: !this.state.precisionOpen,
     });
-  }
-
-  #openHelp(event: Event): void {
-    this.#helpLauncher = event.currentTarget as HTMLElement;
-    this._helpOpen = true;
   }
 
   // Only the views send intents through here (dialog-copy.ts dialogLauncher).
@@ -1257,12 +1238,8 @@ export class MaticMapShellV4 extends LitElement {
     if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
     if (event.key !== "Escape") return;
     event.preventDefault();
-    if (this._overflowOpen) {
-      this.#closeOverflow(true);
-      return;
-    }
-    if (this._helpOpen) {
-      this._helpOpen = false;
+    if (this.#options.value?.menu.open) {
+      this.#options.value.menu.close(true);
       return;
     }
     if (this.state.dialog === "discardDraft") {
@@ -1359,10 +1336,25 @@ export class MaticMapShellV4 extends LitElement {
     `;
   }
 
-  // An entry row's tap; an enabled row also records it for a resumed Try again.
-  #launch(workflow: Workflow, disabled = false): () => void {
+  // An entry row's tap; an enabled row also records it for a resumed Try again,
+  // and the press records which launcher takes focus back.
+  #launch(workflow: Workflow, disabled = false, launcher: string = workflow): () => void {
     if (!disabled) this.#launchers.add(workflow);
-    return () => { if (!disabled) this.#workflow(workflow); };
+    return () => {
+      if (disabled) return;
+      this.#homeLauncher = launcher;
+      this.#workflow(workflow);
+    };
+  }
+
+  // Back on home: the launcher that opened the workflow, if it is still shown,
+  // else the heading (shell.md §5 Focus).
+  #focusHomeLauncher(): void {
+    const key = this.#homeLauncher;
+    this.#homeLauncher = null;
+    const target = key ? this.renderRoot.querySelector<HTMLElement>(`[data-launcher="${key}"]`) : null;
+    if (isVisible(target)) target.focus({ preventScroll: true });
+    else this.#focusPanel();
   }
 
   #shelfRow(label: string, glyph: string, workflow: Workflow, detail?: string, disabled = false, describedBy?: string) {
@@ -1421,7 +1413,7 @@ export class MaticMapShellV4 extends LitElement {
   // robot is busy or the map is not ready, and they share the one reason the
   // description states (MS-HOME-03). Maps keeps history and diagnostics one
   // tap away; a map or robot problem lists diagnostics first.
-  #entry(state: WorkspaceState, narrow: boolean) {
+  #entry(state: WorkspaceState) {
     const t = (key: string, fallback: string, placeholders?: Record<string, string | number>): string =>
       this.#t(key, fallback, placeholders);
     this.#launchers = new Set(["support"]);
@@ -1447,7 +1439,7 @@ export class MaticMapShellV4 extends LitElement {
       case "problem":
         return html`
           <div class="home-actions">
-            <button class="ms-btn ms-btn--secondary" type="button" data-launcher="support-open" @click=${this.#launch("support")}>${t("v4_open_diagnostics", "Open map diagnostics")}</button>
+            <button class="ms-btn ms-btn--secondary" type="button" data-launcher="support-open" @click=${this.#launch("support", false, "support-open")}>${t("v4_open_diagnostics", "Open map diagnostics")}</button>
           </div>
           ${maps(true)}
         `;
@@ -1458,9 +1450,6 @@ export class MaticMapShellV4 extends LitElement {
     const plansResource = state.resources.plans;
     const plans = plansResource.value;
     const noRooms = plans !== null && plans.rooms.length === 0;
-    const planCount = plans?.plans.length ?? 0;
-    const plansLoading = plansResource.status === "loading";
-    const plansUnavailable = plansResource.status === "error";
     const roomsDisabled = held || noRooms;
     const card = (launcher: Workflow, featured: boolean, glyph: string, disabled: boolean, title: unknown, detail: unknown) => html`
       <button
@@ -1491,61 +1480,78 @@ export class MaticMapShellV4 extends LitElement {
         ${card("rooms", true, iconRobot, roomsDisabled,
           t("v4_clean_rooms", "Clean rooms"),
           !held && noRooms ? t("v4_no_rooms_reason", "Can't clean rooms until you name them in the Matic app.") : t("v4_rooms_quick_detail", "Pick rooms and clean them now."))}
-        ${card("plans", false, iconPlan, held,
-          plansLoading
-            ? t("v4_plans_loading", "Checking saved plans")
-            : plansUnavailable
-              ? t("v4_plans_unavailable", "Plans unavailable")
-              : planCount
-                ? t("v4_run_a_plan", "Run a plan")
-                : t("v4_create_plan", "Create a plan"),
-          plansLoading
-            ? t("v4_plans_loading_hint", "Reading plans for this floor")
-            : plansUnavailable
-              ? t("v4_plans_unavailable_hint", "Try again to load your plans.")
-              : planCount
-                ? planCount === 1 ? t("v4_saved_routine", "1 saved plan") : t("v4_saved_routines", "{count} saved plans", { count: planCount })
-                : t("v4_no_plans_hint", "Save a plan to repeat a set of rooms."))}
+        ${this.#planCard(state, held)}
         ${card("draw", false, iconNewArea, held,
           t("v4_custom_areas", "Clean custom area"),
           t("v4_areas_quick_detail", "Draw or choose a custom area"))}
       </div>
       ${maps(kind === "map-unavailable")}
-      ${narrow ? html`
-        <h3 class="shelf-heading" id="map-display-heading">${t("v4_map_display", "Map display")}</h3>
-        <div class="map-display">
-          <div class="ms-segment" role="group" aria-labelledby="map-display-heading">
-            <button
-              class="ms-btn"
-              type="button"
-              aria-pressed=${String(state.appearance === "photo")}
-              @click=${() => this.#intent({ type: "set-appearance", appearance: "photo" })}
-            >${t("map_style_photo", "Photo")}</button>
-            <button
-              class="ms-btn"
-              type="button"
-              aria-pressed=${String(state.appearance === "rooms")}
-              @click=${() => this.#intent({ type: "set-appearance", appearance: "rooms" })}
-            >${t("map_style_room_colours", "Room colors")}</button>
-          </div>
-          <label class="ms-checkbox">
-            <input type="checkbox" .checked=${state.labelsVisible} @change=${() => this.#intent({ type: "toggle-labels" })}>
-            ${t("v4_room_names", "Room names")}
-          </label>
-          <button
-            class="ms-btn ms-btn--secondary help-launcher"
-            type="button"
-            aria-haspopup="dialog"
-            aria-expanded=${String(this._helpOpen)}
-            @click=${this.#openHelp}
-          >${t("v4_how_to_move", "How to move the map")}</button>
-        </div>
-      ` : nothing}
+    `;
+  }
+
+  // The plan card opens the default plan's Run view when that plan is on
+  // this floor (home-rooms.md D1), with the picker's lines; otherwise it
+  // opens the picker. The third line is clamped, but the name has all of it.
+  #planCard(state: WorkspaceState, held: boolean) {
+    const t = this.#tr;
+    const plansResource = state.resources.plans;
+    const plans = plansResource.value;
+    const plan = plans?.plans.find((candidate) => candidate.id === plans.selectedPlan);
+    const planCount = plans?.plans.length ?? 0;
+    const loading = plansResource.status === "loading";
+    const unavailable = plansResource.status === "error";
+    const third = plan ? planRowLine3(t, state.locale, plan) : null;
+    // Only the name is isolated (copy-style <bdi>), so the label is split around it.
+    const title = plan ? t("v4_run_named_plan", "Run {plan}", { plan: plan.name }) : "";
+    const at = plan ? title.indexOf(plan.name) : -1;
+    const open = () => {
+      if (held) return;
+      this.#homeLauncher = "plan";
+      if (plan) this.#intent({ type: "select-plan", planId: plan.id, origin: "home" });
+      else this.#workflow("plans");
+    };
+    if (!held) this.#launchers.add("plans");
+    return html`
+      <button
+        class="ms-row ms-row--card"
+        type="button"
+        data-launcher="plan"
+        aria-disabled=${held ? "true" : nothing}
+        aria-describedby=${held ? "home-reason" : nothing}
+        @click=${open}
+      >
+        <span class="ms-row__lead">${icon(iconPlan)}</span>
+        <span class="ms-row__body">
+          ${plan ? html`
+            <strong class="card-title"><span class="card-name">${at < 0 ? title : html`${title.slice(0, at)}<bdi>${plan.name}</bdi>${title.slice(at + plan.name.length)}`}</span>${plan.enabled ? nothing : html`<span class="ms-chip">${t("v4_paused", "Paused")}</span>`}</strong>
+            <small>${planRowLine2(t, state.locale, plan)}</small>
+            ${third === null ? nothing : "blocked" in third
+              ? html`<span class="card-lines"><span class="line" data-tone="warning">${icon(iconNoticeWarning)}${third.blocked}</span></span>`
+              : html`<span class="card-lines">${third.due.map((line) => html`<span class="line">${icon(iconDue)}${line}</span>`)}</span>`}
+          ` : html`
+            <strong>${loading
+              ? t("v4_plans_loading", "Checking saved plans")
+              : unavailable
+                ? t("v4_plans_unavailable", "Plans unavailable")
+                : planCount
+                  ? t("v4_run_a_plan", "Run a plan")
+                  : t("v4_create_plan", "Create a plan")}</strong>
+            <small>${loading
+              ? t("v4_plans_loading_hint", "Reading plans for this floor")
+              : unavailable
+                ? t("v4_plans_unavailable_hint", "Try again to load your plans.")
+                : planCount
+                  ? planCount === 1 ? t("v4_saved_routine", "1 saved plan") : t("v4_saved_routines", "{count} saved plans", { count: planCount })
+                  : t("v4_no_plans_hint", "Save a plan to repeat a set of rooms.")}</small>
+          `}
+        </span>
+        <span class="ms-row__trail">${icon(iconChevronRight)}</span>
+      </button>
     `;
   }
 
   #workflowBody(state: WorkspaceState, narrow: boolean) {
-    if (state.workflow === "none") return this.#entry(state, narrow);
+    if (state.workflow === "none") return this.#entry(state);
     const tools = this.#tools(state.workflow);
     if (tools !== "ready") {
       // A phone's draw sheet rests at peek, with the body below it, so the
@@ -1626,44 +1632,10 @@ export class MaticMapShellV4 extends LitElement {
     return status.notable ? `${status.title} · ${line}` : line;
   }
 
-  #helpDialog() {
-    const t = (key: string, fallback: string): string => this.#t(key, fallback);
-    return html`
-      <div class="dialog-backdrop" @click=${(event: Event) => { if (event.target === event.currentTarget) this._helpOpen = false; }}>
-        <section
-          class="dialog help-dialog ms-surface ms-surface--overlay"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="help-title"
-          @keydown=${this.#dialogKeyboard}
-        >
-          <h2 id="help-title">${t("v4_how_to_move", "How to move the map")}</h2>
-          <dl>
-            <dt>${t("v4_touch", "Touch")}</dt>
-            <dd>${t("v4_touch_help", "Drag to explore · pinch to zoom · twist two fingers to rotate")}</dd>
-            <dt>${t("v4_trackpad", "Trackpad")}</dt>
-            <dd>${t("v4_trackpad_help", "Scroll to pan · pinch to zoom · twist to rotate")}</dd>
-            <dt>${t("v4_mouse", "Mouse")}</dt>
-            <dd>${t("v4_mouse_help", "Drag to orbit · Shift, middle, or right drag to pan · wheel to zoom")}</dd>
-            <dt>${t("v4_keyboard", "Keyboard")}</dt>
-            <dd>${t("v4_keyboard_help", "WASD to move · Q/E or arrows to orbit · +/− to zoom · 0 to fit")}</dd>
-          </dl>
-          <div class="dialog-actions">
-            <button
-              class="ms-btn ms-btn--secondary"
-              type="button"
-              data-dialog-initial-focus
-              @click=${() => { this._helpOpen = false; }}
-            >${t("v4_close", "Close")}</button>
-          </div>
-        </section>
-      </div>
-    `;
-  }
-
   protected override render() {
     const state = this.state;
     const narrow = state.narrowHint || this._measuredNarrow;
+    const options = this.#options.value;
     const status = statusCopy(state, this.localize);
     const selectedRobotUnavailable = isSelectedRobotUnavailable(state);
     const primary = selectPrimaryAction({ ...state, narrowHint: narrow });
@@ -1722,7 +1694,7 @@ export class MaticMapShellV4 extends LitElement {
       <div class=${`root ${narrow ? "narrow" : "wide"}`} @keydown=${this.#keyboard}>
         <button class="skip-link ms-btn ms-btn--primary" type="button" @click=${this.#skipToMap}>${this.#t("v4_skip_to_map", "Skip to the map")}</button>
         <button class="skip-link ms-btn ms-btn--primary" type="button" @click=${this.#skipToWorkspace}>${this.#t("v4_skip_to_workspace", "Skip to the panel")}</button>
-        <div class="app" ?inert=${Boolean(dialog) || this._helpOpen}>
+        <div class="app" ?inert=${Boolean(dialog)}>
           <header class="app-bar">
             ${!state.precisionOpen ? html`
               <button
@@ -1776,36 +1748,25 @@ export class MaticMapShellV4 extends LitElement {
                 @click=${this.#toggleWorkspace}
               >${icon(iconWorkspace)}</button>
             ` : nothing}
-            <div class="overflow-wrap">
+            <div class="overflow-wrap" @keydown=${options?.menu.keydown} @focusout=${options?.menu.focusout}>
               <button
                 class="overflow ms-btn ms-btn--icon"
                 type="button"
                 aria-label=${this.#t("v4_map_options", "Map options")}
-                aria-expanded=${String(this._overflowOpen)}
+                aria-haspopup="menu"
+                aria-expanded=${String(options?.menu.open ?? false)}
                 aria-controls="map-options"
-                @click=${() => { this._overflowOpen = !this._overflowOpen; }}
+                @click=${this.#toggleOptions}
               >${icon(iconOverflow)}</button>
-              ${this._overflowOpen ? html`
-                <div id="map-options" class="overflow-menu ms-surface ms-surface--overlay">
-                  <label class="overflow-field ms-field">${this.#t("map_quality_label", "Map detail")}
-                    <select
-                      aria-label=${this.#t("map_quality_label", "Map detail")}
-                      .value=${state.quality}
-                      @change=${(event: Event) => this.#intent({
-                        type: "set-quality",
-                        quality: (event.currentTarget as HTMLSelectElement).value as WorkspaceState["quality"],
-                      })}
-                    >
-                      <option value="auto">${this.#t("map_quality_auto", "Auto detail")}</option>
-                      <option value="efficient">${this.#t("map_quality_efficient", "Efficient")}</option>
-                      <option value="balanced">${this.#t("map_quality_balanced", "Balanced")}</option>
-                      <option value="maximum">${this.#t("map_quality_maximum", "Maximum")}</option>
-                    </select>
-                  </label>
-                  <button class="ms-row ms-row--menu" type="button" @click=${() => this.#overflowAction("support")}>${this.#t("v4_map_diagnostics", "Map diagnostics")}</button>
-                  <button class="ms-row ms-row--menu" type="button" @click=${() => this.#overflowAction("fullscreen")}>${this._browserFullscreen ? this.#t("v4_leave_full_screen", "Leave full screen") : this.#t("v4_full_screen", "Full screen")}</button>
-                </div>
-              ` : nothing}
+              ${options?.menu.open ? options.render({
+                state,
+                narrow,
+                browserFullscreen: this._browserFullscreen,
+                t: (key, fallback) => this.#t(key, fallback),
+                intent: (intent) => this.#intent(intent),
+                diagnostics: this.#openDiagnostics,
+                fullscreen: this.#toggleFullscreen,
+              }) : nothing}
             </div>
           </header>
 
@@ -1944,7 +1905,7 @@ export class MaticMapShellV4 extends LitElement {
           data-tone=${toast?.tone ?? nothing}
           style=${sheetOffset}
           ?hidden=${!toast}
-          ?inert=${Boolean(dialog) || this._helpOpen}
+          ?inert=${Boolean(dialog)}
           @pointerenter=${this.#holdToast}
           @focusin=${this.#holdToast}
           @pointerleave=${this.#releaseToast}
@@ -1953,8 +1914,6 @@ export class MaticMapShellV4 extends LitElement {
 
         <div class="sr-only" aria-live="polite" aria-atomic="true">${this._polite}</div>
         <div class="sr-only" role="alert" aria-atomic="true">${this._alert}</div>
-
-        ${this._helpOpen ? this.#helpDialog() : nothing}
 
         ${dialog ? html`
           <div class="dialog-backdrop">

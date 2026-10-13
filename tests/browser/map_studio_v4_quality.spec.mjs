@@ -1,9 +1,11 @@
 import { expect, test } from "@playwright/test";
 
+import { openPlanPicker } from "./map_studio_v4_panel_fixture.mjs";
+
 test("keeps checkbox state attached to its room when selected rows move", async ({ page }) => {
   await page.goto("/map-studio-v4-audit");
   const gallery = page.locator("matic-map-studio-gallery-v0-4-0");
-  await gallery.getByRole("button", { name: /^Run a plan/ }).click();
+  await openPlanPicker(gallery);
   await gallery.getByRole("button", { name: "Create a plan", exact: true }).click();
   const rows = gallery.getByRole("list", { name: "Rooms", exact: true }).getByRole("listitem");
   await rows.last().getByRole("checkbox").click();
@@ -261,7 +263,7 @@ for (const colorScheme of ["light", "dark"]) {
       await page.emulateMedia({ colorScheme });
       await page.goto("/map-studio-v4-review");
       if (surface === "primary") {
-        await page.getByRole("button", { name: "Run a plan 1 saved plan", exact: true }).click();
+        await openPlanPicker(page.locator("matic-map-studio-gallery-v0-4-0"));
         await page.getByRole("button", { name: /^Daily clean/ }).click();
       }
       else await page.getByRole("button", { name: "transition", exact: true }).click();
@@ -943,7 +945,7 @@ for (const width of [320, 390, 820, 1280]) {
       const [m, t, w] = await Promise.all([menu.boundingBox(), title.boundingBox(), toggle.boundingBox()]);
       expect(m.x + m.width).toBeLessThanOrEqual(t.x);
       expect(w.x).toBeGreaterThan(t.x);
-      await gallery.getByRole("button", { name: /^Run a plan/ }).click();
+      await openPlanPicker(gallery);
       await expect(gallery.getByRole("heading", { name: "Your plans", exact: true })).toBeVisible();
       await expect(gallery.getByRole("textbox", { name: "Plan name" })).toHaveCount(0);
       await expect(gallery.getByRole("button", { name: /^Run plan/ })).toHaveCount(0);
@@ -994,7 +996,7 @@ for (const width of [320, 390, 820, 1280]) {
 test("Escape from the plan editor returns to the picker", async ({ page }) => {
   await page.goto("/map-studio-v4-audit");
   const gallery = page.locator("matic-map-studio-gallery-v0-4-0");
-  await gallery.getByRole("button", { name: /^Run a plan/ }).click();
+  await openPlanPicker(gallery);
   await gallery.getByRole("button", { name: /^Daily clean/ }).click();
   await page.keyboard.press("Escape");
   await expect(gallery.getByRole("heading", { name: "Your plans", exact: true })).toBeVisible();
@@ -1005,7 +1007,7 @@ test("Escape from the plan editor returns to the picker", async ({ page }) => {
 test("discarding plan edits through Escape returns to the plan, then the picker", async ({ page }) => {
   await page.goto("/map-studio-v4-audit");
   const gallery = page.locator("matic-map-studio-gallery-v0-4-0");
-  await gallery.getByRole("button", { name: /^Run a plan/ }).click();
+  await openPlanPicker(gallery);
   await gallery.getByRole("button", { name: /^Daily clean/ }).click();
   await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
   await gallery.getByRole("textbox", { name: "Plan name" }).fill("Unsaved change");

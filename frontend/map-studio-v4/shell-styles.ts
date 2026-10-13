@@ -64,14 +64,17 @@ export const shellStyles = [tokens, base, controls, css`
     .app-bar > .ms-btn, .app-bar > .overflow-wrap > .ms-btn { color: var(--ms-bar-text); }
     .app-bar > .ms-btn:focus-visible, .app-bar > .overflow-wrap > .ms-btn:focus-visible { outline-color: var(--ms-bar-text); }
 
-    .context-switcher { max-inline-size: 9rem; inline-size: auto; text-overflow: ellipsis; }
-    .floor-switcher { appearance: none; block-size: 44px; padding-inline-end: 1.8rem; background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%); background-position: calc(100% - 15px) 50%, calc(100% - 10px) 50%; background-size: 5px 5px; background-repeat: no-repeat; }
-    .floor-switcher:dir(rtl) { background-position: 10px 50%, 15px 50%; }
+    .context-switcher { max-inline-size: 9rem; inline-size: auto; min-block-size: var(--ms-control); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .floor-switcher, .robot-switcher { appearance: none; block-size: 44px; padding-inline-end: 1.8rem; background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%); background-position: calc(100% - 15px) 50%, calc(100% - 10px) 50%; background-size: 5px 5px; background-repeat: no-repeat; }
+    .floor-switcher:dir(rtl), .robot-switcher:dir(rtl) { background-position: 10px 50%, 15px 50%; }
 
 
+    /* The title keeps its own width (R24): a robot select beside it takes
+       the rest of the bar and ends in an ellipsis. */
     .title {
+      flex: none;
       overflow: hidden;
-      min-inline-size: 0;
+      min-inline-size: min-content;
       margin: 0;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -94,7 +97,10 @@ export const shellStyles = [tokens, base, controls, css`
       padding: var(--ms-space-1);
     }
     .overflow-menu .ms-row { justify-content: flex-start; }
-    .overflow-field { padding: var(--ms-space-2) var(--ms-space-3) var(--ms-space-1); }
+    .overflow-menu [role="menuitemcheckbox"] { justify-content: space-between; gap: var(--ms-space-3); }
+    .overflow-menu [role="group"] { display: grid; gap: var(--ms-space-1); }
+    .overflow-menu [role="group"] + * { border-block-start: 1px solid var(--ms-line); padding-block-start: var(--ms-space-1); }
+    .menu-heading { margin: 0; padding: var(--ms-space-2) var(--ms-space-3) var(--ms-space-1); color: var(--ms-text-quiet); font-size: var(--ms-t-sm); font-weight: var(--ms-w-bold); }
 
     .workspace {
       position: relative;
@@ -223,7 +229,8 @@ export const shellStyles = [tokens, base, controls, css`
     }
     .wide:has(.full-map-hud.above-dock) > .notice-toast { inset-block-end: calc(max(var(--ms-space-3), var(--ms-safe-bottom)) + var(--ms-control-lg) + 4 * var(--ms-space-3) + 3.5rem + var(--ms-space-2)); }
 
-    .quick-actions, .shelf { display: grid; gap: var(--ms-space-2); }
+    /* minmax(0, 1fr): a card's one-line name must not widen the column. */
+    .quick-actions, .shelf { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--ms-space-2); }
     .quick-actions .ms-row__body small { color: var(--ms-text-quiet); }
     /* The featured card is tinted with the accent, which drops the quiet
        text below AA (4.3:1 on the default light theme). Pull it towards
@@ -236,13 +243,19 @@ export const shellStyles = [tokens, base, controls, css`
     .quick-actions .ms-row[aria-disabled="true"] .ms-row__body strong,
     .quick-actions .ms-row[aria-disabled="true"] .ms-row__body small { color: var(--ms-text-disabled); }
     .home-actions { display: flex; margin: 0 0 var(--ms-space-4); }
-    .shelf-heading { margin: var(--ms-space-5) 0 var(--ms-space-2); color: var(--ms-text-quiet); font-size: var(--ms-t-sm); font-weight: var(--ms-w-bold); }
+    /* The plan card's name stays on one line; its due lines clamp to two
+       (home-rooms.md §5 Cards). The button's name still carries all of it. */
+    .quick-actions .card-title { display: flex; gap: var(--ms-space-1) var(--ms-space-2); align-items: center; min-inline-size: 0; }
+    .quick-actions .card-name { overflow: hidden; min-inline-size: 0; text-overflow: ellipsis; white-space: nowrap; }
+    .quick-actions .card-title .ms-chip { flex: none; }
+    .quick-actions .card-lines { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin-block-start: 0.125rem; color: var(--ms-text); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
+    .quick-actions .line { display: block; padding-inline-start: 1.25rem; text-indent: -1.25rem; }
+    .quick-actions .line .ms-icon { display: inline-block; inline-size: 1rem; block-size: 1rem; margin-inline-end: var(--ms-space-1); vertical-align: -0.1875rem; color: var(--ms-resolved-indicator, var(--ms-accent)); }
+    .quick-actions .line[data-tone="warning"] .ms-icon { color: var(--ms-warning); }
+    .quick-actions .ms-row[aria-disabled="true"] .card-lines { color: var(--ms-text-disabled); }
     .problem { display: grid; gap: var(--ms-space-2); padding: var(--ms-space-4); border: 1px solid var(--ms-line); border-radius: var(--ms-radius-md); }
     .problem p, .loading { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-sm); line-height: var(--ms-lh-normal); }
     .problem .ms-btn { justify-self: start; text-decoration: none; }
-    .map-display { display: grid; gap: var(--ms-space-2); }
-    .map-display .ms-segment { --ms-local: var(--ms-surface-sunken); border: 1px solid var(--ms-line); border-radius: var(--ms-radius-md); background: var(--ms-local); }
-    .map-display .ms-segment .ms-btn { flex: 1; }
     .ms-checkbox { display: flex; gap: var(--ms-space-2); align-items: center; min-block-size: var(--ms-control); font-size: var(--ms-t-sm); }
     .ms-checkbox input { inline-size: 1.25rem; block-size: 1.25rem; margin: 0; accent-color: var(--ms-resolved-indicator, var(--ms-accent)); }
 
@@ -303,9 +316,6 @@ export const shellStyles = [tokens, base, controls, css`
 
     .dialog h2 { margin: 0; font-size: var(--ms-t-lg); }
     .dialog p { color: var(--ms-text-quiet); font-size: var(--ms-t-sm); line-height: var(--ms-lh-normal); }
-    .dialog dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--ms-space-2) var(--ms-space-3); margin: var(--ms-space-3) 0 var(--ms-space-4); font-size: var(--ms-t-sm); }
-    .dialog dt { font-weight: var(--ms-w-bold); }
-    .dialog dd { margin: 0; color: var(--ms-text-quiet); }
     .dialog-actions { display: flex; justify-content: flex-end; gap: var(--ms-space-2); }
 
     /* Programmatic focus after a workflow change is for assistive tech; a ring on a heading reads as a control. */
@@ -420,6 +430,7 @@ export const shellStyles = [tokens, base, controls, css`
     }
     .narrow .title { font-size: var(--ms-t-md); }
     .narrow .context-switcher { max-inline-size: 7rem; }
+    .narrow .robot-switcher { flex: 1 1 auto; min-inline-size: 0; max-inline-size: none; }
     .narrow .full-map-hud { inset-block-end: max(var(--ms-space-3), var(--ms-safe-bottom)); }
     .narrow .workspace.full-map .mobile-sheet { display: none; }
     .narrow .sheet-scrim {

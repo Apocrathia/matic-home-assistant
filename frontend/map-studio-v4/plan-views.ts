@@ -21,7 +21,8 @@ import {
   roomBlocker,
 } from "./state";
 import { translate } from "./localize";
-import { dueLines, formatNumber, scheduleLine, settingLabel } from "./plan-copy";
+import { dueLines, formatNumber, planRowLine2, planRowLine3 } from "./plan-copy";
+import { scheduleLine, settingLabel } from "./plan-cadence";
 
 /** The saved schedule reasons that keep a room's run from starting (plan.md R3). */
 const BLOCKING: readonly CadenceReason[] = [
@@ -177,22 +178,15 @@ export class MaticPlanViewsV4 extends LitElement {
   }
 
   #planRow(plan: SavedPlan, isDefault: boolean) {
-    const count = plan.rooms.length;
-    const ordered = plan.runBehavior === "ordered";
-    const line2 = count === 1
-      ? ordered
-        ? this.#t("v4_plan_row_ordered_one", "1 room · Top to bottom, as listed")
-        : this.#t("v4_plan_row_rotation_one", "1 room · Longest-waiting rooms first")
-      : ordered
-        ? this.#t("v4_plan_row_ordered", "{count} rooms · Top to bottom, as listed", { count: this.#count(count) })
-        : this.#t("v4_plan_row_rotation", "{count} rooms · Longest-waiting rooms first", { count: this.#count(count) });
-    const blocker = plan.nextRunPreview?.blocker;
+    // The home plan card shares these lines (home-rooms.md §5 Cards).
+    const line2 = planRowLine2(this.#t, this.state.locale, plan);
+    const third = planRowLine3(this.#t, this.state.locale, plan);
     // A paused plan shows one status, its chip (plan.md R2).
-    const line3 = !plan.enabled
+    const line3 = third === null
       ? nothing
-      : blocker && blocker !== "plan_disabled"
-        ? html`<span class="lines"><span class="line" data-tone="warning">${icon(iconNoticeWarning)}<span>${this.#t("v4_plan_row_blocked", "Needs attention before it can run")}</span></span></span>`
-        : this.#lines(dueLines(this.#t, this.state.locale, plan.nextRunPreview?.rooms ?? []));
+      : "blocked" in third
+        ? html`<span class="lines"><span class="line" data-tone="warning">${icon(iconNoticeWarning)}<span>${third.blocked}</span></span></span>`
+        : this.#lines(third.due);
     const hint = this.#t("v4_plan_default_hint", "Home Assistant's plan button and plan select run this plan.");
     return html`<li>
       <button

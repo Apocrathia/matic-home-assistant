@@ -290,3 +290,12 @@ def test_every_ms_custom_property_is_defined() -> None:
     used = set().union(*(names for names, _ in found))
     defined = set().union(*(names for _, names in found))
     assert used - defined == set(), f"--ms-* used but never defined: {used - defined}"
+
+
+def test_plan_row_lines_ship_without_schedule_lines() -> None:
+    """The home plan card shares the picker's line helpers, not the Edit schedules (home-rooms.md R1)."""
+    startup = _startup_source()
+    workflow = _STUDIO_V4_WORKFLOW_CHUNK_PATHS[0].read_text(encoding="utf-8")
+    assert "v4_plan_row_rotation" in startup
+    assert "v4_room_schedules_mop" not in startup
+    assert "v4_room_schedules_mop" in workflow

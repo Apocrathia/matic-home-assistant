@@ -31,7 +31,7 @@ export class MenuController implements ReactiveController {
   hostUpdated(): void {
     if (this.#focusFirst) {
       this.#focusFirst = false;
-      this.host.renderRoot.querySelector<HTMLElement>(`${this.root} [role=menuitem]`)?.focus();
+      this.host.renderRoot.querySelector<HTMLElement>(`${this.root} [role^=menuitem]`)?.focus();
     }
   }
 
@@ -54,7 +54,8 @@ export class MenuController implements ReactiveController {
   }
 
   // Escape closes the menu before the shell sees it (shell.md §5 Escape order).
-  // Up and Down move between items, wrapping, and Home and End go to the ends;
+  // Up and Down move between items (every menuitem* role), wrapping, and Home
+  // and End go to the ends;
   // items take focus only this way, so Tab leaves the menu (APG menu button).
   readonly keydown = (event: KeyboardEvent): void => {
     if (!this.open) return;
@@ -63,7 +64,7 @@ export class MenuController implements ReactiveController {
       this.close(true);
       return;
     }
-    const items = [...this.host.renderRoot.querySelectorAll<HTMLElement>(`${this.root} [role=menuitem]`)];
+    const items = [...this.host.renderRoot.querySelectorAll<HTMLElement>(`${this.root} [role^=menuitem]`)];
     const at = items.indexOf(event.composedPath()[0] as HTMLElement);
     const to = event.key === "ArrowDown" ? at + 1
       : event.key === "ArrowUp" ? at - 1

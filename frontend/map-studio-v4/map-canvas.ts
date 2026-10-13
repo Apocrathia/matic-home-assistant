@@ -128,6 +128,8 @@ export class MaticMapCanvasV4 extends LitElement {
     :host([narrow]) ::slotted(.floor-switcher) { inline-size: 7rem; }
     :host([narrow]) .fit { min-inline-size: 44px; padding-inline: var(--ms-space-2); }
     :host([narrow]) .fit .ms-btn__label { display: none; }
+    :host([narrow]) .map-rail { --help-bottom: calc(var(--map-sheet-offset, 0px) + 52px + 44px + var(--ms-space-2)); }
+    :host([narrow]) .navigation-help { inset-block-start: auto; inset-block-end: var(--help-bottom); max-block-size: calc(100% - var(--help-top) - var(--help-bottom)); }
 
     .map-tools, .view-switch, .appearance-switch, .camera-steps { display: flex; }
 
@@ -545,15 +547,19 @@ export class MaticMapCanvasV4 extends LitElement {
     // Draw forces the top view, so the view, appearance and camera groups are
     // noise there; the sheet owns the tools on a phone. Both leave only Fit
     // in the map rail because workspace visibility belongs to the app bar.
+    // Without a scene there is nothing to fit, switch or explain
+    // (home-rooms.md §11 MS-HOME-04), so the rail keeps nothing. A phone's
+    // Room names row is in Map options; its rail keeps the help "?".
     const showView = showScene && !draw;
     const showAppearance = showView && !narrow && state.view === "top";
     const showCamera = showView && state.view === "three";
-    const showTools = !locating;
-    const showExtras = !narrow && !draw;
+    const showTools = showScene && !locating;
+    const showExtras = showScene && !locating && !draw;
+    const showLabels = showExtras && !narrow;
 
     return html`
       <div class="map-rail" data-map-control>
-        <div class="map-context"><slot name="floor"></slot>
+        ${showScene ? html`<div class="map-context"><slot name="floor"></slot>
         ${showView ? html`
           <div class="view-switch ms-surface ms-surface--floating ms-segment" role="group" aria-label=${this.#t("map_view_label", "Map view")}>
             <button
@@ -570,8 +576,7 @@ export class MaticMapCanvasV4 extends LitElement {
             >${this.#t("map_view_top", "2D")}</button>
           </div>
         ` : nothing}
-
-        </div>
+        </div>` : nothing}
         ${showAppearance ? html`
           <div class="appearance-switch ms-surface ms-surface--floating ms-segment" role="group" aria-label=${this.#t("map_style_label", "Map style")}>
             <button
@@ -585,7 +590,7 @@ export class MaticMapCanvasV4 extends LitElement {
               type="button"
               aria-pressed=${String(state.appearance === "rooms")}
               @click=${() => this.#intent({ type: "set-appearance", appearance: "rooms" })}
-            >${this.#t("map_style_room_colours", "Room colors")}</button>
+            >${this.#t("v4_room_colours", "Room colors")}</button>
           </div>
         ` : nothing}
 
@@ -614,8 +619,9 @@ export class MaticMapCanvasV4 extends LitElement {
             ` : nothing}
           </div>
         ` : nothing}
-        ${!locating && showExtras ? html`
+        ${showExtras ? html`
           <div class="map-extras ms-surface ms-surface--floating ms-segment" role="group" aria-label=${this.#t("v4_map_display", "Map display")}>
+              ${showLabels ? html`
               <button
                 class="labels ms-btn"
                 type="button"
@@ -623,6 +629,7 @@ export class MaticMapCanvasV4 extends LitElement {
                 @click=${() => this.#intent({ type: "toggle-labels" })}
                 title=${this.#t("v4_room_names", "Room names")}
               >${icon(iconRoomNames)}<span class="ms-btn__label">${this.#t("v4_room_names", "Room names")}</span></button>
+              ` : nothing}
               <button
                 class="help ms-btn ms-btn--icon"
                 type="button"
@@ -635,7 +642,7 @@ export class MaticMapCanvasV4 extends LitElement {
           </div>
         ` : nothing}
 
-        ${this.#navigationHelp && showScene && showExtras ? html`
+        ${this.#navigationHelp && showExtras ? html`
           <div
             id=${NAVIGATION_HELP_ID}
             class="navigation-help ms-surface ms-surface--floating"
@@ -648,6 +655,8 @@ export class MaticMapCanvasV4 extends LitElement {
               <button class="ms-btn ms-btn--sm" type="button" @click=${() => this.#closeHelp()}>${this.#t("v4_close", "Close")}</button>
             </header>
             <dl>
+              <dt>${this.#t("v4_touch", "Touch")}</dt>
+              <dd>${this.#t("v4_touch_help", "Drag to explore · pinch to zoom · twist two fingers to rotate")}</dd>
               <dt>${this.#t("v4_trackpad", "Trackpad")}</dt>
               <dd>${this.#t("v4_trackpad_help", "Scroll to pan · pinch to zoom · twist to rotate")}</dd>
               <dt>${this.#t("v4_mouse", "Mouse")}</dt>

@@ -71,8 +71,9 @@ Open **Matic Map** from Home Assistant's sidebar. Choose **3D** for the photogra
 map or **2D** for a top-down view. The 2D appearance can show the photo or room map.
 
 Drag to move around the map; use pinch or the wheel to zoom. **Fit map** recenters
-the floor. **How to move the map** lists mouse, touch, and keyboard controls.
-Map options include appearance, refresh, and full screen.
+the floor. The **?** on the map lists touch, trackpad, mouse, and keyboard controls.
+**Map options** holds map detail, map diagnostics, and full screen; on a phone it
+also holds the 2D appearance and room names.
 When choosing rooms for a run or plan, click a room on either map view to select
 or deselect it. The map and room list stay in sync.
 

@@ -61,7 +61,10 @@ export type GalleryScenario =
   | "task-in-progress"
   | "map-unavailable"
   | "map-limited"
-  | "room-limit";
+  | "room-limit"
+  | "home-plan-due"
+  | "home-plan-paused"
+  | "home-plan-blocked";
 
 const verified = (): WorkspaceState => ({
   ...initialWorkspaceState(),
@@ -561,6 +564,27 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
       };
     case "map-limited":
       return { ...state, coherence: "degraded" };
+    // The home plan card's third line kinds (home-rooms.md §5 Cards): due
+    // work in two rooms, a paused plan, a blocked run.
+    case "home-plan-due": {
+      const saved = savedDailyPlan();
+      const rooms = saved.rooms.map((room, index): PlanRoom => index === 0
+        ? { ...room, cadenceReasons: ["mop_due"] }
+        : index === 1 ? { ...room, coverageSetting: "heavy_duty", cadenceReasons: ["mop_due", "coverage_due"] } : room);
+      return withPlans(state, catalogWith([planWithRooms(saved, rooms)]));
+    }
+    case "home-plan-paused":
+      return withPlans(state, catalogWith([{
+        ...savedDailyPlan(),
+        enabled: false,
+        nextRunPreview: previewFor([], { blocker: "plan_disabled" }),
+        nextRunEstimateSeconds: null,
+      }]));
+    case "home-plan-blocked":
+      return withPlans(state, catalogWith([planWithRooms(savedDailyPlan(), savedDailyPlan().rooms, {
+        nextRunPreview: previewFor([], { blocker: "cadence_progress_unverified" }),
+        nextRunEstimateSeconds: null,
+      })]));
     case "room-limit": {
       const rooms = galleryRooms(100);
       const roomIds = rooms.map((room) => room.roomId);
@@ -668,6 +692,9 @@ export const GALLERY_SCENARIOS: readonly GalleryScenario[] = [
   "map-unavailable",
   "map-limited",
   "room-limit",
+  "home-plan-due",
+  "home-plan-paused",
+  "home-plan-blocked",
 ];
 
 /** Every dialog the shell can show; the UX audit captures each one. */

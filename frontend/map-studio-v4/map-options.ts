@@ -1,0 +1,68 @@
+import { html, nothing, type ReactiveControllerHost } from "lit";
+import type { WorkspaceIntent, WorkspaceState } from "./contracts";
+import { MenuController } from "./menu-controller";
+
+type Host = ReactiveControllerHost & HTMLElement & { readonly renderRoot: ParentNode };
+
+export type MapOptionsContext = {
+  state: WorkspaceState;
+  narrow: boolean;
+  browserFullscreen: boolean;
+  t: (key: string, fallback: string) => string;
+  intent: (intent: WorkspaceIntent) => void;
+  diagnostics: () => void;
+  fullscreen: () => void;
+};
+
+/**
+ * The ⋮ Map options menu (home-rooms.md §5 Display; design-system.md §5
+ * Menus): the phone's Map display rows, the map detail choice and the two
+ * actions. The shell loads it on the first press or at idle, since the menu
+ * is off the startup path. A display or detail row keeps the menu open so
+ * the change shows on the map behind it; an action row closes it.
+ */
+export class MapOptions {
+  readonly menu: MenuController;
+
+  constructor(host: Host) {
+    this.menu = new MenuController(host, ".overflow-wrap", ".overflow");
+  }
+
+  render({ state, narrow, browserFullscreen, t, intent, diagnostics, fullscreen }: MapOptionsContext) {
+    const radio = (checked: boolean, label: string, select: () => void) => html`
+      <button class="ms-row ms-row--menu" type="button" role="menuitemradio" aria-checked=${String(checked)} tabindex="-1" @click=${select}>${label}</button>
+    `;
+    const detail = (quality: WorkspaceState["quality"], label: string) =>
+      radio(state.quality === quality, label, () => intent({ type: "set-quality", quality }));
+    return html`
+      <div id="map-options" class="overflow-menu ms-surface ms-surface--overlay" role="menu" aria-label=${t("v4_map_options", "Map options")}>
+        ${narrow ? html`
+          <div role="group" aria-labelledby="menu-display">
+            <p class="menu-heading" id="menu-display" role="presentation">${t("v4_map_display", "Map display")}</p>
+            ${state.view === "top" ? html`
+              ${radio(state.appearance === "photo", t("map_style_photo", "Photo"), () => intent({ type: "set-appearance", appearance: "photo" }))}
+              ${radio(state.appearance === "rooms", t("v4_room_colours", "Room colors"), () => intent({ type: "set-appearance", appearance: "rooms" }))}
+            ` : nothing}
+            <button
+              class="ms-row ms-row--menu"
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked=${String(state.labelsVisible)}
+              tabindex="-1"
+              @click=${() => intent({ type: "toggle-labels" })}
+            ><span>${t("v4_room_names", "Room names")}</span><span class="ms-switch" aria-checked=${String(state.labelsVisible)} aria-hidden="true"></span></button>
+          </div>
+        ` : nothing}
+        <div role="group" aria-labelledby="menu-detail">
+          <p class="menu-heading" id="menu-detail" role="presentation">${t("map_quality_label", "Map detail")}</p>
+          ${detail("auto", t("map_quality_auto", "Auto detail"))}
+          ${detail("efficient", t("map_quality_efficient", "Efficient"))}
+          ${detail("balanced", t("map_quality_balanced", "Balanced"))}
+          ${detail("maximum", t("map_quality_maximum", "Maximum"))}
+        </div>
+        <button class="ms-row ms-row--menu" type="button" role="menuitem" tabindex="-1" @click=${() => { this.menu.close(false); diagnostics(); }}>${t("v4_map_diagnostics", "Map diagnostics")}</button>
+        <button class="ms-row ms-row--menu" type="button" role="menuitem" tabindex="-1" @click=${() => { this.menu.close(true); fullscreen(); }}>${browserFullscreen ? t("v4_leave_full_screen", "Leave full screen") : t("v4_full_screen", "Full screen")}</button>
+      </div>
+    `;
+  }
+}
