@@ -116,13 +116,20 @@ const exerciseCadenceRoundtrip = async ({ page }) => {
   };
   await openSchedule();
   await expectNoSeriousAccessibilityViolations(page, "plan cadence editor");
-  const scope = schedule.getByLabel("Count cleans for Kitchen");
+  // "Count cleans" lives under Advanced (room-schedule.md §3).
+  const scopeRadio = (label) => schedule.getByRole("radio", { name: label, exact: true, includeHidden: true });
+  const setScope = async (label) => {
+    if (!(await scopeRadio(label).isVisible())) await schedule.getByText("Advanced", { exact: true }).click();
+    await scopeRadio(label).check();
+  };
+  const shared = "Across all plans (recommended)";
+  const thisPlan = "In this plan only";
   // Each field is named by its row's label line, which says its value (room-schedule.md §3).
   const mopInterval = schedule.getByRole("spinbutton", { name: /^Mop/ });
   const coverageInterval = schedule.getByRole("spinbutton", { name: /vacuum/ });
   const coverageSetting = schedule.getByLabel("Vacuum level for Kitchen");
-  const mopNext = schedule.getByLabel("Do vacuum and mop on the next clean for Kitchen");
-  const coverageNext = schedule.getByLabel("Add a vacuum rotation on the next clean for Kitchen");
+  // One next-clean switch, named by the work it brings forward.
+  const nextClean = schedule.getByRole("switch");
   const save = panel.getByRole("button", { name: "Save", exact: true });
 
   const waitForReadback = async (saveCount, expectedEnabled, expectedPolicy) => {
@@ -159,16 +166,17 @@ const exerciseCadenceRoundtrip = async ({ page }) => {
     });
   };
 
-  await scope.selectOption("shared");
+  await setScope(shared);
   await mopInterval.fill("7");
   await coverageInterval.fill("5");
   await coverageSetting.selectOption("heavy_duty");
-  await mopNext.check();
-  await coverageNext.check();
+  await expect(nextClean).toHaveAccessibleName("Mop and heavy duty vacuum on the next clean");
+  await nextClean.click();
+  await expect(nextClean).toHaveAttribute("aria-checked", "true");
   await save.click();
   await waitForReadback(1, true, sharedEdited);
   await openSchedule();
-  await expect(scope).toHaveValue("shared");
+  await expect(scopeRadio(shared)).toBeChecked();
   await expect(mopInterval).toHaveValue("7");
   await expect(coverageInterval).toHaveValue("5");
 
@@ -179,21 +187,22 @@ const exerciseCadenceRoundtrip = async ({ page }) => {
   await panel.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
   await rooms.getByRole("button", { name: "Settings for Kitchen", exact: true }).click();
   const reopenedSchedule = rooms.getByRole("group", { name: "Room schedule for Kitchen" });
-  await expect(reopenedSchedule.getByLabel("Count cleans for Kitchen")).toHaveValue("shared");
+  await expect(reopenedSchedule.getByRole("radio", { name: shared, exact: true, includeHidden: true })).toBeChecked();
   await expect(reopenedSchedule.getByRole("spinbutton", { name: "Mop every 7 cleans" })).toHaveValue("7");
   await expect(reopenedSchedule.getByRole("spinbutton", { name: "Heavy duty vacuum every 5 cleans" })).toHaveValue("5");
   await expect(reopenedSchedule.getByLabel("Vacuum level for Kitchen")).toHaveValue("heavy_duty");
-  await expect(reopenedSchedule.getByLabel("Do vacuum and mop on the next clean for Kitchen")).toBeChecked();
-  await expect(reopenedSchedule.getByLabel("Add a vacuum rotation on the next clean for Kitchen")).toBeChecked();
+  await expect(reopenedSchedule.getByRole("switch")).toHaveAttribute("aria-checked", "true");
 
-  await scope.selectOption("plan");
+  // The saved flags stay set, so the switch stays on through the scope change.
+  await setScope(thisPlan);
+  await expect(nextClean).toHaveAttribute("aria-checked", "true");
   await mopInterval.fill("4");
   await coverageInterval.fill("2");
   await coverageSetting.selectOption("standard");
   await save.click();
   await waitForReadback(2, true, privateEdited);
   await openSchedule();
-  await expect(scope).toHaveValue("plan");
+  await expect(scopeRadio(thisPlan)).toBeChecked();
   await expect(mopInterval).toHaveValue("4");
   await expect(coverageInterval).toHaveValue("2");
 
@@ -202,8 +211,8 @@ const exerciseCadenceRoundtrip = async ({ page }) => {
   await save.click();
   await waitForReadback(3, true, cadenceDisabled);
   await openSchedule();
-  await expect(mopNext).not.toBeChecked();
-  await expect(coverageNext).not.toBeChecked();
+  // Nothing is scheduled, so there is nothing to bring forward.
+  await expect(nextClean).toHaveCount(0);
 
   // A new rotation is Heavy duty unless a level is chosen first (room-schedule.md D1).
   await expect(coverageSetting).toHaveValue("heavy_duty");
@@ -273,7 +282,7 @@ test("mop-only legacy vacuum rules stay visible and can leave shared participati
   const turnOff = schedule.getByRole("button", { name: "Turn off the vacuum rotation in Kitchen", exact: true });
   await expect(turnOff).toHaveText("Turn off");
   await turnOff.click();
-  await expect(schedule.getByLabel("Count cleans for Kitchen")).toHaveValue("plan");
+  await expect(schedule.getByRole("radio", { name: "In this plan only", exact: true, includeHidden: true })).toBeChecked();
   await expect(rotation).toHaveValue("");
   await panel.getByRole("button", { name: "Save", exact: true }).click();
   await expect.poll(() => page.evaluate(() => window.__panelFixture.serviceCalls.length)).toBe(1);

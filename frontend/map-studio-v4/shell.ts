@@ -717,10 +717,7 @@ export class MaticMapShellV4 extends LitElement {
         }
         // Safari does not focus a button on a pointing-device click. Use the
         // explicit workflow launcher if there was no nested active element.
-        const launcher = this.#dialogLauncher?.isConnected
-          && this.#dialogLauncher.hasAttribute("data-dialog-launcher")
-          ? this.#dialogLauncher
-          : this.#dialogLauncherFor(previous.dialog);
+        const launcher = this.#dialogReturn(previous);
         this.#dialogLauncher = null;
         // One rule: try the launcher, then, if closing the dialog left focus
         // on the page body (the launcher is gone or hidden, or Safari gave a
@@ -938,11 +935,7 @@ export class MaticMapShellV4 extends LitElement {
   }
 
   #dismissDialog(): void {
-    const dialog = this.state.dialog;
-    const launcher = dialog && this.#dialogLauncher?.isConnected
-      && this.#dialogLauncher.hasAttribute("data-dialog-launcher")
-      ? this.#dialogLauncher
-      : dialog ? this.#dialogLauncherFor(dialog) : null;
+    const launcher = this.#dialogReturn(this.state);
     this.#intent({ type: "dismiss-top-layer" });
     if (launcher) requestAnimationFrame(() => launcher.focus({ preventScroll: true }));
   }
@@ -1176,6 +1169,15 @@ export class MaticMapShellV4 extends LitElement {
   #captureDialogLauncher(event: Event): void {
     const launcher = this.#views.value?.dialogLauncher(event, this.state, (intent) => this.#intent(intent));
     if (launcher) this.#dialogLauncher = launcher;
+  }
+
+  // Focus after a dialog: its launcher, else where the views say (a schedule
+  // Reset's room), else the dialog's launcher found again.
+  #dialogReturn(state: WorkspaceState): HTMLElement | null {
+    if (!state.dialog) return null;
+    return this.#dialogLauncher?.isConnected && this.#dialogLauncher.hasAttribute("data-dialog-launcher")
+      ? this.#dialogLauncher
+      : this.#views.value?.dialogReturnTarget(state, this.renderRoot) ?? this.#dialogLauncherFor(state.dialog);
   }
 
   #dialogLauncherFor(dialog: NonNullable<WorkspaceState["dialog"]>): HTMLElement | null {

@@ -31,7 +31,7 @@ export { actionReason, focusPlanTarget, planCancel, planTitle, planTools } from 
 
 // Dialogs that only these views' controls open carry their copy, launcher and
 // confirm here.
-export { confirmDialog, dialogCopy, dialogLauncher } from "./dialog-copy";
+export { confirmDialog, dialogCopy, dialogLauncher, dialogReturnTarget } from "./dialog-copy";
 
 const planViewsTag = unsafeStatic(PLAN_VIEWS_TAG);
 

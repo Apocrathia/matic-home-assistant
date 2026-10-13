@@ -46,6 +46,8 @@ export type GalleryScenario =
   | "plan-cadence-shared"
   | "plan-cadence-blocked"
   | "plan-schedule-conflict"
+  | "plan-schedule-available"
+  | "plan-schedule-joining"
   | "plan-legacy-oversized"
   | "area-review-new"
   | "area-review-rebind"
@@ -429,6 +431,28 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
         expandedRoom: "room-a",
       };
     }
+    case "plan-schedule-available":
+    case "plan-schedule-joining": {
+      // Office has a shared schedule this plan doesn't use yet (room-schedule.md §4 S6, S7).
+      const catalog = catalogWith([savedDailyPlan()]);
+      const available = {
+        ...openPlan(state, savedDailyPlan(), "edit", {
+          ...catalog,
+          rooms: catalog.rooms.map((room) => room.roomId === "room-c"
+            ? { ...room, sharedCadence: sharedCadencePolicy(), sharedCadenceProgress: sharedCadenceProgress() }
+            : room),
+        }),
+        expandedRoom: "room-c",
+      };
+      return scenario === "plan-schedule-available" ? available : {
+        ...available,
+        planDraft: {
+          ...available.planDraft,
+          dirty: true,
+          rooms: available.planDraft.rooms.map((room) => room.roomId === "room-c" ? { ...room, cadence: sharedCadencePolicy() } : room),
+        },
+      };
+    }
     case "plan-schedule-conflict": {
       // A vacuum rotation left on a mop-only room (room-schedule.md §4 S10).
       const plan = patchFirstRoom(savedDailyPlan(), {
@@ -628,6 +652,8 @@ export const GALLERY_SCENARIOS: readonly GalleryScenario[] = [
   "plan-cadence-shared",
   "plan-cadence-blocked",
   "plan-schedule-conflict",
+  "plan-schedule-available",
+  "plan-schedule-joining",
   "plan-legacy-oversized",
   "area-review-new",
   "area-review-rebind",

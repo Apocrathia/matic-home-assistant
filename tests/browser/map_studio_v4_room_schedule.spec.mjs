@@ -1,5 +1,7 @@
+import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 import { build } from "esbuild";
+import { installPanelFixture } from "./map_studio_v4_panel_fixture.mjs";
 
 // room-schedule.md: the pure schedule model (plan-cadence.ts), tested through
 // an esbuild-bundled harness route, then the Schedule block in the gallery.
@@ -398,6 +400,286 @@ test.describe("Schedule block", () => {
         expect(box.width).toBeGreaterThanOrEqual(44);
         expect(box.height).toBeGreaterThanOrEqual(44);
       }
+    });
+  }
+});
+
+test.describe("next clean, Advanced and joining", () => {
+  test.beforeEach(({ page }) => page.setViewportSize({ width: 1024, height: 768 }));
+  const shared = { scope: "shared", mopEveryN: 3, coverageEveryN: 2, periodicCoverageSetting: "heavy_duty", doMopNext: false, doCoverageNext: false };
+  const officeCadence = async (page) => (await snapshot(page)).planDraft.rooms.find((room) => room.roomId === "room-c").cadence;
+
+  test("turning a row on joins Office's shared schedule, read-only until Save", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-schedule-available" });
+    const schedule = gallery.getByRole("group", { name: "Room schedule for Office" });
+    await expect(schedule.getByText("Office has a shared schedule, and turning on a row uses it.", { exact: true })).toBeVisible();
+    await schedule.getByRole("button", { name: "Increase Mop", exact: true }).click();
+    const mop = schedule.getByRole("spinbutton", { name: "Mop every 3 cleans" });
+    const rotation = schedule.getByRole("spinbutton", { name: "Heavy duty vacuum every 2 cleans" });
+    await expect(mop).toHaveValue("3");
+    await expect(rotation).toHaveValue("2");
+    await expect(mop).toHaveAttribute("readonly", "");
+    await expect(rotation).toHaveAttribute("readonly", "");
+    await expect(schedule.getByRole("button", { name: /^(Increase|Decrease) / })).toHaveCount(0);
+    await expect(schedule.getByRole("combobox")).toHaveCount(0);
+    await expect(mop).toHaveAccessibleDescription("Due in 2 cleans");
+    await expect(rotation).toHaveAccessibleDescription("Due next clean");
+    await expect(schedule.getByText("Uses Office's shared schedule; change it after you save, or choose \"In this plan only\" under Advanced.", { exact: true })).toBeVisible();
+    await expect(schedule.getByText("Saving shares this room's progress with every plan that uses it, picking up any progress already counted.", { exact: true })).toBeVisible();
+    await expect(schedule.getByText(/has a shared schedule/)).toHaveCount(0);
+    expect(await officeCadence(page)).toEqual(shared);
+    const next = schedule.getByRole("switch", { name: "Mop on the next clean" });
+    await expect(next).toHaveAttribute("aria-disabled", "true");
+    await next.click({ force: true });
+    expect(await officeCadence(page)).toEqual(shared);
+
+    await schedule.getByText("Advanced", { exact: true }).click();
+    await schedule.getByRole("radio", { name: "In this plan only" }).check();
+    expect(await officeCadence(page)).toEqual({ ...shared, scope: "plan" });
+    await expect(mop).not.toHaveAttribute("readonly", "");
+    await expect(schedule.getByText("Saving starts progress for this plan only, from zero.", { exact: true })).toBeVisible();
+    await schedule.getByRole("radio", { name: "Across all plans (recommended)" }).check();
+    expect(await officeCadence(page)).toEqual(shared);
+    await expect(mop).toHaveAttribute("readonly", "");
+  });
+
+  test("Cancel undoes a join", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-schedule-joining" });
+    await gallery.getByRole("button", { name: "Cancel", exact: true }).click();
+    const discard = gallery.getByRole("dialog");
+    await discard.getByRole("button", { name: /^Discard/ }).click();
+    const daily = (await snapshot(page)).resources.plans.value.plans[0];
+    expect(daily.rooms.find((room) => room.roomId === "room-c").cadence).toBeUndefined();
+    const state = await snapshot(page);
+    expect(state.planDraft.rooms.find((room) => room.roomId === "room-c").cadence).toBeUndefined();
+  });
+
+  test("the next-clean switch brings work forward and its label names it", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-cadence-shared" });
+    const schedule = gallery.getByRole("group", { name: "Room schedule for Kitchen" });
+    await expect(schedule.getByText("Changes apply to every plan that uses Kitchen's shared schedule.", { exact: true })).toBeVisible();
+    const next = schedule.getByRole("switch", { name: "Mop on the next clean" });
+    await expect(next).toHaveAccessibleDescription("Brings it forward once; the schedule then continues as usual.");
+    await expect(next).toHaveAttribute("aria-checked", "false");
+    await next.click();
+    expect((await snapshot(page)).planDraft.rooms[0].cadence).toMatchObject({ doMopNext: true, doCoverageNext: false });
+    await expect(next).toHaveAttribute("aria-checked", "true");
+    await expect(schedule.getByRole("spinbutton", { name: "Mop every 3 cleans" })).toHaveAccessibleDescription("Due next clean");
+    await next.click();
+    expect((await snapshot(page)).planDraft.rooms[0].cadence).toMatchObject({ doMopNext: false, doCoverageNext: false });
+    // Turning the mop row Off clears the work it brought forward.
+    await next.click();
+    const mop = schedule.getByRole("spinbutton", { name: /^Mop/ });
+    await mop.fill("");
+    await mop.press("Tab");
+    expect((await snapshot(page)).planDraft.rooms[0].cadence).toMatchObject({ mopEveryN: null, doMopNext: false });
+    await expect(schedule.getByRole("switch")).toHaveCount(0);
+
+    // With neither due, the label names both; every clean is never named.
+    await patchState(page, `{ ...s, planDraft: { ...s.planDraft, rooms: s.planDraft.rooms.map((room, index) => index ? room : { ...room, cadenceProgress: { ...room.cadenceProgress, nextMopIn: 2, nextCoverageIn: 2 }, cadence: { ...room.cadence, mopEveryN: 3, doMopNext: false } }) } }`);
+    await expect(schedule.getByRole("switch")).toHaveAccessibleName("Mop and heavy duty vacuum on the next clean");
+    await patchState(page, `{ ...s, planDraft: { ...s.planDraft, rooms: s.planDraft.rooms.map((room, index) => index ? room : { ...room, cadenceProgress: { ...room.cadenceProgress, nextMopIn: 1, nextCoverageIn: 1 }, cadence: { ...room.cadence, mopEveryN: 1 } }) } }`);
+    await expect(schedule.getByRole("switch")).toHaveCount(0);
+  });
+
+  test("a new schedule counts across all plans, and Advanced holds the choice", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-cadence-shared" });
+    await gallery.getByRole("button", { name: "Settings for Living room", exact: true }).click();
+    const schedule = gallery.getByRole("group", { name: "Room schedule for Living room" });
+    const summary = schedule.locator("details.advanced > summary");
+    await expect(summary).toHaveText("Advanced");
+    expect(await schedule.locator("details.advanced").evaluate((details) => details.open)).toBe(false);
+    expect((await summary.boundingBox()).height).toBeGreaterThanOrEqual(44);
+    await schedule.getByRole("button", { name: "Increase Mop", exact: true }).click();
+    expect((await snapshot(page)).planDraft.rooms[1].cadence.scope).toBe("shared");
+    await expect(schedule.getByText("Saving creates a schedule shared by every plan that uses this room, starting from zero.", { exact: true })).toBeVisible();
+    await summary.click();
+    for (const radio of await schedule.getByRole("radio").all()) expect((await radio.locator("..").boundingBox()).height).toBeGreaterThanOrEqual(44);
+    await expect(schedule.getByText("Only cleans the robot confirms count toward these schedules, and due work stays due until a clean is confirmed.")).toBeVisible();
+  });
+
+  test("leaving a shared schedule says other plans keep it", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-cadence-shared" });
+    const schedule = gallery.getByRole("group", { name: "Room schedule for Kitchen" });
+    await schedule.getByText("Advanced", { exact: true }).click();
+    await schedule.getByRole("radio", { name: "In this plan only" }).check();
+    await expect(schedule.getByText("Saving starts new progress for this plan only, and other plans keep the shared schedule.", { exact: true })).toBeVisible();
+  });
+});
+
+// Review Focus 1: a room with a shared schedule this plan doesn't use never
+// saves the user's own values, or Off, counted across all plans.
+test.describe("saving next to a shared schedule", () => {
+  const raw = { scope: "shared", mop_every_n: 3, coverage_every_n: 2, periodic_coverage_setting: "heavy_duty", do_mop_next: false, do_coverage_next: false };
+  const catalog = {
+    rooms: [{ room_id: "room-a", name: "Kitchen", shared_cadence: raw }],
+    selected_plan: "daily",
+    plans: [{
+      id: "daily", name: "Daily clean", enabled: true, run_behavior: "intelligent",
+      rooms: [{ room_id: "room-a", cleaning_mode: "vacuum", coverage_setting: "standard" }],
+      room_order: ["room-a"], return_to_base: true, finish_current_room: false, finish_current_room_threshold: 50,
+    }],
+  };
+  const open = async (page) => {
+    const fixture = await installPanelFixture(page, { initialPlanCatalog: catalog, moduleSource: "packaged" });
+    await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+    const panel = page.locator(fixture.panelTag);
+    await panel.getByRole("button", { name: /^Run a plan/ }).click();
+    await panel.getByRole("button", { name: /^Daily clean/ }).click();
+    await panel.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
+    await panel.getByRole("button", { name: "Settings for Kitchen", exact: true }).click();
+    return { panel, schedule: panel.getByRole("group", { name: "Room schedule for Kitchen" }) };
+  };
+  const saved = async (page, panel) => {
+    await panel.getByRole("button", { name: "Save", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__panelFixture.serviceCalls.length)).toBe(1);
+    return (await page.evaluate(() => window.__panelFixture.serviceCalls))[0].data.rooms[0];
+  };
+
+  test("a level chosen while Off sends no schedule", async ({ page }) => {
+    const { panel, schedule } = await open(page);
+    await schedule.getByLabel("Vacuum level for Kitchen").selectOption("quick");
+    await panel.getByRole("textbox", { name: "Plan name" }).fill("Daily clean 2");
+    expect(await saved(page, panel)).not.toHaveProperty("cadence");
+  });
+
+  test("turning a row on sends exactly the shared schedule", async ({ page }) => {
+    const { panel, schedule } = await open(page);
+    await schedule.getByRole("button", { name: "Increase Mop", exact: true }).click();
+    expect((await saved(page, panel)).cadence).toEqual(raw);
+  });
+
+  test("In this plan only sends the user's own values", async ({ page }) => {
+    const { panel, schedule } = await open(page);
+    await schedule.getByRole("button", { name: "Increase Mop", exact: true }).click();
+    await schedule.getByText("Advanced", { exact: true }).click();
+    await schedule.getByRole("radio", { name: "In this plan only" }).check();
+    await schedule.getByRole("button", { name: "Increase Mop every 3 cleans" }).click();
+    expect((await saved(page, panel)).cadence).toEqual({ ...raw, scope: "plan", mop_every_n: 4 });
+  });
+});
+
+test.describe("room menu and Reset", () => {
+  test.beforeEach(({ page }) => page.setViewportSize({ width: 1024, height: 768 }));
+  const focusedDisclosure = (page) => page.evaluate(() => {
+    let active = document.activeElement;
+    while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+    return active?.getAttribute("data-room-disclosure") ?? active?.getAttribute("aria-label") ?? null;
+  });
+  const listenForAction = (page) => page.evaluate((tag) => {
+    const element = document.querySelector(tag);
+    element.__action = null;
+    element.addEventListener("matic-workspace-action", (event) => { element.__action = event.detail; }, { once: true });
+  }, GALLERY_TAG);
+
+  test("More for Kitchen resets a schedule and returns focus to the room", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-cadence-shared" });
+    const schedule = gallery.getByRole("group", { name: "Room schedule for Kitchen" });
+    const more = schedule.getByRole("button", { name: "More for Kitchen" });
+    await expect(more).toHaveAttribute("aria-haspopup", "menu");
+    await more.click();
+    const menu = schedule.getByRole("menu", { name: "More for Kitchen" });
+    await expect(menu.getByRole("menuitem", { name: "Reset mopping progress for Kitchen" })).toHaveText("Reset mopping");
+    await expect(menu.getByRole("menuitem", { name: "Reset vacuum rotation progress for Kitchen" })).toHaveText("Reset vacuum rotation");
+    await expect(menu.getByRole("menuitem").first()).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(more).toBeFocused();
+    await expect(gallery.getByRole("heading", { level: 2 })).toBeVisible();
+    expect((await snapshot(page)).planView).toBe("edit");
+
+    await more.click();
+    await menu.getByRole("menuitem", { name: "Reset mopping progress for Kitchen" }).click();
+    const dialog = gallery.getByRole("dialog", { name: "Reset mopping progress?" });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(() => focusedDisclosure(page)).toBe("room-a");
+    expect((await snapshot(page)).expandedRoom).toBe("room-a");
+
+    await more.click();
+    await menu.getByRole("menuitem", { name: "Reset mopping progress for Kitchen" }).click();
+    await listenForAction(page);
+    await dialog.getByRole("button", { name: "Reset", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    expect(await page.evaluate((tag) => document.querySelector(tag).__action, GALLERY_TAG))
+      .toEqual({ id: "reset-room-cadence", planId: "daily", roomId: "room-a", mode: "mop" });
+    await expect.poll(() => focusedDisclosure(page)).toBe("room-a");
+
+    await more.click();
+    await menu.getByRole("menuitem", { name: "Reset vacuum rotation progress for Kitchen" }).click();
+    await expect(gallery.getByRole("dialog", { name: "Reset vacuum rotation progress?" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect.poll(() => focusedDisclosure(page)).toBe("room-a");
+  });
+
+  test("nothing to reset offers no menu", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-cadence-shared" });
+    await patchState(page, `{ ...s, resources: { ...s.resources, plans: { ...s.resources.plans, value: { ...s.resources.plans.value,
+      plans: s.resources.plans.value.plans.map((plan) => ({ ...plan, rooms: plan.rooms.map((room) => room.cadenceProgress
+        ? { ...room, cadenceProgress: { ...room.cadenceProgress, mopProgress: 0, coverageProgress: 0 } } : room) })) } } } }`);
+    const schedule = gallery.getByRole("group", { name: "Room schedule for Kitchen" });
+    await expect(schedule.getByRole("spinbutton", { name: "Mop every 3 cleans" })).toBeVisible();
+    await expect(schedule.getByRole("button", { name: "More for Kitchen" })).toHaveCount(0);
+  });
+
+  for (const [why, setup, reason] of [
+    ["unsaved changes", "dirty", "Can't reset until you save or cancel your changes."],
+    ["a busy robot", "{ ...s, activity: \"cleaning\" }", "Can't reset until the robot is idle and the map is live."],
+  ]) {
+    test(`Reset waits for ${why}`, async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "plan-cadence-shared" });
+      const schedule = gallery.getByRole("group", { name: "Room schedule for Kitchen" });
+      if (setup === "dirty") await schedule.getByRole("button", { name: "Increase Mop every 3 cleans" }).click();
+      else await patchState(page, setup);
+      await schedule.getByRole("button", { name: "More for Kitchen" }).click();
+      const item = schedule.getByRole("menuitem", { name: "Reset mopping progress for Kitchen" });
+      await expect(item).toHaveAttribute("aria-disabled", "true");
+      await expect(item).toHaveAccessibleDescription(reason);
+      await item.click({ force: true });
+      await expect(gallery.getByRole("dialog")).toHaveCount(0);
+      expect((await snapshot(page)).dialog).toBeNull();
+    });
+  }
+
+  test("progress Home Assistant can't confirm shows Reset in its row", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-cadence-blocked" });
+    const schedule = gallery.getByRole("group", { name: "Room schedule for Kitchen" });
+    await expect(schedule.getByText("Can't run this plan until you fix Kitchen's schedule.", { exact: true })).toBeVisible();
+    const mop = schedule.getByRole("spinbutton", { name: /^Mop/ });
+    await expect(mop).toHaveAccessibleDescription("Can't run this schedule until you reset its mopping progress, which Home Assistant can't confirm.");
+    const reset = schedule.locator(".sched-row").getByRole("button", { name: "Reset mopping progress for Kitchen" });
+    await expect(reset).toHaveText("Reset mopping");
+    await reset.click();
+    const dialog = gallery.getByRole("dialog", { name: "Reset mopping progress?" });
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(() => focusedDisclosure(page)).toBe("room-a");
+  });
+});
+
+test.describe("Schedule block appearance", () => {
+  for (const [label, setup] of [
+    ["dark", async (page) => page.emulateMedia({ colorScheme: "dark" })],
+    ["right-to-left", async (page) => page.evaluate(() => { document.documentElement.dir = "rtl"; })],
+    ["forced colors", async (page) => page.emulateMedia({ forcedColors: "active" })],
+  ]) {
+    test(`in ${label} at 390 it has no serious axe finding and stays inside the card`, async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await setup(page);
+      const gallery = await loadGallery(page, { scenario: "plan-cadence-shared", narrow: true });
+      const schedule = gallery.getByRole("group", { name: "Room schedule for Kitchen" });
+      await schedule.getByText("Advanced", { exact: true }).click();
+      await expect(schedule.getByRole("radio", { name: "Across all plans (recommended)" })).toBeChecked();
+      const { violations } = await new AxeBuilder({ page }).analyze();
+      expect(violations.filter(({ impact }) => impact === "serious" || impact === "critical").map(({ id, nodes }) => ({ id, nodes: nodes.map((node) => node.target) }))).toEqual([]);
+      const escaped = await schedule.evaluate((element) => {
+        const card = element.closest(".edit-row").getBoundingClientRect();
+        return [...element.querySelectorAll(".ms-stepper button, .advanced > summary .ms-icon, .room-more > button")]
+          .map((control) => control.getBoundingClientRect())
+          .filter((box) => box.left < card.left - 1 || box.right > card.right + 1).length;
+      });
+      expect(escaped).toBe(0);
     });
   }
 });

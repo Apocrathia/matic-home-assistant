@@ -7,6 +7,7 @@ import { base, tokens } from "./tokens";
 import type { Localize, NoButtonAction, PrimaryAction, WorkspaceIntent, WorkspaceState } from "./contracts";
 import { PLAN_TOOLS_TAG, PLAN_VIEWS_TAG, WORKFLOW_TAG } from "./element-tags";
 import { WORKSPACE_INTENT_EVENT } from "./map-canvas";
+import { MenuController } from "./menu-controller";
 import { deleteSubject, initialWorkspaceState } from "./state";
 import { translate } from "./localize";
 
@@ -19,7 +20,6 @@ export class MaticPlanToolsV4 extends LitElement {
   static override properties = {
     state: { attribute: false },
     localize: { attribute: false },
-    _open: { state: true },
   };
 
   // `display: contents` lays the button and its reason line into the
@@ -38,7 +38,6 @@ export class MaticPlanToolsV4 extends LitElement {
 
   state: WorkspaceState = initialWorkspaceState();
   localize?: Localize;
-  protected _open = false;
 
   #t(key: string, fallback: string, placeholders?: Readonly<Record<string, string>>): string {
     return translate(this.localize, key, fallback, placeholders);
@@ -49,47 +48,10 @@ export class MaticPlanToolsV4 extends LitElement {
     from.dispatchEvent(new CustomEvent(WORKSPACE_INTENT_EVENT, { detail: intent, bubbles: true, composed: true }));
   }
 
+  readonly #menu = new MenuController(this, ".more", "> button");
+
   protected override willUpdate(changed: PropertyValues<this>): void {
-    if (changed.has("state") && this.state.planView !== "edit") this._open = false;
-  }
-
-  protected override updated(changed: PropertyValues): void {
-    if (changed.has("_open") && this._open) this.renderRoot.querySelector<HTMLElement>("[role=menuitem]")?.focus();
-  }
-
-  #close(): void {
-    this._open = false;
-    this.renderRoot.querySelector<HTMLElement>(".more > button")?.focus();
-  }
-
-  // Escape closes the menu before the shell sees it (shell.md §5 Escape order).
-  #keydown(event: KeyboardEvent): void {
-    if (event.key !== "Escape" || !this._open) return;
-    event.preventDefault();
-    this.#close();
-  }
-
-  // The menu closes when focus or a press goes elsewhere. Safari gives a
-  // pressed button no focus and moves it to a focusable ancestor instead, so
-  // a press inside the menu keeps focus where it is (mousedown below).
-  #focusout(event: FocusEvent): void {
-    const next = event.relatedTarget as Node | null;
-    if (next && !(event.currentTarget as Node).contains(next)) this._open = false;
-  }
-
-  readonly #outsidePointer = (event: PointerEvent): void => {
-    const more = this.renderRoot.querySelector(".more");
-    if (more && !event.composedPath().includes(more)) this._open = false;
-  };
-
-  override connectedCallback(): void {
-    super.connectedCallback();
-    window.addEventListener("pointerdown", this.#outsidePointer, true);
-  }
-
-  override disconnectedCallback(): void {
-    window.removeEventListener("pointerdown", this.#outsidePointer, true);
-    super.disconnectedCallback();
+    if (changed.has("state") && this.state.planView !== "edit") this.#menu.open = false;
   }
 
   // Delete waits for an unsaved edit and for any command still pending: a
@@ -105,7 +67,7 @@ export class MaticPlanToolsV4 extends LitElement {
   #delete(event: Event): void {
     if (this.#deleteReason()) return;
     const launcher = (event.currentTarget as HTMLElement).closest(".more")?.querySelector("button");
-    this._open = false;
+    this.#menu.close(false);
     this.#intent({ type: "open-dialog", dialog: "confirmDeletePlan" }, launcher ?? this);
   }
 
@@ -133,17 +95,17 @@ export class MaticPlanToolsV4 extends LitElement {
     if (!deleteSubject(this.state, "confirmDeletePlan")) return nothing;
     const held = this.#deleteReason();
     return html`
-      <div class="more" @keydown=${this.#keydown} @focusout=${this.#focusout}>
+      <div class="more" @keydown=${this.#menu.keydown} @focusout=${this.#menu.focusout}>
         <button
           class="ms-btn ms-btn--icon"
           type="button"
           aria-label=${this.#t("v4_more_actions", "More actions")}
           aria-haspopup="menu"
-          aria-expanded=${String(this._open)}
+          aria-expanded=${String(this.#menu.open)}
           data-dialog-launcher="confirmDeletePlan"
-          @click=${() => { this._open = !this._open; }}
+          @click=${() => this.#menu.toggle()}
         >${icon(iconOverflow)}</button>
-        ${this._open ? html`
+        ${this.#menu.open ? html`
           <div class="menu ms-surface ms-surface--overlay" @mousedown=${(event: Event) => event.preventDefault()}>
             <div role="menu" aria-label=${this.#t("v4_more_actions", "More actions")}><button
               class="ms-row ms-row--menu"

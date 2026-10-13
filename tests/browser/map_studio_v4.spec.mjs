@@ -594,15 +594,18 @@ test.describe("Map Studio v0.4 foundation", () => {
     const inspector = gallery.locator(".inspector");
     // plan.md §3: a room's schedule is inside its settings.
     await inspector.getByRole("button", { name: "Settings for Kitchen", exact: true }).click();
-    await expect(inspector.getByRole("group", { name: "Room schedule for Kitchen" })).toBeVisible();
-    await expect(inspector.getByRole("button", { name: "Reset vacuum rotation progress for Kitchen" })).toBeVisible();
-    const reset = inspector.getByRole("button", { name: "Reset mopping progress for Kitchen" });
+    // room-schedule.md §3: Reset lives in the room's "More for {room}" menu.
+    const more = inspector.getByRole("group", { name: "Room schedule for Kitchen" }).getByRole("button", { name: "More for Kitchen" });
+    await more.click();
+    await expect(inspector.getByRole("menuitem", { name: "Reset vacuum rotation progress for Kitchen" })).toBeVisible();
+    const reset = inspector.getByRole("menuitem", { name: "Reset mopping progress for Kitchen" });
     await reset.click();
     const dialog = gallery.getByRole("dialog", { name: "Reset mopping progress?" });
     await expect(dialog).toContainText("The count for Kitchen starts again in every plan that shares its schedule");
     await expect(dialog).toContainText("Other work and cleaning history don't change.");
     await dialog.getByRole("button", { name: "Cancel" }).click();
     await expect(dialog).toHaveCount(0);
+    await more.click();
     await reset.click();
     await page.evaluate((tag) => {
       const element = document.querySelector(tag);
@@ -9999,7 +10002,9 @@ async function openEmptyPicker(gallery) {
 const axeFindings = (results) => results.map(({ id, nodes }) => `${id}: ${nodes.map(({ target }) => target.flat().join(" >> ")).join(" | ")}`);
 
 test.describe("Map Studio accessibility baselines", () => {
-  for (const scenario of ["ready", "rooms", "plans", "plan-saved-intelligent", "plan-saved-ordered", "plan-edit-ordered", "plan-run-paused", "plan-run-blocked", "plan-new", "plan-dirty", "draw", "history", "cleaning", "access"]) {
+  for (const scenario of ["ready", "rooms", "plans", "plan-saved-intelligent", "plan-saved-ordered", "plan-edit-ordered", "plan-run-paused", "plan-run-blocked", "plan-new", "plan-dirty",
+    "plan-cadence-shared", "plan-cadence-blocked", "plan-schedule-available", "plan-schedule-joining", "plan-schedule-conflict",
+    "draw", "history", "cleaning", "access"]) {
     for (const [width, height] of [[390, 844], [1024, 768]]) {
       const narrow = width < 1024;
       test(`${scenario} at ${width} has no serious axe finding and no name on an unnamed role${narrow ? " @mobile" : ""}`, async ({ page }) => {

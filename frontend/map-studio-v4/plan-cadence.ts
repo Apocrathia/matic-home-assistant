@@ -11,7 +11,8 @@ import type {
 import type { WorkspaceIntent, WorkspaceState } from "./contracts";
 import { formatNumber, type Translate } from "./plan-copy";
 import { roomBlockReason } from "./state";
-import { icon, iconNoticeWarning } from "./icons";
+import { icon, iconChevronRight, iconNoticeWarning, iconOverflow } from "./icons";
+import type { MenuController } from "./menu-controller";
 import { stepper } from "./stepper";
 
 export { INTERVAL_MAX, INTERVAL_MIN, snapInterval, stepInterval } from "./stepper";
@@ -425,16 +426,9 @@ export interface ScheduleContext {
   /** The rotation level chosen while it is Off, for this room (view state). */
   readonly offLevel: CoverageSetting | null;
   readonly setOffLevel: (level: CoverageSetting) => void;
+  /** The room's "More for {room}" menu. */
+  readonly menu: MenuController;
 }
-
-/** A held select or checkbox shows the draft's value again and changes nothing. */
-const keep = (context: ScheduleContext, event: Event, value: string | boolean): boolean => {
-  if (!context.held) return false;
-  const input = event.currentTarget as HTMLInputElement;
-  if (typeof value === "boolean") input.checked = value;
-  else input.value = value;
-  return true;
-};
 
 /** The room schedule's inputs from the draft, the saved plan and the catalog. */
 export const scheduleInput = (state: WorkspaceState, room: PlanRoom, name: string, offLevel: CoverageSetting | null): ScheduleInput => {
@@ -455,7 +449,7 @@ export const scheduleBlock = (context: ScheduleContext, room: PlanRoom, index: n
   const draft = state.planDraft;
   const input = scheduleInput(state, room, name, context.offLevel);
   const model = scheduleModel(t, state.locale, input);
-  const { policy } = model;
+  const { policy, next } = model;
   const patch = (cadence: RoomCadencePolicy | null): void => {
     if (!cadence || held) return;
     const rooms = draft.rooms.map((candidate, at) => at === index ? { ...candidate, cadence } : candidate);
@@ -466,11 +460,52 @@ export const scheduleBlock = (context: ScheduleContext, room: PlanRoom, index: n
   const line = (id: string, row: ScheduleRow) => row.reason
     ? html`<small class="sched-status sched-reason" id=${id}>${icon(iconNoticeWarning)}<span>${row.reason}</span></small>`
     : row.status ? html`<small class="sched-status" id=${id}>${row.status}</small>` : nothing;
+  // Reset (room-schedule.md §5): a clean draft, an idle robot and a live map,
+  // else held with its reason. No launcher mark: focus returns to the room.
+  const block = resetBlock(t, state);
+  const resetOff = Boolean(held || block);
+  const resetButton = (kind: ScheduleKind, className: string, reasonId: string, role: "menuitem" | null = null) => html`<button
+    class=${className}
+    type="button"
+    role=${role ?? nothing}
+    aria-label=${kind === "mop"
+      ? t("v4_reset_mop_cadence_button_named", "Reset mopping progress for {room}", { room: name })
+      : t("v4_reset_coverage_cadence_button_named", "Reset vacuum rotation progress for {room}", { room: name })}
+    aria-disabled=${resetOff ? "true" : nothing}
+    aria-describedby=${(held ?? (block ? reasonId : null)) ?? nothing}
+    @click=${() => {
+      if (resetOff || !draft.id) return;
+      context.menu.close(false);
+      context.intent({ type: "request-room-cadence-reset", planId: draft.id, roomId: room.roomId, mode: kind });
+    }}
+  >${kind === "mop" ? t("v4_reset_mop_cadence_button", "Reset mopping") : t("v4_reset_coverage_cadence_button", "Reset vacuum rotation")}</button>`;
+  const more = t("v4_room_more_named", "More for {room}", { room: name });
+  const { menu } = context;
+  const overflow = draft.id && (model.resettable.mop || model.resettable.coverage) ? html`<div class="room-more" @keydown=${menu.keydown} @focusout=${menu.focusout}>
+    <button
+      class="ms-btn ms-btn--icon"
+      type="button"
+      aria-label=${more}
+      title=${more}
+      aria-haspopup="menu"
+      aria-expanded=${String(menu.open)}
+      aria-disabled=${gate.disabled}
+      aria-describedby=${gate.described}
+      @click=${() => { if (!held) menu.toggle(); }}
+    >${icon(iconOverflow)}</button>
+    ${menu.open && !held ? html`<div class="menu ms-surface ms-surface--overlay" @mousedown=${(event: Event) => event.preventDefault()}>
+      <div role="menu" aria-label=${more}>
+        ${model.resettable.mop ? resetButton("mop", "ms-row ms-row--menu", "reset-reason", "menuitem") : nothing}
+        ${model.resettable.coverage ? resetButton("coverage", "ms-row ms-row--menu", "reset-reason", "menuitem") : nothing}
+      </div>
+      ${block ? html`<p class="reason" id="reset-reason">${block}</p>` : nothing}
+    </div>` : nothing}
+  </div>` : nothing;
   const row = (kind: ScheduleKind, data: ScheduleRow, level: unknown) => {
     const id = `sched-${kind}`;
     const lineId = data.reason || data.status ? `${id}-status` : null;
     return html`<div class="sched-row">
-      <span class="sched-label" id=${`${id}-label`}>${data.label}</span>
+      <label class="sched-label" id=${`${id}-label`} for=${id}>${data.label}</label>
       <div class="sched-controls">
         ${level}
         ${stepper({
@@ -486,6 +521,8 @@ export const scheduleBlock = (context: ScheduleContext, room: PlanRoom, index: n
         })}
       </div>
       ${line(`${id}-status`, data)}
+      ${data.unverified && draft.id ? html`${resetButton(kind, "ms-btn ms-btn--secondary", `${id}-reset-reason`)}
+        ${block ? html`<p class="sched-status" id=${`${id}-reset-reason`}>${block}</p>` : nothing}` : nothing}
     </div>`;
   };
   const levelHeld = held ?? (model.coverage.blocked ? "sched-coverage-status" : null);
@@ -507,10 +544,10 @@ export const scheduleBlock = (context: ScheduleContext, room: PlanRoom, index: n
       else context.setOffLevel(chosen);
     }}
   >${COVERAGES.map((option) => html`<option value=${option} ?selected=${option === model.level}>${coverageLabel(t, option)}</option>`)}</select>`;
-  const resetDisabled = Boolean(resetBlock(t, state));
   return html`<section class="schedule" role="group" aria-label=${t("v4_room_cadence_named", "Room schedule for {room}", { room: name })}>
-    <div class="schedule-head"><h3>${t("v4_room_schedule", "Schedule")}</h3></div>
+    <div class="schedule-head"><h3>${t("v4_room_schedule", "Schedule")}</h3>${overflow}</div>
     ${model.roomReason ? html`<p class="sched-status sched-reason">${icon(iconNoticeWarning)}<span>${model.roomReason}</span></p>` : nothing}
+    ${model.sharedHint ? html`<p class="schedule-note">${t("v4_cadence_shared_available", "{room} has a shared schedule, and turning on a row uses it.", { room: name })}</p>` : nothing}
     ${row("mop", model.mop, nothing)}
     ${row("coverage", model.coverage, level)}
     ${model.legacyCoverage ? html`<button
@@ -521,43 +558,43 @@ export const scheduleBlock = (context: ScheduleContext, room: PlanRoom, index: n
       aria-describedby=${gate.described}
       @click=${() => patch(withoutLegacyCoverage(policy))}
     >${t("v4_cadence_clear_room_coverage", "Turn off")}</button>` : nothing}
-    <div class="cadence-fields">
-      <label class="field ms-field">${t("v4_cadence_scope", "Count cleans")}
-        <select aria-label=${t("v4_cadence_scope_named", "Count cleans for {room}", { room: name })} aria-disabled=${gate.disabled} aria-describedby=${gate.described} .value=${policy.scope}
-          @change=${(event: Event) => { if (!keep(context, event, policy.scope)) patch(withScope(input, (event.currentTarget as HTMLSelectElement).value as RoomCadencePolicy["scope"])); }}>
-          <option value="plan" ?selected=${policy.scope === "plan"}>${t("v4_cadence_this_plan", "In this plan only")}</option>
-          <option value="shared" ?selected=${policy.scope === "shared"}>${t("v4_cadence_shared", "Across all plans (recommended)")}</option>
-        </select>
-      </label>
-    </div>
+    ${next ? html`<div class="switch-row">
+      <span class="switch-copy">
+        <span id="sched-next-label">${next.label}</span>
+        <small id="sched-next-hint">${t("v4_cadence_next_hint", "Brings it forward once; the schedule then continues as usual.")}</small>
+      </span>
+      <button
+        class="ms-switch"
+        type="button"
+        role="switch"
+        aria-checked=${String(next.on)}
+        aria-labelledby="sched-next-label"
+        aria-describedby=${ids("sched-next-hint", held ?? (model.joinPending ? "sched-join" : null)) ?? nothing}
+        aria-disabled=${held || model.joinPending ? "true" : nothing}
+        @click=${() => patch(withNextClean(input, !next.on))}
+      ></button>
+    </div>` : nothing}
+    ${model.joinPending ? html`<p class="schedule-note" id="sched-join">${t("v4_cadence_join_pending", "Uses {room}'s shared schedule; change it after you save, or choose \"In this plan only\" under Advanced.", { room: name })}</p>` : nothing}
     ${model.explanation ? html`<p class="schedule-note">${model.explanation}</p>` : nothing}
-    <div class="plan-options" role="group" aria-label=${t("v4_cadence_next_actions_named", "Next clean options for {room}", { room: name })}>
-      <label class="plan-option"><input type="checkbox" aria-label=${t("v4_cadence_do_mop_next_named", "Do vacuum and mop on the next clean for {room}", { room: name })} aria-disabled=${gate.disabled} aria-describedby=${gate.described} .checked=${policy.doMopNext} ?disabled=${!policy.mopEveryN}
-        @change=${(event: Event) => { if (!keep(context, event, policy.doMopNext)) patch({ ...policy, doMopNext: (event.currentTarget as HTMLInputElement).checked }); }}><span class="plan-option-copy"><strong>${t("v4_cadence_do_mop_next", "Do vacuum and mop on the next clean")}</strong></span></label>
-      <label class="plan-option"><input type="checkbox" aria-label=${t("v4_cadence_do_coverage_next_named", "Add a vacuum rotation on the next clean for {room}", { room: name })} aria-disabled=${gate.disabled} aria-describedby=${gate.described} .checked=${policy.doCoverageNext} ?disabled=${!policy.coverageEveryN || room.cleaningMode === "mop"}
-        @change=${(event: Event) => { if (!keep(context, event, policy.doCoverageNext)) patch({ ...policy, doCoverageNext: (event.currentTarget as HTMLInputElement).checked }); }}><span class="plan-option-copy"><strong>${t("v4_cadence_do_coverage_next", "Add a vacuum rotation on the next clean")}</strong></span></label>
-    </div>
-    <p class="schedule-note">${t("v4_cadence_description", "Only cleans the robot confirms count toward these schedules, and due work stays due until a clean is confirmed.")}</p>
-    ${draft.id && (model.resettable.mop || model.resettable.coverage) ? html`
-      <div class="toolbar">
-        ${model.resettable.mop ? html`<button
-          class="danger ms-btn ms-btn--secondary ms-btn--danger"
-          type="button"
-          aria-label=${t("v4_reset_mop_cadence_button_named", "Reset mopping progress for {room}", { room: name })}
-          data-dialog-launcher="confirmResetCadence"
-          ?disabled=${resetDisabled}
-          @click=${() => context.intent({ type: "request-room-cadence-reset", planId: draft.id as string, roomId: room.roomId, mode: "mop" })}
-        >${t("v4_reset_mop_cadence_button", "Reset mopping")}</button>` : nothing}
-        ${model.resettable.coverage ? html`<button
-          class="danger ms-btn ms-btn--secondary ms-btn--danger"
-          type="button"
-          aria-label=${t("v4_reset_coverage_cadence_button_named", "Reset vacuum rotation progress for {room}", { room: name })}
-          data-dialog-launcher="confirmResetCadence"
-          ?disabled=${resetDisabled}
-          @click=${() => context.intent({ type: "request-room-cadence-reset", planId: draft.id as string, roomId: room.roomId, mode: "coverage" })}
-        >${t("v4_reset_coverage_cadence_button", "Reset vacuum rotation")}</button>` : nothing}
-      </div>
-      <p class="schedule-note">${t("v4_reset_cadence_hint", "Reset is available for a saved plan while the robot is idle. Cleaning history is kept separately.")}</p>
-    ` : nothing}
+    <details class="advanced">
+      <summary>${t("v4_advanced", "Advanced")}${icon(iconChevronRight)}</summary>
+      <fieldset class="scope">
+        <legend>${t("v4_cadence_scope", "Count cleans")}</legend>
+        ${([["shared", t("v4_cadence_shared", "Across all plans (recommended)")], ["plan", t("v4_cadence_this_plan", "In this plan only")]] as const).map(([scope, label]) => html`<label class="scope-row"><input
+          type="radio"
+          name="sched-scope"
+          value=${scope}
+          .checked=${model.scope === scope}
+          aria-disabled=${gate.disabled}
+          aria-describedby=${gate.described}
+          @change=${(event: Event) => {
+            // A held choice shows the draft's scope again and changes nothing.
+            if (!held) patch(withScope(input, scope));
+            else (event.currentTarget as HTMLElement).closest("fieldset")?.querySelectorAll<HTMLInputElement>("input").forEach((radio) => { radio.checked = radio.value === model.scope; });
+          }}
+        ><span>${label}</span></label>`)}
+      </fieldset>
+      <p class="schedule-note">${t("v4_cadence_description", "Only cleans the robot confirms count toward these schedules, and due work stays due until a clean is confirmed.")}</p>
+    </details>
   </section>`;
 };
