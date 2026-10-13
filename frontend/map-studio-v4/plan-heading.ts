@@ -111,6 +111,7 @@ export class MaticPlanToolsV4 extends LitElement {
               class="ms-row ms-row--menu"
               type="button"
               role="menuitem"
+              tabindex="-1"
               aria-disabled=${held ? "true" : nothing}
               aria-describedby=${held ? "delete-reason" : nothing}
               @click=${this.#delete}

@@ -54,10 +54,25 @@ export class MenuController implements ReactiveController {
   }
 
   // Escape closes the menu before the shell sees it (shell.md §5 Escape order).
+  // Up and Down move between items, wrapping, and Home and End go to the ends;
+  // items take focus only this way, so Tab leaves the menu (APG menu button).
   readonly keydown = (event: KeyboardEvent): void => {
-    if (event.key !== "Escape" || !this.open) return;
+    if (!this.open) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      this.close(true);
+      return;
+    }
+    const items = [...this.host.renderRoot.querySelectorAll<HTMLElement>(`${this.root} [role=menuitem]`)];
+    const at = items.indexOf(event.composedPath()[0] as HTMLElement);
+    const to = event.key === "ArrowDown" ? at + 1
+      : event.key === "ArrowUp" ? at - 1
+        : event.key === "Home" ? 0
+          : event.key === "End" ? items.length - 1
+            : null;
+    if (to === null || at < 0 || !items.length) return;
     event.preventDefault();
-    this.close(true);
+    items[(to + items.length) % items.length]?.focus();
   };
 
   // The menu closes when focus or a press goes elsewhere. Safari gives a

@@ -20,8 +20,8 @@ Open a saved plan in Matic Map, choose **Edit**, then open a room. Its
 Under each row, a line says when the work is next due: "Due in 3 cleans",
 "Due next clean", "Due every clean" or "Not scheduled". A schedule of 3 runs on
 the third counted clean, and when both are due that clean includes both.
-**… on the next clean** brings the work forward once without resetting
-progress; the schedule then continues as usual.
+The switch below the rows, such as **Mop on the next clean**, brings the work
+forward once without resetting progress; the schedule then continues as usual.
 
 ## Choose where progress is shared
 
@@ -35,7 +35,9 @@ When a room already has a shared schedule, turning on either row uses it: the
 rows show the shared values, read-only until you save, and saving picks up any
 progress already counted. Choose **In this plan only** first to set your own
 values instead. Leaving a shared schedule starts new progress for this plan;
-other plans keep theirs. The line under the rows says what saving will do.
+other plans keep theirs. The line under the rows says what saving will do. If
+the shared schedule needs a cleaning mode this room doesn't use, turning a row
+on counts in this plan only.
 
 Creating or joining a shared schedule requires the live floor. If the map is
 being checked, keep the draft and retry once the floor is ready. Room renames
@@ -73,7 +75,8 @@ count the same clean twice.
 
 Changing how often keeps progress. Turning a schedule off pauses it. To start
 one fresh, open the room in a saved plan's **Edit** view and choose **Reset
-mopping** or **Reset vacuum rotation** from **More for {room}** (⋮). It asks
+mopping** or **Reset vacuum rotation** from the room's menu (for example **More
+for Kitchen**). It asks
 before resetting and works while the robot is idle, the map is live and the
 plan has no unsaved changes; cleaning history is kept separately. A shared reset affects every
 participant in that room's shared schedule. Edits and resets wait while the

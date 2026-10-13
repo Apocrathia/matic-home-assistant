@@ -88,6 +88,8 @@ export class MaticPlanViewsV4 extends LitElement {
 .edit-disclosure > .ms-icon { flex: none; transition: rotate 120ms; }
 .edit-disclosure[aria-expanded="true"] > .ms-icon { rotate: 90deg; }
 .edit-disclosure:dir(rtl) > .ms-icon { scale: -1 1; }
+/* scale applies before rotate, so the mirrored chevron turns the other way to point down. */
+.edit-disclosure[aria-expanded="true"]:dir(rtl) > .ms-icon { rotate: -90deg; }
 .edit-name { padding-inline: var(--ms-space-1); }
 .edit-moves { display: flex; }
 .row-expanded { display: grid; grid-column: 1 / -1; gap: var(--ms-space-2); padding: var(--ms-space-3); border-block-start: 1px solid var(--ms-line); }
@@ -125,6 +127,7 @@ export class MaticPlanViewsV4 extends LitElement {
 .advanced > summary .ms-icon { inline-size: 1.25rem; block-size: 1.25rem; }
 .advanced[open] > summary .ms-icon { rotate: 90deg; }
 .advanced > summary:dir(rtl) .ms-icon { scale: -1 1; }
+.advanced[open] > summary:dir(rtl) .ms-icon { rotate: -90deg; }
 .advanced > summary:focus-visible { outline: 2px solid var(--ms-resolved-indicator, var(--ms-accent)); outline-offset: 2px; border-radius: var(--ms-radius-xs); }
 .scope { display: grid; margin: 0 0 var(--ms-space-2); padding: 0; border: 0; }
 .scope legend { padding: 0; font-size: var(--ms-t-sm); font-weight: var(--ms-w-bold); }
@@ -351,7 +354,7 @@ export class MaticPlanViewsV4 extends LitElement {
     if (changed.has("state") && (this.state.workflow !== "plan" || this.state.planView !== "edit")) this._moved = "";
     // The menu belongs to the open room; it closes with it, and while a save holds Edit.
     const previous = changed.get("state") as WorkspaceState | undefined;
-    if (previous && (previous.expandedRoom !== this.state.expandedRoom || this.state.planView !== "edit" || this.state.dialog)) this.#roomMenu.open = false;
+    if (previous && (previous.expandedRoom !== this.state.expandedRoom || this.state.planView !== "edit" || this.state.dialog || this.#held())) this.#roomMenu.open = false;
   }
 
   // A keyed move re-inserts the row, which drops focus, so the arrow takes it

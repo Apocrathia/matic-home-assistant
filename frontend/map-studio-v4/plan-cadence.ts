@@ -153,6 +153,8 @@ export interface ScheduleModel {
   readonly scope: "shared" | "plan";
   /** Which progress the room menu can reset: only saved progress. */
   readonly resettable: { readonly mop: boolean; readonly coverage: boolean };
+  /** Why "Across all plans" can't be chosen: a shared schedule this room's mode can't use. */
+  readonly sharedReason: string | null;
 }
 
 const ROTATION: Record<CoverageSetting, (t: Translate, count: string | null, one: boolean) => string> = {
@@ -207,6 +209,8 @@ interface Facts {
   readonly progress: RoomCadenceProgress | undefined;
   readonly reasons: readonly CadenceReason[];
   readonly savedPolicy: RoomCadencePolicy | undefined;
+  /** This room's cleaning mode can use the shared schedule (cadence.py:45-46, 66-70). */
+  readonly sharedFits: boolean;
 }
 
 const facts = ({ room, saved, catalogRoom }: ScheduleInput): Facts => {
@@ -224,13 +228,31 @@ const facts = ({ room, saved, catalogRoom }: ScheduleInput): Facts => {
     progress: joinPending ? catalogRoom?.sharedCadenceProgress : room.cadenceProgress,
     reasons: joinPending ? catalogRoom?.sharedCadenceReasons ?? [] : room.cadenceReasons ?? [],
     savedPolicy: saved?.cadence,
+    sharedFits: !shared
+      || ((shared.mopEveryN === null || room.cleaningMode === "vacuum") && (shared.coverageEveryN === null || room.cleaningMode !== "mop")),
   };
 };
 
 const FIELDS = {
-  mop: { every: "mopEveryN", flag: "doMopNext", next: "nextMopIn" },
-  coverage: { every: "coverageEveryN", flag: "doCoverageNext", next: "nextCoverageIn" },
+  mop: { every: "mopEveryN", flag: "doMopNext", next: "nextMopIn", count: "mopProgress" },
+  coverage: { every: "coverageEveryN", flag: "doCoverageNext", next: "nextCoverageIn", count: "coverageProgress" },
 } as const;
+
+/** The next-clean flag the server's progress counted: the shared one while joining, else the saved one. */
+const countedFlag = (f: Facts, kind: ScheduleKind): boolean =>
+  Boolean((f.joinPending ? f.shared : f.savedPolicy)?.[FIELDS[kind].flag]);
+
+/**
+ * The server's `next_*_in`, unless the draft turned off a flag it counted:
+ * then the count since the last time decides (cadence.py:94-131).
+ */
+const nextIn = (f: Facts, kind: ScheduleKind): number | null => {
+  const { every, flag, next, count } = FIELDS[kind];
+  const interval = f.policy[every];
+  if (!f.progress || interval === null || f.policy[flag] || !countedFlag(f, kind)) return f.progress?.[next] ?? null;
+  const done = f.progress[count];
+  return done >= interval - 1 ? 1 : Math.max(1, interval - done);
+};
 
 /** How often changed from a saved value (a join is not an edit). */
 const edited = (f: Facts, kind: ScheduleKind): boolean => {
@@ -239,25 +261,29 @@ const edited = (f: Facts, kind: ScheduleKind): boolean => {
   return !f.joinPending && before !== null && f.policy[field] !== null && f.policy[field] !== before;
 };
 
-/** The work the switch can bring forward: on, not every clean, and not already due next clean. */
+/**
+ * The work the switch can bring forward: on, not every clean, and not already
+ * due next clean. A saved flag keeps naming its work after the switch is
+ * turned off, so the switch stays to be turned back on.
+ */
 const named = (f: Facts, kind: ScheduleKind): boolean => {
   const every = f.policy[FIELDS[kind].every];
-  const nextIn = f.progress?.[FIELDS[kind].next] ?? null;
-  return every !== null && every > 1 && (f.policy[FIELDS[kind].flag] || edited(f, kind) || nextIn !== 1);
+  return every !== null && every > 1
+    && (f.policy[FIELDS[kind].flag] || countedFlag(f, kind) || edited(f, kind) || nextIn(f, kind) !== 1);
 };
 
 const statusLine = (t: Translate, locale: string, f: Facts, kind: ScheduleKind): string | null => {
   const every = f.policy[FIELDS[kind].every];
-  const nextIn = f.progress?.[FIELDS[kind].next] ?? null;
+  const due = nextIn(f, kind);
   if (every === null) return t("v4_cadence_status_off", "Not scheduled");
   if (every === 1) return t("v4_cadence_status_every", "Due every clean");
   if (f.policy[FIELDS[kind].flag]) return t("v4_cadence_status_next", "Due next clean");
   if (edited(f, kind)) return t("v4_cadence_status_edited", "Keeps the progress so far");
   const scopeChanged = !f.joinPending && f.savedPolicy !== undefined && f.savedPolicy.scope !== f.policy.scope;
-  if (scopeChanged || nextIn === null) return null;
-  return nextIn <= 1
+  if (scopeChanged || due === null) return null;
+  return due <= 1
     ? t("v4_cadence_status_next", "Due next clean")
-    : t("v4_cadence_status_in", "Due in {count} cleans", { count: formatNumber(locale, nextIn) });
+    : t("v4_cadence_status_in", "Due in {count} cleans", { count: formatNumber(locale, due) });
 };
 
 const explanation = (t: Translate, f: Facts, name: string): string | null => {
@@ -333,7 +359,7 @@ export const scheduleModel = (t: Translate, locale: string, input: ScheduleInput
     },
     legacyCoverage,
     roomReason: block ? t(block.reasonKey, block.reason, block.reasonPlaceholders) : null,
-    sharedHint: f.sharedExists && !f.participating && policy.scope === "shared" && !hasSchedule(policy),
+    sharedHint: f.sharedExists && f.sharedFits && !f.participating && policy.scope === "shared" && !hasSchedule(policy),
     joinPending: f.joinPending,
     participating: f.participating,
     next: labelMop || labelCoverage
@@ -350,12 +376,21 @@ export const scheduleModel = (t: Translate, locale: string, input: ScheduleInput
       mop: savedHas(saved?.cadenceProgress?.mopProgress, saved?.cadence?.doMopNext, "mop_progress_unverified"),
       coverage: savedHas(saved?.cadenceProgress?.coverageProgress, saved?.cadence?.doCoverageNext, "coverage_progress_unverified"),
     },
+    sharedReason: f.sharedExists && !f.sharedFits && !f.participating
+      ? t("v4_cadence_shared_mode_reason", "Can't count across all plans until this room's cleaning mode works with its shared schedule.")
+      : null,
   };
 };
 
 /** Joining copies the shared schedule exactly, as the backend adopts it on save. */
 const joined = (f: Facts): RoomCadencePolicy | null =>
-  f.shared && f.sharedExists && !f.participating ? { ...f.shared, scope: "shared" } : null;
+  f.shared && f.sharedFits && !f.participating ? { ...f.shared, scope: "shared" } : null;
+
+/**
+ * A shared schedule this room's mode can't use would fail the save once the
+ * backend adopts it (plans.py:2384-2398), so the room counts in this plan only.
+ */
+const unjoinable = (f: Facts): boolean => f.sharedExists && !f.sharedFits && !f.participating;
 
 /** The room's next cadence for a new "how often", or null when nothing may change. */
 export const withInterval = (input: ScheduleInput, kind: ScheduleKind, every: number | null): RoomCadencePolicy | null => {
@@ -365,6 +400,7 @@ export const withInterval = (input: ScheduleInput, kind: ScheduleKind, every: nu
   if (every !== null && !hasSchedule(policy) && policy.scope === "shared") {
     const join = joined(f);
     if (join) return join;
+    if (unjoinable(f)) return withInterval({ ...input, room: { ...input.room, cadence: { ...policy, scope: "plan" } } }, kind, every);
   }
   if (kind === "mop") {
     return every === null ? { ...policy, mopEveryN: null, doMopNext: false } : { ...policy, mopEveryN: every };
@@ -393,9 +429,13 @@ export const withNextClean = (input: ScheduleInput, on: boolean): RoomCadencePol
     : { ...f.policy, doMopNext: false, doCoverageNext: false };
 };
 
-/** "Count cleans": back to all plans joins a shared schedule the plan doesn't use yet. */
-export const withScope = (input: ScheduleInput, scope: "shared" | "plan"): RoomCadencePolicy => {
+/**
+ * "Count cleans": back to all plans joins a shared schedule the plan doesn't
+ * use yet, and null while this room's mode can't use it.
+ */
+export const withScope = (input: ScheduleInput, scope: "shared" | "plan"): RoomCadencePolicy | null => {
   const f = facts(input);
+  if (scope === "shared" && unjoinable(f)) return null;
   return (scope === "shared" ? joined(f) : null) ?? { ...f.policy, scope };
 };
 
@@ -443,12 +483,25 @@ export const scheduleInput = (state: WorkspaceState, room: PlanRoom, name: strin
   };
 };
 
+/** Stands in for {room} in visible text, so the name can render in <bdi>. */
+const ROOM_MARK = "\u0000";
+
+/** A sentence with the room it names isolated in <bdi> (room-schedule.md §8). */
+const withRoom = (text: string, name: string) => {
+  const [before, ...after] = text.split(ROOM_MARK);
+  return after.length ? html`${before}<bdi>${name}</bdi>${after.join(name)}` : text;
+};
+
 /** The Schedule block in an open Edit row (room-schedule.md §3). */
 export const scheduleBlock = (context: ScheduleContext, room: PlanRoom, index: number, name: string) => {
   const { t, state, held } = context;
   const draft = state.planDraft;
   const input = scheduleInput(state, room, name, context.offLevel);
-  const model = scheduleModel(t, state.locale, input);
+  // Visible sentences carry a mark for the room, replaced by <bdi>{room}</bdi>.
+  const model = scheduleModel(t, state.locale, { ...input, name: ROOM_MARK });
+  const reasonLine = (id: string | null, text: unknown, tag: "small" | "p" = "small") => tag === "p"
+    ? html`<p class="sched-status sched-reason" id=${id ?? nothing}>${icon(iconNoticeWarning)}<span>${text}</span></p>`
+    : html`<small class="sched-status sched-reason" id=${id ?? nothing}>${icon(iconNoticeWarning)}<span>${text}</span></small>`;
   const { policy, next } = model;
   const patch = (cadence: RoomCadencePolicy | null): void => {
     if (!cadence || held) return;
@@ -458,7 +511,7 @@ export const scheduleBlock = (context: ScheduleContext, room: PlanRoom, index: n
   const gate = { disabled: held ? "true" : nothing, described: held ?? nothing };
   const ids = (...list: (string | null)[]): string | null => list.filter(Boolean).join(" ") || null;
   const line = (id: string, row: ScheduleRow) => row.reason
-    ? html`<small class="sched-status sched-reason" id=${id}>${icon(iconNoticeWarning)}<span>${row.reason}</span></small>`
+    ? reasonLine(id, row.reason)
     : row.status ? html`<small class="sched-status" id=${id}>${row.status}</small>` : nothing;
   // Reset (room-schedule.md §5): a clean draft, an idle robot and a live map,
   // else held with its reason. No launcher mark: focus returns to the room.
@@ -468,6 +521,7 @@ export const scheduleBlock = (context: ScheduleContext, room: PlanRoom, index: n
     class=${className}
     type="button"
     role=${role ?? nothing}
+    tabindex=${role ? "-1" : nothing}
     aria-label=${kind === "mop"
       ? t("v4_reset_mop_cadence_button_named", "Reset mopping progress for {room}", { room: name })
       : t("v4_reset_coverage_cadence_button_named", "Reset vacuum rotation progress for {room}", { room: name })}
@@ -498,7 +552,7 @@ export const scheduleBlock = (context: ScheduleContext, room: PlanRoom, index: n
         ${model.resettable.mop ? resetButton("mop", "ms-row ms-row--menu", "reset-reason", "menuitem") : nothing}
         ${model.resettable.coverage ? resetButton("coverage", "ms-row ms-row--menu", "reset-reason", "menuitem") : nothing}
       </div>
-      ${block ? html`<p class="reason" id="reset-reason">${block}</p>` : nothing}
+      ${block ? html`<div class="reason">${reasonLine("reset-reason", block, "p")}</div>` : nothing}
     </div>` : nothing}
   </div>` : nothing;
   const row = (kind: ScheduleKind, data: ScheduleRow, level: unknown) => {
@@ -522,7 +576,7 @@ export const scheduleBlock = (context: ScheduleContext, room: PlanRoom, index: n
       </div>
       ${line(`${id}-status`, data)}
       ${data.unverified && draft.id ? html`${resetButton(kind, "ms-btn ms-btn--secondary", `${id}-reset-reason`)}
-        ${block ? html`<p class="sched-status" id=${`${id}-reset-reason`}>${block}</p>` : nothing}` : nothing}
+        ${block ? reasonLine(`${id}-reset-reason`, block, "p") : nothing}` : nothing}
     </div>`;
   };
   const levelHeld = held ?? (model.coverage.blocked ? "sched-coverage-status" : null);
@@ -546,8 +600,8 @@ export const scheduleBlock = (context: ScheduleContext, room: PlanRoom, index: n
   >${COVERAGES.map((option) => html`<option value=${option} ?selected=${option === model.level}>${coverageLabel(t, option)}</option>`)}</select>`;
   return html`<section class="schedule" role="group" aria-label=${t("v4_room_cadence_named", "Room schedule for {room}", { room: name })}>
     <div class="schedule-head"><h3>${t("v4_room_schedule", "Schedule")}</h3>${overflow}</div>
-    ${model.roomReason ? html`<p class="sched-status sched-reason">${icon(iconNoticeWarning)}<span>${model.roomReason}</span></p>` : nothing}
-    ${model.sharedHint ? html`<p class="schedule-note">${t("v4_cadence_shared_available", "{room} has a shared schedule, and turning on a row uses it.", { room: name })}</p>` : nothing}
+    ${model.roomReason ? reasonLine(null, withRoom(model.roomReason, name), "p") : nothing}
+    ${model.sharedHint ? html`<p class="schedule-note">${withRoom(t("v4_cadence_shared_available", "{room} has a shared schedule, and turning on a row uses it.", { room: ROOM_MARK }), name)}</p>` : nothing}
     ${row("mop", model.mop, nothing)}
     ${row("coverage", model.coverage, level)}
     ${model.legacyCoverage ? html`<button
@@ -574,25 +628,30 @@ export const scheduleBlock = (context: ScheduleContext, room: PlanRoom, index: n
         @click=${() => patch(withNextClean(input, !next.on))}
       ></button>
     </div>` : nothing}
-    ${model.joinPending ? html`<p class="schedule-note" id="sched-join">${t("v4_cadence_join_pending", "Uses {room}'s shared schedule; change it after you save, or choose \"In this plan only\" under Advanced.", { room: name })}</p>` : nothing}
-    ${model.explanation ? html`<p class="schedule-note">${model.explanation}</p>` : nothing}
+    ${model.joinPending ? html`<p class="schedule-note" id="sched-join">${withRoom(t("v4_cadence_join_pending", "Uses {room}'s shared schedule; change it after you save, or choose \"In this plan only\" under Advanced.", { room: ROOM_MARK }), name)}</p>` : nothing}
+    ${model.explanation ? html`<p class="schedule-note">${withRoom(model.explanation, name)}</p>` : nothing}
     <details class="advanced">
       <summary>${t("v4_advanced", "Advanced")}${icon(iconChevronRight)}</summary>
       <fieldset class="scope">
         <legend>${t("v4_cadence_scope", "Count cleans")}</legend>
-        ${([["shared", t("v4_cadence_shared", "Across all plans (recommended)")], ["plan", t("v4_cadence_this_plan", "In this plan only")]] as const).map(([scope, label]) => html`<label class="scope-row"><input
-          type="radio"
-          name="sched-scope"
-          value=${scope}
-          .checked=${model.scope === scope}
-          aria-disabled=${gate.disabled}
-          aria-describedby=${gate.described}
-          @change=${(event: Event) => {
-            // A held choice shows the draft's scope again and changes nothing.
-            if (!held) patch(withScope(input, scope));
-            else (event.currentTarget as HTMLElement).closest("fieldset")?.querySelectorAll<HTMLInputElement>("input").forEach((radio) => { radio.checked = radio.value === model.scope; });
-          }}
-        ><span>${label}</span></label>`)}
+        ${([["shared", t("v4_cadence_shared", "Across all plans (recommended)")], ["plan", t("v4_cadence_this_plan", "In this plan only")]] as const).map(([scope, label]) => {
+          const off = held ?? (scope === "shared" && model.sharedReason ? "sched-scope-reason" : null);
+          return html`<label class="scope-row"><input
+            type="radio"
+            name="sched-scope"
+            value=${scope}
+            .checked=${model.scope === scope}
+            aria-disabled=${off ? "true" : nothing}
+            aria-describedby=${off ?? nothing}
+            @change=${(event: Event) => {
+              // A held choice shows the draft's scope again and changes nothing.
+              const next = off ? null : withScope(input, scope);
+              if (next) patch(next);
+              else (event.currentTarget as HTMLElement).closest("fieldset")?.querySelectorAll<HTMLInputElement>("input").forEach((radio) => { radio.checked = radio.value === model.scope; });
+            }}
+          ><span>${label}</span></label>`;
+        })}
+        ${model.sharedReason ? reasonLine("sched-scope-reason", model.sharedReason, "p") : nothing}
       </fieldset>
       <p class="schedule-note">${t("v4_cadence_description", "Only cleans the robot confirms count toward these schedules, and due work stays due until a clean is confirmed.")}</p>
     </details>

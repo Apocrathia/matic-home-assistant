@@ -99,7 +99,7 @@ export const stepper = (o: StepperOptions): TemplateResult => {
       aria-label=${name}
       aria-controls=${id}
       aria-disabled=${reason || held ? "true" : nothing}
-      aria-describedby=${(reason ? endId : o.heldBy) ?? nothing}
+      aria-describedby=${[reason ? endId : null, o.heldBy].filter(Boolean).join(" ") || nothing}
       title=${reason ?? nothing}
       @click=${() => { if (!reason && !held) o.commit(stepInterval(value, delta)); }}
     >${icon(delta < 0 ? iconMinus : iconPlus)}${reason ? html`<span class="sr-only" id=${endId}>${reason}</span>` : nothing}</button>`;
