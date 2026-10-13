@@ -269,6 +269,28 @@ test.describe("room schedule model", () => {
     });
   });
 
+  // Codex P2 (#253): the catalog reports a broken shared schedule by its
+  // reasons alone, which still counts as one that exists and can't be joined.
+  test("a shared schedule reported only by its reasons is never joined", async ({ page }) => {
+    const result = await run(page, `
+      const catalogRoom = { roomId: "a", name: "Kitchen", sharedCadenceReasons: ["invalid_cadence_policy"] };
+      const off = input(undefined, room(), undefined, catalogRoom);
+      const model = m.scheduleModel(t, "en", off);
+      const on = m.withInterval(off, "mop", 3);
+      const own = input(on, room(), undefined, catalogRoom);
+      const stray = m.scheduleModel(t, "en", input(p({ scope: "shared", mopEveryN: 3 }), room(), undefined, catalogRoom));
+      const member = m.scheduleModel(t, "en", input(p({ scope: "shared", mopEveryN: 3 }), room(p({ scope: "shared", mopEveryN: 3 })), g({ nextMopIn: 2 }), catalogRoom));
+      return { hint: model.sharedHint, reason: model.sharedReason, joinPending: model.joinPending, on,
+        rejoin: m.withScope(own, "shared"), strayJoinPending: stray.joinPending,
+        member: [member.participating, member.joinPending, member.sharedReason, member.mop.status] };`);
+    expect(result).toEqual({
+      hint: false, reason: "Can't count across all plans until you fix this room's shared schedule in a plan that uses it.", joinPending: false,
+      on: { scope: "plan", mopEveryN: 3, coverageEveryN: null, periodicCoverageSetting: null, doMopNext: false, doCoverageNext: false },
+      rejoin: null, strayJoinPending: false,
+      member: [true, false, null, "Due in 2 cleans"],
+    });
+  });
+
   test("row and room reasons", async ({ page }) => {
     const result = await run(page, `
       const unverified = m.scheduleModel(t, "en", input(p({ mopEveryN: 3 }), undefined, undefined, undefined,
@@ -692,6 +714,23 @@ test.describe("next clean, Advanced and joining", () => {
     await expect(mop).not.toHaveAccessibleDescription("Due next clean");
     await page.keyboard.press("Space");
     expect((await snapshot(page)).planDraft.rooms[0].cadence).toMatchObject({ doMopNext: true });
+  });
+
+  test("a broken shared schedule keeps the room to this plan, with a reason", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-schedule-available" });
+    await patchState(page, `{ ...s, resources: { ...s.resources, plans: { ...s.resources.plans, value: { ...s.resources.plans.value,
+      rooms: s.resources.plans.value.rooms.map(({ sharedCadence, sharedCadenceProgress, ...room }) => room.roomId === "room-c" ? { ...room, sharedCadenceReasons: ["shared_schedule_unavailable"] } : room) } } } }`);
+    const schedule = gallery.getByRole("group", { name: "Room schedule for Office" });
+    await expect(schedule.getByText(/has a shared schedule/)).toHaveCount(0);
+    await schedule.getByRole("button", { name: "Increase Mop", exact: true }).click();
+    expect(await officeCadence(page)).toEqual({ scope: "plan", mopEveryN: 1, coverageEveryN: null, periodicCoverageSetting: null, doMopNext: false, doCoverageNext: false });
+    await expect(schedule.getByRole("spinbutton", { name: "Mop every clean" })).not.toHaveAttribute("readonly", "");
+    await schedule.getByText("Advanced", { exact: true }).click();
+    const across = schedule.getByRole("radio", { name: "Across all plans (recommended)" });
+    await expect(across).toHaveAttribute("aria-disabled", "true");
+    await expect(across).toHaveAccessibleDescription("Can't count across all plans until you fix this room's shared schedule in a plan that uses it.");
+    await across.click({ force: true });
+    expect((await officeCadence(page)).scope).toBe("plan");
   });
 
   test("a shared schedule this room's mode can't use keeps the room to this plan, with a reason", async ({ page }) => {

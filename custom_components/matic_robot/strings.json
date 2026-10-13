@@ -516,6 +516,7 @@
     "v4_cadence_shared_available": "{room} has a shared schedule, and turning on a row uses it.",
     "v4_cadence_join_pending": "Uses {room}'s shared schedule; change it after you save, or choose \"In this plan only\" under Advanced.",
     "v4_cadence_shared_mode_reason": "Can't count across all plans until this room's cleaning mode works with its shared schedule.",
+    "v4_cadence_shared_broken_reason": "Can't count across all plans until you fix this room's shared schedule in a plan that uses it.",
     "v4_cadence_next_hint": "Brings it forward once; the schedule then continues as usual.",
     "v4_advanced": "Advanced",
     "v4_reason_reset_unsaved": "Can't reset until you save or cancel your changes.",

@@ -216,14 +216,18 @@ interface Facts {
   readonly savedProgress: RoomCadenceProgress | undefined;
   /** This room's cleaning mode can use the shared schedule (cadence.py:45-46, 66-70). */
   readonly sharedFits: boolean;
+  /** A shared schedule the catalog reports only by its reasons (invalid or unavailable, slam_scene.py). */
+  readonly sharedBroken: boolean;
 }
 
 const facts = ({ room, saved, catalogRoom }: ScheduleInput): Facts => {
   const policy = room.cadence ?? OFF;
   const shared = catalogRoom?.sharedCadence;
-  const sharedExists = shared !== undefined;
+  // The catalog gives a broken shared schedule its reasons but no policy.
+  const sharedBroken = shared === undefined && (catalogRoom?.sharedCadenceReasons?.length ?? 0) > 0;
+  const sharedExists = shared !== undefined || sharedBroken;
   const participating = saved?.cadence?.scope === "shared";
-  const joinPending = sharedExists && !participating && room.cadence?.scope === "shared";
+  const joinPending = shared !== undefined && !participating && room.cadence?.scope === "shared";
   return {
     policy,
     shared,
@@ -236,6 +240,7 @@ const facts = ({ room, saved, catalogRoom }: ScheduleInput): Facts => {
     savedProgress: saved?.cadenceProgress,
     sharedFits: !shared
       || ((shared.mopEveryN === null || room.cleaningMode === "vacuum") && (shared.coverageEveryN === null || room.cleaningMode !== "mop")),
+    sharedBroken,
   };
 };
 
@@ -378,7 +383,7 @@ export const scheduleModel = (t: Translate, locale: string, input: ScheduleInput
     },
     legacyCoverage,
     roomReason: block ? t(block.reasonKey, block.reason, block.reasonPlaceholders) : null,
-    sharedHint: f.sharedExists && f.sharedFits && !f.participating && policy.scope === "shared" && !hasSchedule(policy),
+    sharedHint: f.shared !== undefined && f.sharedFits && !f.participating && policy.scope === "shared" && !hasSchedule(policy),
     joinPending: f.joinPending,
     participating: f.participating,
     next: labelMop || labelCoverage
@@ -396,9 +401,11 @@ export const scheduleModel = (t: Translate, locale: string, input: ScheduleInput
       mop: savedHas(saved?.cadenceProgress?.mopProgress, saved?.cadence?.doMopNext, "mop_progress_unverified"),
       coverage: savedHas(saved?.cadenceProgress?.coverageProgress, saved?.cadence?.doCoverageNext, "coverage_progress_unverified"),
     },
-    sharedReason: f.sharedExists && !f.sharedFits && !f.participating
-      ? t("v4_cadence_shared_mode_reason", "Can't count across all plans until this room's cleaning mode works with its shared schedule.")
-      : null,
+    sharedReason: !unjoinable(f)
+      ? null
+      : f.sharedBroken
+        ? t("v4_cadence_shared_broken_reason", "Can't count across all plans until you fix this room's shared schedule in a plan that uses it.")
+        : t("v4_cadence_shared_mode_reason", "Can't count across all plans until this room's cleaning mode works with its shared schedule."),
   };
 };
 
@@ -407,10 +414,11 @@ const joined = (f: Facts): RoomCadencePolicy | null =>
   f.shared && f.sharedFits && !f.participating ? { ...f.shared, scope: "shared" } : null;
 
 /**
- * A shared schedule this room's mode can't use would fail the save once the
- * backend adopts it (plans.py:2384-2398), so the room counts in this plan only.
+ * A shared schedule this room's mode can't use, or one the catalog reports as
+ * broken, would fail the save once the backend adopts it (plans.py:2384-2398),
+ * so the room counts in this plan only.
  */
-const unjoinable = (f: Facts): boolean => f.sharedExists && !f.sharedFits && !f.participating;
+const unjoinable = (f: Facts): boolean => f.sharedExists && (!f.sharedFits || f.sharedBroken) && !f.participating;
 
 /** The room's next cadence for a new "how often", or null when nothing may change. */
 export const withInterval = (input: ScheduleInput, kind: ScheduleKind, every: number | null): RoomCadencePolicy | null => {
