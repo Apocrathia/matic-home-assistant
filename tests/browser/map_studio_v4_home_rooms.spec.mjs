@@ -792,3 +792,326 @@ test.describe("Map options and the rail (home-rooms.md §5 Display, §11 MS-HOME
     await expect(robot).toHaveCSS("text-overflow", "ellipsis");
   });
 });
+
+// The Rooms view (home-rooms.md §3 Rooms, §4 R1-R10, §5 Settings, Due work,
+// Clean, Selection gate and Keyboard; R5, R20-R22, R25, R28).
+const roomsGroup = (gallery) => gallery.getByRole("group", { name: "Rooms to clean" });
+const roomBox = (gallery, name) => roomsGroup(gallery).getByRole("checkbox", { name: new RegExp(`^${name}( |$)`) });
+const primary = (gallery) => panelOf(gallery).getByRole("button", { name: /^Clean( \d+)? rooms?$/ });
+const primaryReason = (gallery) => gallery.locator("#primary-reason");
+const settingsRow = (gallery) => gallery.getByRole("button", { name: /^Cleaning settings/ });
+const checkLines = (gallery) => gallery.locator(".check-lines .line");
+const description = (gallery) => gallery.locator("#rooms-description");
+const listHeader = (gallery) => gallery.locator(".list-header");
+// Playwright refuses selectOption on an aria-disabled select, so a held
+// select is changed the way a browser would report it.
+const forceSelect = (select, value) => select.evaluate((element, next) => {
+  element.value = next;
+  element.dispatchEvent(new Event("change", { bubbles: true }));
+}, value);
+const plansResource = (gallery, patch) => gallery.evaluate((element, applied) => {
+  const state = element.getWorkspaceSnapshot();
+  element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...state.resources.plans, ...applied } } });
+}, patch);
+const roomPreview = (gallery, patch) => gallery.evaluate((element, applied) => {
+  const state = element.getWorkspaceSnapshot();
+  element.replaceWorkspaceState({ ...state, manualRoomPreview: { ...state.manualRoomPreview, ...applied } });
+}, patch);
+
+for (const narrow of [true, false]) {
+  test.describe(`the Rooms view (narrow: ${narrow})`, () => {
+    test(`starts with no selection: header, collapsed settings, plain rows and a disabled Clean (R1)${narrow ? " @mobile" : ""}`, async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "rooms", narrow });
+      await expect(description(gallery)).toHaveText("Choose rooms on the map or in the list.");
+      await expect(gallery.getByRole("heading", { level: 3, name: "Rooms to clean" })).toBeVisible();
+      await expect(listHeader(gallery).getByText(/\d+ selected/)).toHaveCount(0);
+      await expect(listHeader(gallery).getByRole("button", { name: "Clear", exact: true })).toHaveCount(0);
+      await expect(settingsRow(gallery)).toHaveAccessibleName("Cleaning settings Vacuum · Optimal");
+      await expect(settingsRow(gallery)).toHaveAttribute("aria-expanded", "false");
+      const boxes = roomsGroup(gallery).getByRole("checkbox");
+      await expect(boxes).toHaveCount(4);
+      for (const [index, name] of ["Kitchen", "Living room", "Office", "Bedroom"].entries()) {
+        await expect(boxes.nth(index)).toHaveAccessibleName(name);
+      }
+      await expect(gallery.getByRole("button", { name: /^Settings for / })).toHaveCount(0);
+      await expect(primary(gallery)).toHaveAttribute("aria-disabled", "true");
+      await expect(primaryReason(gallery)).toHaveText("Can't start until you choose a named room.");
+      for (const text of ["Ready", "Select rooms here", "Override shared schedule settings", "Effective cleaning preview"]) {
+        await expect(panelOf(gallery).getByText(text)).toHaveCount(0);
+      }
+      await expect(checkLines(gallery)).toHaveCount(0);
+    });
+
+    test(`a tap on the name selects the room: the label is the 44 px target${narrow ? " @mobile" : ""}`, async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "rooms", narrow });
+      const label = roomsGroup(gallery).locator("label.ms-check").first();
+      expect((await label.boundingBox()).height).toBeGreaterThanOrEqual(44);
+      await roomsGroup(gallery).getByText("Kitchen", { exact: true }).click();
+      await expect.poll(async () => (await snapshot(page)).selection.roomIds).toEqual(["room-a"]);
+      await expect(roomBox(gallery, "Kitchen")).toBeChecked();
+      await expect(listHeader(gallery).getByText("1 selected", { exact: true })).toBeVisible();
+      await expect(listHeader(gallery).getByRole("button", { name: "Clear", exact: true })).toBeVisible();
+    });
+
+    test("shows Checking settings… on a selected row while the check runs (R2)", async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "rooms-ready", narrow });
+      await roomPreview(gallery, { status: "loading", value: null });
+      await expect(roomBox(gallery, "Kitchen")).toHaveAccessibleName("Kitchen Checking settings…");
+      await expect(primary(gallery)).toHaveAttribute("aria-disabled", "true");
+      await expect(primaryReason(gallery)).toHaveText("Waiting for the room settings check.");
+    });
+
+    test("shows each room's effective setting and the check lines above the rows (R3)", async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "rooms-ready", narrow });
+      await expect(roomBox(gallery, "Kitchen")).toHaveAccessibleName("Kitchen Vacuum + mop · Optimal");
+      await expect(roomBox(gallery, "Living room")).toHaveAccessibleName("Living room Vacuum · Heavy duty");
+      await expect(roomBox(gallery, "Office")).toHaveAccessibleName("Office Vacuum · Optimal");
+      await expect(checkLines(gallery)).toHaveText([
+        "Mop due in Kitchen",
+        "Heavy duty vacuum due in Living room",
+        "The robot cleans these rooms in 2 parts and may stop at the dock between parts.",
+      ]);
+      const lines = await checkLines(gallery).first().boundingBox();
+      const rows = await roomsGroup(gallery).boundingBox();
+      expect(lines.y).toBeLessThan(rows.y);
+      await expect(listHeader(gallery).getByText("4 selected", { exact: true })).toBeVisible();
+      await expect(listHeader(gallery).getByRole("button", { name: "Clear", exact: true })).toBeVisible();
+      await expect(settingsRow(gallery)).toHaveAccessibleName("Cleaning settings Vacuum · Optimal");
+      await expect(primary(gallery)).toHaveText("Clean 4 rooms");
+      await expect(primary(gallery)).not.toHaveAttribute("aria-disabled", "true");
+    });
+
+    test("the settings row opens the whole-clean selects and the due switch", async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "rooms-ready", narrow });
+      await settingsRow(gallery).click();
+      await expect(settingsRow(gallery)).toHaveAttribute("aria-expanded", "true");
+      await expect(settingsRow(gallery)).toHaveAttribute("aria-controls", "clean-settings");
+      const body = gallery.locator("#clean-settings");
+      await expect(body.getByRole("combobox", { name: "Cleaning mode" })).toHaveValue("vacuum");
+      await expect(body.getByRole("combobox", { name: "Vacuum coverage" })).toHaveValue("standard");
+      const due = body.getByRole("switch", { name: "Include scheduled work that's due" });
+      await expect(due).toHaveAttribute("aria-checked", "true");
+      await expect(due).toHaveAccessibleDescription("Turn off to use only your settings. Skipped work stays due for the next clean.");
+      await due.click();
+      await expect.poll(async () => (await snapshot(page)).selection.useRoomSchedule).toBe(false);
+      await expect(due).toHaveAttribute("aria-checked", "false");
+      await expect(due).toBeVisible();
+
+      const plain = await loadGallery(page, { scenario: "rooms", narrow });
+      await settingsRow(plain).click();
+      await expect(plain.locator("#clean-settings").getByRole("combobox")).toHaveCount(2);
+      await expect(plain.getByRole("switch")).toHaveCount(0);
+    });
+
+    test("a whole-clean change rewrites every room; a per-room change makes the value mixed", async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "rooms-ready", narrow });
+      await settingsRow(gallery).click();
+      await gallery.locator("#clean-settings").getByRole("combobox", { name: "Cleaning mode" }).selectOption("vacuum_and_mop");
+      await expect.poll(async () => (await snapshot(page)).selection.roomSettings.map((room) => room.cleaningMode))
+        .toEqual(["vacuum_and_mop", "vacuum_and_mop", "vacuum_and_mop", "vacuum_and_mop"]);
+      await expect(settingsRow(gallery)).toHaveAccessibleName("Cleaning settings Vacuum + mop · Optimal");
+      await gallery.getByRole("button", { name: "Settings for Office" }).click();
+      await gallery.getByRole("combobox", { name: "Cleaning mode for Office" }).selectOption("mop");
+      await expect.poll(async () => (await snapshot(page)).selection.roomSettings.find((room) => room.roomId === "room-c").cleaningMode).toBe("mop");
+      await expect(settingsRow(gallery)).toHaveAccessibleName("Cleaning settings Different per room");
+    });
+
+    test("one disclosure opens at a time, and Mop holds the coverage select with its hint (R28)", async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "rooms-ready", narrow });
+      const kitchen = gallery.getByRole("button", { name: "Settings for Kitchen" });
+      const box = await kitchen.boundingBox();
+      expect(box.width).toBeGreaterThanOrEqual(44);
+      expect(box.height).toBeGreaterThanOrEqual(44);
+      await kitchen.click();
+      await expect(kitchen).toHaveAttribute("aria-expanded", "true");
+      await expect(gallery.getByRole("combobox", { name: "Cleaning mode for Kitchen" })).toBeVisible();
+      await expect(gallery.getByRole("combobox", { name: "Vacuum coverage for Kitchen" })).toBeVisible();
+      await gallery.getByRole("button", { name: "Settings for Living room" }).click();
+      await expect(kitchen).toHaveAttribute("aria-expanded", "false");
+      await expect(gallery.getByRole("combobox", { name: "Cleaning mode for Living room" })).toBeVisible();
+      await expect(gallery.getByRole("combobox", { name: "Cleaning mode for Kitchen" })).toHaveCount(0);
+      await settingsRow(gallery).click();
+      await expect(gallery.getByRole("combobox", { name: /^Cleaning mode for / })).toHaveCount(0);
+      await expect(gallery.locator("#clean-settings")).toBeVisible();
+
+      await kitchen.click();
+      await gallery.getByRole("combobox", { name: "Cleaning mode for Kitchen" }).selectOption("mop");
+      const coverage = gallery.getByRole("combobox", { name: "Vacuum coverage for Kitchen" });
+      await expect(coverage).toHaveAttribute("aria-disabled", "true");
+      await expect(coverage).toHaveAccessibleDescription(/^Vacuum coverage applies only when vacuuming\./);
+      const before = (await snapshot(page)).selection.roomSettings.find((room) => room.roomId === "room-a").coverageSetting;
+      await forceSelect(coverage, "quick");
+      await expect.poll(async () => (await snapshot(page)).selection.roomSettings.find((room) => room.roomId === "room-a").coverageSetting).toBe(before);
+      await expect(coverage).toHaveValue(before);
+    });
+
+    test("Escape closes an open disclosure first and leaves Rooms second (§5 Keyboard)", async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "ready", narrow });
+      await cards(gallery).nth(0).click();
+      await roomsGroup(gallery).getByText("Kitchen", { exact: true }).click();
+      const kitchen = gallery.getByRole("button", { name: "Settings for Kitchen" });
+      await kitchen.click();
+      await gallery.getByRole("combobox", { name: "Vacuum coverage for Kitchen" }).focus();
+      await page.keyboard.press("Escape");
+      await expect(kitchen).toHaveAttribute("aria-expanded", "true");
+      await kitchen.focus();
+      await page.keyboard.press("Escape");
+      await expect(kitchen).toHaveAttribute("aria-expanded", "false");
+      await expect(kitchen).toBeFocused();
+      expect((await snapshot(page)).workflow).toBe("rooms");
+      await page.keyboard.press("Escape");
+      await expect.poll(async () => (await snapshot(page)).workflow).toBe("none");
+      await expect.poll(() => focusedText(page)).toMatch(/^button Clean rooms/);
+    });
+
+    test("a failed or blocked check shows one line above the rows (R4)", async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "rooms-failed", narrow });
+      await expect(checkLines(gallery)).toHaveCount(1);
+      await expect(checkLines(gallery).first()).toContainText("Home Assistant couldn't check the room settings.");
+      await expect(primaryReason(gallery)).toHaveText("Can't start until Home Assistant checks the room settings.");
+      const retries = (await snapshot(page)).manualRoomPreviewRetry;
+      await gallery.locator(".check-lines").getByRole("button", { name: "Try again" }).click();
+      await expect.poll(async () => (await snapshot(page)).manualRoomPreviewRetry).toBe(retries + 1);
+
+      const blocked = await loadGallery(page, { scenario: "rooms-ready", narrow });
+      await blocked.evaluate((element) => {
+        const { withGalleryRoomPreview } = window.__galleryModule;
+        const state = element.getWorkspaceSnapshot();
+        element.replaceWorkspaceState(withGalleryRoomPreview({ ...state, selection: { ...state.selection,
+          roomSettings: state.selection.roomSettings.map((room) => room.roomId === "room-a" ? { ...room, cleaningMode: "mop" } : room) } },
+        { blocker: "invalid_cadence_policy" }));
+      });
+      await expect(checkLines(blocked).last()).toHaveText("The room schedule can't use the cleaning mode you chose. Turn off \"Include scheduled work that's due\", or choose another mode.");
+      await expect(primaryReason(blocked)).toHaveText("Can't start until you change the settings noted above.");
+      await settingsRow(blocked).click();
+      await blocked.getByRole("switch", { name: "Include scheduled work that's due" }).click();
+      await expect(checkLines(blocked).last()).toHaveText("These rooms can't be cleaned with the current settings. Change the settings or the rooms, then try again.");
+    });
+
+    test("a row keeps its own schedule problem as a third line (R20)", async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "rooms-ready", narrow });
+      await gallery.evaluate((element) => {
+        const { withGalleryRoomPreview } = window.__galleryModule;
+        element.replaceWorkspaceState(withGalleryRoomPreview(element.getWorkspaceSnapshot(), { reasons: { "room-c": ["coverage_requires_vacuum"] } }));
+      });
+      await expect(roomBox(gallery, "Office")).toHaveAccessibleName(/^Office Vacuum · Optimal The vacuum rotation needs a cleaning mode/);
+      await expect(roomsGroup(gallery).locator(".problem-line .ms-icon")).toHaveCount(1);
+    });
+
+    test("at the limit the header line has no live role and unselected rows are held by it (R5)", async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "room-limit", narrow });
+      // The scenario selects all 100 rooms; a 101st shows the held row.
+      await gallery.evaluate((element) => {
+        const state = element.getWorkspaceSnapshot();
+        const plans = state.resources.plans.value;
+        element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...state.resources.plans,
+          value: { ...plans, rooms: [...plans.rooms, { roomId: "room-extra", name: "Pantry" }] } } } });
+      });
+      const limit = gallery.locator("#rooms-limit");
+      await expect(limit).toHaveText("Up to 100 rooms fit in one clean, so remove one to add another.");
+      await expect(limit).not.toHaveAttribute("role", /./);
+      await expect(gallery.getByRole("status").filter({ hasText: "Up to 100 rooms" })).toHaveCount(0);
+      const boxes = roomsGroup(gallery).getByRole("checkbox");
+      await expect(boxes).toHaveCount(101);
+      const spare = boxes.nth(100);
+      await expect(spare).not.toBeChecked();
+      await expect(spare).toHaveAttribute("aria-disabled", "true");
+      await expect(spare).toHaveAccessibleDescription("Up to 100 rooms fit in one clean, so remove one to add another.");
+      await spare.dispatchEvent("click");
+      expect((await snapshot(page)).selection.roomIds).toHaveLength(100);
+      await expect(spare).not.toBeChecked();
+    });
+
+    test("a busy robot holds every control with one shared description and no summary (R7, R10)", async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "rooms-busy", narrow });
+      const busy = "Can't change rooms until the robot finishes or stops.";
+      await expect(description(gallery)).toHaveText(busy);
+      const boxes = roomsGroup(gallery).getByRole("checkbox");
+      for (let index = 0; index < await boxes.count(); index += 1) {
+        await expect(boxes.nth(index)).toHaveAttribute("aria-disabled", "true");
+        await expect(boxes.nth(index)).toHaveAccessibleDescription(busy);
+      }
+      const clear = listHeader(gallery).getByRole("button", { name: "Clear", exact: true });
+      await expect(clear).toHaveAttribute("aria-disabled", "true");
+      await expect(clear).toHaveAccessibleDescription(busy);
+      const before = (await snapshot(page)).selection;
+      await boxes.first().dispatchEvent("click");
+      await clear.dispatchEvent("click");
+      await settingsRow(gallery).click();
+      const mode = gallery.locator("#clean-settings").getByRole("combobox", { name: "Cleaning mode" });
+      await expect(mode).toHaveAttribute("aria-disabled", "true");
+      await expect(mode).toHaveAccessibleDescription(busy);
+      await forceSelect(mode, "mop");
+      await expect(mode).toHaveValue("vacuum");
+      const due = gallery.getByRole("switch", { name: "Include scheduled work that's due" });
+      await expect(due).toHaveAttribute("aria-disabled", "true");
+      await due.dispatchEvent("click");
+      await gallery.getByRole("button", { name: "Settings for Kitchen" }).click();
+      const room = gallery.getByRole("combobox", { name: "Cleaning mode for Kitchen" });
+      await expect(room).toHaveAttribute("aria-disabled", "true");
+      await forceSelect(room, "mop");
+      await expect(room).toHaveValue("vacuum");
+      expect((await snapshot(page)).selection).toEqual(before);
+      await expect(gallery.locator(".action-summary")).toHaveCount(0);
+    });
+
+    test("rows held by a map that is not ready say so to screen readers", async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "rooms-ready", narrow });
+      await patchState(gallery, { coherence: "verifying" });
+      await expect(roomBox(gallery, "Kitchen")).toHaveAttribute("aria-disabled", "true");
+      await expect(roomBox(gallery, "Kitchen")).toHaveAccessibleDescription("Waiting for the map to be ready.");
+      await expect(description(gallery)).toHaveText("Choose rooms on the map or in the list.");
+    });
+
+    test("empty, loading and failed catalogs take the description slot (R9)", async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "rooms-empty", narrow });
+      await expect(description(gallery)).toHaveText("This floor has no rooms yet. Name rooms in the Matic app to see them here.");
+      await expect(gallery.getByRole("heading", { level: 3, name: "Rooms to clean" })).toHaveCount(0);
+      await expect(settingsRow(gallery)).toHaveCount(0);
+      await expect(listHeader(gallery)).toHaveCount(0);
+      await expect(primaryReason(gallery)).toHaveText("Can't start until you choose a named room.");
+
+      await plansResource(gallery, { status: "loading", value: null });
+      await expect(panelOf(gallery).getByRole("status").filter({ hasText: "Loading rooms and plans…" })).toBeVisible();
+      await plansResource(gallery, { status: "error", value: null });
+      await expect(panelOf(gallery).getByRole("alert").filter({ hasText: "Home Assistant couldn't load rooms and plans." })).toBeVisible();
+      await expect(panelOf(gallery).getByRole("button", { name: "Try again" })).toBeVisible();
+    });
+  });
+}
+
+test.describe("the Rooms view: RTL and forced colors", () => {
+  test("mirrors the open chevron and keeps the Settings button inside its row in RTL", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "rooms-ready", narrow: true });
+    await page.evaluate(() => { document.documentElement.dir = "rtl"; });
+    await settingsRow(gallery).click();
+    await expect(settingsRow(gallery)).toHaveAttribute("aria-expanded", "true");
+    await expect.poll(() => settingsRow(gallery).locator(".ms-icon").evaluate((element) => {
+      const { rotate, transform } = getComputedStyle(element);
+      return rotate === "-90deg" || /matrix\(-?0(\.0+)?, -?1, 1, -?0(\.0+)?/.test(transform) ? "mirrored" : `${rotate} ${transform}`;
+    })).toBe("mirrored");
+    const kitchen = gallery.getByRole("button", { name: "Settings for Kitchen" });
+    await kitchen.click();
+    await expect(kitchen).toHaveAttribute("aria-expanded", "true");
+    const row = await kitchen.locator("xpath=ancestor::*[contains(@class, 'room-row')]").boundingBox();
+    const button = await kitchen.boundingBox();
+    expect(button.x).toBeGreaterThanOrEqual(row.x - 0.5);
+    expect(button.x + button.width).toBeLessThanOrEqual(row.x + row.width + 0.5);
+  });
+
+  test("a selected row takes the Highlight fill in forced colors", async ({ page }) => {
+    await page.emulateMedia({ forcedColors: "active" });
+    const gallery = await loadGallery(page, { scenario: "rooms-ready" });
+    const row = roomsGroup(gallery).locator(".room-row").first();
+    const highlight = await page.evaluate(() => {
+      const probe = document.createElement("div");
+      probe.style.cssText = "background: Highlight; forced-color-adjust: none";
+      document.body.append(probe);
+      const value = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return value;
+    });
+    await expect(row).toHaveCSS("background-color", highlight);
+    await expect(roomBox(gallery, "Kitchen")).toBeVisible();
+  });
+});

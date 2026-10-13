@@ -250,7 +250,8 @@ const workflowCopy = (state: WorkspaceState, localize?: Localize): {
   const t = (key: string, fallback: string): string => translate(localize, key, fallback);
   switch (state.workflow) {
     case "rooms":
-      return { title: t("v4_choose_rooms", "Choose rooms"), description: t("v4_choose_rooms_detail", "Choose rooms on the map or in the list.") };
+      // The view renders its own description, so the rows can be described by it (R6).
+      return { title: t("v4_choose_rooms", "Choose rooms"), description: "" };
     case "draw":
       return { title: t("v4_draw_area", "Draw an area"), description: t("v4_draw_area_detail", "Outline or paint the area, then review it before saving.") };
     case "plans":

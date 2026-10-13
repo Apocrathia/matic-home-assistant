@@ -128,8 +128,10 @@ export class MaticMapCanvasV4 extends LitElement {
     :host([narrow]) ::slotted(.floor-switcher) { inline-size: 7rem; }
     :host([narrow]) .fit { min-inline-size: 44px; padding-inline: var(--ms-space-2); }
     :host([narrow]) .fit .ms-btn__label { display: none; }
-    :host([narrow]) .map-rail { --help-bottom: calc(var(--map-sheet-offset, 0px) + 52px + 44px + var(--ms-space-2)); }
-    :host([narrow]) .navigation-help { inset-block-start: auto; inset-block-end: var(--help-bottom); max-block-size: calc(100% - var(--help-top) - var(--help-bottom)); }
+    /* Phone: the full detent leaves two rows, so "?" takes the bottom-left. */
+    :host([narrow]) .map-extras { inset-inline-end: auto; inset-inline-start: 0; inset-block-end: var(--map-sheet-offset, 0px); }
+    :host([narrow]) .map-rail { --help-bottom: calc(var(--map-sheet-offset, 0px) + 44px + var(--ms-space-2)); }
+    :host([narrow]) .navigation-help { inset-block-start: auto; inset-inline-end: auto; inset-inline-start: 0; inset-block-end: var(--help-bottom); max-block-size: calc(100% - var(--help-top) - var(--help-bottom)); }
 
     .map-tools, .view-switch, .appearance-switch, .camera-steps { display: flex; }
 

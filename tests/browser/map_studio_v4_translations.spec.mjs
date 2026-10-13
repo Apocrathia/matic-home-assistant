@@ -342,8 +342,10 @@ test("the room summary and selection chip take their rooms and count from placeh
 
   // Found by class: the summary is a plain paragraph with no role or name.
   await expect(gallery.locator(".action-summary")).toHaveText(`${list}, danach zurück zum Dock`);
-  // The chip has no role or name of its own; its text is the contract.
-  await expect(gallery.getByText("Gewählt: 3 Räume", { exact: true })).toBeVisible();
+  // The chip has no role or name of its own; its text is the contract. The
+  // Rooms list header carries the same count (home-rooms.md §4).
+  await expect(gallery.locator(".selection-chip").getByText("Gewählt: 3 Räume", { exact: true })).toBeVisible();
+  await expect(gallery.locator(".list-header").getByText("Gewählt: 3 Räume", { exact: true })).toBeVisible();
   const dock = await localizeCalls(page, "v4_rooms_summary_dock");
   expect(dock.at(-1).placeholders).toEqual({ rooms: list });
   const chip = await localizeCalls(page, "v4_rooms_selected");

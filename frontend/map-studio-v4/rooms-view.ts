@@ -1,0 +1,389 @@
+import { LitElement, css, html, nothing } from "lit";
+import type { PropertyValues } from "lit";
+import { controls } from "./controls";
+import { icon, iconChevronDown, iconChevronRight, iconChevronUp, iconDue, iconNoticeWarning } from "./icons";
+import { base, tokens } from "./tokens";
+import type { CadenceReason, CleaningMode, CoverageSetting, NextRunPreviewRoom, PlanRoom } from "./backend-contracts";
+import {
+  MAX_ROOM_SEQUENCE_SIZE,
+  type Localize,
+  type NoButtonAction,
+  type PrimaryAction,
+  type WorkspaceIntent,
+  type WorkspaceState,
+} from "./contracts";
+import { ROOMS_VIEW_TAG } from "./element-tags";
+import { isNativeSelectControl } from "./gesture-controller";
+import { WORKSPACE_INTENT_EVENT } from "./map-canvas";
+import { translate } from "./localize";
+import { COVERAGES, MODES, cadenceProblem, coverageLabel, modeLabel, settingLabel } from "./plan-cadence";
+import { dueLines, type Translate } from "./plan-copy";
+import { admittedManualRoomPreview, canSelectRooms, hasStoppableWork, initialWorkspaceState } from "./state";
+
+const DUE: readonly CadenceReason[] = ["mop_due", "coverage_due"];
+
+type CatalogRoom = NonNullable<WorkspaceState["resources"]["plans"]["value"]>["rooms"][number];
+
+const roomName = (state: WorkspaceState, roomId: string): string | null =>
+  state.resources.plans.value?.rooms.find((room) => room.roomId === roomId)?.name ?? null;
+
+/** The catalog names of the selected rooms, in selection order (shell summary and grip). */
+export const selectedRoomNames = (state: WorkspaceState): string[] =>
+  state.selection.roomIds.map((roomId) => roomName(state, roomId) ?? roomId);
+
+// Task 6 fills the summary line and the map-tap announcement.
+export const roomsSummary = (_t: Translate, _state: WorkspaceState): string => "";
+
+export const roomTapAnnouncement = (
+  _t: Translate,
+  _before: WorkspaceState,
+  _after: WorkspaceState,
+  _roomId: string,
+  _primary: PrimaryAction | NoButtonAction | null,
+): string | null => null;
+
+const eventValue = (event: Event): string => (event.currentTarget as HTMLSelectElement).value;
+
+/**
+ * The Rooms view (home-rooms.md §3 Rooms, §4 R1-R10, §5): the description,
+ * the list header, the whole-clean Cleaning settings row, the check lines and
+ * the room rows in catalog order. One disclosure is open at a time (`_open`:
+ * "settings" or a room id). While the selection is locked (R10), every
+ * control stays readable and focusable but changes nothing (R22).
+ */
+export class MaticRoomsViewV4 extends LitElement {
+  static override properties = {
+    state: { attribute: false },
+    localize: { attribute: false },
+    _open: { state: true },
+  };
+
+  static override styles = [tokens, base, controls, css`
+:host { display: block; min-inline-size: 0; }
+.stack { display: grid; gap: var(--ms-space-3); }
+.description { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-sm); line-height: var(--ms-lh-normal); }
+.sr-only { position: absolute; overflow: hidden; inline-size: 1px; block-size: 1px; margin: -1px; padding: 0; border: 0; clip-path: inset(50%); white-space: nowrap; }
+.list-header { display: flex; align-items: center; gap: var(--ms-space-2); min-block-size: var(--ms-control-sm); }
+.list-header h3 { flex: 1; margin: 0; }
+.list-header small { color: var(--ms-text-quiet); font-size: var(--ms-t-xs); }
+.limit { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
+@media (any-pointer: coarse) { .clear { min-block-size: var(--ms-control); min-inline-size: var(--ms-control); } }
+/* The settings row: a full-row disclosure, its body below (design-system.md §4). */
+.settings-row { display: grid; padding: 0; }
+.ms-disclosure { display: flex; gap: var(--ms-space-2); align-items: center; min-inline-size: 0; min-block-size: var(--ms-control); padding: var(--ms-space-2) var(--ms-space-3); border: 0; border-radius: var(--ms-radius-sm); color: inherit; background: transparent; font: inherit; font-size: var(--ms-t-md); font-weight: var(--ms-w-bold); text-align: start; cursor: pointer; }
+.ms-disclosure:focus-visible { outline: 2px solid var(--ms-resolved-indicator, var(--ms-accent)); outline-offset: -2px; }
+.ms-disclosure > span:first-child { flex: 1; }
+.ms-disclosure__value { overflow: hidden; color: var(--ms-text-quiet); font-weight: var(--ms-w-regular); font-size: var(--ms-t-sm); text-overflow: ellipsis; white-space: nowrap; }
+.ms-disclosure > .ms-icon { flex: none; transition: rotate var(--ms-fast) var(--ms-ease); }
+.ms-disclosure[aria-expanded="true"] > .ms-icon { rotate: 90deg; }
+.ms-disclosure:dir(rtl) > .ms-icon { scale: -1 1; }
+/* scale applies before rotate, so the mirrored chevron turns the other way to point down. */
+.ms-disclosure[aria-expanded="true"]:dir(rtl) > .ms-icon { rotate: -90deg; }
+.settings-body, .row-expanded { display: grid; gap: var(--ms-space-3); padding: var(--ms-space-3); border-block-start: 1px solid var(--ms-line); }
+.split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--ms-space-2); }
+@media (max-width: 25rem) { .split { grid-template-columns: 1fr; } }
+.hint { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
+.switch-row { display: flex; gap: var(--ms-space-3); align-items: center; min-block-size: var(--ms-control); }
+.switch-copy { display: grid; flex: 1; gap: 0.125rem; min-inline-size: 0; font-size: var(--ms-t-md); }
+.switch-copy small { color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
+/* Check lines: the glyph carries the tone, the text keeps its colour (design-system.md §5). */
+.check-lines { display: grid; gap: var(--ms-space-2); }
+.line { display: flex; gap: var(--ms-space-2); align-items: flex-start; margin: 0; font-size: var(--ms-t-sm); line-height: var(--ms-lh-snug); }
+.line .ms-icon { flex: none; inline-size: 1.125rem; block-size: 1.125rem; margin-block-start: 0.0625rem; }
+.line[data-tone="warning"] .ms-icon { color: var(--ms-warning); }
+.line > span { flex: 1; }
+.line .ms-btn { flex: none; }
+/* Room rows: the label is the target up to the Settings button (§8 Targets). */
+.room-list { display: grid; gap: var(--ms-space-2); }
+.room-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; padding: 0; --ms-local: var(--ms-surface-card); }
+.room-row:has(.ms-check :checked) { --ms-local: color-mix(in srgb, var(--ms-accent) 10%, var(--ms-surface-sunken)); border-color: var(--ms-resolved-indicator, var(--ms-accent)); }
+.ms-check { display: flex; gap: var(--ms-space-3); align-items: center; min-inline-size: 0; min-block-size: var(--ms-control); padding: var(--ms-space-2) var(--ms-space-3); cursor: pointer; }
+.ms-check input { flex: none; inline-size: 1.25rem; block-size: 1.25rem; margin: 0; accent-color: var(--ms-resolved-indicator, var(--ms-accent)); cursor: pointer; }
+.ms-check input[aria-disabled="true"] { cursor: not-allowed; }
+.row-lines { display: grid; flex: 1; gap: 0.125rem; min-inline-size: 0; }
+.row-lines bdi { overflow: hidden; font-weight: var(--ms-w-bold); text-overflow: ellipsis; white-space: nowrap; }
+.row-lines small { color: color-mix(in srgb, var(--ms-text) 78%, var(--ms-local)); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
+.problem-line { display: flex; gap: var(--ms-space-1); align-items: flex-start; color: var(--ms-text); }
+.problem-line .ms-icon { flex: none; inline-size: 1rem; block-size: 1rem; color: var(--ms-warning); }
+.room-settings { margin-inline-end: var(--ms-space-1); }
+.row-expanded { grid-column: 1 / -1; }
+@media (forced-colors: active) {
+  .room-row:has(.ms-check :checked) { forced-color-adjust: none; color: HighlightText; background: Highlight; border-color: Highlight; }
+  .room-row:has(.ms-check :checked) .row-lines small { color: HighlightText; }
+  .room-row:has(.ms-check :checked) input, .room-row:has(.ms-check :checked) .room-settings { forced-color-adjust: auto; }
+  .line .ms-icon, .problem-line .ms-icon { color: CanvasText; }
+}
+@media (prefers-reduced-motion: reduce) { .ms-disclosure > .ms-icon { transition: none; } }
+`];
+
+  state: WorkspaceState = initialWorkspaceState();
+  localize?: Localize;
+  /** The open disclosure: "settings" or a selected room id, one at a time (§5). */
+  protected _open: string | null = null;
+
+  readonly #t: Translate = (key, fallback, placeholders) => translate(this.localize, key, fallback, placeholders);
+
+  #intent(intent: WorkspaceIntent): void {
+    this.dispatchEvent(new CustomEvent(WORKSPACE_INTENT_EVENT, { detail: intent, bubbles: true, composed: true }));
+  }
+
+  protected override willUpdate(changed: PropertyValues<this>): void {
+    if (!changed.has("state")) return;
+    // A deselected room's disclosure closes with it.
+    if (this._open && this._open !== "settings" && !this.state.selection.roomIds.includes(this._open)) this._open = null;
+  }
+
+  // Escape closes the open disclosure and returns to its button before the
+  // shell sees it (shell.md §5 Escape order); a native select keeps Escape.
+  readonly #keydown = (event: KeyboardEvent): void => {
+    if (event.key !== "Escape" || this._open === null || isNativeSelectControl(event)) return;
+    if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+    event.preventDefault();
+    const selector = this._open === "settings" ? '[data-disclosure="settings"]' : `[data-room-disclosure="${CSS.escape(this._open)}"]`;
+    this._open = null;
+    void this.updateComplete.then(() => this.renderRoot.querySelector<HTMLElement>(selector)?.focus());
+  };
+
+  #toggle(id: string): void {
+    this._open = this._open === id ? null : id;
+  }
+
+  // A held select (R22) keeps its value: the change is undone in place.
+  #select(held: boolean, current: string, apply: (value: string) => void) {
+    return (event: Event): void => {
+      if (held) {
+        (event.currentTarget as HTMLSelectElement).value = current;
+        return;
+      }
+      apply(eventValue(event));
+    };
+  }
+
+  #describe(...ids: (string | null | false | undefined)[]): string | typeof nothing {
+    const list = ids.filter((id): id is string => Boolean(id));
+    return list.length ? list.join(" ") : nothing;
+  }
+
+  #settingsRow(state: WorkspaceState, held: string | null, anyDue: boolean) {
+    const t = this.#t;
+    const open = this._open === "settings";
+    const selected = state.selection.roomSettings.filter((room) => state.selection.roomIds.includes(room.roomId));
+    const first = selected[0];
+    const mixed = selected.some((room) => room.cleaningMode !== first?.cleaningMode || room.coverageSetting !== first?.coverageSetting);
+    const value = mixed
+      ? t("v4_settings_mixed", "Different per room")
+      : settingLabel(t, first ?? { cleaningMode: state.selection.cleaningMode, coverageSetting: state.selection.coverageSetting });
+    const mode = state.selection.cleaningMode;
+    const coverage = state.selection.coverageSetting;
+    const mop = mode === "mop";
+    const locked = held !== null;
+    return html`
+      <div class="ms-row settings-row">
+        <button
+          class="ms-disclosure"
+          type="button"
+          data-disclosure="settings"
+          aria-expanded=${String(open)}
+          aria-controls="clean-settings"
+          @click=${() => this.#toggle("settings")}
+        ><span>${t("v4_clean_settings", "Cleaning settings")}</span><span class="ms-disclosure__value">${value}</span>${icon(iconChevronRight)}</button>
+        ${open ? html`
+          <div id="clean-settings" class="settings-body">
+            <div class="split">
+              <label class="ms-field">${t("v4_cleaning_system", "Cleaning mode")}
+                <select
+                  class="ms-select"
+                  aria-disabled=${locked ? "true" : nothing}
+                  aria-describedby=${this.#describe(held)}
+                  .value=${mode}
+                  @change=${this.#select(locked, mode, (next) => this.#intent({ type: "set-clean-settings", cleaningMode: next as CleaningMode }))}
+                >${MODES.map((option) => html`<option value=${option} ?selected=${option === mode}>${modeLabel(t, option)}</option>`)}</select>
+              </label>
+              <label class="ms-field">${t("vacuum_coverage", "Vacuum coverage")}
+                <select
+                  class="ms-select"
+                  aria-disabled=${locked || mop ? "true" : nothing}
+                  aria-describedby=${this.#describe(mop && "clean-mop-hint", held)}
+                  .value=${coverage}
+                  @change=${this.#select(locked || mop, coverage, (next) => this.#intent({ type: "set-clean-settings", coverageSetting: next as CoverageSetting }))}
+                >${COVERAGES.map((option) => html`<option value=${option} ?selected=${option === coverage}>${coverageLabel(t, option)}</option>`)}</select>
+              </label>
+            </div>
+            ${mop ? html`<p class="hint" id="clean-mop-hint">${t("v4_mop_coverage_hint", "Vacuum coverage applies only when vacuuming. Use the robot's Double-pass mopping setting for an extra mop pass.")}</p>` : nothing}
+            ${anyDue ? html`
+              <div class="switch-row">
+                <span class="switch-copy">
+                  <span id="due-label">${t("v4_include_due_schedule", "Include scheduled work that's due")}</span>
+                  <small id="due-hint">${t("v4_include_due_schedule_hint", "Turn off to use only your settings. Skipped work stays due for the next clean.")}</small>
+                </span>
+                <button
+                  class="ms-switch"
+                  type="button"
+                  role="switch"
+                  aria-checked=${String(state.selection.useRoomSchedule)}
+                  aria-labelledby="due-label"
+                  aria-describedby=${this.#describe("due-hint", held)}
+                  aria-disabled=${locked ? "true" : nothing}
+                  @click=${() => { if (!locked) this.#intent({ type: "set-use-room-schedule", value: !state.selection.useRoomSchedule }); }}
+                ></button>
+              </div>
+            ` : nothing}
+          </div>
+        ` : nothing}
+      </div>
+    `;
+  }
+
+  #checkLines(state: WorkspaceState, preview: readonly NextRunPreviewRoom[] | null, boundaries: number, blocker: string | null) {
+    const t = this.#t;
+    const failed = state.manualRoomPreview.status === "error";
+    const due = preview ? dueLines(t, state.locale, preview) : [];
+    const blockedLine = blocker === null ? null
+      : blocker === "invalid_cadence_policy" && state.selection.useRoomSchedule
+        && state.selection.roomSettings.some((room) => room.cleaningMode !== "vacuum")
+        ? t("v4_room_preview_schedule_override", "The room schedule can't use the cleaning mode you chose. Turn off \"Include scheduled work that's due\", or choose another mode.")
+        : t("v4_room_preview_blocked", "These rooms can't be cleaned with the current settings. Change the settings or the rooms, then try again.");
+    if (!due.length && !boundaries && !failed && !blockedLine) return nothing;
+    return html`
+      <div class="check-lines">
+        ${due.map((line) => html`<p class="line" data-tone="due">${icon(iconDue)}<span>${line}</span></p>`)}
+        ${boundaries ? html`<p class="line" data-tone="info">${icon(iconDue)}<span>${t("v4_room_parts", "The robot cleans these rooms in {count} parts and may stop at the dock between parts.", { count: boundaries + 1 })}</span></p>` : nothing}
+        ${failed ? html`
+          <p class="line" data-tone="warning">${icon(iconNoticeWarning)}<span>${t("v4_room_preview_unavailable", "Home Assistant couldn't check the room settings.")}</span>
+            <button class="ms-btn ms-btn--sm ms-btn--secondary" type="button" @click=${() => this.#intent({ type: "retry-room-preview" })}>${t("v4_retry", "Try again")}</button>
+          </p>
+        ` : nothing}
+        ${blockedLine ? html`<p class="line" data-tone="warning">${icon(iconNoticeWarning)}<span>${blockedLine}</span></p>` : nothing}
+      </div>
+    `;
+  }
+
+  #row(state: WorkspaceState, room: CatalogRoom, index: number, held: string | null, atLimit: boolean, previewRoom: NextRunPreviewRoom | null) {
+    const t = this.#t;
+    const checked = state.selection.roomIds.includes(room.roomId);
+    const settings = state.selection.roomSettings.find((candidate) => candidate.roomId === room.roomId)
+      ?? { roomId: room.roomId, cleaningMode: state.selection.cleaningMode, coverageSetting: state.selection.coverageSetting };
+    const limited = atLimit && !checked;
+    const locked = held !== null;
+    const loading = state.manualRoomPreview.status === "loading";
+    const reasons = previewRoom?.cadenceReasons ?? room.sharedCadenceReasons ?? room.sharedCadenceProgress?.reasons ?? [];
+    const problem = checked ? cadenceProblem(t, reasons) : null;
+    const open = this._open === room.roomId;
+    const bodyId = `room-settings-${index}`;
+    const hintId = `room-mop-hint-${index}`;
+    const mop = settings.cleaningMode === "mop";
+    return html`
+      <div class="ms-row room-row">
+        <label class="ms-check">
+          <input
+            type="checkbox"
+            .checked=${checked}
+            aria-disabled=${locked || limited ? "true" : nothing}
+            aria-describedby=${this.#describe(held ?? (limited && "rooms-limit"))}
+            @click=${(event: Event) => { if (locked || limited) event.preventDefault(); }}
+            @change=${() => this.#intent({ type: "toggle-room", roomId: room.roomId })}
+          >
+          <span class="row-lines">
+            <bdi>${room.name}</bdi>
+            ${checked ? html`<small>${loading ? t("v4_room_preview_loading", "Checking settings…") : settingLabel(t, previewRoom ?? settings)}</small>` : nothing}
+            ${problem ? html`<small class="problem-line">${icon(iconNoticeWarning)}<span>${problem}</span></small>` : nothing}
+          </span>
+        </label>
+        ${checked ? html`
+          <button
+            class="ms-btn ms-btn--icon room-settings"
+            type="button"
+            data-room-disclosure=${room.roomId}
+            aria-label=${t("v4_room_settings_named", "Settings for {room}", { room: room.name })}
+            aria-expanded=${String(open)}
+            aria-controls=${bodyId}
+            @click=${() => this.#toggle(room.roomId)}
+          >${icon(open ? iconChevronUp : iconChevronDown)}</button>
+        ` : nothing}
+        ${open ? html`
+          <div class="row-expanded" id=${bodyId}>
+            <div class="split">
+              <label class="ms-field">${t("v4_cleaning_system", "Cleaning mode")}
+                <select
+                  class="ms-select"
+                  aria-label=${t("v4_room_cleaning_system_named", "Cleaning mode for {room}", { room: room.name })}
+                  aria-disabled=${locked ? "true" : nothing}
+                  aria-describedby=${this.#describe(held)}
+                  .value=${settings.cleaningMode}
+                  @change=${this.#select(locked, settings.cleaningMode, (next) => this.#intent({ type: "patch-room-settings", roomId: room.roomId, cleaningMode: next as CleaningMode }))}
+                >${MODES.map((option) => html`<option value=${option} ?selected=${option === settings.cleaningMode}>${modeLabel(t, option)}</option>`)}</select>
+              </label>
+              <label class="ms-field">${t("vacuum_coverage", "Vacuum coverage")}
+                <select
+                  class="ms-select"
+                  aria-label=${t("v4_room_vacuum_coverage_named", "Vacuum coverage for {room}", { room: room.name })}
+                  aria-disabled=${locked || mop ? "true" : nothing}
+                  aria-describedby=${this.#describe(mop && hintId, held)}
+                  .value=${settings.coverageSetting}
+                  @change=${this.#select(locked || mop, settings.coverageSetting, (next) => this.#intent({ type: "patch-room-settings", roomId: room.roomId, coverageSetting: next as CoverageSetting }))}
+                >${COVERAGES.map((option) => html`<option value=${option} ?selected=${option === settings.coverageSetting}>${coverageLabel(t, option)}</option>`)}</select>
+              </label>
+            </div>
+            ${mop ? html`<p class="hint" id=${hintId}>${t("v4_mop_coverage_hint", "Vacuum coverage applies only when vacuuming. Use the robot's Double-pass mopping setting for an extra mop pass.")}</p>` : nothing}
+          </div>
+        ` : nothing}
+      </div>
+    `;
+  }
+
+  protected override render() {
+    const t = this.#t;
+    const state = this.state;
+    const rooms = state.resources.plans.value?.rooms ?? [];
+    const empty = rooms.length === 0;
+    const busy = hasStoppableWork(state);
+    const locked = !canSelectRooms(state);
+    // R22: the shared description while work runs, else an sr-only reason.
+    const held = locked ? (busy ? "rooms-description" : "rooms-held") : null;
+    const count = state.selection.roomIds.length;
+    const atLimit = count >= MAX_ROOM_SEQUENCE_SIZE;
+    const admitted = admittedManualRoomPreview(state)?.preview ?? null;
+    const preview = admitted ? admitted.rooms.map((room) => ({ ...room, name: roomName(state, room.roomId) ?? room.name })) : null;
+    const previewRoom = (roomId: string): NextRunPreviewRoom | null => preview?.find((room) => room.roomId === roomId) ?? null;
+    const anyDue = (preview ?? []).some((room) => room.cadenceReasons.some((reason) => DUE.includes(reason)))
+      || rooms.some((room) => state.selection.roomIds.includes(room.roomId)
+        && (room.sharedCadenceProgress?.mopDue || room.sharedCadenceProgress?.coverageDue
+          || (room.sharedCadenceReasons ?? room.sharedCadenceProgress?.reasons ?? []).some((reason) => DUE.includes(reason))));
+    const description = busy
+      ? t("v4_rooms_busy", "Can't change rooms until the robot finishes or stops.")
+      : empty
+        ? t("v4_no_rooms_plans", "This floor has no rooms yet. Name rooms in the Matic app to see them here.")
+        : t("v4_choose_rooms_detail", "Choose rooms on the map or in the list.");
+    return html`
+      <div class="stack" @keydown=${this.#keydown}>
+        <p class="description" id="rooms-description">${description}</p>
+        ${locked && !busy ? html`<span class="sr-only" id="rooms-held">${t("v4_reason_clean_rooms_verification", "Waiting for the map to be ready.")}</span>` : nothing}
+        ${empty ? nothing : html`
+          <div class="list-header">
+            <h3 class="ms-section-heading" id="rooms-heading">${t("v4_rooms_to_clean", "Rooms to clean")}</h3>
+            ${count ? html`
+              <small>${t("v4_rooms_selected", "{count} selected", { count })}</small>
+              <button
+                class="ms-btn ms-btn--sm ms-btn--secondary clear"
+                type="button"
+                aria-disabled=${locked ? "true" : nothing}
+                aria-describedby=${this.#describe(held)}
+                @click=${() => { if (!locked) this.#intent({ type: "clear-selection" }); }}
+              >${t("v4_clear", "Clear")}</button>
+            ` : nothing}
+          </div>
+          ${atLimit ? html`<p class="limit" id="rooms-limit">${t("v4_room_limit_reached", "Up to {limit} rooms fit in one clean, so remove one to add another.", { limit: MAX_ROOM_SEQUENCE_SIZE })}</p>` : nothing}
+          ${this.#settingsRow(state, held, anyDue)}
+          ${this.#checkLines(state, preview, admitted?.missionBoundaries.length ?? 0, admitted?.blocker ?? null)}
+          <div class="room-list" role="group" aria-labelledby="rooms-heading">
+            ${rooms.map((room, index) => this.#row(state, room, index, held, atLimit, previewRoom(room.roomId)))}
+          </div>
+        `}
+      </div>
+    `;
+  }
+}
+
+export type { PlanRoom };
+
+if (!customElements.get(ROOMS_VIEW_TAG)) customElements.define(ROOMS_VIEW_TAG, MaticRoomsViewV4);

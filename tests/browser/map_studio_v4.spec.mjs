@@ -733,8 +733,12 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(choices).toHaveCount(101);
     await choices.nth(99).check();
     await expect(choices.nth(99)).toBeChecked();
-    await expect(choices.nth(100)).toBeDisabled();
-    await expect(gallery.getByRole("status").filter({ hasText: "Up to 100 rooms fit" })).toBeVisible();
+    // home-rooms.md §4 R5: the limit line sits in the header with no live
+    // role, and the spare row is held by it, not natively disabled.
+    await expect(choices.nth(100)).toHaveAttribute("aria-disabled", "true");
+    await expect(choices.nth(100)).toHaveAccessibleDescription("Up to 100 rooms fit in one clean, so remove one to add another.");
+    await expect(gallery.getByRole("status").filter({ hasText: "Up to 100 rooms fit" })).toHaveCount(0);
+    await expect(gallery.locator("#rooms-limit")).toHaveText("Up to 100 rooms fit in one clean, so remove one to add another.");
     await expect(rooms.locator('input[type="checkbox"]:checked')).toHaveCount(100);
 
     await page.evaluate((tag) => {
@@ -972,16 +976,19 @@ test.describe("Map Studio v0.4 foundation", () => {
     }, GALLERY_TAG);
     await gallery.getByRole("button", { name: /^Clean rooms/ }).click();
     const roomList = gallery.getByRole("group", { name: "Rooms to clean" });
+    // home-rooms.md §5 Due work: the shared schedule's due work puts the
+    // "Include scheduled work that's due" switch in the settings row, on by
+    // default; off sends the user's settings alone and keeps the switch.
+    await expect(gallery.getByRole("switch")).toHaveCount(0);
     await roomList.getByRole("checkbox").first().check();
-    const useSchedule = gallery.getByRole("checkbox", { name: "Override shared schedule settings" });
-    await expect(useSchedule).not.toBeChecked();
+    await gallery.getByRole("button", { name: /^Cleaning settings/ }).click();
+    const useSchedule = gallery.getByRole("switch", { name: "Include scheduled work that's due" });
+    await expect(useSchedule).toHaveAttribute("aria-checked", "true");
     expect((await snapshot(page)).selection.useRoomSchedule).toBe(true);
-    const sharedStatus = gallery.getByText(/^Kitchen: /u);
-    await expect(sharedStatus).toContainText("Vacuum and mop is due on this clean.");
-    await useSchedule.check();
-    await expect(useSchedule).toBeChecked();
+    await useSchedule.click();
+    await expect(useSchedule).toHaveAttribute("aria-checked", "false");
     expect((await snapshot(page)).selection.useRoomSchedule).toBe(false);
-    await expect(sharedStatus).toContainText("Vacuum and mop is due on this clean.");
+    await expect(useSchedule).toBeVisible();
   });
 
   test("registers the sidebar robot before opening the map without replacing other icon sets", async ({ page }) => {
@@ -1103,10 +1110,11 @@ test.describe("Map Studio v0.4 foundation", () => {
       element.replaceWorkspaceState(withGalleryRoomPreview({ ...state, workflow: "rooms", selection: { ...state.selection,
         roomIds: ["room-a"], roomSettings: [{ roomId: "room-a", cleaningMode: "vacuum", coverageSetting: "standard" }] } }));
     }, GALLERY_TAG);
-    const rows = gallery.getByRole("list", { name: "Effective room order" }).locator("li");
-    await expect(rows.first()).toBeVisible();
-    // home-rooms.md §6 v4_room_setting_*: the whole string, not mode + coverage text.
-    await expect(rows.first().locator(".subtle").first()).toHaveText("Vacuum · Optimal");
+    // home-rooms.md §6 v4_room_setting_*: the whole string, not mode + coverage
+    // text, as the selected row's second line.
+    const kitchen = gallery.getByRole("group", { name: "Rooms to clean" }).getByRole("checkbox", { name: /^Kitchen/ });
+    await expect(kitchen).toBeChecked();
+    await expect(kitchen).toHaveAccessibleName("Kitchen Vacuum · Optimal");
   });
 
   test("a picker with no plans offers one filled Create a plan", async ({ page }) => {
@@ -1494,9 +1502,11 @@ test.describe("Map Studio v0.4 foundation", () => {
       const state = element.getWorkspaceSnapshot();
       panel.state = { ...state, manualRoomPreview: { status: "error", value: null, problem: "request-failed" } };
     });
-    const problem = gallery.locator(".problem", { hasText: "room settings" });
-    await expect(problem).toHaveText("Home Assistant couldn't check the room settings.");
-    await expect(gallery.getByRole("button", { name: "Try again", exact: true })).toBeVisible();
+    // home-rooms.md §4 R4: the failed check is one line above the rows with
+    // its Try again button.
+    const problem = gallery.locator(".check-lines .line", { hasText: "room settings" });
+    await expect(problem).toContainText("Home Assistant couldn't check the room settings.");
+    await expect(problem.getByRole("button", { name: "Try again", exact: true })).toBeVisible();
   });
 
   test("a selected point has one name in every language", async ({ page }) => {
@@ -5899,7 +5909,10 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect.poll(async () => (await snapshot(page)).workflow).toBe("rooms");
     const inspector = gallery.locator(".inspector");
     await expect(inspector.getByLabel(/^Cleaning mode for /)).toHaveCount(0);
-    await inspector.getByRole("checkbox", { name: "Kitchen" }).check();
+    await inspector.getByRole("checkbox", { name: /^Kitchen/ }).check();
+    // home-rooms.md §4 R3: a selected room's own settings open from its row.
+    await expect(inspector.getByLabel(/^Cleaning mode for /)).toHaveCount(0);
+    await inspector.getByRole("button", { name: "Settings for Kitchen", exact: true }).click();
     await expect(inspector.getByLabel(/^Cleaning mode for /)).toBeVisible();
     await expect(inspector.getByLabel(/^Cleaning mode for /)).toHaveValue("vacuum");
     const mode = inspector.getByLabel(/^Vacuum coverage for /);
@@ -5908,10 +5921,10 @@ test.describe("Map Studio v0.4 foundation", () => {
     await mode.selectOption("heavy_duty");
     const cleaningSystem = inspector.getByLabel(/^Cleaning mode for /);
     await cleaningSystem.selectOption("mop");
-    await expect(mode).toBeDisabled();
+    await expect(mode).toHaveAttribute("aria-disabled", "true");
     await expect(inspector.getByText("Vacuum coverage applies only when vacuuming.", { exact: false })).toBeVisible();
     await cleaningSystem.selectOption("vacuum_and_mop");
-    await expect(mode).toBeEnabled();
+    await expect(mode).not.toHaveAttribute("aria-disabled", "true");
     await expect(mode).toHaveValue("heavy_duty");
   });
 
@@ -10098,7 +10111,9 @@ test.describe("Map Studio accessibility baselines", () => {
       const { heading, body } = await openScroller(page, scenario, width, height);
       return scrollerState(which === "body" ? body : heading, which === "top");
     };
-    expect(await scroller("access", 844, 390, "body"), "access body on a landscape phone").toEqual({ overflows: true, focusableChild: false, tabindex: "0", role: "region", named: true });
+    // home-rooms.md §3: a held home has an empty body under its heading, so the
+    // text-only body is the Rooms view's empty description (R9).
+    expect(await scroller("rooms-empty", 844, 390, "body"), "rooms-empty body on a landscape phone").toEqual({ overflows: true, focusableChild: false, tabindex: "0", role: "region", named: true });
     expect(await scroller("plans", 844, 390, "body"), "plans body on a landscape phone").toEqual({ overflows: true, focusableChild: true, tabindex: null, role: "region", named: true });
     expect(await scroller("access", 1440, 900, "body"), "access body on a desktop").toEqual({ overflows: false, focusableChild: false, tabindex: null, role: "region", named: true });
     expect(await scroller("paused", 844, 390, "top"), "paused pinned top on a landscape phone").toEqual({ overflows: true, focusableChild: false, tabindex: "0", role: "group", named: true });
@@ -10106,7 +10121,7 @@ test.describe("Map Studio accessibility baselines", () => {
   });
 
   test("a focused tab-stop scroller shows a 2 px ring inset 2 px and stays a tab stop until it loses focus @mobile", async ({ page }) => {
-    const { gallery, body } = await openScroller(page, "access", 844, 390);
+    const { gallery, body } = await openScroller(page, "rooms-empty", 844, 390);
     await expect(body).toHaveAttribute("tabindex", "0");
     await body.focus();
     expect(await body.evaluate((element) => {

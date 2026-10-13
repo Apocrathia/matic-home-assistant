@@ -299,3 +299,15 @@ def test_plan_row_lines_ship_without_schedule_lines() -> None:
     assert "v4_plan_row_rotation" in startup
     assert "v4_room_schedules_mop" not in startup
     assert "v4_room_schedules_mop" in workflow
+
+
+def test_rooms_view_ships_in_the_lazy_workflow_chunk() -> None:
+    """The Rooms view and its copy load with the other workflow views (home-rooms.md R25)."""
+    startup = _startup_source()
+    workflow = _STUDIO_V4_WORKFLOW_CHUNK_PATHS[0].read_text(encoding="utf-8")
+    # The tag itself is in element-tags.ts, which startup already holds; the
+    # view's copy only ships with the lazy views.
+    assert "matic-map-rooms-v4" in startup
+    for marker in ("Different per room", "Include scheduled work"):
+        assert marker not in startup
+        assert marker in workflow

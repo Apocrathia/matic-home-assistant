@@ -30,12 +30,11 @@ export const coverageNeedsVacuum = (t: Translate): string =>
   t("v4_cadence_coverage_requires_vacuum", "The vacuum rotation needs a cleaning mode that includes vacuuming, so change the mode or turn the rotation off.");
 
 /** A room schedule's state in one or two sentences, most urgent first. */
-export const cadenceSummary = (
-  t: Translate,
-  policy: RoomCadencePolicy | undefined,
-  progress: PlanRoom["cadenceProgress"] | undefined,
-  reasons: readonly CadenceReason[] = progress?.reasons || [],
-): string => {
+/**
+ * A Rooms row's third line (home-rooms.md R20): the schedule problem that
+ * keeps the row's schedule from applying, or null for due work alone.
+ */
+export const cadenceProblem = (t: Translate, reasons: readonly CadenceReason[]): string | null => {
   if (reasons.includes("coverage_requires_vacuum")) return coverageNeedsVacuum(t);
   if (reasons.includes("identity_changed") || reasons.includes("room_not_on_current_map")) {
     return t("v4_cadence_identity_blocked", "This room's schedule was set up on a different map, so it can't run. Review the room's schedule before cleaning.");
@@ -56,31 +55,7 @@ export const cadenceSummary = (
   if (reasons.includes("invalid_cadence_policy")) {
     return t("v4_cadence_policy_invalid", "The room schedule needs review before it can be applied.");
   }
-  if (!policy || (!policy.mopEveryN && !policy.coverageEveryN)) {
-    return t("v4_cadence_not_enabled", "No recurring room schedule is enabled.");
-  }
-  const parts: string[] = [];
-  const mopDue = progress?.mopDue || progress?.reasons.includes("mop_due");
-  const coverageDue = progress?.coverageDue || progress?.reasons.includes("coverage_due");
-  if (policy.mopEveryN) {
-    parts.push(mopDue
-      ? t("v4_cadence_mop_due", "Vacuum and mop is due on this clean.")
-      : t("v4_cadence_mop_progress", "Mop every {interval} cleans; {completed} counted since the last mop.", {
-        interval: policy.mopEveryN,
-        completed: progress?.mopProgress ?? 0,
-      }));
-  }
-  if (policy.coverageEveryN) {
-    parts.push(coverageDue
-      ? t("v4_cadence_coverage_due", "{coverage} vacuum rotation is due on this clean.", {
-        coverage: coverageLabel(t, policy.periodicCoverageSetting || "standard"),
-      })
-      : t("v4_cadence_coverage_progress", "Vacuum rotation every {interval} cleans; {completed} counted so far.", {
-        interval: policy.coverageEveryN,
-        completed: progress?.coverageProgress ?? 0,
-      }));
-  }
-  return parts.join(" ");
+  return null;
 };
 
 // ---- The schedule model (room-schedule.md §3-§6) ----------------------------
