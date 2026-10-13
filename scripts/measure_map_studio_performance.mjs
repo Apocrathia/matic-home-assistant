@@ -95,15 +95,18 @@ await new Promise((resolve, reject) => { server.once("error", reject); server.li
 const origin = `http://127.0.0.1:${server.address().port}`;
 let browser;
 const samples = [];
-const settle = (page, action = null) => page.evaluate(label => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => {
+// An action labelled `measured: false` is a step one variant needs to reach a
+// shared screen; its interactions are left out so both journeys compare the
+// same transitions.
+const settle = (page, action = null, measured = true) => page.evaluate(({ label, measured }) => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => {
   const benchmark = window.__maticBenchmark;
   if (label && benchmark.start) {
     const end = performance.now();
-    benchmark.actions.push({ label, start: benchmark.lastActionEnd, end });
+    benchmark.actions.push({ label, start: benchmark.lastActionEnd, end, measured });
     benchmark.lastActionEnd = end;
   }
   resolve();
-}))), action);
+}))), { label: action, measured });
 const quantile = (values, probability) => [...values].sort((a, b) => a - b)[Math.ceil(values.length * probability) - 1] ?? null;
 
 try {
@@ -157,20 +160,29 @@ try {
           const buffer = element.getWorkspaceSnapshot().resources.scene.value.buffer;
           return [...new Uint8Array(await crypto.subtle.digest("SHA-256", buffer))].map(byte => byte.toString(16).padStart(2, "0")).join("");
         });
-        // Both revisions share the four public transitions from Home to a
-        // saved plan detail and back. The baseline opens Edit; UX2 opens Run.
-        const planButton = variant === "baseline" ? /Daily clean.*Edit plan/ : /Daily clean/;
+        // Both revisions measure the same four transitions: Home to the
+        // picker, into the saved plan's editor, out of it, and back Home. The
+        // baseline's picker row opens its editor and Back to plans leaves it.
+        // UX2 reaches Edit through Run and Cancel returns there, so its
+        // picker-to-Run and Run-to-picker steps are taken but not measured.
+        const button = name => gallery.getByRole("button", { name, exact: typeof name === "string" });
+        const step = async (name, label, measured = true) => {
+          await button(name).click();
+          await settle(page, label, measured);
+        };
         const planJourney = async () => {
-          const homeLauncher = variant === "candidate" ? /^(Run a plan|Plans)/ : /^Run a plan/;
-          for (const [name, label] of [
-            [homeLauncher, "plan:open-picker"],
-            [planButton, "plan:open-detail"],
-            ["Back to plans", "plan:back-to-picker"],
-            ["Back to all tasks", "plan:back-to-home"],
-          ]) {
-            await gallery.getByRole("button", { name, exact: typeof name === "string" }).click();
-            await settle(page, label);
+          if (variant === "baseline") {
+            await step(/^Run a plan/, "plan:open-picker");
+            await step(/Daily clean.*Edit plan/, "plan:open-editor");
+            await step("Back to plans", "plan:leave-editor");
+          } else {
+            await step(/^(Run a plan|Plans)/, "plan:open-picker");
+            await step(/Daily clean/, "plan:to-run", false);
+            await step("Edit Daily clean", "plan:open-editor");
+            await step("Cancel", "plan:leave-editor");
+            await step("Back to plans", "plan:to-picker", false);
           }
+          await step("Back to all tasks", "plan:back-to-home");
         };
         await planJourney(); // Warm the lazy workflow before the common journey.
         const warmedScripts = [...new Set(requests)].filter(productionRequest);
@@ -201,7 +213,9 @@ try {
           window.__maticBenchmark.flush();
           const { events, tasks, actions, start } = window.__maticBenchmark;
           const interactions = new Map();
-          for (const event of events.filter(event => event.start >= start && event.interactionId)) {
+          const unmeasured = actions.filter(action => !action.measured);
+          const inMeasuredAction = event => !unmeasured.some(action => event.start >= action.start && event.start < action.end);
+          for (const event of events.filter(event => event.start >= start && event.interactionId && inMeasuredAction(event))) {
             const previous = interactions.get(event.interactionId);
             if (!previous || event.duration > previous.duration) interactions.set(event.interactionId, event);
           }
@@ -211,8 +225,8 @@ try {
             slowestInteractions: details.sort((a, b) => b.duration - a.duration).slice(0, 10).map(event => ({
               ...event, action: actions.find(action => event.start >= action.start && event.start < action.end)?.label ?? null,
             })),
-            recordedActions: actions.length,
-            longTasks: tasks.filter(task => task.start >= start).map(task => task.duration),
+            recordedActions: actions.filter(action => action.measured).length,
+            longTasks: tasks.filter(task => task.start >= start && inMeasuredAction(task)).map(task => task.duration),
           };
         });
         const hostLoadAfter = loadavg();
@@ -259,14 +273,14 @@ try {
       logicalCpus: cpus().length, tracing: Boolean(traceDirectory),
       viewport: "1280x900", dpr: 1, headless, network: "loopback, unthrottled", cpuThrottle: 1,
       cache: "new browser context per sample; no-store assets", order: "AB BA AB",
-      journey: "60 2D/3D toggles, 5 four-action plan-to-home loops (home → picker → detail → picker → home), 10 room-list/back loops; lazy workflow warmed first; baseline detail is Edit, UX2 detail is Run" },
+      journey: "60 2D/3D toggles, 5 four-action plan editor loops (home → picker → saved plan's Edit → out of Edit → home), 10 room-list/back loops; lazy workflow warmed first; UX2's unmeasured Run hops excluded" },
     limits: ["Synthetic lab proxy; not field INP or mobile/robot acceptance", "Scene hash must match between builds",
       "Event Timing threshold 16 ms; unreported interactions imputed at 16 ms; browser quantization retained",
       "Tracing adds diagnostic overhead; trace-enabled timings do not qualify the untraced performance gate",
       "Gzip bytes are offline size estimates; the loopback server sends uncompressed JavaScript",
       "Candidate review-only assets are reported separately; shared compiled production chunks serve the synthetic journey",
       "Candidate includes actual registered HA extra modules; historical baseline is panel-only and has no host-wide byte total",
-      "The shared four-action plan route is equivalent, but its detail screen differs by design: baseline opens Edit and UX2 opens Run",
+      "Both variants measure opening and leaving the saved plan's Edit view; UX2 reaches it through Run, and those Run hops are taken but not measured",
       "Heap is one observation after each journey, not a leak bound; no GPU FPS or transport latency measurement"],
     summary, samples }, null, 2));
 } finally {
