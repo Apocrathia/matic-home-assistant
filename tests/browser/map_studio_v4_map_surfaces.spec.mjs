@@ -1,6 +1,7 @@
 // UX5 Map surfaces (docs/ux-spec-0.5/map-surfaces.md; D1-D3 accepted
 // 2026-10-11): one input-aware help popover in every workflow, Full map,
 // the Draw tool row and precision, area review and history.
+import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 
 const GALLERY_TAG = "matic-map-studio-gallery-v0-4-0";
@@ -1104,5 +1105,120 @@ test.describe("History", () => {
     await expect(chipOf(gallery)).toContainText(`${date} · 1 of 1`);
     await expect(chipOf(gallery).locator(".sr-only")).toHaveText(`Saved map, read only, ${date}, 1 of 1`);
     await expect(panelOf(gallery).locator(".snapshot span").first()).toHaveText(date);
+  });
+});
+
+// design-system.md §8, map-surfaces.md §9: the open surfaces and the themed
+// Draw and History states carry no serious or critical axe finding.
+const axeFindings = (results) => results.map(({ id, nodes }) => `${id}: ${nodes.map(({ target }) => target.flat().join(" >> ")).join(" | ")}`);
+const expectNoSeriousFinding = async (page, { forced = false } = {}) => {
+  // Linux WebKit's emulated forced colours fail axe's contrast rule (UX3
+  // R34), so under forced colors that rule is replaced by the style checks.
+  const builder = new AxeBuilder({ page });
+  const { violations, incomplete } = await (forced ? builder.disableRules(["color-contrast"]) : builder).analyze();
+  expect(axeFindings(violations.filter(({ impact }) => impact === "serious" || impact === "critical"))).toEqual([]);
+  expect(axeFindings(incomplete.filter(({ id }) => id === "aria-prohibited-attr"))).toEqual([]);
+};
+
+test.describe("Accessibility", () => {
+  test("Draw with help open at 390 has no serious axe finding @mobile", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "draw", narrow: true });
+    await helpButton(gallery).click();
+    await expect(helpDialog(gallery)).toBeVisible();
+    await expectNoSeriousFinding(page);
+  });
+
+  test("Draw with precision docked at 1024 has no serious axe finding", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "draw", viewport: { width: 1024, height: 768 } });
+    await patchState(gallery, { precisionOpen: true });
+    await expect(precisionOf(panelOf(gallery))).toBeVisible();
+    await expectNoSeriousFinding(page);
+  });
+
+  test("Full map with the HUD at 390 has no serious axe finding @mobile", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "full-map-cleaning", narrow: true });
+    await expect(hudOf(gallery).getByRole("button", { name: "Stop cleaning" })).toBeVisible();
+    await expectNoSeriousFinding(page);
+  });
+
+  for (const [label, setup] of [
+    ["dark", (page) => page.emulateMedia({ colorScheme: "dark" })],
+    // The parsed <html> replaces the one an init script would set dir on, so
+    // the direction is set once the page is up.
+    ["RTL", (page) => page.evaluate(() => { document.documentElement.dir = "rtl"; })],
+    ["forced colors", (page) => page.emulateMedia({ forcedColors: "active" })],
+  ]) {
+    const rtl = label === "RTL";
+    const load = async (page, scenario) => {
+      if (!rtl) await setup(page);
+      const gallery = await loadGallery(page, { scenario, narrow: true });
+      if (rtl) await setup(page);
+      await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).direction)).toBe(rtl ? "rtl" : "ltr");
+      return gallery;
+    };
+
+    test(`Draw at 390 in ${label} has no serious axe finding and keeps Undo first in reading order @mobile`, async ({ page }) => {
+      const gallery = await load(page, "draw");
+      const undo = gallery.getByRole("button", { name: "Undo", exact: true });
+      const redo = gallery.getByRole("button", { name: "Redo", exact: true });
+      await expect(undo).toBeVisible();
+      await expectNoSeriousFinding(page, { forced: label === "forced colors" });
+      // Undo precedes Redo along the reading direction and its arrow turns
+      // with it (MS-DRAW-06).
+      const [undoBox, redoBox] = [await undo.boundingBox(), await redo.boundingBox()];
+      if (rtl) expect(undoBox.x).toBeGreaterThan(redoBox.x);
+      else expect(undoBox.x).toBeLessThan(redoBox.x);
+      expect(await undo.locator(".ms-icon").evaluate((icon) => getComputedStyle(icon).scale)).toBe(rtl ? "-1 1" : "none");
+    });
+
+    test(`History at 390 in ${label} has no serious axe finding and keeps the chip${label === "forced colors" ? " bordered" : ""} @mobile`, async ({ page }) => {
+      const gallery = await load(page, "history-floors");
+      const chip = chipOf(gallery);
+      await expect(chip).toBeVisible();
+      await expectNoSeriousFinding(page, { forced: label === "forced colors" });
+      if (label === "forced colors") expect(await chip.evaluate((element) => getComputedStyle(element).borderTopStyle)).toBe("solid");
+    });
+  }
+});
+
+// R26: the sheet detent and the status title are announced once each through
+// the shell's polite region, in the host's language; the chip and HUD are
+// plain content with no live role of their own.
+test.describe("Announcements", () => {
+  const GERMAN = { v4_workspace_height_half: "Bedienfeld, halbe Höhe", v4_workspace_height_full: "Bedienfeld, volle Höhe", v4_cleaning: "Reinigt" };
+  const speakGerman = (gallery) => gallery.evaluate((element, templates) => {
+    const prefix = "component.matic_robot.common.";
+    window.__announced = [];
+    const shell = element.shadowRoot.querySelector("matic-map-shell-v4");
+    shell.localize = (key) => templates[key.slice(prefix.length)] ?? key;
+    const region = shell.shadowRoot.querySelector('.root > .sr-only[aria-live="polite"]');
+    new MutationObserver(() => { if (region.textContent.trim()) window.__announced.push(region.textContent.trim()); })
+      .observe(region, { childList: true, characterData: true, subtree: true });
+  }, GERMAN);
+  const announced = (page) => page.evaluate(() => window.__announced);
+
+  test("a detent change and a status change are each announced once, translated @mobile", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "ready", narrow: true });
+    await expect(gallery.locator(".mobile-sheet")).toHaveAttribute("data-detent", "half");
+    await speakGerman(gallery);
+    await gallery.getByRole("button", { name: "Expand panel" }).click();
+    await expect(gallery.locator(".mobile-sheet")).toHaveAttribute("data-detent", "full");
+    await expect.poll(() => announced(page)).toEqual(["Bedienfeld, volle Höhe"]);
+    await patchState(gallery, { activity: "cleaning" });
+    await expect.poll(() => announced(page)).toEqual(["Bedienfeld, volle Höhe", "Reinigt"]);
+    await patchState(gallery, { activity: "cleaning", batteryPercent: 60 });
+    await page.waitForTimeout(200);
+    expect(await announced(page)).toEqual(["Bedienfeld, volle Höhe", "Reinigt"]);
+  });
+
+  test("the chip and the HUD carry no live role", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "history", viewport: { width: 1024, height: 768 } });
+    const chip = chipOf(gallery);
+    await expect(chip).toBeVisible();
+    expect(await chip.evaluate((element) => [element.getAttribute("role"), element.getAttribute("aria-live"), element.closest("[aria-live], [role=status], [role=alert]")])).toEqual([null, null, null]);
+    const full = await loadGallery(page, { scenario: "full-map-cleaning", viewport: { width: 1024, height: 768 } });
+    const hud = hudOf(full);
+    await expect(hud).toBeVisible();
+    expect(await hud.evaluate((element) => [element.getAttribute("aria-live"), element.querySelector("[aria-live], [role=status], [role=alert]")])).toEqual([null, null]);
   });
 });

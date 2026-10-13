@@ -4,7 +4,7 @@
 import { launch, openScenario, inject } from "./common.mjs";
 
 const VIEWPORTS = [[320, 844], [320, 256], [640, 400], [720, 450]];
-const SCENARIOS = ["ready", "rooms", "draw", "plan-saved-intelligent", "plan-cadence-shared", "plan-schedule-available", "plan-schedule-joining", "plan-schedule-conflict", "history", "support", "multi-robot", "plans", "area-review-new", "full-map", "problem"];
+const SCENARIOS = ["ready", "rooms", "draw", "plan-saved-intelligent", "plan-cadence-shared", "plan-schedule-available", "plan-schedule-joining", "plan-schedule-conflict", "history", "support", "multi-robot", "plans", "area-review-new", "full-map", "problem", "draw-points", "draw-redraw", "area-review-saved", "area-review-stale", "history-floors", "full-map-cleaning"];
 const DIALOGS = [["confirmResetCadence", "plan-cadence-shared"], ["discardDraft", "plan-dirty"], ["confirmDeletePlan", "plan-saved-intelligent"]];
 
 const { browser, context } = await launch();

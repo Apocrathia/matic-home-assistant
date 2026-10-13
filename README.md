@@ -74,7 +74,9 @@ Open **Matic Map** from the sidebar:
 - **Run {plan}** opens your selected plan; **Your plans** and **Create a plan**
   manage saved room plans.
 - **Clean custom area** creates or selects a saved custom area.
-- **Map history** browses saved maps; saved floors are read-only.
+- **Map history** shows saved maps by date; they are read-only and never
+  show the robot's position.
+- **Full map** hides the panel; **?** on the map explains how to move it.
 
 Use Home Assistant schedules and presence automations to decide when plans run.
 See the [cleaning guide](docs/cleaning.md), [entity reference](docs/entities.md),

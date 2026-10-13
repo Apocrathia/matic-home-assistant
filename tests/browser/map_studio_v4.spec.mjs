@@ -9972,6 +9972,8 @@ test.describe("Map Studio accessibility baselines", () => {
   for (const scenario of ["ready", "rooms", "plans", "plan-saved-intelligent", "plan-saved-ordered", "plan-edit-ordered", "plan-run-paused", "plan-run-blocked", "plan-new", "plan-dirty",
     "plan-cadence-shared", "plan-cadence-blocked", "plan-schedule-available", "plan-schedule-joining", "plan-schedule-conflict",
     "draw", "history", "cleaning", "access",
+    // map-surfaces.md §4: the Draw, area review, history and Full map states (UX5).
+    "draw-points", "draw-redraw", "area-review-saved", "area-review-stale", "history-floors", "full-map-cleaning",
     // home-rooms.md §4: home by state and the Rooms states (UX4).
     "rooms-ready", "rooms-busy", "rooms-failed", "rooms-empty", "room-limit", "home-plan-due", "home-plan-paused",
     "problem", "map-unavailable", "empty", "robot-offline"]) {
@@ -10019,14 +10021,18 @@ test.describe("Map Studio accessibility baselines", () => {
   // home-rooms.md §8 Forced colors, RTL; MS-HOME-11 dark tints.
   for (const [label, setup] of [
     ["dark", (page) => page.emulateMedia({ colorScheme: "dark" })],
-    ["RTL", (page) => page.addInitScript(() => { document.documentElement.dir = "rtl"; })],
+    // The parsed <html> replaces the one an init script would set dir on, so
+    // the direction is set once the page is up.
+    ["RTL", (page) => page.evaluate(() => { document.documentElement.dir = "rtl"; })],
     ["forced colors", (page) => page.emulateMedia({ forcedColors: "active" })],
   ]) {
     test(`rooms-ready at 390 in ${label} has no serious axe finding and keeps Settings in its row @mobile`, async ({ page }) => {
-      await setup(page);
+      if (label !== "RTL") await setup(page);
       await page.setViewportSize({ width: 390, height: 844 });
       const gallery = await loadGallery(page, { scenario: "rooms-ready", narrow: true });
+      if (label === "RTL") await setup(page);
       await settleWorkspace(gallery);
+      await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).direction)).toBe(label === "RTL" ? "rtl" : "ltr");
       await gallery.getByRole("button", { name: "Expand panel" }).click();
       const kitchen = gallery.getByRole("button", { name: "Settings for Kitchen", exact: true });
       await expect(kitchen).toBeVisible();

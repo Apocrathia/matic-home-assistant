@@ -70,15 +70,22 @@ Avoid controlling the robot from multiple integrations or apps at once.
 Open **Matic Map** from Home Assistant's sidebar. Choose **3D** for the photographic
 map or **2D** for a top-down view. The 2D appearance can show the photo or room map.
 
-Drag to move around the map; use pinch or the wheel to zoom. **Fit map** recenters
-the floor. The **?** on the map lists touch, trackpad, mouse, and keyboard controls.
-**Map options** holds map detail, map diagnostics, and full screen; on a phone it
-also holds the 2D appearance and room names.
+Drag to move around the map; pinch or scroll to zoom; twist two fingers,
+Shift-drag, or use the camera buttons to turn the 3D view. **Fit map** recenters
+the floor. The **?** on the map opens **How to move the map**, which lists only
+the controls for the input you use, and adds the drawing controls in Draw.
+**Full map** in the top bar hides the panel and keeps the status, the main
+action, and **Exit full map** in a small bar over the map. **Map options** holds
+map detail and map diagnostics; on a phone it also holds the 2D appearance and
+room names.
 When choosing rooms for a run or plan, click a room on either map view to select
 or deselect it. The map and room list stay in sync.
 
-**Map history** browses saved views. When history includes another floor, the
-floor selector can show it read-only. Cleaning is available only on the current
+**Map history** lists each saved map by date. Choose one to show it: the map
+says **Saved map**, with its date and position, and shows no robot position.
+With three or more saved maps, the slider under them runs from **Oldest** to
+**Live**; **Mapped floors** appears when another floor is mapped. Nothing starts
+from a saved map; **Show live map** returns to the live map of your current
 floor. After carrying the robot, wait for its new map and position to appear.
 
 The map panel requires a Home Assistant administrator. For a dashboard, add
@@ -105,15 +112,20 @@ Mapped room names must be unique.
 
 Choose **Clean custom area** to create an area or select one already saved.
 
-1. Place points around the part of the map to clean. The outline closes automatically.
-2. Drag points to adjust the boundary; insert or delete points as needed.
-3. Use undo/redo to correct edits, then save a name, cleaning mode, and coverage.
-4. Reopen the area to edit it or run it again.
+1. Pick a tool: **Points** places corners, **Paint** and **Erase** brush the
+   map (**Brush** sets the width), and **Move map** pans without drawing.
+2. **Undo**, **Redo**, and **Clear** sit in the same row; **Cancel** leaves
+   the map as it was.
+3. Choose **Name and save**, then give the area a name, cleaning mode, and
+   coverage, and choose **Save area**. **Redraw** returns to the map; **Done**
+   brings you back.
+4. Reopen the area from the **Custom areas** list to clean it, redraw it, or
+   delete it with **Delete** at the end of its details.
 
 Areas may cross room boundaries. They remain saved for future runs and can be
 selected from the robot's **Custom cleaning area** entity or called by name in
 an [automation](automation.md#custom-areas).
 
-If the map changes, a saved area may need **Save area** again or a **Redraw**.
-The editor shows the required action. Coordinates stay in Home Assistant;
-automations need only the saved name.
+If the map changes, the area opens as **Check {name}** and asks for **Save
+area** or **Redraw**; an area the map can't place any more needs **Redraw**.
+Coordinates stay in Home Assistant; automations need only the saved name.

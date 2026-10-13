@@ -167,7 +167,7 @@ const NOTICE_BASES = [
   ["support", "support"],
   ["area-review", "area-review-new"],
 ];
-const HELP_BASES = ["ready", "plan-saved-intelligent"];
+const HELP_BASES = ["ready", "plan-saved-intelligent", "draw"];
 
 const ITEMS = [
   ...GALLERY_SCENARIOS.map((scenario) => ({

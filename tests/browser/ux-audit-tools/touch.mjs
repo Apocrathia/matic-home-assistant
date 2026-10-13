@@ -7,7 +7,7 @@ const width = Number(process.argv[2] ?? 390);
 const height = Number(process.argv[3] ?? 844);
 const SCENARIOS = process.argv.slice(4).length
   ? process.argv.slice(4)
-  : ["plan-saved-intelligent", "rooms", "draw"];
+  : ["plan-saved-intelligent", "rooms", "draw", "draw-points", "draw-redraw", "area-review-saved", "area-review-stale", "history-floors", "full-map-cleaning"];
 
 const { browser, context } = await launch();
 const page = await context.newPage();
