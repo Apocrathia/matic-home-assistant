@@ -11,6 +11,7 @@ import {
   type CoordinateEditTool,
   type CommandState,
   type NoButtonAction,
+  type PlanOrigin,
   type PrimaryAction,
   type ResourceStamp,
   type AdmittedManualRoomPreview,
@@ -18,7 +19,7 @@ import {
   type WorkspaceState,
 } from "./contracts";
 import type { AreaCircle, CadenceReason, NextRunPreviewBlocker, SavedPlan } from "./backend-contracts";
-import { readWorkspaceNotice, type CameraPreference } from "./contracts";
+import { notice, readWorkspaceNotice, type CameraPreference } from "./contracts";
 
 const emptyResource = <T>(): { status: "idle"; value: T | null; problem: null } => ({
   status: "idle",
@@ -155,6 +156,7 @@ export const initialWorkspaceState = (): WorkspaceState => ({
     parkedRooms: [],
   },
   planView: "run",
+  planOrigin: "plans",
   pendingAction: null,
   expandedRoom: null,
   areaDraft: {
@@ -262,12 +264,15 @@ export const draftForPlan = (plan: SavedPlan): WorkspaceState["planDraft"] => {
 /**
  * Opens a plan (plan.md §5 State): Create opens in Edit; another saved plan,
  * or entering the plan workflow, opens in Run. Reselecting the open plan, as a
- * reload after a write does, keeps the view and the open row.
+ * reload after a write does, keeps the view, the open row and the origin.
+ * The home plan card passes origin "home"; Back and Escape from Run return
+ * there (home-rooms.md §5 Cards; plan.md §5 State).
  */
 export const planSelection = (
   state: WorkspaceState,
   planId: string | null,
   preserveNotice: boolean,
+  origin: PlanOrigin = "plans",
 ): Partial<WorkspaceState> => {
   const plan = state.resources.plans.value?.plans.find((candidate) => candidate.id === planId);
   const reselect = planId !== null && state.workflow === "plan" && state.selection.planId === planId;
@@ -277,6 +282,7 @@ export const planSelection = (
     selection: { ...state.selection, planId },
     planDraft: plan ? draftForPlan(plan) : initialWorkspaceState().planDraft,
     planView: reselect ? state.planView : planId === null ? "edit" : "run",
+    planOrigin: reselect ? state.planOrigin : origin,
     expandedRoom: reselect ? state.expandedRoom : null,
   };
 };
@@ -475,7 +481,17 @@ export const reduceWorkspace = (
       }
       if (state.workflow === "rooms" && !canSelectRooms(state)) return state;
       const selected = state.selection.roomIds.includes(intent.roomId);
-      if (!selected && state.selection.roomIds.length >= MAX_ROOM_SEQUENCE_SIZE) return state;
+      // A refused add says why in the slot; the list's rows are described by
+      // the same line (home-rooms.md §4 R5).
+      if (!selected && state.selection.roomIds.length >= MAX_ROOM_SEQUENCE_SIZE) {
+        return state.workflow === "rooms"
+          ? {
+            ...state,
+            notice: notice("info", "v4_room_limit_reached", "Up to {limit} rooms fit in one clean, so remove one to add another.", { limit: MAX_ROOM_SEQUENCE_SIZE }),
+          }
+          : state;
+      }
+      // A new room takes the whole-clean setting (home-rooms.md §5 Settings).
       return {
         ...state,
         selection: {
@@ -489,15 +505,18 @@ export const reduceWorkspace = (
               ...state.selection.roomSettings,
               {
                 roomId: intent.roomId,
-                cleaningMode: "vacuum",
-                coverageSetting: "standard",
+                cleaningMode: state.selection.cleaningMode,
+                coverageSetting: state.selection.coverageSetting,
               },
             ],
         },
       };
     }
+    // The rooms selection is locked while a clean runs or the map is not
+    // ready: every change to it is refused, and Clear keeps the whole-clean
+    // default (home-rooms.md §5 Selection gate).
     case "clear-selection":
-      if (state.workflow !== "rooms"
+      if (state.workflow !== "rooms" || !canSelectRooms(state)
         || (state.selection.roomIds.length === 0 && state.selection.roomSettings.length === 0)) {
         return state;
       }
@@ -511,6 +530,7 @@ export const reduceWorkspace = (
         manualRoomPreview: emptyResource<AdmittedManualRoomPreview>(),
       };
     case "patch-room-settings":
+      if (state.workflow === "rooms" && !canSelectRooms(state)) return state;
       return {
         ...state,
         selection: {
@@ -525,7 +545,22 @@ export const reduceWorkspace = (
               : room),
         },
       };
+    case "set-clean-settings": {
+      if (state.workflow !== "rooms" || !canSelectRooms(state)) return state;
+      const cleaningMode = intent.cleaningMode ?? state.selection.cleaningMode;
+      const coverageSetting = intent.coverageSetting ?? state.selection.coverageSetting;
+      return {
+        ...state,
+        selection: {
+          ...state.selection,
+          cleaningMode,
+          coverageSetting,
+          roomSettings: state.selection.roomSettings.map((room) => ({ ...room, cleaningMode, coverageSetting })),
+        },
+      };
+    }
     case "set-use-room-schedule":
+      if (state.workflow === "rooms" && !canSelectRooms(state)) return state;
       return {
         ...state,
         selection: { ...state.selection, useRoomSchedule: intent.value },
@@ -561,7 +596,7 @@ export const reduceWorkspace = (
         selection: { ...state.selection, historyId: intent.historyId },
       };
     case "select-plan":
-      return { ...state, ...planSelection(state, intent.planId, false) };
+      return { ...state, ...planSelection(state, intent.planId, false, intent.origin ?? "plans") };
     case "set-plan-view":
       if (state.workflow !== "plan") return state;
       if (intent.view === "edit") return {
@@ -619,14 +654,15 @@ export const reduceWorkspace = (
       if (state.precisionOpen) return { ...state, precisionOpen: false };
       if (state.fullMap) return { ...state, fullMap: false };
       // A saved plan's Edit steps back to its Run view; Run and a new plan's
-      // Edit step back to the picker.
+      // Edit step back to where the plan was opened from: the picker, or home
+      // for the home plan card (home-rooms.md §5 Cards).
       if (state.workflow === "plan" && state.planView === "edit" && state.planDraft.id !== null) {
         return { ...state, planView: "run", expandedRoom: null };
       }
       if (state.workflow !== "none") {
         return {
           ...state,
-          workflow: state.workflow === "plan" ? "plans" : "none",
+          workflow: state.workflow === "plan" && state.planOrigin !== "home" ? "plans" : "none",
           precisionOpen: false,
         };
       }
@@ -703,8 +739,9 @@ export class WorkspaceStore {
   replace(next: WorkspaceState): WorkspaceState {
     if (next === this.#state) return next;
     const settled = next.pendingAction && next.command !== "pending" ? { ...next, pendingAction: null } : next;
-    const left = settled.workflow !== "plan" && (settled.planView !== "run" || settled.expandedRoom !== null)
-      ? { ...settled, planView: "run" as const, expandedRoom: null }
+    const left = settled.workflow !== "plan"
+      && (settled.planView !== "run" || settled.expandedRoom !== null || settled.planOrigin !== "plans")
+      ? { ...settled, planView: "run" as const, planOrigin: "plans" as const, expandedRoom: null }
       : settled;
     const noticed = left.notice && left.notice !== this.#state.notice
       ? { ...left, notice: readWorkspaceNotice(left.notice) ?? this.#state.notice }
@@ -1083,7 +1120,16 @@ export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction | NoBu
     return noButton("administrator");
   }
   if (state.host.robotCount === 0) {
-    return noButton("setup");
+    // The one primary that is a link: it opens the integration page, so the
+    // view renders an anchor and never dispatches it (home-rooms.md D2).
+    return {
+      id: "setup",
+      label: "Open integration",
+      labelKey: "v4_open_integration",
+      kind: "link",
+      href: "/config/integrations/integration/matic_robot",
+      enabled: true,
+    };
   }
   if (isSelectedRobotUnavailable(state)) {
     return noButton("choose-robot");

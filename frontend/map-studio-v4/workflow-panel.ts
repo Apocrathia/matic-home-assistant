@@ -233,7 +233,7 @@ line-height: var(--ms-lh-snug);
             `;
           })}
         </div>
-        ${atRoomLimit ? html`<p class="subtle" role="status">${this.#t("v4_room_limit_reached", "Up to {limit} rooms fit, so remove one to add another.", { limit: MAX_ROOM_SEQUENCE_SIZE })}</p>` : nothing}
+        ${atRoomLimit ? html`<p class="subtle" role="status">${this.#t("v4_room_limit_reached", "Up to {limit} rooms fit in one clean, so remove one to add another.", { limit: MAX_ROOM_SEQUENCE_SIZE })}</p>` : nothing}
         <p class="subtle">${this.#t("v4_room_selection_hint", "Select rooms here or directly on the map. The map and list stay in sync.")}</p>
         <label class="plan-option">
           <input type="checkbox" .checked=${!this.state.selection.useRoomSchedule} @change=${(event: Event) => this.#intent({ type: "set-use-room-schedule", value: !eventChecked(event) })}>

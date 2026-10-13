@@ -862,13 +862,13 @@ test("notice text keeps 4.5:1 contrast in every tone with Home Assistant's palet
 
 // shell.md §2: on a "No button" row the policy still returns its disabled
 // branch, but it carries no copy, since no view renders it; the strip says
-// the state.
+// the state. The no-robot row is a link primary (home-rooms.md D2), covered
+// in map_studio_v4_home_rooms.spec.mjs.
 test("rows the spec marks No button render no footer button and carry no copy", async ({ page }) => {
   for (const [scenario, id] of [
     ["ready", "choose-cleaning"],
     ["ha-offline", "reconnecting"],
     ["access", "administrator"],
-    ["empty", "setup"],
     ["robot-offline", "robot-offline"],
     ["problem", "problem"],
     ["map-unavailable", "map-unavailable"],

@@ -1251,6 +1251,8 @@ export class MaticMapShellV4 extends LitElement {
           ?? this.#t(action.reasonKey, action.reason, action.reasonPlaceholders)
         : action.reason)
       : null;
+    // A link primary opens its page itself (home-rooms.md D2).
+    if (action.kind === "link") return html`<a class=${classes} href=${action.href ?? "#"}>${label}</a>`;
     return html`
       <button
         class=${`${classes} ${action.kind === "danger" ? "ms-btn--danger" : ""}`}
@@ -1384,7 +1386,6 @@ export class MaticMapShellV4 extends LitElement {
       return this.#hostState(
         t("v4_no_robot_title", "No robot set up"),
         t("v4_no_robot_body", "Add the Matic (Unofficial) integration to see a map here."),
-        html`<a class="ms-btn ms-btn--secondary" href="/config/integrations/integration/matic_robot">${t("v4_open_integration", "Open integration")}</a>`,
       );
     }
     if (isSelectedRobotUnavailable(state)) {
@@ -1548,9 +1549,11 @@ export class MaticMapShellV4 extends LitElement {
   // The back chevron, in the heading or, at peek, the grip. Run goes back to
   // the picker, every other workflow to all tasks; Edit has none, since
   // Cancel replaces it (plan.md §3).
+  // Back from Run goes to where the plan was opened from: the picker, or home
+  // for the home plan card (home-rooms.md §5 Cards; plan.md §5 Navigation).
   #back(state: WorkspaceState, grip: boolean) {
-    const plan = state.workflow === "plan";
-    if (state.workflow === "none" || (plan && state.planView === "edit")) return nothing;
+    if (state.workflow === "none" || (state.workflow === "plan" && state.planView === "edit")) return nothing;
+    const plan = state.workflow === "plan" && state.planOrigin !== "home";
     const name = plan ? this.#t("v4_back_to_plans", "Back to plans") : this.#t("v4_back_to_all_tasks", "Back to all tasks");
     return html`
       <button

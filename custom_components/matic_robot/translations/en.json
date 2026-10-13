@@ -219,7 +219,7 @@
     "v4_robot_position_verified": "The robot's position is confirmed.",
     "v4_room_names": "Room names",
     "v4_room_ready": "Ready",
-    "v4_room_limit_reached": "Up to {limit} rooms fit, so remove one to add another.",
+    "v4_room_limit_reached": "Up to {limit} rooms fit in one clean, so remove one to add another.",
     "v4_room_selection_hint": "Select rooms here or directly on the map. The map and list stay in sync.",
     "v4_rooms_selected": "{count} selected",
     "v4_rooms_to_clean": "Rooms to clean",

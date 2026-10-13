@@ -1,4 +1,4 @@
-import{R as C,S as L}from"./chunk-NGPLTNCD.js";var I=C`
+import{R as C,S as L}from"./chunk-LIKAU5TE.js";var I=C`
 :host {
 --ms-safe-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
 --ms-safe-right: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
