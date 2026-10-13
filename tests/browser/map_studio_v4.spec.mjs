@@ -2268,7 +2268,11 @@ test.describe("Map Studio v0.4 foundation", () => {
         gallery.replaceWorkspaceState(window.__pausedMapState);
       }, GALLERY_TAG);
       await expect(page.locator(GALLERY_TAG).locator(".scene-window")).toBeVisible();
-      if (!retained) await expect(page.locator(GALLERY_TAG).locator(".map-message")).toContainText("Showing the saved map from");
+      // The card names the state once; the sheet's slot carries the dated notice.
+      if (!retained) {
+        await expect(page.locator(GALLERY_TAG).locator(".map-message")).toHaveText("Saved map is read only");
+        await expect(page.locator(GALLERY_TAG).locator("[data-notice-slot]")).toContainText("Showing the saved map from");
+      }
       else await expect(page.locator(GALLERY_TAG).getByText("Locating the current map").first()).toBeVisible();
       await page.screenshot({ path: testInfo.outputPath(`${retained ? "retained" : "saved"}-map.png`) });
 
@@ -2961,10 +2965,10 @@ test.describe("Map Studio v0.4 foundation", () => {
   });
 
   test("history exposes keyboard navigation buttons and meaningful timeline values", async ({ page, browserName }) => {
-    const gallery = await loadGallery(page, { scenario: "history" });
+    const gallery = await loadGallery(page, { scenario: "history-floors" });
     const floors = gallery.getByRole("group", { name: "Mapped floors" });
-    const current = floors.getByRole("button", { name: "House Live" });
-    const saved = floors.getByRole("button", { name: "Shed Read only" });
+    const current = floors.getByRole("button", { name: "Current floor Live" });
+    const saved = floors.getByRole("button", { name: "Saved floor 1 Saved map" });
     await current.focus();
     // Safari's default keyboard preference uses Option-Tab for native buttons.
     await current.press(browserName === "webkit" ? "Alt+Tab" : "Tab");
@@ -2972,7 +2976,8 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(saved).toHaveAttribute("aria-current", "true");
     const timeline = gallery.getByRole("slider", { name: "Map timeline" });
     await expect(timeline).toHaveAttribute("aria-valuetext", /2026/);
-    await expect(gallery.getByRole("button", { name: "Return to current floor Current" })).toBeVisible();
+    // One way back: Show live map in the bar, no row (map-surfaces.md §5).
+    await expect(gallery.getByRole("button", { name: /Return to current floor/ })).toHaveCount(0);
     await saved.press("Enter");
     expect((await snapshot(page)).selection.floorId).toBe("saved-1");
   });
@@ -4277,7 +4282,6 @@ test.describe("Map Studio v0.4 foundation", () => {
       });
     }, GALLERY_TAG);
     await expect(gallery.locator(".map-message")).toContainText("Saved map unavailable");
-    await expect(gallery.locator(".map-message")).toContainText("Choose another snapshot or return to the live map.");
     await expect(scene).toHaveAttribute("aria-label", "This saved map is unavailable.");
   });
 

@@ -906,3 +906,203 @@ test.describe("Area review", () => {
     await expect(gallery.locator(".mobile-sheet .sheet-body").getByRole("button", { name: "Redraw", exact: true })).toBeVisible();
   });
 });
+
+// ---- History (map-surfaces.md §4 History, §5 History, §11 MS-HIST-01…05, MS-RESP-09) ----
+// The shell formats dates as formatDateTime does: medium date, short time, in
+// the host's language and zone (the gallery leaves both to the browser).
+const formatted = (page, iso, dates = null) => page.evaluate(({ iso, dates }) =>
+  new Intl.DateTimeFormat(dates?.language, { dateStyle: "medium", timeStyle: "short", timeZone: dates?.timeZone }).format(new Date(iso)), { iso, dates });
+const SAVED_ONE = "2026-08-28T11:30:00Z";
+const chipOf = (gallery) => canvasOf(gallery).locator(".map-chip");
+const floorSnapshots = async (page, floorId) => (await snapshot(page)).resources.history.value.floors.find((floor) => floor.id === floorId).snapshots;
+
+test.describe("History", () => {
+  test("the strip and the chip date the saved map and give its position; the map loses its colour", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "history", viewport: { width: 1024, height: 768 } });
+    const date = await formatted(page, SAVED_ONE);
+    const strip = gallery.locator(".status-strip");
+    await expect(strip.locator("strong")).toHaveText("Saved map");
+    await expect(strip.locator("small")).toHaveText(`${date} · 1 of 1`);
+    const chip = chipOf(gallery);
+    await expect(chip).toBeVisible();
+    await expect(chip).toContainText("Saved map");
+    await expect(chip).toContainText(`${date} · 1 of 1`);
+    expect(await chip.evaluate((element) => [element.getAttribute("role"), element.getAttribute("aria-live")])).toEqual([null, null]);
+    await expect(chip.locator(".sr-only")).toHaveText(`Saved map, read only, ${date}, 1 of 1`);
+    const root = await canvasOf(gallery).locator(".map-root").boundingBox();
+    const box = await chip.boundingBox();
+    expect(Math.abs(box.x + box.width / 2 - (root.x + root.width / 2)), "top centre").toBeLessThan(2);
+    expect(box.y - root.y).toBeLessThan(root.height / 4);
+    expect(await canvasOf(gallery).locator(".scene-canvas").evaluate((canvas) => getComputedStyle(canvas).filter)).toContain("saturate");
+    await expect(gallery.getByText("Read only", { exact: true })).toHaveCount(0);
+    await gallery.getByRole("button", { name: "Full map", exact: true }).click();
+    await expect(gallery.getByRole("button", { name: "Exit full map", exact: true })).toBeVisible();
+    await expect(chip).toBeVisible();
+  });
+
+  test("the grip line reads the saved map's date and position too @mobile", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "history", narrow: true });
+    const date = await formatted(page, SAVED_ONE);
+    await expect(gallery.locator(".sheet-status")).toHaveText(`Saved map · ${date} · 1 of 1`);
+    await expect(chipOf(gallery)).toBeVisible();
+  });
+
+  test("forced colors border the chip", async ({ page }) => {
+    await page.emulateMedia({ forcedColors: "active" });
+    const gallery = await loadGallery(page, { scenario: "history" });
+    const probe = await page.evaluate(() => {
+      const element = document.createElement("span");
+      element.style.color = "CanvasText";
+      document.body.append(element);
+      return getComputedStyle(element).color;
+    });
+    const chip = chipOf(gallery);
+    expect(await chip.evaluate((element) => getComputedStyle(element).borderTopStyle)).toBe("solid");
+    expect(await chip.evaluate((element) => getComputedStyle(element).borderTopColor)).toBe(probe);
+  });
+
+  test("the body says it once, lists floors with Live or Saved map trails and offers no row back", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "history-floors" });
+    const panel = panelOf(gallery);
+    await expect(panel.getByText(/never show where the robot is now/)).toHaveCount(1);
+    await expect(panel.getByText(/Return to current floor/)).toHaveCount(0);
+    await expect(panel.getByText("Current", { exact: true })).toHaveCount(0);
+    await expect(panel.getByText("Read only", { exact: true })).toHaveCount(0);
+    await expect(panel.getByRole("heading", { level: 3, name: "Mapped floors" })).toBeVisible();
+    const floors = panel.getByRole("group", { name: "Mapped floors" });
+    const live = floors.getByRole("button", { name: "Current floor Live", exact: true });
+    const saved = floors.getByRole("button", { name: "Saved floor 1 Saved map", exact: true });
+    await expect(live).toHaveAttribute("aria-current", "false");
+    await expect(saved).toHaveAttribute("aria-current", "true");
+    await live.click();
+    await expect.poll(async () => (await snapshot(page)).selection.floorId).toBe("current");
+    await expect(live).toHaveAttribute("aria-current", "true");
+    // Two snapshots on the live floor: rows, no scrubber.
+    await expect(panel.getByRole("slider")).toHaveCount(0);
+    await expect(panel.locator(".snapshot")).toHaveCount(2);
+    // One floor: no group at all.
+    const state = await snapshot(page);
+    const catalog = state.resources.history.value;
+    await patchState(gallery, { resources: { ...state.resources, history: { ...state.resources.history, value: { ...catalog, floors: catalog.floors.filter((floor) => floor.id === "current") } } } });
+    await expect(panel.getByRole("group", { name: "Mapped floors" })).toHaveCount(0);
+  });
+
+  test("the scrubber appears from three snapshots, ends at Oldest and Live and fits a 320 px sheet @mobile", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "history-floors", narrow: true, viewport: { width: 320, height: 844 } });
+    const panel = gallery.locator(".mobile-sheet");
+    const snapshots = await floorSnapshots(page, "saved-1");
+    expect(snapshots).toHaveLength(4);
+    const slider = panel.getByRole("slider", { name: "Map timeline" });
+    await expect(slider).toHaveAttribute("min", "0");
+    await expect(slider).toHaveAttribute("max", "4");
+    await expect(slider).toHaveClass(/ms-range/);
+    await expect(panel.locator(".timeline-ends span")).toHaveText(["Oldest", "Live"]);
+    const [width, container] = await slider.evaluate((input) => [input.getBoundingClientRect().width, input.parentElement.getBoundingClientRect().width]);
+    expect(width).toBeLessThanOrEqual(container + 0.5);
+    expect(await panel.locator(".sheet-body").evaluate((body) => body.scrollWidth <= body.clientWidth), "no sideways scroll").toBe(true);
+    await expect(slider).toHaveAttribute("aria-valuetext", await formatted(page, snapshots[1].createdAt));
+    await expect(slider).toHaveValue("1");
+    const preview = (value) => slider.evaluate((input, next) => { input.value = next; input.dispatchEvent(new Event("input", { bubbles: true })); }, value);
+    await preview("4");
+    await expect(slider).toHaveAttribute("aria-valuetext", "Live");
+    await preview("0");
+    await expect(slider).toHaveAttribute("aria-valuetext", await formatted(page, snapshots[0].createdAt));
+    const rows = panel.locator(".snapshot");
+    await expect(rows).toHaveCount(4);
+    await expect(rows.nth(1)).toHaveAttribute("aria-current", "true");
+    await expect(rows.nth(0)).toHaveAttribute("aria-current", "false");
+    await expect(rows.nth(1).locator("span").first()).toHaveText(await formatted(page, snapshots[1].createdAt));
+    await expect(rows.nth(1).locator("small")).toHaveText("2 of 4");
+    await rows.nth(3).click();
+    await expect.poll(async () => (await snapshot(page)).selection.historyId).toBe(snapshots[3].id);
+    // Live at the end leaves the saved map but stays in History (R21).
+    await slider.evaluate((input) => { input.value = "4"; input.dispatchEvent(new Event("change", { bubbles: true })); });
+    await expect.poll(async () => (await snapshot(page)).selection.historyId).toBeNull();
+    expect((await snapshot(page)).dataMode).toBe("live");
+    expect((await snapshot(page)).workflow).toBe("history");
+    await expect(chipOf(gallery)).toHaveCount(0);
+  });
+
+  test("Show live map is the one way back; Stop is its secondary while the robot works; a saved floor while live shows only the reason", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "history" });
+    const bar = gallery.locator(".action-bar");
+    const strip = gallery.locator(".status-strip");
+    await expect(bar.getByRole("button")).toHaveText(["Show live map"]);
+    await patchState(gallery, { activity: "cleaning" });
+    // Wide: Stop keeps its strip place (shell.md §3) and the bar keeps the primary.
+    await expect(bar.getByRole("button")).toHaveText(["Show live map"]);
+    await expect(strip.getByRole("button", { name: "Stop cleaning" })).toBeVisible();
+    await expect(gallery.getByRole("button", { name: /^Start|^Clean|^Run/ })).toHaveCount(0);
+    // The last saved map while the live one is unavailable: no button, one
+    // reason, first in the body (the selectors leave history without a branch).
+    const panel = panelOf(gallery);
+    await patchState(gallery, { activity: "docked", dataMode: "live" });
+    await expect(bar).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: /Live map required|Show live map/ })).toHaveCount(0);
+    await expect(panel.locator(".workflow-body .stack > :first-child")).toHaveText("Can't edit until you show the live map.");
+    await patchState(gallery, { dataMode: "live", activity: "cleaning" });
+    await expect(strip.getByRole("button", { name: "Stop cleaning" })).toBeVisible();
+    await expect(panel.locator(".workflow-body .stack > :first-child")).toHaveText("Can't edit until you show the live map.");
+    // Show live map returns to the live current floor and stays in History.
+    await patchState(gallery, { dataMode: "history", activity: "docked" });
+    await bar.getByRole("button", { name: "Show live map", exact: true }).click();
+    await expect.poll(async () => (await snapshot(page)).dataMode).toBe("live");
+    const after = await snapshot(page);
+    expect(after.workflow).toBe("history");
+    expect(after.selection.floorId).toBe("current");
+    expect(after.floor.readOnly).toBe(false);
+    await expect(chipOf(gallery)).toHaveCount(0);
+    await expect(panelOf(gallery).getByRole("button", { name: "House Live", exact: true })).toHaveAttribute("aria-current", "true");
+    await expect(gallery.locator(".status-strip strong")).not.toHaveText("Saved map");
+  });
+
+  test("on a phone the bar holds Show live map with Stop as its secondary @mobile", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "history", narrow: true });
+    const bar = gallery.locator(".action-bar");
+    await patchState(gallery, { activity: "cleaning" });
+    await expect(bar.getByRole("button")).toHaveText(["Show live map", "Stop"]);
+    await expect(bar.getByRole("button", { name: "Stop cleaning" })).toHaveClass(/ms-btn--secondary/);
+    await patchState(gallery, { activity: "cleaning", dataMode: "live" });
+    await expect(bar.getByRole("button")).toHaveText(["Stop"]);
+  });
+
+  for (const narrow of [false, true]) {
+    test(`held floor rows, saved-map rows and scrubber say why while a command runs${narrow ? " @mobile" : ""}`, async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "history-floors", narrow });
+      const panel = narrow ? gallery.locator(".mobile-sheet") : panelOf(gallery);
+      const before = await snapshot(page);
+      await patchState(gallery, { command: "pending" });
+      const live = panel.getByRole("button", { name: "Current floor Live", exact: true });
+      const row = panel.locator(".snapshot").nth(0);
+      const slider = panel.getByRole("slider", { name: "Map timeline" });
+      for (const [control, label] of [[live, "floor row"], [row, "saved-map row"], [slider, "scrubber"]]) {
+        await expect(control, label).toHaveAttribute("aria-disabled", "true");
+        await expect(control, label).toHaveAccessibleDescription("Waiting for the current change to finish.");
+      }
+      await expect(panel.locator("fieldset")).toHaveCount(0);
+      await live.click({ force: true });
+      await row.click({ force: true });
+      await slider.evaluate((input) => { input.value = "0"; input.dispatchEvent(new Event("change", { bubbles: true })); });
+      const after = await snapshot(page);
+      expect(after.selection).toEqual(before.selection);
+      await expect(slider).toHaveValue("1");
+      await patchState(gallery, { command: "starting" });
+      await expect(slider).toHaveAccessibleDescription("Waiting for the robot to begin.");
+      await patchState(gallery, { command: "idle" });
+      await expect(slider).not.toHaveAttribute("aria-disabled", "true");
+      await expect(live).not.toHaveAttribute("aria-disabled", "true");
+    });
+  }
+
+  test("a German host dates the strip, chip and rows alike", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "history", viewport: { width: 1024, height: 768 } });
+    const dates = { language: "de", timeZone: "Europe/Berlin" };
+    await gallery.evaluate((element, applied) => { element.dates = applied; }, dates);
+    const date = await formatted(page, SAVED_ONE, dates);
+    expect(date).not.toBe(await formatted(page, SAVED_ONE));
+    await expect(gallery.locator(".status-strip small")).toHaveText(`${date} · 1 of 1`);
+    await expect(chipOf(gallery)).toContainText(`${date} · 1 of 1`);
+    await expect(chipOf(gallery).locator(".sr-only")).toHaveText(`Saved map, read only, ${date}, 1 of 1`);
+    await expect(panelOf(gallery).locator(".snapshot span").first()).toHaveText(date);
+  });
+});

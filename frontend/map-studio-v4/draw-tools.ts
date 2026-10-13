@@ -28,10 +28,7 @@ export const heldReasonKey = (state: WorkspaceState): { readonly reason: string;
     : state.command === "starting" ? { reason: "Waiting for the robot to begin.", reasonKey: "v4_reason_starting" }
       : state.command === "settling" ? { reason: "Waiting for the robot to stop.", reasonKey: "v4_reason_stop" }
         : null;
-export const heldReason = (state: WorkspaceState, t: DrawToolsHandlers["t"]): string | null => {
-  const held = heldReasonKey(state);
-  return held ? t(held.reasonKey, held.reason) : null;
-};
+
 
 export const renderDrawTools = (
   state: WorkspaceState,
@@ -40,7 +37,8 @@ export const renderDrawTools = (
 ): TemplateResult => {
   const { draw } = state;
   const brush = new Intl.NumberFormat(state.locale, { style: "unit", unit: "centimeter", unitDisplay: "short" }).format(Math.round(draw.brushMeters * 100));
-  const held = heldReason(state, handlers.t);
+  const key = heldReasonKey(state);
+  const held = key ? handlers.t(key.reasonKey, key.reason) : null;
   const edit = (idle: boolean, path: string, label: string, intent: WorkspaceIntent, directional = false) => html`<button
     class="ms-btn"
     type="button"

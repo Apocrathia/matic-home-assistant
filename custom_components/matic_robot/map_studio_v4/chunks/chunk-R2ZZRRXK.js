@@ -1,4 +1,4 @@
-import{S as e}from"./chunk-YNEKT7MH.js";var s=e`
+import{T as e}from"./chunk-GLF7JOXJ.js";var s=e`
 .ms-switch {
 position: relative;
 flex: none;

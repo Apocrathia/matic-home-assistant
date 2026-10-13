@@ -1317,6 +1317,14 @@ export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction | NoBu
   return noButton("choose-cleaning");
 };
 
+/** The saved map on show: its time and place among the floor's snapshots (map-surfaces.md §4). */
+export const savedMapPosition = (state: WorkspaceState): { readonly date: string; readonly position: number; readonly count: number } | null => {
+  if (state.dataMode !== "history") return null;
+  const snapshots = state.resources.history.value?.floors.find((floor) => floor.id === state.selection.floorId)?.snapshots ?? [];
+  const index = snapshots.findIndex((snapshot) => snapshot.id === state.selection.historyId);
+  return index < 0 ? null : { date: snapshots[index]!.createdAt, position: index + 1, count: snapshots.length };
+};
+
 export const selectStopSecondaryAction = (
   state: WorkspaceState,
 ): PrimaryAction | null => hasStoppableWork(state) && selectPrimaryAction(state).id !== "stop"

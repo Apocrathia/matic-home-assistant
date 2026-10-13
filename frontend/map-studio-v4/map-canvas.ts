@@ -18,6 +18,7 @@ import {
   canShowLiveMap,
   initialWorkspaceState,
   mapScale,
+  savedMapPosition,
 } from "./state";
 import { translate } from "./localize";
 
@@ -145,6 +146,12 @@ export class MaticMapCanvasV4 extends LitElement {
     .map-tools, .view-switch, .appearance-switch, .camera-steps { display: flex; }
 
     .map-dock, .map-scale, .map-message { position: absolute; z-index: 4; }
+    /* The saved-map chip sits top centre under the rail's first row; the
+       appearance switch steps down to make room (map-surfaces.md §4). */
+    .map-chip { position: absolute; inset-block-start: var(--help-top); inset-inline-start: 50%; translate: -50% 0; max-inline-size: 100%; padding: var(--ms-space-1) var(--ms-space-3); font-size: var(--ms-t-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+    .map-chip :last-child::before { content: " · "; }
+    .map-root:has(.map-chip) .appearance-switch { inset-block-start: calc(2 * (44px + 2 * var(--ms-space-2))); }
+    .map-root:has(.map-chip) .scene-canvas { filter: saturate(0.35); }
 
     .map-dock {
       inset-inline-start: 50%;
@@ -232,8 +239,6 @@ export class MaticMapCanvasV4 extends LitElement {
       text-align: center;
     }
 
-    .map-message strong { display: block; margin-block-end: 0.35rem; }
-    .map-message span { color: var(--ms-text-quiet); font-size: 0.82rem; }
 
     .sr-only {
       position: absolute;
@@ -260,7 +265,7 @@ export class MaticMapCanvasV4 extends LitElement {
    previous block here targeted the mock-map layer that the renderer replaced,
    which meant the map had no forced-colors treatment at all. */
 .scene-canvas, .overlay-canvas { forced-color-adjust: none; }
-.map-root { border: 1px solid CanvasText; }
+.map-root, .map-chip { border: 1px solid CanvasText; }
 .map-root:focus-visible::after { border-color: Highlight; }
 }
   `];
@@ -480,48 +485,26 @@ export class MaticMapCanvasV4 extends LitElement {
     };
   }
 
-  #message(): { readonly title: string; readonly detail: string } | null {
-    if (!this.state.host.connected) {
-      return { title: this.#t("v4_reconnecting", "Reconnecting"), detail: this.#t("v4_reconnecting_detail", "The map is read only until Home Assistant reconnects.") };
+  // The card names the state once (shell.md §4 MS-HOST-01/05); the sheet
+  // carries the sentence, the date and the next step.
+  #message(): string | null {
+    const state = this.state;
+    if (!state.host.connected) return this.#t("v4_reconnecting", "Reconnecting");
+    if (!state.host.administrator) return this.#t("v4_admin_required", "Administrator access required");
+    if (state.host.robotCount === 0) return this.#t("v4_no_robot", "No robot set up");
+    if (state.dataMode === "live" && state.floor.readOnly && state.map.available && state.notice?.key === "v4_notice_saved_map") {
+      return this.#t("v4_saved_map_read_only_title", "Saved map is read only");
     }
-    if (!this.state.host.administrator) {
-      return { title: this.#t("v4_admin_required", "Administrator access required"), detail: this.#t("v4_private_map_hidden", "Private map data is hidden.") };
-    }
-    if (this.state.host.robotCount === 0) {
-      return { title: this.#t("v4_no_robot", "No robot set up"), detail: this.#t("v4_no_robot_detail", "Set up a robot before opening its map.") };
-    }
-    const notice = this.state.notice;
-    if (this.state.dataMode === "live" && this.state.floor.readOnly
-      && this.state.map.available && notice?.key === "v4_notice_saved_map") {
-      return {
-        title: this.#t("v4_saved_map_read_only_title", "Saved map is read only"),
-        detail: this.#t(notice.key, notice.fallback, notice.placeholders),
-      };
-    }
-    if (this.state.dataMode === "history") {
-      if (!this.state.map.available && this.state.resources.scene.status === "loading") {
-        return { title: this.#t("v4_loading_saved_map", "Loading saved map"), detail: this.#t("v4_loading_saved_map_detail", "This read-only snapshot is still preparing.") };
-      }
-      if (!this.state.map.available) {
-        return { title: this.#t("v4_saved_map_unavailable", "Saved map unavailable"), detail: this.#t("v4_saved_map_unavailable_detail", "Choose another snapshot or return to the live map.") };
-      }
+    if (state.dataMode === "history") {
+      if (!state.map.available && state.resources.scene.status === "loading") return this.#t("v4_loading_saved_map", "Loading saved map");
+      if (!state.map.available) return this.#t("v4_saved_map_unavailable", "Saved map unavailable");
       return null;
     }
-    if (!this.state.host.robotConnected) {
-      return { title: this.#t("v4_robot_offline", "Robot offline"), detail: this.#t("v4_robot_offline_detail", "The last known map stays read only and has no live position.") };
-    }
-    if (this.state.coherence === "verifying" || this.state.coherence === "booting") {
-      return { title: this.#t("v4_locating_map", "Locating the current map"), detail: this.#t("v4_locating_map_detail", "Map controls come back once the robot confirms which floor it is on.") };
-    }
-    if (!this.state.map.available && this.state.resources.scene.status === "loading") {
-      return { title: this.#t("v4_loading_verified_map", "Loading the current map"), detail: this.#t("v4_loading_verified_map_detail", "The map is almost ready.") };
-    }
-    if (!this.state.map.available) {
-      return { title: this.#t("v4_map_unavailable", "Map unavailable"), detail: this.#t("v4_map_unavailable_detail", "The map isn't ready yet. Nothing is shown until it is.") };
-    }
-    if (this.state.activity === "problem") {
-      return { title: this.#t("v4_robot_attention", "Robot needs attention"), detail: this.#t("v4_robot_attention_detail", "Check the robot before starting another task.") };
-    }
+    if (!state.host.robotConnected) return this.#t("v4_robot_offline", "Robot offline");
+    if (state.coherence === "verifying" || state.coherence === "booting") return this.#t("v4_locating_map", "Locating the current map");
+    if (!state.map.available && state.resources.scene.status === "loading") return this.#t("v4_loading_verified_map", "Loading the current map");
+    if (!state.map.available) return this.#t("v4_map_unavailable", "Map unavailable");
+    if (state.activity === "problem") return this.#t("v4_robot_attention", "Robot needs attention");
     return null;
   }
 
@@ -529,6 +512,7 @@ export class MaticMapCanvasV4 extends LitElement {
     const state = this.state;
     const narrow = this.narrow;
     const draw = state.workflow === "draw";
+    const saved = showScene ? savedMapPosition(state) : null;
     const helpTitle = this.#t("v4_how_to_move", "How to move the map");
     // Draw forces the top view, so the view, appearance and camera groups are
     // noise there; the sheet owns the tools on a phone. Both leave Fit and
@@ -545,6 +529,13 @@ export class MaticMapCanvasV4 extends LitElement {
 
     return html`
       <div class="map-rail" data-map-control>
+        ${saved ? html`
+          <div class="map-chip ms-surface ms-surface--floating">
+            <span class="sr-only">${this.#t("v4_history_chip_label", "Saved map, read only, {date}, {position} of {count}", { date: { date: saved.date }, position: saved.position, count: saved.count })}</span>
+            <span aria-hidden="true">${this.#t("v4_saved_map", "Saved map")}</span>
+            <span aria-hidden="true">${this.#t("v4_saved_map_position", "{date} · {position} of {count}", { date: { date: saved.date }, position: saved.position, count: saved.count })}</span>
+          </div>
+        ` : nothing}
         ${showScene ? html`<div class="map-context"><slot name="floor"></slot>
         ${showView ? html`
           <div class="view-switch ms-surface ms-surface--floating ms-segment" role="group" aria-label=${this.#t("map_view_label", "Map view")}>
@@ -713,10 +704,7 @@ export class MaticMapCanvasV4 extends LitElement {
         ${this.#renderDock(showScene)}
 
         ${message ? html`
-          <div class="map-message ms-surface ms-surface--floating">
-            <strong>${message.title}</strong>
-            <span>${message.detail}</span>
-          </div>
+          <div class="map-message ms-surface ms-surface--floating"><strong>${message}</strong></div>
         ` : nothing}
         <div class="sr-only" aria-live="polite" aria-atomic="true">
           ${describeMap(state, this.localize)}

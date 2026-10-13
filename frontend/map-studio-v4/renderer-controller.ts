@@ -629,9 +629,9 @@ export class RendererController {
 
   #beforeReview: { readonly camera: CameraState; readonly fit: boolean } | null = null;
 
-  #preferenceOf(camera: CameraState, fit: boolean): CameraPreference {
+  #preferenceOf(camera: CameraState, fit: boolean, home = this.#homeTop): CameraPreference {
     if (fit) return { yaw: 0, pitch: Math.PI / 2 - 0.018, zoom: 1, targetX: 0, targetZ: 0 };
-    return { yaw: camera.yaw, pitch: camera.pitch, zoom: this.#homeTop / Math.max(0.2, camera.distance), targetX: camera.targetX, targetZ: camera.targetZ };
+    return { yaw: camera.yaw, pitch: camera.pitch, zoom: home / Math.max(0.2, camera.distance), targetX: camera.targetX, targetZ: camera.targetZ };
   }
 
   /** The world position of a map point in metres (the overlay's coordinate space). */
@@ -837,13 +837,7 @@ export class RendererController {
       const effectiveView = preferenceView
         ?? (topView(state));
       const home = effectiveView === "top" ? this.#homeTop : this.#homeThree;
-      preferences[effectiveView] = {
-        yaw: this.#camera.yaw,
-        pitch: this.#camera.pitch,
-        zoom: home / Math.max(0.2, this.#camera.distance),
-        targetX: this.#camera.targetX,
-        targetZ: this.#camera.targetZ,
-      };
+      preferences[effectiveView] = this.#preferenceOf(this.#camera, false, home);
       this.#callbacks.onCameraPreferences?.(preferences);
       return preferences;
     }

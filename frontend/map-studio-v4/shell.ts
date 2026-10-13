@@ -71,6 +71,7 @@ import {
   isSelectedRobotUnavailable,
   selectStopSecondaryAction,
   selectPrimaryAction,
+  savedMapPosition,
 } from "./state";
 import type { DialogPresentation } from "./dialog-copy";
 
@@ -91,9 +92,9 @@ interface StatusPresentation {
   readonly recheck?: boolean;
 }
 
-const statusCopy = (state: WorkspaceState, localize?: Localize): StatusPresentation => {
-  const t = (key: string, fallback: string, placeholders?: Record<string, string | number>): string =>
-    translate(localize, key, fallback, placeholders);
+const statusCopy = (state: WorkspaceState, localize?: Localize, dates?: DateFormat): StatusPresentation => {
+  const t = (key: string, fallback: string, placeholders?: NoticePlaceholders): string =>
+    translate(localize, key, fallback, placeholders, dates);
   if (!state.host.connected) return { title: t("v4_reconnecting", "Reconnecting"), detail: t("v4_ha_offline", "Home Assistant is offline"), icon: iconOffline, notable: true };
   if (!state.host.administrator) return { title: t("v4_access_required", "Access required"), detail: t("v4_admin_only", "Administrator only"), icon: iconOffline, notable: true };
   if (state.host.robotCount === 0) return { title: t("v4_no_robot_short", "No robot"), detail: t("v4_set_up_robot", "Set up a robot"), icon: iconOffline, notable: true };
@@ -101,18 +102,11 @@ const statusCopy = (state: WorkspaceState, localize?: Localize): StatusPresentat
   if (!state.host.robotConnected) return { title: t("v4_robot_offline", "Robot offline"), detail: t("v4_last_map_read_only", "Last known map · read only"), icon: iconOffline, notable: true };
   if (state.activity === "problem") return { title: t("v4_needs_attention", "Needs attention"), detail: t("v4_check_robot", "Check the robot"), icon: iconOffline, notable: true };
   if (state.dataMode === "history") {
-    const floor = state.resources.history.value?.floors.find(
-      (candidate) => candidate.id === state.selection.floorId,
-    );
-    const position = floor?.snapshots.findIndex(
-      (snapshot) => snapshot.id === state.selection.historyId,
-    ) ?? -1;
-    const count = floor?.snapshots.length ?? 0;
+    // shell.md §4 row 7: the date and place of the saved map, as the chip says.
+    const saved = savedMapPosition(state);
     return {
       title: t("v4_saved_map", "Saved map"),
-      detail: position >= 0
-        ? t("v4_read_only_position", "Read only · {position} of {count}", { position: position + 1, count })
-        : t("v4_read_only", "Read only"),
+      detail: saved ? t("v4_saved_map_position", "{date} · {position} of {count}", { date: { date: saved.date }, position: saved.position, count: saved.count }) : "",
       icon: iconHistory,
       notable: false,
     };
@@ -1703,7 +1697,7 @@ export class MaticMapShellV4 extends LitElement {
     const state = this.state;
     const narrow = state.narrowHint || this._measuredNarrow;
     const options = this.#options.value;
-    const status = statusCopy(state, this.localize);
+    const status = statusCopy(state, this.localize, this.dates);
     const selectedRobotUnavailable = isSelectedRobotUnavailable(state);
     const primary = selectPrimaryAction({ ...state, narrowHint: narrow });
     // Stop takes the bar when work is stoppable (shell.md §3) and Redraw moves

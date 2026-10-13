@@ -18,7 +18,7 @@ import { WORKSPACE_INTENT_EVENT } from "./map-canvas";
 import { deleteSubject, hasStoppableWork, initialWorkspaceState } from "./state";
 import { formatDateTime, translate } from "./localize";
 import { LazyChunk, chunkStatus } from "./lazy-chunk";
-import { heldReason } from "./draw-tools";
+import { heldReasonKey } from "./draw-tools";
 import { COVERAGES, MODES, coverageLabel, modeLabel } from "./plan-cadence";
 // The plan picker, Run and Edit, and the Rooms view.
 import "./plan-views";
@@ -56,7 +56,6 @@ export class MaticMapWorkflowV4 extends LitElement {
 
   static override styles = [tokens, base, controls, formControls, css`
 :host { display: block; min-inline-size: 0; container-type: inline-size; }
-.workflow-fields { border: 0; margin: 0; padding: 0; min-inline-size: 0; }
 .ms-row--danger { color: var(--ms-danger); }
 .sr-only { position: absolute; overflow: hidden; inline-size: 1px; block-size: 1px; margin: -1px; clip-path: inset(50%); white-space: nowrap; }
 button, select, input[type="checkbox"] { cursor: pointer; }
@@ -78,7 +77,6 @@ line-height: var(--ms-lh-snug);
 .split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--ms-space-2); }
 .list { display: grid; gap: var(--ms-space-2); }
 .group { display: grid; gap: var(--ms-space-2); }
-.group-heading { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); font-weight: var(--ms-w-medium); letter-spacing: 0.04em; line-height: var(--ms-lh-snug); text-transform: uppercase; }
 .floor[aria-current="true"] { border-color: var(--ms-resolved-indicator, var(--ms-accent)); background: color-mix(in srgb, var(--ms-accent) 12%, var(--ms-local)); }
 .problem p { margin: 0; }
 @media (forced-colors: active) { .floor[aria-current="true"] { forced-color-adjust: none; color: HighlightText; background: Highlight; border-color: Highlight; } }
@@ -87,7 +85,7 @@ line-height: var(--ms-lh-snug);
 .checkbox input { inline-size: 1.2rem; block-size: 1.2rem; }
 .floor small, .snapshot small, .list-button small { margin-inline-start: auto; color: color-mix(in srgb, var(--ms-text) 78%, var(--ms-local)); font-weight: var(--ms-w-regular); }
 .timeline { display: grid; gap: var(--ms-space-2); }
-.timeline input[type="range"] { inline-size: 100%; min-block-size: var(--ms-control); }
+.timeline-ends { display: flex; justify-content: space-between; margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
 @media (max-width: 25rem) { .split { grid-template-columns: 1fr; } }
 `];
 
@@ -118,6 +116,12 @@ line-height: var(--ms-lh-snug);
 
   #t(key: string, fallback: string, placeholders?: Readonly<Record<string, string | number>>): string {
     return translate(this.localize, key, fallback, placeholders);
+  }
+
+  // Why the rows wait while a command runs (R12), in the host's words.
+  #heldReason(): string | null {
+    const held = heldReasonKey(this.state);
+    return held ? this.#t(held.reasonKey, held.reason) : null;
   }
 
   #modeLabel(mode: CleaningMode): string {
@@ -223,7 +227,7 @@ line-height: var(--ms-lh-snug);
     const areas = this.state.resources.areas;
     const hint = this.#drawHint();
     // Rows are held while a command runs, with the toolbar's reason (R12).
-    const held = heldReason(this.state, (key, fallback) => this.#t(key, fallback));
+    const held = this.#heldReason();
     const row = (content: unknown, intent: WorkspaceIntent) => html`
       <button
         class="list-button ms-row"
@@ -260,7 +264,7 @@ line-height: var(--ms-lh-snug);
     const needsReview = draft.canRebind || draft.status === "review";
     const stale = !needsReview && (draft.status === "stale" || draft.status === "unknown");
     // Held while a command runs (R12): fields stay focusable and say why.
-    const held = heldReason(this.state, (key, fallback) => this.#t(key, fallback));
+    const held = this.#heldReason();
     const heldBy = held ? "review-held-reason" : nothing;
     const disabled = held ? "true" : nothing;
     // While Stop holds the bar, as primary or secondary, Redraw is a body
@@ -325,63 +329,77 @@ line-height: var(--ms-lh-snug);
     const position = this.state.selection.historyId
       ? Math.max(0, snapshots.findIndex((snapshot) => snapshot.id === this.state.selection.historyId))
       : snapshots.length;
-    const liveLabel = floor?.active
-      ? this.#t("map_timeline_live_action", "Live")
-      : this.#t("v4_return_current_floor", "Return to current floor");
+    const live = this.#t("map_timeline_live_action", "Live");
     const displayPosition = this._historyPreviewPosition ?? position;
     const selectedSnapshot = snapshots[displayPosition];
+    // Held while a command runs (R12): rows and scrubber say why and change nothing.
+    const held = this.#heldReason();
+    const disabled = held ? "true" : nothing;
+    const heldBy = held ? "history-held-reason" : nothing;
+    // The live map could not be shown, so the last saved one is: the selectors
+    // leave history without a branch, so the body carries the reason once.
+    const readOnlyLive = this.state.dataMode === "live" && this.state.floor.readOnly;
     return this.#resource(resource, html`
       <div class="stack">
+        ${readOnlyLive ? html`<p class="subtle">${this.#t("v4_reason_live_map_required", "Can't edit until you show the live map.")}</p>` : nothing}
         ${(catalog?.floors.length || 0) > 1 ? html`
           <div class="group">
-            <h3 class="group-heading" id="floors-heading">${this.#t("v4_mapped_floors", "Mapped floors")}</h3>
+            <h3 class="ms-section-heading" id="floors-heading">${this.#t("v4_mapped_floors", "Mapped floors")}</h3>
             <div class="list" role="group" aria-labelledby="floors-heading">
             ${(catalog?.floors || []).map((candidate, index) => html`
               <button
-                class="floor ms-row ms-row"
+                class="floor ms-row"
                 type="button"
                 aria-current=${String(candidate.id === floor?.id)}
-                @click=${() => this.#intent({ type: "set-floor", floorId: candidate.id })}
+                aria-disabled=${disabled}
+                aria-describedby=${heldBy}
+                @click=${() => { if (!held) this.#intent({ type: "set-floor", floorId: candidate.id }); }}
               >
                 <span>${candidate.label || (candidate.active
                   ? this.#t("v4_current_floor", "Current floor")
                   : this.#t("v4_saved_floor", "Saved floor {number}", { number: candidate.ordinal ?? index }))}</span>
-                <small>${candidate.active ? this.#t("map_timeline_live_action", "Live") : this.#t("v4_read_only", "Read only")}</small>
+                <small>${candidate.active ? live : this.#t("v4_saved_map", "Saved map")}</small>
               </button>
             `)}
             </div>
           </div>
         ` : nothing}
         <div class="timeline">
-          <label class="field ms-field">${this.#t("map_timeline_label", "Map timeline")}
-            <input
-              type="range"
-              min="0"
-              max=${String(snapshots.length)}
-              step="1"
-              .value=${String(displayPosition)}
-              aria-valuetext=${selectedSnapshot ? formatDateTime(selectedSnapshot.createdAt, this.dates) : liveLabel}
-              ?disabled=${!snapshots.length}
-              @input=${(event: Event) => {
-                this._historyPreviewPosition = Number(eventValue(event));
-              }}
-              @change=${(event: Event) => {
-                const index = Number(eventValue(event));
-                this._historyPreviewPosition = null;
-                this.#intent({ type: "set-history", historyId: index === snapshots.length ? null : snapshots[index]?.id || null });
-              }}
-            >
-          </label>
+          ${snapshots.length >= 3 ? html`
+            <label class="field ms-field">${this.#t("map_timeline_label", "Map timeline")}
+              <input
+                type="range"
+                class="ms-range"
+                min="0"
+                max=${String(snapshots.length)}
+                step="1"
+                .value=${String(displayPosition)}
+                aria-valuetext=${selectedSnapshot ? formatDateTime(selectedSnapshot.createdAt, this.dates) : live}
+                aria-disabled=${disabled}
+                aria-describedby=${heldBy}
+                @input=${(event: Event) => {
+                  if (held) { (event.currentTarget as HTMLInputElement).value = String(position); return; }
+                  this._historyPreviewPosition = Number(eventValue(event));
+                }}
+                @change=${(event: Event) => {
+                  if (held) { (event.currentTarget as HTMLInputElement).value = String(position); return; }
+                  const index = Number(eventValue(event));
+                  this._historyPreviewPosition = null;
+                  this.#intent({ type: "set-history", historyId: index === snapshots.length ? null : snapshots[index]?.id || null });
+                }}
+              >
+            </label>
+            <p class="timeline-ends" aria-hidden="true"><span>${this.#t("map_timeline_oldest", "Oldest")}</span><span>${live}</span></p>
+          ` : nothing}
           <div class="list">
-            <button class="snapshot ms-row ms-row" type="button" aria-current=${String(!this.state.selection.historyId && Boolean(floor?.active))} @click=${() => this.#intent({ type: "set-history", historyId: null })}><span>${liveLabel}</span><small>${this.#t("v4_current", "Current")}</small></button>
             ${snapshots.map((snapshot, index) => html`
-              <button class="snapshot ms-row ms-row" type="button" aria-current=${String(snapshot.id === this.state.selection.historyId)} @click=${() => this.#intent({ type: "set-history", historyId: snapshot.id })}>
+              <button class="snapshot ms-row" type="button" aria-current=${String(snapshot.id === this.state.selection.historyId)} aria-disabled=${disabled} aria-describedby=${heldBy} @click=${() => { if (!held) this.#intent({ type: "set-history", historyId: snapshot.id }); }}>
                 <span>${formatDateTime(snapshot.createdAt, this.dates)}</span><small>${this.#t("v4_history_position", "{position} of {count}", { position: index + 1, count: snapshots.length })}</small>
               </button>
             `)}
           </div>
         </div>
-        <p class="subtle">${this.#t("v4_history_privacy", "Saved maps show one floor each and never show where the robot is now.")}</p>
+        ${held ? html`<p class="sr-only" id="history-held-reason">${held}</p>` : nothing}
       </div>
     `, "history");
   }
@@ -396,14 +414,6 @@ line-height: var(--ms-lh-snug);
     ></matic-map-diagnostics-v4>`;
   }
 
-  // Draw, area review and history keep the hold they had before plan Edit
-  // and Rooms gained their own: every control waits while a command runs
-  // until map-surfaces.md gives each its reason. A Delete confirmed then would
-  // be refused while its dialog closed as if it had been sent.
-  #held(content: unknown) {
-    return html`<fieldset class="workflow-fields" ?disabled=${this.state.command !== "idle" && this.state.command !== "failed"}>${content}</fieldset>`;
-  }
-
   protected override render() {
     switch (this.state.workflow) {
       case "rooms": return this.#rooms();
@@ -411,7 +421,7 @@ line-height: var(--ms-lh-snug);
       case "plan": return this.#planViews();
       case "draw": return this.#draw();
       case "areaReview": return this.#areaReview();
-      case "history": return this.#held(this.#history());
+      case "history": return this.#history();
       case "support": return this.#support();
       case "none": return nothing;
     }

@@ -1,4 +1,4 @@
-import{S as C,U as M}from"./chunk-YNEKT7MH.js";var U=C`
+import{T as C,V as M}from"./chunk-GLF7JOXJ.js";var U=C`
 :host {
 --ms-safe-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
 --ms-safe-right: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));

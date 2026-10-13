@@ -581,7 +581,9 @@ test("the saved-map notice and the history list show one snapshot's time alike",
   await expect(panel.getByText(savedMapSentence(expected)).first()).toBeVisible();
   await showSnapshotInHistory(page);
   await expect(panel.locator('.snapshot[aria-current="true"] > span')).toHaveText(expected);
-  await expect(panel.locator('.timeline input[type="range"]')).toHaveAttribute("aria-valuetext", expected);
+  // One saved map: no scrubber (map-surfaces.md §4 asks for three). The
+  // scrubber's dated aria-valuetext is pinned in map_studio_v4_map_surfaces.
+  await expect(panel.locator('.timeline input[type="range"]')).toHaveCount(0);
 });
 
 test("a language or time zone change reformats the saved-map date where it shows", async ({ page }) => {
