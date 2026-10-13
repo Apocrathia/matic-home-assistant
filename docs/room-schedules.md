@@ -7,7 +7,7 @@ plans keep their fixed settings until you enable a room schedule.
 
 ## Choose the work and interval
 
-Open a saved plan in Map Studio, choose **Edit**, then open a room and its
+Open a saved plan in Matic Map, choose **Edit**, then open a room and its
 **Room schedule**. For each room, you can independently enable:
 
 - Mopping: vacuum normally, then vacuum and mop every N verified cleans.
@@ -20,7 +20,8 @@ Open a saved plan in Map Studio, choose **Edit**, then open a room and its
 
 Intervals range from 1 to 100. A new interval of 3 applies scheduled work on
 the third qualifying clean. If both rules are due, that clean includes both.
-**Do on next clean** requests the selected work without resetting progress.
+**Do vacuum and mop on the next clean** and **Add a vacuum rotation on the next
+clean** request that work without resetting progress.
 Verified mopping clears its next-clean request. A vacuum rotation is
 credited only when the robot confirms the requested goals at dispatch and again
 after the same native session completes. Missing or changed setting evidence
@@ -29,7 +30,7 @@ keeps the rotation due. A completed-looking run alone does not clear it.
 ## Choose where progress is shared
 
 **In this plan only** keeps settings and progress private to that plan.
-**Across all plans (recommended)** lets participating plans and tracked Map Studio room
+**Across all plans (recommended)** lets participating plans and tracked Matic Map room
 cleans use the same schedule and progress.
 
 Creating a schedule starts at zero. Joining an existing shared schedule adopts
@@ -44,13 +45,13 @@ carry progress to another map.
 
 ## One-time room cleans
 
-Map Studio room cleans use an existing shared schedule by default and do not
+Matic Map room cleans use an existing shared schedule by default and do not
 create a saved plan. Choose **Override shared schedule settings** to use your
 selected settings for that clean. Compatible verified work still counts;
 omitting a due mode or coverage leaves that work due.
 
 Review the effective room order, modes, coverage, and due-work explanations
-before starting. Map Studio refreshes that preview at Start; if it changed,
+before starting. Matic Map refreshes that preview when you start; if it changed,
 review the updated settings before starting again. A failed preview keeps your
 selection and offers **Try again**.
 
@@ -72,8 +73,9 @@ be requested again on later cleans. Delayed results and restart recovery cannot
 count the same clean twice.
 
 Changing an interval preserves progress. Disabling a rule pauses it. Use the
-separate **Reset mopping** or **Reset vacuum rotation** action to start that interval
-fresh; cleaning history is kept separately. A shared reset affects every
+separate **Reset mopping** or **Reset vacuum rotation** action in a saved plan's
+**Edit** view to start that interval fresh. It asks before resetting and works
+while the robot is idle; cleaning history is kept separately. A shared reset affects every
 participant in that room's shared schedule. Edits and resets wait while the
 affected room is queued, running, or its result is being verified.
 

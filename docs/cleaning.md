@@ -7,7 +7,7 @@ should stop. Open **Matic Map** in the Home Assistant sidebar to get started.
 
 ## Saved plans
 
-Choose **Create a plan**, or open **Run a plan** to select an existing routine.
+Choose **Create a plan**, or open **Run a plan** to select an existing plan.
 Each plan saves:
 
 - Included rooms and their order.
@@ -15,18 +15,20 @@ Each plan saves:
 - Intelligent rotation or saved-order execution.
 - Return-to-dock and finish-current-room preferences.
 
-The **Run** view previews the next clean. Use **Plan enabled** to pause or
-resume it; choose **Run plan** to start. Open **Edit** to change the plan. Tick the rooms to include, open a
-room for its settings and schedule, and, in **Saved order**, use its arrows to
-move it. Each room keeps its mode and coverage within one ordered mission,
-including mixed settings.
-Choose **Cancel** to leave without saving, **Save** for changes, or **Done**
-when an unchanged plan is open. **More actions > Delete** removes the plan.
+<a id="run-and-edit"></a>
+The **Run** view previews the next run. Use **Plan enabled** to pause or
+resume it; choose **Run plan** to start. Open **Edit** to change the plan:
+tick the rooms to include, open a room for its settings and schedule, and, in
+**Saved order**, use its arrows to move it. Each room keeps its mode and
+coverage within one ordered run, including mixed settings.
+Choose **Save** to keep changes, or **Done** when an unchanged plan is open.
+**Cancel** leaves Edit and asks before discarding unsaved changes.
+**More actions > Delete** removes the plan.
 The robot handles battery and water servicing as needed.
 [Mixed room missions](mixed-room-missions.md).
 
 A plan defines what to clean. Home Assistant automations decide when it runs.
-Create and edit plans and custom areas in Map Studio. The integration's
+Create and edit plans and custom areas in Matic Map. The integration's
 **Configure** flow keeps integration preferences and plan maintenance: choose
 an existing default plan or explicitly reset cleaning history.
 
