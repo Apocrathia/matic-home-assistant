@@ -74,7 +74,7 @@ async function loadGallery(page, { scenario = "ready", narrow = false } = {}) {
 async function loadEffectHarness(page) {
   const bundle = await build({
     stdin: {
-    contents: 'export { EffectController } from "./frontend/map-studio-v4/effects"; export { LayerHistoryController } from "./frontend/map-studio-v4/layer-history"; export { WorkspaceStore, captureCoordinateEdit, canEditCoordinates, canReadFloorResources } from "./frontend/map-studio-v4/state"; export { createGalleryState, withGalleryRoomPreview } from "./frontend/map-studio-v4/gallery-state";',
+    contents: 'export { EffectController } from "./frontend/map-studio-v4/effects"; export { LayerHistoryController, layerDepth } from "./frontend/map-studio-v4/layer-history"; export { WorkspaceStore, captureCoordinateEdit, canEditCoordinates, canReadFloorResources, draftForPlan, selectPrimaryAction } from "./frontend/map-studio-v4/state"; export { createGalleryState, withGalleryRoomPreview } from "./frontend/map-studio-v4/gallery-state";',
     resolveDir: process.cwd(),
     },
     bundle: true, format: "esm", write: false,
@@ -327,7 +327,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     });
     const failure = gallery.getByRole("alert").filter({ hasText: "The cleaning tools didn't load. Reload the page to try again." });
     const retry = failure.getByRole("button", { name: "Try again" });
-    const dialog = gallery.getByRole("dialog", { name: "Discard area changes?" });
+    const dialog = gallery.getByRole("dialog", { name: "Discard changes?" });
     await page.evaluate(() => { window.__samePage = true; });
 
     await retry.click();
@@ -349,6 +349,99 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect.poll(draft).toEqual({ workflow: "draw", dirty: false });
     await expect(gallery.getByRole("toolbar", { name: "Draw area tools" })).toBeVisible();
     await expect(failure).toHaveCount(0);
+  });
+
+  // The draw tools are startup code, so an area draft can be dirty while the
+  // views chunk failed; the shell's own discard dialog still guards it.
+  test("browser Back asks before discarding an area drawn while the workflow views failed @safety", async ({ page }) => {
+    const fixture = await installPanelFixture(page, { moduleSource: "packaged" });
+    const panel = page.locator(fixture.panelTag);
+    const draft = () => page.evaluate((tag) => {
+      const { workflow, draw } = document.querySelector(tag).getWorkspaceSnapshot();
+      return { workflow, dirty: draw.dirty };
+    }, fixture.panelTag);
+    await page.route("**/chunks/workflow-panel-*.js", (route) => route.abort());
+    await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+    await panel.getByRole("button", { name: /Clean custom area/ }).click();
+    await expect(panel.getByRole("alert").filter({ hasText: "The cleaning tools didn't load. Reload the page to try again." })).toHaveCount(1);
+    await page.evaluate((tag) => {
+      document.querySelector(tag).shadowRoot.querySelector("matic-map-shell-v4").dispatchEvent(new CustomEvent("matic-workspace-intent", {
+        detail: { type: "mark-draft", strokeDelta: 1 },
+        bubbles: true,
+        composed: true,
+      }));
+    }, fixture.panelTag);
+    await expect.poll(draft).toEqual({ workflow: "draw", dirty: true });
+
+    await page.evaluate(() => history.back());
+    const dialog = panel.getByRole("dialog", { name: "Discard changes?" });
+    await expect(dialog).toBeVisible();
+    // shell.md §5: a new area's draft says it is lost for good.
+    await expect(dialog).toContainText("This new area hasn't been saved, and discarding it can't be undone.");
+    await expect(dialog.getByRole("button", { name: "Keep editing" })).toBeVisible();
+    await dialog.getByRole("button", { name: "Discard" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(draft).toEqual({ workflow: "none", dirty: false });
+  });
+
+  // One saved two-room plan, as Home Assistant's plan catalog sends it.
+  const dailyPlanCatalog = () => {
+    const rooms = ["kitchen", "hall"].map((id, index) => ({
+      room_id: id, name: id === "kitchen" ? "Kitchen" : "Hall",
+      boundary: [[index * 6, 0], [index * 6 + 6, 0], [index * 6 + 6, 5], [index * 6, 5]],
+    }));
+    const planRooms = rooms.map((room) => ({ room_id: room.room_id, cleaning_mode: "vacuum", coverage_setting: "standard" }));
+    return {
+      rooms,
+      selected_plan: "daily",
+      plans: [{
+        id: "daily", name: "Daily", enabled: true, run_behavior: "ordered", rooms: planRooms,
+        room_order: planRooms.map((room) => room.room_id), return_to_base: true,
+        finish_current_room: false, finish_current_room_threshold: 50,
+      }],
+    };
+  };
+
+  // Plan and area writes load on the first save; a failed load is that
+  // write's own failure and leaves nothing pending.
+  test("Save shows the plan save failure when the writes fail to load @safety", async ({ page }) => {
+    const fixture = await installPanelFixture(page, { moduleSource: "packaged", initialPlanCatalog: dailyPlanCatalog() });
+    const panel = page.locator(fixture.panelTag);
+    const state = () => page.evaluate((tag) => {
+      const { command, planDraft } = document.querySelector(tag).getWorkspaceSnapshot();
+      return { command, dirty: planDraft.dirty };
+    }, fixture.panelTag);
+    await page.route("**/chunks/catalog-writes-*.js", (route) => route.abort());
+    await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+    await panel.getByRole("button", { name: /^Run a plan/ }).click();
+    await panel.getByRole("button", { name: /^Daily/ }).click();
+    await page.evaluate((tag) => {
+      document.querySelector(tag).shadowRoot.querySelector("matic-map-shell-v4").dispatchEvent(new CustomEvent("matic-workspace-intent", {
+        detail: { type: "set-plan-view", view: "edit" }, bubbles: true, composed: true,
+      }));
+    }, fixture.panelTag);
+    await panel.getByRole("list", { name: "Rooms", exact: true }).getByRole("checkbox").first().uncheck();
+    const save = panel.getByRole("button", { name: "Save", exact: true });
+    await save.click();
+
+    await expect(panel.getByRole("alert")).toHaveText("Home Assistant can't confirm the plan was saved, so check your plans, then try again.");
+    await expect.poll(state).toEqual({ command: "idle", dirty: true });
+    await expect(save).toBeEnabled();
+    expect(await page.evaluate(() => window.__panelFixture.serviceCalls.length)).toBe(0);
+  });
+
+  // The writes stay out of startup, but opening a workflow that can write
+  // starts their load so a save rarely waits for it.
+  test("opening the plan workflow, not startup, requests the plan and area writes", async ({ page }) => {
+    const fixture = await installPanelFixture(page, { moduleSource: "packaged", initialPlanCatalog: dailyPlanCatalog() });
+    const panel = page.locator(fixture.panelTag);
+    const requested = [];
+    page.on("request", (request) => { if (/\/chunks\/catalog-writes-[^/]+\.js$/u.test(request.url())) requested.push(request.url()); });
+    await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+    await expect.poll(() => page.evaluate((tag) => document.querySelector(tag).getWorkspaceSnapshot().map.available, fixture.panelTag)).toBe(true);
+    expect(requested).toEqual([]);
+    await panel.getByRole("button", { name: /^Run a plan/ }).click();
+    await expect.poll(() => requested.length).toBe(1);
   });
 
   // A resumed Try again opens only what the entry screen would: a limited map
@@ -496,8 +589,11 @@ test.describe("Map Studio v0.4 foundation", () => {
       });
     }, GALLERY_TAG);
     await gallery.getByRole("button", { name: /^Run a plan/ }).click();
-    await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
+    await gallery.getByRole("button", { name: /^Daily clean/ }).click();
+    await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
     const inspector = gallery.locator(".inspector");
+    // plan.md §3: a room's schedule is inside its settings.
+    await inspector.getByRole("button", { name: "Settings for Kitchen", exact: true }).click();
     const schedule = inspector.locator("details").first();
     await schedule.locator("summary").click();
     await expect(inspector.getByRole("button", { name: "Reset vacuum rotation progress for Kitchen" })).toBeVisible();
@@ -553,8 +649,10 @@ test.describe("Map Studio v0.4 foundation", () => {
       });
     }, GALLERY_TAG);
     await gallery.getByRole("button", { name: /^Run a plan/ }).click();
-    await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
+    await gallery.getByRole("button", { name: /^Daily clean/ }).click();
+    await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
     const inspector = gallery.locator(".inspector");
+    await inspector.getByRole("button", { name: "Settings for Kitchen", exact: true }).click();
     await inspector.locator("details").first().locator("summary").click();
     await expect(inspector).toContainText("Can't run this schedule until you reset its mopping progress, which Home Assistant can't confirm.");
     await expect(inspector).toContainText("Can't run this schedule until you reset its vacuum rotation progress, which Home Assistant can't confirm.");
@@ -587,10 +685,18 @@ test.describe("Map Studio v0.4 foundation", () => {
       });
     }, GALLERY_TAG);
     await gallery.getByRole("button", { name: /^Run a plan/ }).click();
-    await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
-    const preview = gallery.locator("section[aria-labelledby='next-run-preview-heading']");
-    await expect(preview.getByRole("list", { name: "Next-run room order and effective settings" })).toHaveText(/1\. Living room.*Vacuum \+ mop · Heavy duty.*Vacuum and mop are due.*Part 2.*2\. Kitchen.*Vacuum · Quick.*Vacuum rotation is due/s);
-    await expect(gallery.getByRole("button", { name: "Run plan", exact: true })).toBeEnabled();
+    await gallery.getByRole("button", { name: /^Daily clean/ }).click();
+    // plan.md §3 Run R1: server order, one setting string per row, due lines
+    // above, `v4_room_parts` and a named divider at each boundary.
+    const rows = gallery.locator(".run-list > li");
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0)).toHaveText("Living room Vacuum + mop · Heavy duty");
+    await expect(rows.nth(1)).toHaveText("Part 2 starts here; the robot may stop at the dock first Kitchen Vacuum · Quick");
+    await expect(gallery.getByText("Mop due in Living room", { exact: true })).toBeVisible();
+    await expect(gallery.getByText("Quick vacuum due in Kitchen", { exact: true })).toBeVisible();
+    await expect(gallery.getByText("The robot cleans these rooms in 2 parts and may stop at the dock between parts.", { exact: true })).toBeVisible();
+    // plan.md §6 (v4_action_run_plan_named): Run plan is named with the plan.
+    await expect(gallery.getByRole("button", { name: "Run plan Daily clean", exact: true })).toBeEnabled();
   });
 
   test("keeps manual room choice within the service limit and explains the disabled choices", async ({ page }) => {
@@ -639,16 +745,24 @@ test.describe("Map Studio v0.4 foundation", () => {
       element.replaceWorkspaceState({
         ...state,
         workflow: "plan",
+        planView: "edit",
         planDraft: { ...state.planDraft, id: null, name: "Capacity check", rooms: selected, dirty: false },
       });
     }, GALLERY_TAG);
-    const planRooms = gallery.getByRole("group", { name: "Rooms in this plan" });
-    const planChoices = planRooms.locator(".plan-room-label input[type=checkbox]");
+    const planRooms = gallery.getByRole("list", { name: "Rooms", exact: true });
+    const planChoices = planRooms.getByRole("checkbox");
     await expect(planChoices).toHaveCount(101);
     await planChoices.nth(99).check();
     await expect(planChoices.nth(99)).toBeChecked();
-    await expect(planChoices.nth(100)).toBeDisabled();
-    await expect(gallery.getByRole("status").filter({ hasText: "Up to 100 rooms fit" })).toBeVisible();
+    // plan.md §3: the room past the limit stays focusable, says why, and
+    // doesn't change.
+    const limit = "Can't add more rooms until you remove one; a plan holds up to 100.";
+    await expect(gallery.getByText(limit, { exact: true })).toBeVisible();
+    await expect(planChoices.nth(100)).toHaveAttribute("aria-disabled", "true");
+    await expect(planChoices.nth(100)).toHaveAccessibleDescription(limit);
+    await planChoices.nth(100).dispatchEvent("click");
+    await expect(planChoices.nth(100)).not.toBeChecked();
+    await expect.poll(async () => (await snapshot(page)).planDraft.rooms.length).toBe(100);
   });
 
   test("blocks an oversized legacy plan with a clear recovery action", async ({ page }) => {
@@ -690,15 +804,21 @@ test.describe("Map Studio v0.4 foundation", () => {
       return { status: plans?.status, count: plans?.value?.plans[0]?.rooms.length };
     })).toEqual({ status: "ready", count: 102 });
     await gallery.getByRole("button", { name: /^Run a plan/ }).click();
-    await gallery.getByRole("button", { name: /Legacy plan.*Edit plan/ }).click();
+    await gallery.getByRole("button", { name: /^Legacy plan/ }).click();
 
-    await expect(gallery.getByRole("button", { name: "Run plan", exact: true })).toBeDisabled();
-    const rooms = gallery.getByRole("group", { name: "Rooms in this plan" });
+    await expect(gallery.getByRole("button", { name: "Run plan Legacy plan", exact: true })).toBeDisabled();
+    // A saved plan opens in Run (plan.md §5 State); its rooms change in Edit.
+    await page.evaluate((tag) => {
+      document.querySelector(tag).shadowRoot.querySelector("matic-map-shell-v4").dispatchEvent(new CustomEvent("matic-workspace-intent", {
+        detail: { type: "set-plan-view", view: "edit" }, bubbles: true, composed: true,
+      }));
+    }, fixture.panelTag);
+    const rooms = gallery.getByRole("list", { name: "Rooms", exact: true });
     const draftRoomCount = () => page.evaluate(
       (tag) => document.querySelector(tag).getWorkspaceSnapshot().planDraft.rooms.length,
       fixture.panelTag,
     );
-    await rooms.locator(".plan-room-label input[type=checkbox]").first().uncheck();
+    await rooms.getByRole("checkbox").first().uncheck();
     expect(await draftRoomCount()).toBe(101);
     await expect(gallery.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
 
@@ -711,14 +831,22 @@ test.describe("Map Studio v0.4 foundation", () => {
         draftDirty: state.planDraft.dirty,
         draftCount: state.planDraft.rooms.length,
         savedCount: state.resources.plans.value?.plans[0]?.rooms.length,
+        planView: state.planView,
       };
-    }, fixture.panelTag)).toEqual({ draftDirty: false, draftCount: 101, savedCount: 101 });
+    }, fixture.panelTag)).toEqual({ draftDirty: false, draftCount: 101, savedCount: 101, planView: "run" });
     await expect.poll(() => page.evaluate(() => window.__panelFixture.planReads)).toBeGreaterThan(initialPlanReads);
 
     const firstSavedCall = await page.evaluate(() => window.__panelFixture.serviceCalls[0]);
     expect(firstSavedCall.data.rooms.map((room) => room.room)).toEqual(
       Array.from({ length: 101 }, (_, index) => `legacy-room-${index + 2}`),
     );
+
+    // A save returns to Run (plan.md §5 Navigation); the next edit opens Edit again.
+    await page.evaluate((tag) => {
+      document.querySelector(tag).shadowRoot.querySelector("matic-map-shell-v4").dispatchEvent(new CustomEvent("matic-workspace-intent", {
+        detail: { type: "set-plan-view", view: "edit" }, bubbles: true, composed: true,
+      }));
+    }, fixture.panelTag);
 
     await gallery.getByRole("checkbox", { name: /Legacy room 2$/ }).uncheck();
     expect(await draftRoomCount()).toBe(100);
@@ -741,9 +869,10 @@ test.describe("Map Studio v0.4 foundation", () => {
     );
 
     await gallery.getByRole("button", { name: "Back to plans", exact: true }).click();
-    await gallery.getByRole("button", { name: /Legacy plan.*Edit plan/ }).click();
-    await expect(gallery.getByRole("group", { name: "Rooms in this plan" })
-      .locator(".plan-room-label input[type=checkbox]:checked")).toHaveCount(100);
+    await gallery.getByRole("button", { name: /^Legacy plan/ }).click();
+    await gallery.getByRole("button", { name: "Edit Legacy plan", exact: true }).click();
+    await expect(gallery.getByRole("list", { name: "Rooms", exact: true })
+      .getByRole("checkbox", { checked: true })).toHaveCount(100);
     await expect.poll(() => page.evaluate((tag) => {
       const state = document.querySelector(tag).getWorkspaceSnapshot();
       return state.planDraft.rooms.length;
@@ -893,14 +1022,334 @@ test.describe("Map Studio v0.4 foundation", () => {
     });
   }
 
-  test("a paused plan shows a Paused chip beside its name and only its room count below", async ({ page }) => {
+  // plan.md §3 Picker: the default plan first, then catalog order; line 2 the
+  // count and order; line 3 the due work or "Needs attention"; a paused plan
+  // shows only its chip; Create a plan is the last, secondary row.
+  test("the picker shows each plan's order, default and due work, and Create a plan last", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "plans" });
+    await gallery.evaluate((element) => {
+      const state = element.getWorkspaceSnapshot();
+      const value = state.resources.plans.value;
+      element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...state.resources.plans,
+        value: { ...value, plans: [value.plans[1], value.plans[2], value.plans[0]] } } } });
+    });
+    const rows = gallery.locator("[data-plan-row]");
+    await expect(rows).toHaveCount(3);
+    expect(await rows.evaluateAll((items) => items.map((item) => item.dataset.planRow))).toEqual(["daily", "weekend", "guest"]);
+    const daily = gallery.getByRole("button", { name: /^Daily clean/ });
+    await expect(daily.locator("strong bdi")).toHaveText("Daily clean");
+    await expect(daily.locator("strong .ms-chip")).toHaveText("Default");
+    await expect(daily.locator("strong .ms-chip")).toHaveAttribute("title", "Home Assistant's plan button and plan select run this plan.");
+    await expect(daily).toHaveAccessibleDescription("Home Assistant's plan button and plan select run this plan.");
+    await expect(daily.locator("small")).toHaveText("3 rooms · Longest-waiting rooms first");
+    // Intl.ListFormat joins the rooms that share a due kind (plan.md §3).
+    await expect(daily.locator(".line")).toHaveText(["Mop due in Kitchen and Living room", "Optimal vacuum due in Kitchen"]);
+    const weekend = gallery.getByRole("button", { name: /^Weekend refresh/ });
+    await expect(weekend.locator(".ms-chip")).toHaveCount(0);
+    await expect(weekend.locator("small")).toHaveText("2 rooms · Top to bottom, as listed");
+    await expect(weekend.locator(".line")).toHaveText("Needs attention before it can run");
+    // Line 3 is one size whatever it says (plan.md §3, --ms-t-xs).
+    const size = (row) => row.locator(".line").first().evaluate((element) => getComputedStyle(element).fontSize);
+    expect(await size(weekend)).toBe(await size(daily));
+    await expect(weekend).toHaveAccessibleDescription("");
     const paused = gallery.getByRole("button", { name: /^Guest prep/ });
     await expect(paused.locator("strong .ms-chip")).toHaveText("Paused");
-    await expect(paused.locator("small")).toHaveText("1 room");
-    const running = gallery.getByRole("button", { name: /^Weekend refresh/ });
-    await expect(running.locator(".ms-chip")).toHaveCount(0);
-    await expect(running.locator("small")).toHaveText("2 rooms");
+    await expect(paused.locator("small")).toHaveText("1 room · Longest-waiting rooms first");
+    await expect(paused.locator(".line")).toHaveCount(0);
+    const items = gallery.locator("matic-map-plan-views-v4 li");
+    await expect(items.last().getByRole("button")).toHaveText("Create a plan");
+    await expect(items.last().getByRole("button")).not.toHaveClass(/ms-btn--primary/);
+  });
+
+  for (const [width, narrow] of [[390, true], [1024, false]]) {
+    test(`a long plan name ends in an ellipsis and keeps its chips on line 1 at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 844 });
+      const gallery = await loadGallery(page, { scenario: "plans", narrow });
+      await settleWorkspace(gallery);
+      await gallery.evaluate((element) => {
+        const state = element.getWorkspaceSnapshot();
+        const value = state.resources.plans.value;
+        const plans = value.plans.map((plan) => plan.id === "daily" ? { ...plan, name: "A very long plan name for every room on the ground floor and the stairs" } : plan);
+        element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...state.resources.plans, value: { ...value, plans } } } });
+      });
+      const row = gallery.locator('[data-plan-row="daily"]');
+      await expect(row.locator("bdi")).toHaveText(/^A very long plan name/);
+      const layout = await row.evaluate((button) => {
+        const bdi = button.querySelector(".plan-title bdi");
+        const chip = button.querySelector(".plan-title .ms-chip");
+        const body = button.querySelector(".ms-row__body").getBoundingClientRect();
+        const name = bdi.getBoundingClientRect();
+        const chipBox = chip.getBoundingClientRect();
+        return {
+          ellipsis: getComputedStyle(bdi).textOverflow,
+          truncated: bdi.scrollWidth > bdi.clientWidth,
+          inside: name.right <= body.right + 0.5 && chipBox.right <= body.right + 0.5,
+          sameLine: Math.abs(chipBox.top + chipBox.height / 2 - (name.top + name.height / 2)) < 4,
+        };
+      });
+      expect(layout).toEqual({ ellipsis: "ellipsis", truncated: true, inside: true, sameLine: true });
+    });
+  }
+
+  test("Rooms' preview gives each room its setting as one string", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "rooms" });
+    await settleWorkspace(gallery);
+    await page.evaluate((tag) => {
+      const { withGalleryRoomPreview } = window.__galleryModule;
+      const element = document.querySelector(tag);
+      const state = element.getWorkspaceSnapshot();
+      element.replaceWorkspaceState(withGalleryRoomPreview({ ...state, workflow: "rooms", selection: { ...state.selection,
+        roomIds: ["room-a"], roomSettings: [{ roomId: "room-a", cleaningMode: "vacuum", coverageSetting: "standard" }] } }));
+    }, GALLERY_TAG);
+    const rows = gallery.getByRole("list", { name: "Effective room order" }).locator("li");
+    await expect(rows.first()).toBeVisible();
+    // home-rooms.md §6 v4_room_setting_*: the whole string, not mode + coverage text.
+    await expect(rows.first().locator(".subtle").first()).toHaveText("Vacuum · Optimal");
+  });
+
+  test("a picker with no plans offers one filled Create a plan", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plans" });
+    await gallery.evaluate((element) => {
+      const state = element.getWorkspaceSnapshot();
+      element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...state.resources.plans,
+        value: { ...state.resources.plans.value, plans: [], selectedPlan: null } } } });
+    });
+    await expect(gallery.getByRole("heading", { level: 3, name: "No plans yet" })).toBeVisible();
+    await expect(gallery.getByText("Save a plan to repeat a set of rooms.", { exact: true })).toBeVisible();
+    // The card stands alone: no "Tap a plan" description above it.
+    await expect(gallery.getByText("Tap a plan to see its next run.")).toHaveCount(0);
+    await expect(gallery.locator("[data-plan-row]")).toHaveCount(0);
+    const create = gallery.getByRole("button", { name: "Create a plan", exact: true });
+    await expect(create).toHaveClass(/ms-btn--primary/);
+    await create.click();
+    expect(await gallery.evaluate((element) => element.getWorkspaceSnapshot())).toMatchObject({ workflow: "plan", planView: "edit" });
+  });
+
+  // plan.md §5 Navigation and focus: a row opens Run and focuses its heading;
+  // Back returns to the picker with focus on that row (MS-KEY-01).
+  test("a picker row opens Run, and Back returns focus to that row", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plans" });
+    await gallery.getByRole("button", { name: /^Weekend refresh/ }).click();
+    expect(await gallery.evaluate((element) => element.getWorkspaceSnapshot())).toMatchObject({
+      workflow: "plan", planView: "run", selection: { planId: "weekend" },
+    });
+    await expect(gallery.getByRole("heading", { level: 2, name: "Weekend refresh" })).toBeFocused();
+    await gallery.getByRole("button", { name: "Back to plans", exact: true }).click();
+    await expect(gallery.getByRole("button", { name: /^Weekend refresh/ })).toBeFocused();
+  });
+
+  // plan.md §3 Run view, R1 ready, at the phone sheet and the inspector.
+  for (const [width, height, narrow] of [[390, 844, true], [1024, 768, false]]) {
+    test(`Run shows the next run's summary, due work and rooms at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height });
+      const gallery = await loadGallery(page, { scenario: "plan-saved-intelligent", narrow });
+      await settleWorkspace(gallery);
+      await gallery.evaluate((element) => {
+        const state = element.getWorkspaceSnapshot();
+        const catalog = state.resources.plans.value;
+        const plans = catalog.plans.map((plan) => ({ ...plan, nextRunPreview: { ...plan.nextRunPreview,
+          rooms: plan.nextRunPreview.rooms.map((room) => ({ ...room, cadenceReasons: ["mop_due"] })) } }));
+        element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...state.resources.plans, value: { ...catalog, plans } } } });
+      });
+      await expect(gallery.getByText("3 rooms · about 33 min", { exact: true })).toBeVisible();
+      await expect(gallery.getByText("Mop due in Kitchen, Living room, and Office", { exact: true })).toBeVisible();
+      await expect(gallery.getByRole("heading", { name: "Next run", level: 3 })).toBeVisible();
+      await expect(gallery.getByText("Longest-waiting rooms first, checked again when you run the plan.", { exact: true })).toBeVisible();
+      // Intelligent rotation: an unnumbered list, one setting string per row.
+      await expect(gallery.locator("ol.run-list")).toHaveCount(0);
+      const rows = gallery.locator("ul.run-list > li");
+      await expect(rows).toHaveText(["Kitchen Vacuum · Optimal", "Living room Vacuum · Optimal", "Office Vacuum · Optimal"]);
+      await expect(rows.locator(".pos-badge")).toHaveCount(0);
+      const enabled = gallery.getByRole("switch", { name: "Plan enabled" });
+      await expect(enabled).toHaveAttribute("aria-checked", "true");
+      await expect(enabled).toHaveAccessibleDescription("When it's on, this plan can run from here, from automations and from Home Assistant actions.");
+      await expect(gallery.getByText("Returns to the dock when finished", { exact: true })).toBeVisible();
+      await expect(gallery.getByRole("button", { name: "Run plan Daily clean", exact: true })).toBeEnabled();
+      await expect(gallery.getByRole("button", { name: "Try again", exact: true })).toHaveCount(0);
+    });
+  }
+
+  test("Run numbers Saved order and marks each part break", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-saved-ordered" });
+    await expect(gallery.locator("ol.run-list > li")).toHaveText(["1 Office Vacuum · Optimal", "2 Kitchen Vacuum · Optimal", "3 Living room Vacuum · Optimal"]);
+    await expect(gallery.getByText("Longest-waiting rooms first, checked again when you run the plan.")).toHaveCount(0);
+
+    await gallery.evaluate((element) => element.setScenario("plan-run-parts"));
+    await settleWorkspace(gallery);
+    await expect(gallery.getByText("The robot cleans these rooms in 2 parts and may stop at the dock between parts.", { exact: true })).toBeVisible();
+    await expect(gallery.getByText("Mop due in Kitchen", { exact: true })).toBeVisible();
+    const rows = gallery.locator("ol.run-list > li");
+    await expect(rows).toHaveText([
+      "1 Kitchen Vacuum + mop · Optimal",
+      "Part 2 starts here; the robot may stop at the dock first 2 Living room Vacuum · Optimal",
+      "3 Office Vacuum · Optimal",
+    ]);
+    await expect(gallery.locator(".run-row[data-break]")).toHaveCount(1);
+  });
+
+  test("a paused plan lists its rooms and turns on from the switch", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-run-paused" });
+    await expect(gallery.getByText("3 rooms", { exact: true })).toBeVisible();
+    await expect(gallery.getByRole("heading", { name: "Rooms in this plan", level: 3 })).toBeVisible();
+    await expect(gallery.locator("ul.run-list > li")).toHaveText(["Kitchen Vacuum · Optimal", "Living room Vacuum · Optimal", "Office Vacuum · Optimal"]);
+    await expect(gallery.getByRole("switch", { name: "Plan enabled" })).toHaveAttribute("aria-checked", "false");
+    await expect(gallery.getByRole("button", { name: "Try again", exact: true })).toHaveCount(0);
+    await expect(gallery.locator(".problem")).toHaveCount(0);
+    await expect(gallery.getByRole("button", { name: "Run plan Daily clean", exact: true })).toBeDisabled();
+  });
+
+  test("a room that blocks the run says Needs attention, and Review opens it in Edit", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-run-blocked" });
+    const rows = gallery.locator("ul.run-list > li");
+    await expect(rows).toHaveCount(3);
+    await expect(rows.nth(1)).toContainText("Needs attention");
+    await expect(gallery.getByText("Needs attention", { exact: true })).toHaveCount(1);
+    await expect(gallery.locator(".problem")).toHaveCount(0);
+    await expect(gallery.getByRole("button", { name: "Try again", exact: true })).toHaveCount(0);
+    await expect(gallery.getByText("Can't run this plan until you reset Living room's schedule progress, which Home Assistant can't confirm.").first()).toBeVisible();
+    await gallery.getByRole("button", { name: "Review Living room", exact: true }).click();
+    expect(await gallery.evaluate((element) => element.getWorkspaceSnapshot().planView)).toBe("edit");
+    // plan.md §5: Edit opens with that room's settings open and focused.
+    const settings = gallery.getByRole("list", { name: "Rooms", exact: true })
+      .getByRole("button", { name: "Settings for Living room", exact: true });
+    await expect(settings).toHaveAttribute("aria-expanded", "true");
+    await expect(settings).toBeFocused();
+    await expect(settings).toContainText("Needs attention");
+  });
+
+  test("a next run that can't be checked says why and offers Try again", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-legacy-oversized" });
+    await gallery.evaluate((element) => element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), planView: "run" }));
+    await expect(gallery.locator(".problem")).toHaveText("Can't run this plan until it has 100 rooms or fewer.");
+    const intents = await page.evaluateHandle(() => {
+      const seen = [];
+      document.addEventListener("matic-workspace-intent", (event) => seen.push(event.detail), true);
+      return seen;
+    });
+    await gallery.getByRole("button", { name: "Try again", exact: true }).click();
+    expect(await intents.evaluate((seen) => seen)).toContainEqual({ type: "open-workflow", workflow: "plan" });
+  });
+
+  test("the Run switch says why it is held", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-saved-intelligent" });
+    await settleWorkspace(gallery);
+    const enabled = gallery.getByRole("switch", { name: "Plan enabled" });
+    await expect(enabled).not.toHaveAttribute("aria-disabled", "true");
+    const base = await gallery.evaluate((element) => element.getWorkspaceSnapshot());
+    const hint ="When it's on, this plan can run from here, from automations and from Home Assistant actions.";
+    for (const [patch, reason] of [
+      [{ command: "pending", pendingAction: "save-plan" }, "Waiting for Home Assistant to save the plan."],
+      [{ command: "pending", pendingAction: "run-plan" }, "Waiting for Home Assistant to check the next run."],
+      [{ activity: "cleaning" }, "Can't change this until the robot finishes."],
+      [{ host: { connected: true, robotConnected: false } }, "Waiting for Home Assistant to reach the robot again."],
+      [{ pageActive: false }, "Waiting for the map to be ready."],
+    ]) {
+      await gallery.evaluate((element, { value, base }) => {
+        element.replaceWorkspaceState({ ...base, ...value, ...(value.host ? { host: { ...base.host, ...value.host } } : {}) });
+      }, { value: patch, base });
+      await expect(enabled, reason).toHaveAttribute("aria-disabled", "true");
+      await expect(enabled, reason).toHaveAccessibleDescription(`${hint} ${reason}`);
+      await enabled.dispatchEvent("click");
+      expect(await gallery.evaluate((element) => element.getWorkspaceSnapshot().planDraft.enabled), reason).toBe(true);
+    }
+  });
+
+  test("Run heads the list After this run while a plan is running", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-saved-intelligent" });
+    await settleWorkspace(gallery);
+    await gallery.evaluate((element) => {
+      const state = element.getWorkspaceSnapshot();
+      element.replaceWorkspaceState({ ...state, resources: { ...state.resources, entry: { ...state.resources.entry, activePlan: true } } });
+    });
+    await expect(gallery.getByRole("heading", { name: "After this run", level: 3 })).toBeVisible();
+    await expect(gallery.getByRole("heading", { name: "Next run", level: 3 })).toHaveCount(0);
+  });
+
+  test("the Run switch pauses a saved plan through Home Assistant and says so", async ({ page }) => {
+    const rooms = [
+      { room_id: "kitchen", name: "Kitchen", boundary: [[0, 0], [3, 0], [3, 3], [0, 3]] },
+      { room_id: "hall", name: "Hall", boundary: [[3, 0], [6, 0], [6, 3], [3, 3]] },
+    ];
+    const planRooms = rooms.map((room) => ({ room_id: room.room_id, cleaning_mode: "vacuum", coverage_setting: "standard" }));
+    const fixture = await installPanelFixture(page, {
+      moduleSource: "packaged",
+      initialPlanCatalog: {
+        rooms,
+        selected_plan: "daily",
+        plans: [{
+          id: "daily", name: "Daily clean", enabled: true, run_behavior: "intelligent",
+          rooms: planRooms, room_order: planRooms.map((room) => room.room_id),
+          return_to_base: true, finish_current_room: false, finish_current_room_threshold: 50,
+        }],
+      },
+    });
+    await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+    const panel = page.locator(fixture.panelTag);
+    await panel.getByRole("button", { name: /^Run a plan/ }).click();
+    await panel.getByRole("button", { name: /^Daily clean/ }).click();
+    const enabled = panel.getByRole("switch", { name: "Plan enabled" });
+    await expect(enabled).toHaveAttribute("aria-checked", "true");
+    // From the keyboard, so every engine gives the switch focus (Safari does not on a click).
+    await enabled.focus();
+    await page.keyboard.press("Space");
+    await expect.poll(() => page.evaluate(() => window.__panelFixture.serviceCalls.length)).toBe(1);
+    const call = await page.evaluate(() => window.__panelFixture.serviceCalls[0]);
+    expect(call).toMatchObject({ domain: "matic_robot", service: "save_plan", data: { plan_id: "daily", enabled: false } });
+    await expect(panel.locator("[data-notice-slot], [data-notice-toast]").filter({ hasText: "Plan paused" }).first()).toBeVisible();
+    await expect(enabled).toHaveAttribute("aria-checked", "false");
+    // plan.md §5: focus stays on the switch after success and after failure.
+    await expect(enabled).toBeFocused();
+    await page.evaluate(() => window.__panelFixture.failNextService("save_plan"));
+    await page.keyboard.press("Space");
+    await expect.poll(() => page.evaluate(() => window.__panelFixture.serviceCalls.length)).toBe(2);
+    await expect(enabled).toHaveAttribute("aria-checked", "false");
+    await expect(enabled).toBeFocused();
+  });
+
+  test("Run's summary uses the one-room forms", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-saved-intelligent" });
+    await settleWorkspace(gallery);
+    const oneRoom = (seconds) => gallery.evaluate((element, seconds) => {
+      const state = element.getWorkspaceSnapshot();
+      const catalog = state.resources.plans.value;
+      const plans = catalog.plans.map((plan) => ({ ...plan, rooms: plan.rooms.slice(0, 1), roomOrder: plan.roomOrder.slice(0, 1),
+        nextRunEstimateSeconds: seconds, nextRunPreview: { ...plan.nextRunPreview, rooms: plan.nextRunPreview.rooms.slice(0, 1) } }));
+      element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...state.resources.plans, value: { ...catalog, plans } } } });
+    }, seconds);
+    await oneRoom(1_980);
+    await expect(gallery.locator(".summary")).toHaveText("1 room · about 33 min");
+    await oneRoom(null);
+    await expect(gallery.locator(".summary")).toHaveText("1 room");
+  });
+
+  test("a next run with no usable preview asks to retry it", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-saved-intelligent" });
+    await settleWorkspace(gallery);
+    for (const preview of [null, { previewToken: "not-a-token" }]) {
+      await gallery.evaluate((element, preview) => {
+        const state = element.getWorkspaceSnapshot();
+        const catalog = state.resources.plans.value;
+        const plans = catalog.plans.map((plan) => ({ ...plan, nextRunPreview: preview && { ...plan.nextRunPreview, ...preview } }));
+        element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...state.resources.plans, value: { ...catalog, plans } } } });
+      }, preview);
+      await expect(gallery.locator(".problem")).toHaveText("Can't run this plan until you retry its next-run preview.");
+      await expect(gallery.getByRole("button", { name: "Try again", exact: true })).toBeVisible();
+    }
+  });
+
+  test("turning a paused plan on shows no problem while it saves, then retries the stale preview", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-run-paused" });
+    await settleWorkspace(gallery);
+    const base = await gallery.evaluate((element) => element.getWorkspaceSnapshot());
+    await gallery.evaluate((element, base) => element.replaceWorkspaceState({ ...base, command: "pending", pendingAction: "save-plan",
+      planDraft: { ...base.planDraft, enabled: true } }), base);
+    await expect(gallery.getByRole("switch", { name: "Plan enabled" })).toHaveAttribute("aria-checked", "true");
+    await expect(gallery.locator(".problem")).toHaveCount(0);
+    await expect(gallery.getByRole("button", { name: "Try again", exact: true })).toHaveCount(0);
+    await expect(gallery.getByText("Can't run this plan until you turn it on.")).toHaveCount(0);
+    // The save is done but the preview still says paused: it is stale, so it is retried.
+    await gallery.evaluate((element, base) => element.replaceWorkspaceState({ ...base, planDraft: { ...base.planDraft, enabled: true } }), base);
+    await expect(gallery.locator(".problem")).toHaveText("Can't run this plan until you retry its next-run preview.");
   });
 
   test("delete dialogs use a generic title, the bare verb and the saved name", async ({ page }) => {
@@ -989,6 +1438,22 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(dialog, "an area that is not selected changes no selection").not.toContainText("custom area");
   });
 
+  test("area review holds its controls while a command runs, so Delete can't seem to run", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "area-review-rebind" });
+    const remove = gallery.getByRole("button", { name: "Delete area" });
+    const name = gallery.getByRole("textbox", { name: "Area name" });
+    await expect(remove).toBeEnabled();
+    await expect(name).toBeEnabled();
+    await gallery.evaluate((element) => element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), command: "pending" }));
+    await expect(remove).toBeDisabled();
+    await expect(name).toBeDisabled();
+    await remove.click({ force: true });
+    await expect(gallery.getByRole("dialog")).toHaveCount(0);
+    expect(await gallery.evaluate((element) => element.getWorkspaceSnapshot().dialog)).toBeNull();
+    await gallery.evaluate((element) => element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), command: "idle" }));
+    await expect(remove).toBeEnabled();
+  });
+
   test("Delete shows and its dialog stands only while the catalog holds the saved item", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "area-review-rebind" });
     const unresolved = (patch) => gallery.evaluate((element, { patch: kind }) => {
@@ -1008,9 +1473,11 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(gallery.getByRole("dialog")).toHaveCount(0);
 
     await page.evaluate((tag) => document.querySelector(tag).setScenario("plan-saved-intelligent"), GALLERY_TAG);
-    await expect(gallery.getByRole("button", { name: "Delete plan", exact: true })).toBeVisible();
+    // Delete lives in Edit's More actions (plan.md §3); Run has none.
+    await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
+    await expect(gallery.getByRole("button", { name: "More actions", exact: true })).toBeVisible();
     expect(await unresolved("plan-gone"), "a delete dialog for a plan deleted elsewhere").toBeNull();
-    await expect(gallery.getByRole("button", { name: "Delete plan", exact: true })).toHaveCount(0);
+    await expect(gallery.getByRole("button", { name: "More actions", exact: true })).toHaveCount(0);
     await expect(gallery.getByRole("dialog")).toHaveCount(0);
   });
 
@@ -1361,13 +1828,20 @@ test.describe("Map Studio v0.4 foundation", () => {
       ]) {
         const initial = { ...createGalleryState("ready"), workflow: "plan" };
         const store = new WorkspaceStore(initial);
+        const aborted = async () => { throw new DOMException("Aborted", "AbortError"); };
         const backend = {
+          catalog: async () => [initial.resources.entry],
+          history: async () => initial.resources.history.value,
+          scene: aborted,
+          pose: aborted,
           plans: async () => initial.resources.plans.value,
           service: async () => { throw error; },
           dispose() {},
         };
         const effects = new EffectController(store, backend);
         effects.sync({ host: initial.host, activity: initial.activity, batteryPercent: 92, robotLabel: "Synthetic", robots: initial.robots, language: "en", userKey: "test", entryKey: initial.selection.entryId, vacuumEntityId: "vacuum.synthetic" });
+        // The preflight reads the plans fresh, which needs a current map.
+        await effects.refreshCatalog(true);
         await effects.executeAction("run-plan");
         notices.push(store.value.notice?.key);
         effects.dispose();
@@ -1393,7 +1867,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       const calls = [];
       let finish;
       const effects = new EffectController(store, {
-        catalog: async () => new Promise(() => {}),
+        catalog: async () => [initial.resources.entry],
         history: async () => initial.resources.history.value,
         scene: async () => { throw new DOMException("Aborted", "AbortError"); },
         pose: async () => { throw new DOMException("Aborted", "AbortError"); },
@@ -1411,6 +1885,8 @@ test.describe("Map Studio v0.4 foundation", () => {
         dispose() {},
       });
       effects.sync({ host: initial.host, activity: initial.activity, batteryPercent: 92, robotLabel: "Synthetic", robots: initial.robots, language: "en", userKey: "test", entryKey: initial.selection.entryId, vacuumEntityId: "vacuum.synthetic" });
+      // The preflight reads the plans fresh, which needs a current map.
+      await effects.refreshCatalog(true);
       const phases = [];
       try {
         for (const action of ["run-plan", "clean-rooms"]) {
@@ -1624,7 +2100,11 @@ test.describe("Map Studio v0.4 foundation", () => {
     await page.evaluate((tag) => {
       const element = document.querySelector(tag);
       const state = element.getWorkspaceSnapshot();
-      element.replaceWorkspaceState({ ...state, workflow: "plan", planDraft: { ...state.planDraft, dirty: true } });
+      // A room open with its settings makes the form long.
+      element.replaceWorkspaceState({
+        ...state, workflow: "plan", planView: "edit", expandedRoom: state.planDraft.rooms[0].roomId,
+        planDraft: { ...state.planDraft, dirty: true },
+      });
     }, GALLERY_TAG);
     const save = gallery.getByRole("button", { name: "Save", exact: true });
     await expect(save).toBeInViewport({ ratio: 1 });
@@ -1632,7 +2112,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     expect(await body.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
     await body.evaluate((element) => { element.scrollTop = element.scrollHeight; });
     await expect(save).toBeInViewport({ ratio: 1 });
-    await expect(gallery.getByRole("button", { name: "Delete plan", exact: true })).toBeInViewport();
+    await expect(gallery.getByText("When a run ends", { exact: true })).toBeInViewport();
   });
 
   test("a limited map while idle says so and offers one Try again that rechecks", async ({ page }) => {
@@ -2344,10 +2824,12 @@ test.describe("Map Studio v0.4 foundation", () => {
     await page.evaluate((tag) => {
       const element = document.querySelector(tag);
       const state = element.getWorkspaceSnapshot();
-      element.replaceWorkspaceState({ ...state, workflow: "plan", planDraft: { ...state.planDraft, name: "Keep these edits", dirty: true } });
+      element.replaceWorkspaceState({ ...state, workflow: "plan", planView: "edit", planDraft: { ...state.planDraft, name: "Keep these edits", dirty: true } });
     }, GALLERY_TAG);
-    const dialog = gallery.getByRole("dialog", { name: "Discard plan changes?" });
-    await gallery.getByRole("button", { name: "Back to plans" }).click();
+    const dialog = gallery.getByRole("dialog", { name: "Discard changes?" });
+    // Edit's Cancel takes the place of Back (plan.md §3).
+    const cancel = gallery.locator('[data-dialog-launcher="discardDraft"]');
+    await cancel.click();
     await expect(dialog).toBeVisible();
     await dialog.getByRole("button", { name: "Keep editing" }).click();
     await expect(gallery.getByRole("textbox", { name: "Plan name" })).toHaveValue("Keep these edits");
@@ -2355,10 +2837,11 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(dialog).toBeVisible();
     await dialog.getByRole("button", { name: "Keep editing" }).click();
     await expect(gallery.getByRole("combobox", { name: "Choose floor" })).toHaveValue("current");
-    await gallery.getByRole("button", { name: "Back to plans", exact: true }).click();
+    await cancel.click();
     await expect(dialog).toBeVisible();
     await dialog.getByRole("button", { name: "Discard", exact: true }).click();
     await expect(dialog).toHaveCount(0);
+    await gallery.getByRole("button", { name: "Back to plans", exact: true }).click();
     await gallery.getByRole("button", { name: "Create a plan", exact: true }).click();
     expect(await snapshot(page)).toMatchObject({ workflow: "plan", selection: { planId: null }, planDraft: { dirty: false, name: "", rooms: [] } });
   });
@@ -2369,16 +2852,25 @@ test.describe("Map Studio v0.4 foundation", () => {
       const element = document.querySelector(tag);
       const state = element.getWorkspaceSnapshot();
       const { reduceWorkspace } = window.__galleryModule;
-      element.replaceWorkspaceState(reduceWorkspace({ ...state, workflow: "plan", planDraft: { ...state.planDraft, dirty: true } }, { type: "dismiss-top-layer" }));
+      element.replaceWorkspaceState(reduceWorkspace({ ...state, workflow: "plan", planView: "edit", planDraft: { ...state.planDraft, dirty: true } }, { type: "dismiss-top-layer" }));
     }, GALLERY_TAG);
-    await expect(gallery.getByRole("dialog", { name: "Discard plan changes?" })).toBeVisible();
+    await expect(gallery.getByRole("dialog", { name: "Discard changes?" })).toBeVisible();
     await gallery.getByRole("button", { name: "Keep editing" }).click();
     await page.evaluate((tag) => {
       const element = document.querySelector(tag);
-      element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), command: "pending" });
+      const state = element.getWorkspaceSnapshot();
+      element.replaceWorkspaceState({ ...state, command: "pending", pendingAction: "save-plan", expandedRoom: state.planDraft.rooms[0].roomId });
     }, GALLERY_TAG);
-    await expect(gallery.getByRole("textbox", { name: "Plan name" })).toBeDisabled();
-    await expect(gallery.getByRole("combobox", { name: "Cleaning mode for Kitchen", exact: true })).toBeDisabled();
+    // plan.md §4 E5: every control stays readable and focusable, says why
+    // once, and doesn't change.
+    const held = "Waiting for Home Assistant to save the plan.";
+    const name = gallery.getByRole("textbox", { name: "Plan name" });
+    await expect(name).toHaveAttribute("aria-disabled", "true");
+    await expect(name).toHaveAttribute("readonly", "");
+    await expect(name).toHaveAccessibleDescription(held);
+    const mode = gallery.getByRole("combobox", { name: "Cleaning mode for Kitchen", exact: true });
+    await expect(mode).toHaveAttribute("aria-disabled", "true");
+    await expect(mode).toHaveAccessibleDescription(held);
   });
   test("preserves plan edits after a failed or blocked save and allows retry", async ({ page }) => {
     await loadEffectHarness(page);
@@ -2417,9 +2909,41 @@ test.describe("Map Studio v0.4 foundation", () => {
         return { draft, failure, blocked, retry };
       } finally { effects.dispose(); }
     });
-    expect(result.failure).toEqual({ draft: result.draft, command: "failed", reloads: 0 });
+    // A failed Home Assistant write returns to idle (plan.md §9, shell.md §6).
+    expect(result.failure).toEqual({ draft: result.draft, command: "idle", reloads: 0 });
     expect(result.blocked).toEqual({ draft: result.draft, writes: 1, reloads: 0 });
     expect(result.retry).toEqual({ command: "idle", writes: 2, reloads: 1 });
+  });
+
+  test("saving keeps the default plan unless it is the plan being saved", async ({ page }) => {
+    await loadEffectHarness(page);
+    const select = await page.evaluate(async () => {
+      const { EffectController, WorkspaceStore, createGalleryState } = await import("/plan-recovery-test.js");
+      const initial = createGalleryState("ready");
+      const store = new WorkspaceStore(initial);
+      const sent = [];
+      const effects = new EffectController(store, {
+        service: async (_domain, _service, data) => {
+          sent.push(data.select);
+          return { response: { plan: { id: data.plan_id ?? "new-plan" } } };
+        },
+        dispose() {},
+      });
+      effects.sync({
+        host: initial.host, activity: initial.activity, batteryPercent: 92,
+        robotLabel: "Synthetic", robots: initial.robots, language: "en",
+        userKey: "test", entryKey: initial.selection.entryId, vacuumEntityId: "vacuum.synthetic",
+      });
+      effects.loadPlans = async () => {};
+      try {
+        for (const id of [null, "weekend", "daily"]) {
+          store.patch({ planDraft: { ...initial.planDraft, id, name: "Saved plan", dirty: true } });
+          await effects.savePlan();
+        }
+        return sent;
+      } finally { effects.dispose(); }
+    });
+    expect(select).toEqual([false, false, true]);
   });
 
   test("history exposes keyboard navigation buttons and meaningful timeline values", async ({ page, browserName }) => {
@@ -3818,6 +4342,12 @@ test.describe("Map Studio v0.4 foundation", () => {
       const module = window.__galleryModule;
       document.querySelector(tag).replaceWorkspaceState({ ...module.createGalleryState("ready"), workflow: "plan" });
     }, GALLERY_TAG);
+    // shell.md §5 Sheet: plan Run rests at half, Edit's long form at full.
+    await expect(sheet).toHaveAttribute("data-detent", "half");
+    await page.evaluate((tag) => {
+      const module = window.__galleryModule;
+      document.querySelector(tag).replaceWorkspaceState({ ...module.createGalleryState("ready"), workflow: "plan", planView: "edit" });
+    }, GALLERY_TAG);
     await expect(sheet).toHaveAttribute("data-detent", "full");
   });
 
@@ -3831,16 +4361,20 @@ test.describe("Map Studio v0.4 foundation", () => {
       });
     }, GALLERY_TAG);
     await gallery.getByRole("button", { name: /^Run a plan/ }).click();
-    await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
-    const deletePlan = gallery.getByRole("button", { name: "Delete plan" });
-    await expect(deletePlan).toBeVisible();
-    await deletePlan.click();
+    await gallery.getByRole("button", { name: /^Daily clean/ }).click();
+    await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
+    // plan.md §3: Delete is in the heading's More actions, which takes focus back.
+    const more = gallery.getByRole("button", { name: "More actions" });
+    await expect(more).toBeVisible();
+    await more.click();
+    await gallery.getByRole("menuitem", { name: "Delete" }).click();
     await expect(gallery.getByRole("dialog", { name: "Delete plan?" })).toBeVisible();
     expect(await page.evaluate(() => window.__mapStudioActions)).toEqual([]);
-    await gallery.getByRole("button", { name: "Cancel" }).click();
-    await expect(deletePlan).toBeFocused();
+    await gallery.getByRole("dialog", { name: "Delete plan?" }).getByRole("button", { name: "Cancel" }).click();
+    await expect(more).toBeFocused();
 
-    await deletePlan.click();
+    await more.click();
+    await gallery.getByRole("menuitem", { name: "Delete" }).click();
     await gallery.getByRole("dialog", { name: "Delete plan?" })
       .getByRole("button", { name: "Delete", exact: true }).click();
     await expect(gallery.getByRole("dialog", { name: "Delete plan?" })).toHaveCount(0);
@@ -3870,15 +4404,17 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(gallery.locator(".mobile-sheet")).toBeVisible();
 
     await gallery.getByRole("button", { name: /^Run a plan/ }).click();
-    await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
+    await gallery.getByRole("button", { name: /^Daily clean/ }).click();
+    await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
     // Exactly one panel: two meant the launcher lookup could pick the hidden one.
     await expect(gallery.locator("matic-map-workflow-v4")).toHaveCount(1);
-    const deletePlan = gallery.getByRole("button", { name: "Delete plan" });
-    await expect(deletePlan).toBeVisible();
-    await deletePlan.click();
+    const more = gallery.getByRole("button", { name: "More actions" });
+    await expect(more).toBeVisible();
+    await more.click();
+    await gallery.getByRole("menuitem", { name: "Delete" }).click();
     await expect(gallery.getByRole("dialog", { name: "Delete plan?" })).toBeVisible();
-    await gallery.getByRole("button", { name: "Cancel" }).click();
-    await expect(deletePlan).toBeFocused();
+    await gallery.getByRole("dialog", { name: "Delete plan?" }).getByRole("button", { name: "Cancel" }).click();
+    await expect(more).toBeFocused();
   });
 
   test("preserves Draw state through the workspace toggle and restores focus in Escape order", async ({ page }) => {
@@ -4116,32 +4652,219 @@ test.describe("Map Studio v0.4 foundation", () => {
   test("uses one ordered room list for plan selection and per-room settings", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "ready" });
     await gallery.getByRole("button", { name: /^Run a plan/ }).click();
-    await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
+    await gallery.getByRole("button", { name: /^Daily clean/ }).click();
+    await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
     const inspector = gallery.locator(".inspector");
-    // Groups are named by a visible h3 (aria-labelledby), not a bare
-    // aria-label, so the outline is readable by sighted users as well.
-    await expect(inspector.getByRole("heading", { name: "Rooms in this plan", level: 3 })).toBeVisible();
-    const list = inspector.getByLabel("Rooms in this plan");
+    // plan.md §3 Edit: one list named by its visible "Rooms" heading, the
+    // plan's rooms first, then the rest.
+    await expect(inspector.getByRole("heading", { name: "Rooms", level: 3, exact: true })).toBeVisible();
+    await expect(inspector.getByText("3 of 4 selected", { exact: true })).toBeVisible();
+    const list = inspector.getByRole("list", { name: "Rooms", exact: true });
     await expect(list).toHaveCount(1);
-    await expect(list).toHaveAttribute("aria-labelledby", "plan-rooms-heading");
-    await expect(inspector.getByLabel("Room order and settings")).toHaveCount(0);
-    await expect(list.locator(".room")).toHaveCount(4);
-    await expect(list.locator('.room[data-selected="true"]')).toHaveCount(3);
-    await expect(list.getByLabel("Cleaning mode")).toHaveCount(3);
+    const rows = list.getByRole("listitem");
+    await expect(rows).toHaveCount(4);
+    await expect(list.getByRole("checkbox", { checked: true })).toHaveCount(3);
+    await expect(list.getByRole("checkbox").nth(3)).not.toBeChecked();
+    // Settings stay closed until a row is opened, and one row is open at a time.
+    await expect(list.getByLabel(/^Cleaning mode for /)).toHaveCount(0);
+    const kitchen = list.getByRole("button", { name: "Settings for Kitchen", exact: true });
+    await expect(kitchen).toHaveAttribute("aria-expanded", "false");
+    await kitchen.click();
+    await expect(kitchen).toHaveAttribute("aria-expanded", "true");
+    await expect(list.getByLabel(/^Cleaning mode for /)).toHaveCount(1);
     const cadenceSettings = list.locator("details");
-    await expect(cadenceSettings).toHaveCount(3);
-    await expect(cadenceSettings.first().locator("summary")).toHaveText("Room schedule for Kitchen");
-    await cadenceSettings.first().locator("summary").click();
-    await expect(cadenceSettings.first().getByLabel(/How often to mop .*, every 1 to 100 cleans/)).toHaveAttribute("min", "1");
-    await expect(cadenceSettings.first().getByLabel(/How often to add a vacuum rotation in .*, every 1 to 100 cleans/)).toHaveAttribute("max", "100");
-    // Completion options now FOLLOW the room list: choose what to clean first,
-    // then how the run should end.
-    await expect(inspector.getByRole("heading", { name: "When a run ends", level: 3 })).toBeVisible();
-    const options = inspector.locator('[aria-labelledby="completion-heading"]');
-    await expect(options).toHaveAttribute("role", "group");
-    expect(await options.evaluate((element) =>
-      Boolean(element.compareDocumentPosition(element.parentElement.querySelector('[aria-labelledby="plan-rooms-heading"]')) & Node.DOCUMENT_POSITION_PRECEDING),
+    await expect(cadenceSettings).toHaveCount(1);
+    await expect(cadenceSettings.locator("summary")).toHaveText("Room schedule for Kitchen");
+    await cadenceSettings.locator("summary").click();
+    await expect(cadenceSettings.getByLabel(/How often to mop .*, every 1 to 100 cleans/)).toHaveAttribute("min", "1");
+    await expect(cadenceSettings.getByLabel(/How often to add a vacuum rotation in .*, every 1 to 100 cleans/)).toHaveAttribute("max", "100");
+    const second = list.getByRole("button", { name: /^Settings for / }).nth(1);
+    await second.click();
+    await expect(second).toHaveAttribute("aria-expanded", "true");
+    await expect(kitchen).toHaveAttribute("aria-expanded", "false");
+    await expect(list.getByLabel(/^Cleaning mode for /)).toHaveCount(1);
+    await second.click();
+    await expect(list.getByLabel(/^Cleaning mode for /)).toHaveCount(0);
+    // When a run ends FOLLOWS the room list: what to clean, then how it ends.
+    const runEnd = inspector.locator("details", { has: page.getByText("When a run ends", { exact: true }) });
+    await expect(runEnd).toHaveCount(1);
+    expect(await runEnd.evaluate((element) =>
+      Boolean(element.compareDocumentPosition(element.parentElement.querySelector('[aria-labelledby="edit-rooms"]')) & Node.DOCUMENT_POSITION_PRECEDING),
     )).toBe(true);
+  });
+
+  // The ready plan in Edit, with `patch` over its draft and `extra` over the state.
+  const editDaily = async (page, patch = {}, extra = {}) => {
+    const gallery = await loadGallery(page, { scenario: "ready" });
+    await page.evaluate(({ tag, patch, extra }) => {
+      const element = document.querySelector(tag);
+      const state = element.getWorkspaceSnapshot();
+      element.replaceWorkspaceState({ ...state, workflow: "plan", planView: "edit", ...extra, planDraft: { ...state.planDraft, ...patch } });
+    }, { tag: GALLERY_TAG, patch, extra });
+    await settleWorkspace(gallery);
+    return { gallery, rooms: gallery.getByRole("list", { name: "Rooms", exact: true }) };
+  };
+
+  test("Edit's arrows say when a room is already at an end, keep focus, and announce a move", async ({ page }) => {
+    const { gallery, rooms } = await editDaily(page, { runBehavior: "ordered" });
+    const state = await snapshot(page);
+    const [first, second, last] = state.planDraft.rooms.map((room) =>
+      state.resources.plans.value.rooms.find((candidate) => candidate.roomId === room.roomId).name);
+    const up = rooms.getByRole("button", { name: `Move ${first} earlier`, exact: true });
+    await expect(up).toHaveAttribute("aria-disabled", "true");
+    await expect(up).toHaveAccessibleDescription(`${first} is already first`);
+    const down = rooms.getByRole("button", { name: `Move ${last} later`, exact: true });
+    await expect(down).toHaveAttribute("aria-disabled", "true");
+    await expect(down).toHaveAccessibleDescription(`${last} is already last`);
+    // An end arrow changes nothing and keeps focus.
+    await up.focus();
+    await page.keyboard.press("Enter");
+    await expect(up).toBeFocused();
+    expect((await snapshot(page)).planDraft.rooms.map((room) => room.roomId)).toHaveLength(3);
+    const before = (await snapshot(page)).planDraft.rooms.map((room) => room.roomId);
+    const later = rooms.getByRole("button", { name: `Move ${first} later`, exact: true });
+    await later.focus();
+    await page.keyboard.press("Enter");
+    await expect.poll(async () => (await snapshot(page)).planDraft.rooms.map((room) => room.roomId)).toEqual([before[1], before[0], before[2]]);
+    // Focus stays on the arrow, now in the second row, and the move is said once.
+    await expect(rooms.getByRole("button", { name: `Move ${first} later`, exact: true })).toBeFocused();
+    await expect(rooms.locator(".pos-badge")).toHaveText(["1", "2", "3"]);
+    await expect(rooms.getByRole("button", { name: /^Settings for / }).first()).toHaveAccessibleName(`Settings for ${second}`);
+    await expect(gallery.getByRole("status").filter({ hasText: `${first} moved to position 2` })).toHaveCount(1);
+  });
+
+  test("opening a room's settings doesn't change whether it is in the plan", async ({ page }) => {
+    const { rooms } = await editDaily(page);
+    const settings = rooms.getByRole("button", { name: "Settings for Kitchen", exact: true });
+    await settings.click();
+    await expect(settings).toHaveAttribute("aria-expanded", "true");
+    await expect(rooms.getByRole("checkbox", { name: "Include Kitchen", exact: true })).toBeChecked();
+    expect((await snapshot(page)).planDraft.rooms).toHaveLength(3);
+  });
+
+  test("a room ticked again gets back the settings it had", async ({ page }) => {
+    const { rooms } = await editDaily(page, {}, { expandedRoom: "room-a" });
+    await rooms.getByRole("combobox", { name: "Cleaning mode for Kitchen", exact: true }).selectOption("vacuum_and_mop");
+    const include = rooms.getByRole("checkbox", { name: "Include Kitchen", exact: true });
+    await include.uncheck();
+    await expect.poll(async () => (await snapshot(page)).planDraft.rooms.map((room) => room.roomId)).not.toContain("room-a");
+    // An unticked room shows only its name, with nothing to open.
+    await expect(rooms.getByRole("button", { name: "Settings for Kitchen", exact: true })).toHaveCount(0);
+    await include.check();
+    const kitchen = (await snapshot(page)).planDraft.rooms.find((room) => room.roomId === "room-a");
+    expect(kitchen).toMatchObject({ cleaningMode: "vacuum_and_mop" });
+    await expect(rooms.getByRole("button", { name: "Settings for Kitchen", exact: true })).toContainText("Vacuum + mop");
+  });
+
+  for (const [cadence, line] of [
+    [{ mopEveryN: 2, coverageEveryN: null, periodicCoverageSetting: null }, "Mop every 2 cleans"],
+    [{ mopEveryN: 1, coverageEveryN: null, periodicCoverageSetting: null }, "Mop every clean"],
+    [{ mopEveryN: null, coverageEveryN: 1, periodicCoverageSetting: "quick" }, "Quick vacuum every clean"],
+    [{ mopEveryN: null, coverageEveryN: 4, periodicCoverageSetting: "standard" }, "Optimal vacuum every 4 cleans"],
+    [{ mopEveryN: 1, coverageEveryN: 3, periodicCoverageSetting: "heavy_duty" }, "Mop every clean · Heavy duty vacuum every 3 cleans"],
+    [{ mopEveryN: 5, coverageEveryN: 1, periodicCoverageSetting: "quick" }, "Mop every 5 cleans · Quick vacuum every clean"],
+    [{ mopEveryN: 1, coverageEveryN: 1, periodicCoverageSetting: "standard" }, "Mop every clean · Optimal vacuum every clean"],
+  ]) {
+    test(`an Edit row says its schedule as "${line}"`, async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "ready" });
+      const rooms = await page.evaluate(({ tag, cadence }) => {
+        const element = document.querySelector(tag);
+        const state = element.getWorkspaceSnapshot();
+        const policy = { scope: "plan", doMopNext: false, doCoverageNext: false, ...cadence };
+        const draftRooms = state.planDraft.rooms.map((room, index) => index === 0 ? { ...room, cadence: policy } : room);
+        element.replaceWorkspaceState({ ...state, workflow: "plan", planView: "edit", planDraft: { ...state.planDraft, rooms: draftRooms } });
+        return draftRooms.length;
+      }, { tag: GALLERY_TAG, cadence });
+      expect(rooms).toBe(3);
+      const settings = gallery.getByRole("button", { name: "Settings for Kitchen", exact: true });
+      await expect(settings.getByText(line, { exact: true })).toBeVisible();
+      await expect(gallery.getByRole("button", { name: /^Settings for / }).nth(1).locator("small")).toHaveCount(1);
+    });
+  }
+
+  test("the finish threshold shows only while Finish the current room is on", async ({ page }) => {
+    const { gallery } = await editDaily(page, { finishCurrentRoom: false, finishCurrentRoomThreshold: 60 });
+    await gallery.getByText("When a run ends", { exact: true }).click();
+    const finish = gallery.getByRole("switch", { name: "Finish the current room when you press Stop" });
+    await expect(finish).toHaveAttribute("aria-checked", "false");
+    await expect(finish).toHaveAccessibleDescription("Only if the room is at least 60% done; otherwise the robot stops right away.");
+    await expect(gallery.getByRole("slider")).toHaveCount(0);
+    await finish.click();
+    await expect(finish).toHaveAttribute("aria-checked", "true");
+    const slider = gallery.getByRole("slider", { name: "Finish if at least 60% done" });
+    await expect(slider).toHaveAttribute("aria-valuetext", "60%");
+    await slider.fill("80");
+    await expect.poll(async () => (await snapshot(page)).planDraft.finishCurrentRoomThreshold).toBe(80);
+    await expect(gallery.getByRole("slider", { name: "Finish if at least 80% done" })).toHaveAttribute("aria-valuetext", "80%");
+    await finish.click();
+    await expect(gallery.getByRole("slider")).toHaveCount(0);
+    const dock = gallery.getByRole("switch", { name: "Return to the dock when finished" });
+    await expect(dock).toHaveAttribute("aria-checked", "true");
+    await dock.click();
+    expect((await snapshot(page)).planDraft.returnToBase).toBe(false);
+  });
+
+  test("a save holds every Edit control with one shared reason", async ({ page }) => {
+    const { gallery, rooms } = await editDaily(page, { runBehavior: "ordered", finishCurrentRoom: true, dirty: true },
+      { command: "pending", pendingAction: "save-plan", expandedRoom: "room-a" });
+    const held = "Waiting for Home Assistant to save the plan.";
+    await expect(gallery.getByText(held, { exact: true }).first()).toBeVisible();
+    await gallery.getByText("When a run ends", { exact: true }).click();
+    const controls = [
+      gallery.getByRole("textbox", { name: "Plan name" }),
+      gallery.getByRole("group", { name: "Cleaning order" }).getByRole("button", { name: "Intelligent rotation", exact: true }),
+      rooms.getByRole("checkbox", { name: "Include Kitchen", exact: true }),
+      rooms.getByRole("button", { name: "Settings for Kitchen", exact: true }),
+      rooms.getByRole("button", { name: "Move Kitchen later", exact: true }),
+      rooms.getByRole("combobox", { name: "Cleaning mode for Kitchen", exact: true }),
+      gallery.getByRole("switch", { name: "Return to the dock when finished" }),
+      gallery.getByRole("slider"),
+    ];
+    for (const control of controls) {
+      await expect(control).toHaveAttribute("aria-disabled", "true");
+      await expect(control).toHaveAccessibleDescription(new RegExp(held.replace(/\./gu, "\\.")));
+    }
+    const before = await snapshot(page);
+    await rooms.getByRole("checkbox", { name: "Include Kitchen", exact: true }).dispatchEvent("click");
+    await rooms.getByRole("button", { name: "Move Kitchen later", exact: true }).dispatchEvent("click");
+    await gallery.getByRole("switch", { name: "Return to the dock when finished" }).dispatchEvent("click");
+    const after = await snapshot(page);
+    expect(after.planDraft).toEqual(before.planDraft);
+    await expect(rooms.getByRole("checkbox", { name: "Include Kitchen", exact: true })).toBeChecked();
+  });
+
+  test("the workflow holds no fieldset; each control says why it is held", async ({ page }) => {
+    const { gallery } = await editDaily(page, {}, { command: "pending", pendingAction: "save-plan" });
+    await expect(gallery.locator("fieldset")).toHaveCount(0);
+    await gallery.evaluate((element) => element.setScenario("rooms"));
+    await settleWorkspace(gallery);
+    await expect(gallery.locator("fieldset")).toHaveCount(0);
+  });
+
+  test("Rooms' choices stay readable but don't change while the robot works", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "rooms" });
+    await settleWorkspace(gallery);
+    const group = gallery.getByRole("group", { name: "Rooms to clean" });
+    const busy = "Can't change rooms until the robot finishes or stops.";
+    await expect(gallery.getByText(busy, { exact: true })).toHaveCount(0);
+    await expect(group.getByRole("checkbox").first()).not.toHaveAttribute("aria-disabled", "true");
+    await page.evaluate((tag) => {
+      const element = document.querySelector(tag);
+      element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), activity: "cleaning" });
+    }, GALLERY_TAG);
+    await expect(gallery.getByText(busy, { exact: true })).toHaveCount(1);
+    const choices = group.getByRole("checkbox");
+    const count = await choices.count();
+    expect(count).toBeGreaterThan(1);
+    for (let index = 0; index < count; index += 1) {
+      await expect(choices.nth(index)).toHaveAttribute("aria-disabled", "true");
+      await expect(choices.nth(index)).toHaveAccessibleDescription(busy);
+    }
+    const before = (await snapshot(page)).selection.roomIds;
+    const wasChecked = await choices.first().isChecked();
+    await choices.first().dispatchEvent("click");
+    await expect(choices.first()).toBeChecked({ checked: wasChecked });
+    expect((await snapshot(page)).selection.roomIds).toEqual(before);
   });
 
   test("@safety keeps room schedule controls readable in desktop and narrow inspectors", async ({ page }) => {
@@ -4174,8 +4897,11 @@ test.describe("Map Studio v0.4 foundation", () => {
         } });
       }, GALLERY_TAG);
       await gallery.getByRole("button", { name: /^Run a plan/ }).click();
-      await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
-      const cadence = gallery.getByLabel("Rooms in this plan").locator("details").first();
+      await gallery.getByRole("button", { name: /^Daily clean/ }).click();
+      await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
+      const rooms = gallery.getByRole("list", { name: "Rooms", exact: true });
+      await rooms.getByRole("button", { name: "Settings for Kitchen", exact: true }).click();
+      const cadence = rooms.locator("details").first();
       await cadence.locator("summary").click();
       await expect(cadence.getByText("A vacuum rotation counts only after the robot confirms the vacuum coverage and that the clean finished. If it can't confirm, the rotation stays due for the next clean.")).toBeVisible();
       const scope = cadence.getByLabel("Count cleans for Kitchen");
@@ -4204,7 +4930,7 @@ test.describe("Map Studio v0.4 foundation", () => {
   test("keeps plan choices available after catalog loading", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "ready" });
     await gallery.getByRole("button", { name: /^Run a plan/ }).click();
-    const choice = gallery.getByRole("button", { name: /Daily clean.*Edit plan/ });
+    const choice = gallery.getByRole("button", { name: /^Daily clean/ });
     await expect(choice).toBeVisible();
     await expect(gallery.getByRole("textbox", { name: "Plan name" })).toHaveCount(0);
 
@@ -4267,7 +4993,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       });
     }, GALLERY_TAG);
     // The shell's static alert region is always present, so filter to the panel's message.
-    await expect(gallery.getByRole("alert").filter({ hasText: "Map history is unavailable" })).toContainText("Map history is unavailable right now. Try again shortly.");
+    await expect(gallery.getByRole("alert").filter({ hasText: "Map history is unavailable" })).toHaveText("Map history is unavailable right now.");
   });
 
   test("keeps a saved-area destination intact through cancel and discard", async ({ page }) => {
@@ -4279,7 +5005,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     }, GALLERY_TAG);
     const target = gallery.getByRole("button", { name: "Other area Ready", exact: true });
     await target.click();
-    const dialog = gallery.getByRole("dialog", { name: "Discard area changes?" });
+    const dialog = gallery.getByRole("dialog", { name: "Discard changes?" });
     await expect(dialog).toBeVisible();
     expect(await snapshot(page)).toMatchObject({ workflow: "draw", selection: { areaId: "entryway" }, draw: { dirty: true } });
     await dialog.getByRole("button", { name: "Keep editing" }).click();
@@ -4298,15 +5024,15 @@ test.describe("Map Studio v0.4 foundation", () => {
     const floor = gallery.getByLabel("Choose floor", { exact: true });
     await floor.selectOption("saved-1");
 
-    await expect(gallery.getByRole("dialog", { name: "Discard area changes?" })).toBeVisible();
+    await expect(gallery.getByRole("dialog", { name: "Discard changes?" })).toBeVisible();
     expect(await snapshot(page)).toMatchObject({
       dataMode: "live",
       workflow: "draw",
       floor: { readOnly: false },
       draw: { dirty: true },
     });
-    await gallery.getByRole("dialog", { name: "Discard area changes?" }).press("Escape");
-    await expect(gallery.getByRole("dialog", { name: "Discard area changes?" })).toHaveCount(0);
+    await gallery.getByRole("dialog", { name: "Discard changes?" }).press("Escape");
+    await expect(gallery.getByRole("dialog", { name: "Discard changes?" })).toHaveCount(0);
     await expect(floor).toHaveValue("current");
     expect(await snapshot(page)).toMatchObject({
       dataMode: "live",
@@ -4327,7 +5053,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await gallery.getByRole("button", { name: "Redraw" }).click();
     await expect.poll(async () => (await snapshot(page)).workflow).toBe("draw");
     await floor.selectOption("saved-1");
-    await expect(gallery.getByRole("dialog", { name: "Discard area changes?" })).toBeVisible();
+    await expect(gallery.getByRole("dialog", { name: "Discard changes?" })).toBeVisible();
     await gallery.getByRole("button", { name: "Keep editing" }).click();
     await expect(floor).toHaveValue("current");
     expect(await snapshot(page)).toMatchObject({
@@ -4691,7 +5417,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(gallery.getByRole("heading", { name: "Map tools", level: 3 })).toBeVisible();
     await expect(gallery.locator(".shelf").getByRole("button", { name: /^Clean custom area Draw or choose a custom area/ })).toBeVisible();
     await expect(gallery.locator(".shelf").getByRole("button", { name: /^Map history Saved maps show one floor each\. They can't be edited and never show where the robot is now\./ })).toBeVisible();
-    await expect(gallery.getByRole("button", { name: "Run plan", exact: true })).toHaveCount(0);
+    await expect(gallery.getByRole("button", { name: /^Run plan/ })).toHaveCount(0);
     // The launcher and the Rooms strip action share "Clean rooms"; each view holds only one.
     await expect(gallery.getByRole("button", { name: /^Clean rooms/ })).toHaveCount(1);
 
@@ -4994,9 +5720,10 @@ test.describe("Map Studio v0.4 foundation", () => {
     // shipped looking identical whether a room was in the plan or not.
     const gallery = await loadGallery(page, { scenario: "ready" });
     await gallery.getByRole("button", { name: /^Run a plan/ }).click();
-    await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
+    await gallery.getByRole("button", { name: /^Daily clean/ }).click();
+    await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
     const inspector = gallery.locator(".inspector");
-    const rows = inspector.locator(".plan-room");
+    const rows = inspector.getByRole("list", { name: "Rooms", exact: true }).getByRole("listitem");
     await expect(rows.first()).toBeVisible();
     const distinct = await rows.evaluateAll((elements) => {
       const shade = (element) => {
@@ -6948,22 +7675,26 @@ for (const activity of ["docked", "idle"]) {
 }
 
 for (const ordered of [false, true]) {
-  test(`mixed-settings guidance respects ${ordered ? "saved order" : "rotation"}`, async ({ page }) => {
+  test(`the order segment switches numbers and arrows ${ordered ? "on for saved order" : "off for rotation"}`, async ({ page }) => {
     const gallery = await loadGallery(page);
     await page.evaluate(({ tag, ordered }) => {
       const module = window.__galleryModule;
       const state = module.createGalleryState("ready");
-      document.querySelector(tag).replaceWorkspaceState({ ...state, workflow: "plan", planDraft: {
-        ...state.planDraft, runBehavior: ordered ? "ordered" : "intelligent", rooms: [
-          { roomId: "room-one", cleaningMode: "vacuum", coverageSetting: "quick" },
-          { roomId: "room-two", cleaningMode: "vacuum", coverageSetting: "standard" },
-        ],
+      document.querySelector(tag).replaceWorkspaceState({ ...state, workflow: "plan", planView: "edit", planDraft: {
+        ...state.planDraft, runBehavior: ordered ? "intelligent" : "ordered",
       } });
     }, { tag: GALLERY_TAG, ordered });
-    await expect(gallery.locator(".plan-transition-hint")).toContainText("may be cleaned in separate parts");
-    await expect(gallery.locator(".plan-transition-hint")).toContainText(ordered
-      ? "Placing rooms with matching settings together" : "Longest-waiting rooms first, checked again when you run the plan");
-    expect((await snapshot(page)).planDraft.rooms.map((room) => room.roomId)).toEqual(["room-one", "room-two"]);
+    const order = gallery.getByRole("group", { name: "Cleaning order" });
+    const choice = order.getByRole("button", { name: ordered ? "Saved order" : "Intelligent rotation", exact: true });
+    await choice.click();
+    await expect(choice).toHaveAttribute("aria-pressed", "true");
+    await expect(order.getByRole("button", { name: ordered ? "Intelligent rotation" : "Saved order", exact: true })).toHaveAttribute("aria-pressed", "false");
+    // plan.md §3: the hint under the segment says what the order means.
+    await expect(order.getByText(ordered ? "Top to bottom, as listed" : "Longest-waiting rooms first", { exact: true })).toBeVisible();
+    expect((await snapshot(page)).planDraft.runBehavior).toBe(ordered ? "ordered" : "intelligent");
+    const rooms = gallery.getByRole("list", { name: "Rooms", exact: true });
+    await expect(rooms.getByRole("button", { name: /^Move .* (earlier|later)$/ })).toHaveCount(ordered ? 6 : 0);
+    await expect(rooms.locator(".pos-badge")).toHaveText(ordered ? ["1", "2", "3"] : []);
   });
 }
 
@@ -7019,13 +7750,16 @@ test("short phone keeps plan footer reachable below the reserved map controls", 
   const gallery = await loadGallery(page);
   await gallery.locator(".stage").evaluate((stage) => { stage.style.minBlockSize = "0"; stage.style.blockSize = "568px"; });
   await gallery.getByRole("button", { name: /^Run a plan/ }).click();
-  await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
+  await gallery.getByRole("button", { name: /^Daily clean/ }).click();
+  // shell.md §5 Sheet: Run rests at half; Edit's long form opens at full.
+  await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
   await settleSheet(gallery);
   const sheet = gallery.locator(".mobile-sheet");
   await expect(sheet).toHaveAttribute("data-detent", "full");
-  const deletePlan = gallery.getByRole("button", { name: "Delete plan", exact: true });
-  await deletePlan.scrollIntoViewIfNeeded();
-  await expect(deletePlan).toBeInViewport();
+  // The form's last control, When a run ends, scrolls above the footer.
+  const runEnd = gallery.getByText("When a run ends", { exact: true });
+  await runEnd.scrollIntoViewIfNeeded();
+  await expect(runEnd).toBeInViewport();
   const footer = await gallery.locator(".action-bar").boundingBox();
   expect(footer.y + footer.height).toBeLessThanOrEqual(568);
   const body = await sheet.boundingBox();
@@ -7644,13 +8378,13 @@ test("saved areas recover when Draw opens before the live scene is ready", async
 });
 
 test("zone geometry and saved perimeter survive the authenticated backend round trip", async ({ page }) => {
-  const bundle = await build({ stdin: { contents: `export * from "./frontend/map-studio-v4/area-outline"; export { MaticBackend } from "./frontend/map-studio-v4/backend"; export { EffectController } from "./frontend/map-studio-v4/effects"; export { WorkspaceStore, selectPrimaryAction } from "./frontend/map-studio-v4/state"; export { createGalleryState } from "./frontend/map-studio-v4/gallery-state";`, resolveDir: process.cwd() }, bundle: true, format: "esm", write: false });
+  const bundle = await build({ stdin: { contents: `export * from "./frontend/map-studio-v4/area-outline"; export { insideOutline, outlineCircles } from "./frontend/map-studio-v4/outline-editor"; export { MaticBackend } from "./frontend/map-studio-v4/backend"; export { EffectController } from "./frontend/map-studio-v4/effects"; export { WorkspaceStore, selectPrimaryAction } from "./frontend/map-studio-v4/state"; export { createGalleryState } from "./frontend/map-studio-v4/gallery-state";`, resolveDir: process.cwd() }, bundle: true, format: "esm", write: false });
   await page.route("**/zone-contract.js", (route) => route.fulfill({ contentType: "text/javascript", body: bundle.outputFiles[0].text }));
   await page.goto("/");
   const result = await page.evaluate(async () => {
     const m = await import("/zone-contract.js");
     const outline = { closed: true, points: [{x:1,y:1},{x:3,y:1},{x:3,y:3},{x:1,y:3}] };
-    const circles = m.outlineCircles(outline, () => true);
+    const circles = m.outlineCircles(m, outline, () => true);
     const inscribed = circles.every(c => m.insideOutline(c, outline.points) && outline.points.every((a,i) => m.edgeDistance(c,a,outline.points[(i+1)%4]) >= c.radius));
     const crossed = m.validOutline({closed:true,points:[outline.points[0],outline.points[2],outline.points[1],outline.points[3]]});
     const store = new m.WorkspaceStore(); store.replace(m.createGalleryState("draw"));
@@ -7944,7 +8678,794 @@ test("late plan deletion clears the deleted identity without replacing another w
   ]);
 });
 
-test("browser Back closes the plan editor then picker before leaving the route", async ({ page }) => {
+// plan.md §5 State, Map, Navigation; home-rooms.md §5 selection gate.
+test.describe("plan view state", () => {
+  // Dispatches `intents` to a store holding the gallery scenario (with `patch`
+  // spread over it) and returns the fields these rules change.
+  async function run(page, scenario, intents, patch = {}) {
+    await loadEffectHarness(page);
+    return page.evaluate(async ({ scenario, intents, patch }) => {
+      const { WorkspaceStore, createGalleryState } = await import("/plan-recovery-test.js");
+      const store = new WorkspaceStore({ ...createGalleryState(scenario), ...patch });
+      const before = store.value;
+      for (const intent of intents) store.dispatch(intent);
+      const state = store.value;
+      return {
+        unchanged: state === before,
+        workflow: state.workflow,
+        planView: state.planView,
+        expandedRoom: state.expandedRoom,
+        dialog: state.dialog,
+        planId: state.selection.planId,
+        draft: { id: state.planDraft.id, dirty: state.planDraft.dirty, enabled: state.planDraft.enabled,
+          rooms: state.planDraft.rooms.map((room) => room.roomId), parked: state.planDraft.parkedRooms },
+        selectedRooms: state.selection.roomIds,
+      };
+    }, { scenario, intents, patch });
+  }
+
+  test("starts in Run with nothing pending and no open row", async ({ page }) => {
+    await loadEffectHarness(page);
+    const initial = await page.evaluate(async () => {
+      const { WorkspaceStore } = await import("/plan-recovery-test.js");
+      const { planView, pendingAction, expandedRoom, planDraft } = new WorkspaceStore().value;
+      return { planView, pendingAction, expandedRoom, parked: planDraft.parkedRooms };
+    });
+    expect(initial).toEqual({ planView: "run", pendingAction: null, expandedRoom: null, parked: [] });
+  });
+
+  test("select-plan opens Create in Edit and a saved plan in Run", async ({ page }) => {
+    expect(await run(page, "plans", [{ type: "select-plan", planId: null }]))
+      .toMatchObject({ workflow: "plan", planView: "edit", expandedRoom: null, planId: null });
+    expect(await run(page, "plans", [{ type: "select-plan", planId: "weekend" }]))
+      .toMatchObject({ workflow: "plan", planView: "run", expandedRoom: null, planId: "weekend" });
+    // Entering the plan workflow opens Run even for the plan already selected.
+    expect(await run(page, "plans", [{ type: "select-plan", planId: "daily" }]))
+      .toMatchObject({ workflow: "plan", planView: "run", planId: "daily" });
+    // Another saved plan from an open Edit opens in Run and closes the row.
+    expect(await run(page, "plans", [
+      { type: "select-plan", planId: "daily" },
+      { type: "set-plan-view", view: "edit", roomId: "room-a" },
+      { type: "select-plan", planId: "weekend" },
+    ])).toMatchObject({ workflow: "plan", planView: "run", expandedRoom: null, planId: "weekend" });
+  });
+
+  test("reselecting the open plan keeps its view and open row", async ({ page }) => {
+    expect(await run(page, "plan-saved-intelligent", [
+      { type: "set-plan-view", view: "edit", roomId: "room-b" },
+      { type: "select-plan", planId: "daily" },
+    ])).toMatchObject({ workflow: "plan", planView: "edit", expandedRoom: "room-b", planId: "daily" });
+  });
+
+  test("leaving the plan workflow resets the view, Try again keeps it", async ({ page }) => {
+    const edit = { type: "set-plan-view", view: "edit", roomId: "room-a" };
+    expect(await run(page, "plan-saved-intelligent", [edit, { type: "open-workflow", workflow: "rooms" }]))
+      .toMatchObject({ workflow: "rooms", planView: "run", expandedRoom: null });
+    expect(await run(page, "plan-saved-intelligent", [edit, { type: "open-workflow", workflow: "plan" }]))
+      .toMatchObject({ workflow: "plan", planView: "edit", expandedRoom: "room-a" });
+    expect(await run(page, "plan-saved-intelligent", [edit, { type: "return-live" }]))
+      .toMatchObject({ workflow: "none", planView: "run", expandedRoom: null });
+  });
+
+  test("set-plan-view edit opens, keeps or closes the room row", async ({ page }) => {
+    expect(await run(page, "plan-saved-intelligent", [{ type: "set-plan-view", view: "edit", roomId: "room-a" }]))
+      .toMatchObject({ planView: "edit", expandedRoom: "room-a" });
+    expect(await run(page, "plan-saved-intelligent", [
+      { type: "set-plan-view", view: "edit", roomId: "room-a" },
+      { type: "set-plan-view", view: "edit" },
+    ])).toMatchObject({ planView: "edit", expandedRoom: "room-a" });
+    expect(await run(page, "plan-saved-intelligent", [
+      { type: "set-plan-view", view: "edit", roomId: "room-a" },
+      { type: "set-plan-view", view: "edit", roomId: null },
+    ])).toMatchObject({ planView: "edit", expandedRoom: null });
+    expect(await run(page, "plans", [{ type: "set-plan-view", view: "edit", roomId: "room-a" }]))
+      .toMatchObject({ unchanged: true, workflow: "plans" });
+  });
+
+  test("set-plan-view run needs a saved, clean draft", async ({ page }) => {
+    expect(await run(page, "plan-saved-intelligent", [
+      { type: "set-plan-view", view: "edit", roomId: "room-a" },
+      { type: "set-plan-view", view: "run" },
+    ])).toMatchObject({ planView: "run", expandedRoom: null });
+    expect(await run(page, "plan-dirty", [{ type: "set-plan-view", view: "run" }]))
+      .toMatchObject({ unchanged: true, planView: "edit" });
+    expect(await run(page, "plan-new", [{ type: "set-plan-view", view: "run" }]))
+      .toMatchObject({ unchanged: true, planView: "edit" });
+  });
+
+  test("set-plan-enabled reflects the Run switch on a saved, clean draft only", async ({ page }) => {
+    expect(await run(page, "plan-saved-intelligent", [{ type: "set-plan-enabled", enabled: false }]))
+      .toMatchObject({ planView: "run", draft: { id: "daily", enabled: false, dirty: false } });
+    expect(await run(page, "plan-dirty", [{ type: "set-plan-enabled", enabled: false }]))
+      .toMatchObject({ unchanged: true });
+    expect(await run(page, "plan-cadence-shared", [{ type: "set-plan-enabled", enabled: false }]))
+      .toMatchObject({ unchanged: true });
+    expect(await run(page, "plan-new", [{ type: "set-plan-enabled", enabled: false }]))
+      .toMatchObject({ unchanged: true });
+    expect(await run(page, "plans", [{ type: "set-plan-enabled", enabled: false }]))
+      .toMatchObject({ unchanged: true });
+  });
+
+  test("discarding returns a saved plan to Run and a new plan to the picker", async ({ page }) => {
+    expect(await run(page, "plan-dirty", [
+      { type: "set-plan-view", view: "edit", roomId: "room-a" },
+      { type: "open-dialog", dialog: "discardDraft" },
+      { type: "discard-draft" },
+    ])).toMatchObject({ workflow: "plan", planView: "run", expandedRoom: null, dialog: null, planId: "daily",
+      draft: { id: "daily", dirty: false, rooms: ["room-a", "room-b", "room-c"], parked: [] } });
+    expect(await run(page, "plan-new", [
+      { type: "toggle-room", roomId: "room-a" },
+      { type: "discard-draft" },
+    ])).toMatchObject({ workflow: "plans", planView: "run", dialog: null, planId: null, draft: { id: null, dirty: false, rooms: [] } });
+    // A saved plan the catalog no longer holds has no Run view to return to.
+    expect(await page.evaluate(async () => {
+      const { WorkspaceStore, createGalleryState } = await import("/plan-recovery-test.js");
+      const state = createGalleryState("plan-dirty");
+      const store = new WorkspaceStore({ ...state, resources: { ...state.resources,
+        plans: { ...state.resources.plans, value: { ...state.resources.plans.value, plans: [] } } } });
+      store.dispatch({ type: "discard-draft" });
+      const { workflow, planView, selection, planDraft } = store.value;
+      return { workflow, planView, planId: selection.planId, id: planDraft.id, dirty: planDraft.dirty };
+    })).toEqual({ workflow: "plans", planView: "run", planId: null, id: null, dirty: false });
+  });
+
+  test("a reload without the open saved plan leaves for Your plans and says it was removed", async ({ page }) => {
+    await loadEffectHarness(page);
+    const result = await page.evaluate(async () => {
+      const { EffectController, WorkspaceStore, createGalleryState, layerDepth } = await import("/plan-recovery-test.js");
+      const initial = createGalleryState("plans");
+      const store = new WorkspaceStore(initial);
+      const catalog = { deleted: false };
+      const aborted = async () => { throw new DOMException("Aborted", "AbortError"); };
+      const effects = new EffectController(store, {
+        catalog: async () => [initial.resources.entry], scene: aborted, pose: aborted,
+        history: async () => initial.resources.history.value,
+        plans: async () => {
+          const value = structuredClone(initial.resources.plans.value);
+          return catalog.deleted ? { ...value, plans: value.plans.filter((plan) => plan.id !== "daily" && plan.id !== catalog.deleted) } : value;
+        },
+        areas: async () => initial.resources.areas.value,
+        dispose() {},
+      });
+      try {
+        effects.sync({ host: initial.host, activity: initial.activity, batteryPercent: 92, robotLabel: "Synthetic", robots: initial.robots, language: "en", userKey: "one", entryKey: initial.selection.entryId, vacuumEntityId: "vacuum.synthetic" });
+        await effects.refreshCatalog(true);
+        store.patch({ map: initial.map, coherence: "current" });
+        await effects.loadPlans({ force: true });
+        effects.selectPlan("daily");
+        const opened = { planView: store.value.planView, id: store.value.planDraft.id };
+        catalog.deleted = true;
+        await effects.loadPlans({ force: true });
+        const run = store.value;
+        effects.selectPlan("weekend");
+        store.patch({ notice: null });
+        store.dispatch({ type: "set-plan-view", view: "edit" });
+        const editing = { planView: store.value.planView, id: store.value.planDraft.id };
+        catalog.deleted = "weekend";
+        await effects.loadPlans({ force: true });
+        const edit = store.value;
+        const read = (state) => ({ workflow: state.workflow, planView: state.planView, expandedRoom: state.expandedRoom,
+          planId: state.selection.planId, id: state.planDraft.id, notice: state.notice?.key, depth: layerDepth(state) });
+        return { opened, run: read(run), editing, edit: read(edit) };
+      } finally { effects.dispose(); }
+    });
+    const left = { workflow: "plans", planView: "run", expandedRoom: null, planId: null, id: null,
+      notice: "v4_notice_plan_removed", depth: 1 };
+    expect(result).toEqual({ opened: { planView: "run", id: "daily" }, run: left,
+      editing: { planView: "edit", id: "weekend" }, edit: left });
+  });
+
+  test("dismissing steps Edit to Run, then Run or a new plan to the picker", async ({ page }) => {
+    const dismiss = { type: "dismiss-top-layer" };
+    expect(await run(page, "plan-saved-intelligent", [{ type: "set-plan-view", view: "edit", roomId: "room-a" }, dismiss]))
+      .toMatchObject({ workflow: "plan", planView: "run", expandedRoom: null });
+    expect(await run(page, "plan-saved-intelligent", [dismiss])).toMatchObject({ workflow: "plans", planView: "run" });
+    expect(await run(page, "plan-new", [dismiss])).toMatchObject({ workflow: "plans", planView: "run" });
+    expect(await run(page, "plan-dirty", [dismiss])).toMatchObject({ workflow: "plan", planView: "edit", dialog: "discardDraft" });
+    expect(await run(page, "plans", [dismiss])).toMatchObject({ workflow: "none" });
+  });
+
+  test("map taps never change the plan in Run", async ({ page }) => {
+    expect(await run(page, "plan-saved-intelligent", [{ type: "toggle-room", roomId: "room-d" }]))
+      .toMatchObject({ unchanged: true });
+  });
+
+  test("unticking a room in Edit parks its settings until it is ticked again", async ({ page }) => {
+    const parked = await run(page, "plan-cadence-shared", [{ type: "toggle-room", roomId: "room-a" }]);
+    expect(parked.draft.rooms).toEqual(["room-b", "room-c"]);
+    expect(parked.draft.parked.map((room) => room.roomId)).toEqual(["room-a"]);
+    expect(parked.draft.parked[0].cadence).toBeTruthy();
+    const restored = await page.evaluate(async () => {
+      const { WorkspaceStore, createGalleryState } = await import("/plan-recovery-test.js");
+      const store = new WorkspaceStore(createGalleryState("plan-cadence-shared"));
+      const saved = store.value.planDraft.rooms[0];
+      store.dispatch({ type: "toggle-room", roomId: "room-b" });
+      store.dispatch({ type: "toggle-room", roomId: "room-a" });
+      store.dispatch({ type: "toggle-room", roomId: "room-a" });
+      store.dispatch({ type: "toggle-room", roomId: "room-d" });
+      const { rooms, parkedRooms, dirty } = store.value.planDraft;
+      return { rooms, parked: parkedRooms.map((room) => room.roomId), dirty, same: JSON.stringify(rooms[1]) === JSON.stringify(saved) };
+    });
+    expect(restored).toMatchObject({ parked: ["room-b"], dirty: true, same: true });
+    expect(restored.rooms.map((room) => room.roomId)).toEqual(["room-c", "room-a", "room-d"]);
+    expect(restored.rooms[2]).toEqual({ roomId: "room-d", cleaningMode: "vacuum", coverageSetting: "standard" });
+  });
+
+  test("the plan room limit still refuses a new room in Edit", async ({ page }) => {
+    expect(await run(page, "plan-legacy-oversized", [{ type: "toggle-room", roomId: "room-extra" }]))
+      .toMatchObject({ unchanged: true });
+  });
+
+  test("Rooms selection waits for an editable map with no robot work to stop", async ({ page }) => {
+    const toggle = [{ type: "open-workflow", workflow: "rooms" }, { type: "toggle-room", roomId: "room-a" }];
+    expect((await run(page, "ready", toggle)).selectedRooms).toEqual(["room-a"]);
+    expect((await run(page, "ready", toggle, { activity: "cleaning" })).selectedRooms).toEqual([]);
+    expect((await run(page, "ready", toggle, { coherence: "degraded" })).selectedRooms).toEqual([]);
+  });
+
+  test("a dirty plan draft asks before going to Run", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-dirty" });
+    await expect(gallery.getByRole("textbox", { name: "Plan name" })).toBeVisible();
+    await page.evaluate((tag) => {
+      const shell = document.querySelector(tag).shadowRoot.querySelector("matic-map-shell-v4");
+      const body = [...shell.shadowRoot.querySelectorAll("*")].find((element) => element.localName.startsWith("matic-map-workflow-v4"));
+      body.dispatchEvent(new CustomEvent("matic-workspace-intent", {
+        detail: { type: "set-plan-view", view: "run" }, bubbles: true, composed: true,
+      }));
+    }, GALLERY_TAG);
+    await expect(gallery.getByRole("dialog", { name: "Discard changes?" })).toBeVisible();
+    const state = await snapshot(page);
+    expect({ planView: state.planView, dirty: state.planDraft.dirty }).toEqual({ planView: "edit", dirty: true });
+  });
+
+  test("layerDepth puts Run and a new plan's Edit under a saved plan's Edit", async ({ page }) => {
+    await loadEffectHarness(page);
+    const depths = await page.evaluate(async () => {
+      const { createGalleryState, layerDepth } = await import("/plan-recovery-test.js");
+      return ["ready", "plans", "plan-saved-intelligent", "plan-new", "plan-dirty"]
+        .map((scenario) => layerDepth(createGalleryState(scenario)));
+    });
+    expect(depths).toEqual([0, 1, 2, 2, 3]);
+  });
+});
+
+test.describe("plan primary action", () => {
+  // The primary action for a gallery scenario with `state` spread over it, the
+  // open plan's catalog entry patched with `plan`, its preview with `preview`,
+  // `reasons[roomId]` as that saved room's cadenceReasons, and `draft` over the
+  // plan draft.
+  async function primary(page, scenario, { state = {}, plan = {}, preview = {}, reasons = {}, draft = {} } = {}) {
+    await loadEffectHarness(page);
+    return page.evaluate(async ({ scenario, state, plan, preview, reasons, draft }) => {
+      const { createGalleryState, selectPrimaryAction } = await import("/plan-recovery-test.js");
+      const base = createGalleryState(scenario);
+      const catalog = base.resources.plans.value;
+      const plans = catalog.plans.map((saved) => saved.id !== base.planDraft.id ? saved : {
+        ...saved,
+        ...plan,
+        rooms: (plan.rooms ?? saved.rooms).map((room) => room.roomId in reasons ? { ...room, cadenceReasons: reasons[room.roomId] } : room),
+        nextRunPreview: { ...saved.nextRunPreview, ...preview },
+      });
+      const resources = { ...base.resources, plans: { ...base.resources.plans, value: { ...catalog, plans } } };
+      const { id, label, labelKey, enabled, reason, reasonKey, reasonPlaceholders, jump } =
+        selectPrimaryAction({ ...base, resources, planDraft: { ...base.planDraft, ...draft }, ...state });
+      return { id, label, labelKey, enabled, reason, reasonKey, reasonPlaceholders, jump };
+    }, { scenario, state, plan, preview, reasons, draft });
+  }
+  const run = { planView: "run" };
+  const blocked = { blocker: "invalid_cadence_policy", rooms: [] };
+
+  test("routes Edit, a dirty draft and a new plan to Save, a clean saved plan to Done", async ({ page }) => {
+    expect(await primary(page, "plan-saved-intelligent"))
+      .toMatchObject({ id: "run-plan", label: "Run plan", enabled: true, reason: undefined });
+    expect(await primary(page, "plan-saved-intelligent", { state: { planView: "edit" } }))
+      .toMatchObject({ id: "save-plan", label: "Done", labelKey: "v4_action_done", enabled: true });
+    expect(await primary(page, "plan-dirty"))
+      .toMatchObject({ id: "save-plan", label: "Save", labelKey: "v4_action_save_plan" });
+    expect(await primary(page, "plan-new"))
+      .toMatchObject({ id: "save-plan", label: "Save", labelKey: "v4_action_save_plan" });
+  });
+
+  test("Save is disabled while a save is pending, then names the map, the limit or the form", async ({ page }) => {
+    expect(await primary(page, "plan-dirty", { state: { command: "pending", pendingAction: "save-plan" } })).toMatchObject({
+      id: "save-plan", label: "Save", enabled: false,
+      reason: "Waiting for Home Assistant to save the plan.", reasonKey: "v4_reason_plan_saving",
+    });
+    expect(await primary(page, "plan-saved-intelligent", { state: { planView: "edit", pageActive: false } }))
+      .toMatchObject({ label: "Done", enabled: false, reason: "Waiting for the map to be ready.", reasonKey: "v4_reason_save_plan_map" });
+    expect(await primary(page, "plan-legacy-oversized"))
+      .toMatchObject({ label: "Done", enabled: false, reasonKey: "v4_reason_save_plan_room_limit" });
+    expect(await primary(page, "plan-new")).toMatchObject({ enabled: false, reasonKey: "v4_reason_save_plan" });
+  });
+
+  test("Run plan waits for the next-run check or a plan save before the robot fallback", async ({ page }) => {
+    expect(await primary(page, "plan-saved-intelligent", { state: { command: "pending", pendingAction: "run-plan" } })).toMatchObject({
+      id: "run-plan", enabled: false,
+      reason: "Waiting for Home Assistant to check the next run.", reasonKey: "v4_reason_run_plan_checking",
+    });
+    expect(await primary(page, "plan-saved-intelligent", { state: { command: "pending", pendingAction: "save-plan" } }))
+      .toMatchObject({ id: "run-plan", enabled: false, reasonKey: "v4_reason_plan_saving" });
+    expect(await primary(page, "plan-saved-intelligent", { state: { command: "pending" } }))
+      .toMatchObject({ id: "run-plan", enabled: false, reasonKey: "v4_reason_robot_operation_waiting" });
+  });
+
+  test("a paused plan says so before any blocker; a malformed token asks for a retry", async ({ page }) => {
+    expect(await primary(page, "plan-cadence-blocked", { state: run, draft: { enabled: false } })).toMatchObject({
+      id: "run-plan", enabled: false,
+      reason: "Can't run this plan until you turn it on.", reasonKey: "v4_reason_run_plan_paused", jump: undefined,
+    });
+    expect(await primary(page, "plan-saved-intelligent", { preview: { previewToken: "not-a-token" } })).toMatchObject({
+      enabled: false, reason: "Can't run this plan until you retry its next-run preview.", reasonKey: "v4_reason_run_plan_preview",
+    });
+  });
+
+  test("a blocked run names the first blocking room in saved order and links to it", async ({ page }) => {
+    // plan-cadence-blocked: Kitchen holds invalid_cadence_policy and mop_progress_unverified; progress wins.
+    expect(await primary(page, "plan-cadence-blocked", { state: run })).toEqual({
+      id: "run-plan", label: "Run plan", labelKey: "v4_action_run_plan", enabled: false,
+      reason: "Can't run this plan until you reset {room}'s schedule progress, which Home Assistant can't confirm.",
+      reasonKey: "v4_reason_plan_room_progress",
+      reasonPlaceholders: { room: "Kitchen" },
+      jump: { label: "Review {room}", labelKey: "v4_review_room", labelPlaceholders: { room: "Kitchen" }, roomId: "room-a" },
+    });
+    const cases = [
+      [["coverage_progress_unverified", "identity_changed"], "v4_reason_plan_room_progress"],
+      [["room_not_on_current_map", "identity_changed"], "v4_reason_plan_room_map",
+        "Can't run this plan until you review {room}'s schedule on this map."],
+      [["shared_schedule_unavailable", "room_not_on_current_map"], "v4_reason_plan_room_off_map",
+        "Can't run this plan until {room} is on the current map or removed from the plan."],
+      [["coverage_requires_vacuum", "shared_schedule_unavailable"], "v4_reason_plan_room_schedule",
+        "Can't run this plan until you fix {room}'s schedule."],
+      [["coverage_requires_vacuum", "invalid_cadence_policy"], "v4_reason_plan_room_schedule"],
+      [["mop_due", "coverage_requires_vacuum"], "v4_reason_plan_room_mode",
+        "Can't run this plan until {room} uses a vacuum mode or its vacuum rotation is off."],
+    ];
+    for (const [roomReasons, reasonKey, reason] of cases) {
+      // The saved order is Office, Kitchen, Living room; Kitchen's due reason never blocks.
+      const action = await primary(page, "plan-saved-intelligent", {
+        plan: { roomOrder: ["room-c", "room-a", "room-b"] }, preview: blocked,
+        reasons: { "room-c": ["mop_due"], "room-a": roomReasons, "room-b": ["identity_changed"] },
+      });
+      expect(action).toMatchObject({ enabled: false, reasonKey, reasonPlaceholders: { room: "Kitchen" }, jump: { roomId: "room-a" } });
+      if (reason) expect(action.reason).toBe(reason);
+    }
+  });
+
+  test("a plan-level blocker, or a blocking room without a name, names no room", async ({ page }) => {
+    const cases = [
+      ["cadence_identity_unavailable", "v4_preview_identity_unavailable",
+        "Can't run this plan until Home Assistant can match its rooms to the current map."],
+      ["cadence_identity_changed", "v4_preview_identity_unavailable"],
+      ["plan_has_no_rooms", "v4_preview_no_rooms", "Can't run this plan until it has at least one room."],
+      ["plan_room_limit", "v4_preview_room_limit", "Can't run this plan until it has 100 rooms or fewer."],
+      ["invalid_plan", "v4_preview_invalid", "Can't run this plan until you open Edit and save it again."],
+      // An enabled draft with a preview still paused: the preview is stale, so it is retried.
+      ["plan_disabled", "v4_reason_run_plan_preview"],
+      ["preview_unavailable", "v4_reason_run_plan_preview"],
+      ["coverage_requires_vacuum", "v4_reason_run_plan_preview"],
+    ];
+    for (const [blocker, reasonKey, reason] of cases) {
+      const action = await primary(page, "plan-saved-intelligent", { preview: { blocker, rooms: [] } });
+      expect(action).toMatchObject({ id: "run-plan", enabled: false, reasonKey, reasonPlaceholders: undefined, jump: undefined });
+      if (reason) expect(action.reason).toBe(reason);
+    }
+    // room-z is in the plan but not in the catalog, so it has no name to show.
+    expect(await primary(page, "plan-saved-intelligent", {
+      plan: { rooms: [{ roomId: "room-z", cleaningMode: "vacuum", coverageSetting: "standard", cadenceReasons: ["room_not_on_current_map"] }], roomOrder: ["room-z"] },
+      preview: { blocker: "invalid_plan", rooms: [] },
+    })).toMatchObject({ reasonKey: "v4_preview_invalid", jump: undefined });
+  });
+
+  test("the action bar fills in the blocking room's name", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-cadence-blocked" });
+    await page.evaluate((tag) => {
+      document.querySelector(tag).shadowRoot.querySelector("matic-map-shell-v4").dispatchEvent(new CustomEvent("matic-workspace-intent", {
+        detail: { type: "set-plan-view", view: "run" }, bubbles: true, composed: true,
+      }));
+    }, GALLERY_TAG);
+    // plan.md R3: the reason ends in the link that opens that room.
+    await expect(gallery.locator(".action-reason")).toHaveText(
+      "Can't run this plan until you reset Kitchen's schedule progress, which Home Assistant can't confirm. Review Kitchen",
+    );
+  });
+});
+
+test.describe("plan effects", () => {
+  // Installs `window.planEffects(scenario)`: an EffectController over a gallery
+  // scenario with a synced robot and a current map. `run.calls` lists
+  // [service, data] per Home Assistant call and `run.reloads` counts plan
+  // reads. A test replaces `run.plans` or `run.service` to hold or fail them,
+  // and `run.inFlight()` waits until a lazily loaded write reaches the service.
+  async function loadPlanEffects(page) {
+    await loadEffectHarness(page);
+    await page.evaluate(async () => {
+      const m = await import("/plan-recovery-test.js");
+      const ticks = async () => { for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 0)); };
+      window.planEffects = async (scenario) => {
+        const initial = m.createGalleryState(scenario);
+        const store = new m.WorkspaceStore(initial);
+        const aborted = async () => { throw new DOMException("Aborted", "AbortError"); };
+        const run = { m, initial, store, calls: [], reloads: 0, plans: null, service: null };
+        run.projection = { host: initial.host, activity: initial.activity, batteryPercent: 92, robotLabel: "Synthetic", robots: initial.robots, language: "en", userKey: "one", entryKey: initial.selection.entryId, vacuumEntityId: "vacuum.synthetic" };
+        run.effects = new m.EffectController(store, {
+          catalog: async () => [initial.resources.entry], scene: aborted, pose: aborted,
+          history: async () => initial.resources.history.value,
+          areas: async () => initial.resources.areas.value,
+          plans: async () => { run.reloads += 1; return run.plans ? run.plans() : structuredClone(initial.resources.plans.value); },
+          service: async (_domain, service, data) => { run.calls.push([service, data]); return run.service?.(service, data); },
+          dispose() {},
+        });
+        run.effects.sync(run.projection);
+        await run.effects.refreshCatalog(true);
+        await ticks();
+        store.patch({ map: initial.map, coherence: "current", workflow: initial.workflow, planView: initial.planView,
+          selection: initial.selection, planDraft: initial.planDraft, resources: { ...store.value.resources, plans: initial.resources.plans } });
+        run.reloads = 0;
+        run.hold = () => new Promise((resolve, reject) => { run.finish = resolve; run.fail = reject; });
+        run.inFlight = async () => { for (let i = 0; i < 20 && run.calls.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 0)); };
+        return run;
+      };
+    });
+  }
+
+  test("an in-place reload keeps the plans on screen and a failed one leaves them untouched", async ({ page }) => {
+    await loadPlanEffects(page);
+    const result = await page.evaluate(async () => {
+      const run = await window.planEffects("plan-saved-intelligent");
+      const { store, effects } = run;
+      const fresh = structuredClone(store.value.resources.plans.value);
+      fresh.plans[0].name = "Renamed elsewhere";
+      run.plans = () => run.hold().then(() => fresh);
+      const loading = effects.loadPlans({ force: true, inPlace: true });
+      const during = store.value.resources.plans.status;
+      run.finish(); const returned = await loading;
+      const success = { during, returned: returned === store.value.resources.plans.value,
+        name: store.value.resources.plans.value.plans[0].name, status: store.value.resources.plans.status };
+      const before = store.value.resources.plans;
+      run.plans = async () => { throw new Error("Unavailable"); };
+      const failed = { returned: await effects.loadPlans({ force: true, inPlace: true }), untouched: store.value.resources.plans === before };
+      // With no catalog to keep, the read shows loading as before.
+      store.patch({ resources: { ...store.value.resources, plans: { status: "idle", value: null, problem: null } } });
+      run.plans = () => run.hold().then(() => fresh);
+      const cold = effects.loadPlans({ inPlace: true });
+      const empty = store.value.resources.plans.status;
+      run.finish(); await cold;
+      effects.dispose();
+      return { success, failed, empty };
+    });
+    expect(result).toEqual({
+      success: { during: "ready", returned: true, name: "Renamed elsewhere", status: "ready" },
+      failed: { returned: null, untouched: true },
+      empty: "loading",
+    });
+  });
+
+  test("the preflight never shows Loading rooms and plans", async ({ page }) => {
+    await loadPlanEffects(page);
+    const result = await page.evaluate(async () => {
+      const run = await window.planEffects("plan-saved-intelligent");
+      const { m, store, effects } = run;
+      const catalog = structuredClone(store.value.resources.plans.value);
+      run.plans = () => run.hold().then(() => catalog);
+      const running = effects.executeAction("run-plan");
+      const action = m.selectPrimaryAction(store.value);
+      const during = { status: store.value.resources.plans.status, command: store.value.command,
+        pendingAction: store.value.pendingAction, id: action.id, enabled: action.enabled, reasonKey: action.reasonKey };
+      run.finish(); await running;
+      const sent = { calls: run.calls.map(([service]) => service), pendingAction: store.value.pendingAction };
+      store.patch({ notice: null });
+      const before = store.value.resources.plans;
+      run.plans = async () => { throw new Error("Unavailable"); };
+      await effects.executeAction("run-plan");
+      const failed = { notice: store.value.notice?.key, command: store.value.command,
+        pendingAction: store.value.pendingAction, untouched: store.value.resources.plans === before, calls: run.calls.length };
+      effects.dispose();
+      return { during, sent, failed };
+    });
+    expect(result).toEqual({
+      during: { status: "ready", command: "pending", pendingAction: "run-plan", id: "run-plan", enabled: false,
+        reasonKey: "v4_reason_run_plan_checking" },
+      sent: { calls: ["run_selected_plan"], pendingAction: null },
+      failed: { notice: "v4_notice_plan_preview_refresh_failed", command: "idle", pendingAction: null, untouched: true, calls: 1 },
+    });
+  });
+
+  test("a plan write is pending as a plan save until it settles or is cancelled", async ({ page }) => {
+    await loadPlanEffects(page);
+    const result = await page.evaluate(async () => {
+      const run = await window.planEffects("plan-dirty");
+      const { m, store, effects } = run;
+      run.service = () => run.hold();
+      const saving = effects.executeAction("save-plan");
+      await run.inFlight();
+      const action = m.selectPrimaryAction(store.value);
+      const during = { command: store.value.command, pendingAction: store.value.pendingAction,
+        id: action.id, enabled: action.enabled, reasonKey: action.reasonKey };
+      run.finish(); await saving;
+      const settled = { command: store.value.command, pendingAction: store.value.pendingAction };
+      store.patch({ planDraft: { ...store.value.planDraft, name: "Edited again", dirty: true } });
+      run.calls.length = 0;
+      const cancelled = effects.savePlan();
+      await run.inFlight();
+      void effects.selectFloor("saved-1");
+      const afterCancel = { command: store.value.command, pendingAction: store.value.pendingAction };
+      run.finish(); await cancelled;
+      effects.dispose();
+      return { during, settled, afterCancel };
+    });
+    expect(result).toEqual({
+      during: { command: "pending", pendingAction: "save-plan", id: "save-plan", enabled: false, reasonKey: "v4_reason_plan_saving" },
+      settled: { command: "idle", pendingAction: null },
+      afterCancel: { command: "idle", pendingAction: null },
+    });
+  });
+
+  // shell.md §6: "Check robot status" follows only a failed robot command.
+  for (const write of ["save", "delete", "reset"]) {
+    test(`a failed plan ${write} returns to idle with its notice, not Check robot status`, async ({ page }) => {
+      await loadPlanEffects(page);
+      const result = await page.evaluate(async (write) => {
+        const run = await window.planEffects(write === "save" ? "plan-dirty" : "plan-saved-intelligent");
+        const { m, store, effects } = run;
+        run.service = async () => { throw new Error("Unavailable"); };
+        if (write === "delete") store.dispatch({ type: "set-plan-view", view: "edit" });
+        if (write === "save") await effects.executeAction("save-plan");
+        else if (write === "delete") await effects.executeAction("delete-plan");
+        else await effects.executeAction({ id: "reset-room-cadence", planId: "daily", roomId: "room-a", mode: "mop" });
+        const action = m.selectPrimaryAction(store.value);
+        effects.dispose();
+        return { calls: run.calls.length, command: store.value.command, pendingAction: store.value.pendingAction,
+          notice: store.value.notice?.key, primary: action.id, labelKey: action.labelKey };
+      }, write);
+      expect(result).toEqual({
+        calls: 1, command: "idle", pendingAction: null,
+        ...{
+          save: { notice: "v4_notice_plan_save_failed", primary: "save-plan", labelKey: "v4_action_save_plan" },
+          delete: { notice: "v4_notice_plan_delete_failed", primary: "save-plan", labelKey: "v4_action_done" },
+          reset: { notice: "v4_notice_reset_mop_failed", primary: "run-plan", labelKey: "v4_action_run_plan" },
+        }[write],
+      });
+    });
+  }
+
+  test("post-write reloads keep the plans on screen", async ({ page }) => {
+    await loadPlanEffects(page);
+    const result = await page.evaluate(async () => {
+      const outcome = {};
+      for (const write of ["save", "reset", "delete"]) {
+        const run = await window.planEffects(write === "save" ? "plan-dirty" : "plan-saved-intelligent");
+        const { store, effects } = run;
+        const statuses = new Set();
+        const unsubscribe = store.subscribe((state) => statuses.add(state.resources.plans.status));
+        if (write === "save") await effects.executeAction("save-plan");
+        else if (write === "delete") await effects.executeAction("delete-plan");
+        else await effects.executeAction({ id: "reset-room-cadence", planId: "daily", roomId: "room-a", mode: "mop" });
+        unsubscribe();
+        outcome[write] = { statuses: [...statuses], reloads: run.reloads, workflow: store.value.workflow };
+        effects.dispose();
+      }
+      return outcome;
+    });
+    expect(result).toEqual({
+      save: { statuses: ["ready"], reloads: 1, workflow: "plan" },
+      reset: { statuses: ["ready"], reloads: 1, workflow: "plan" },
+      delete: { statuses: ["ready"], reloads: 1, workflow: "plans" },
+    });
+  });
+
+  test("Done returns a clean saved plan to Run without a write, and a save returns to Run", async ({ page }) => {
+    await loadPlanEffects(page);
+    const result = await page.evaluate(async () => {
+      const run = await window.planEffects("plan-saved-intelligent");
+      const { store, effects } = run;
+      store.dispatch({ type: "set-plan-view", view: "edit" });
+      await effects.executeAction("save-plan");
+      const done = { planView: store.value.planView, calls: run.calls.length };
+      store.dispatch({ type: "set-plan-view", view: "edit" });
+      store.dispatch({ type: "patch-plan-draft", patch: { name: "Renamed" } });
+      await effects.executeAction("save-plan");
+      const saved = { planView: store.value.planView, dirty: store.value.planDraft.dirty,
+        calls: run.calls.map(([service]) => service) };
+      effects.dispose();
+      return { done, saved };
+    });
+    expect(result).toEqual({
+      done: { planView: "run", calls: 0 },
+      saved: { planView: "run", dirty: false, calls: ["save_plan"] },
+    });
+  });
+
+  test("the Run switch saves the freshly read plan with only enabled changed", async ({ page }) => {
+    await loadPlanEffects(page);
+    const result = await page.evaluate(async () => {
+      const run = await window.planEffects("plan-saved-intelligent");
+      const { m, store, effects } = run;
+      const catalog = structuredClone(store.value.resources.plans.value);
+      catalog.plans[0].name = "Renamed elsewhere";
+      run.plans = async () => structuredClone(catalog);
+      run.service = (_service, data) => run.hold().then(() => { catalog.plans[0].enabled = data.enabled; });
+      const original = store.value.planDraft;
+      const pausing = effects.setPlanEnabled(false);
+      await run.inFlight();
+      const during = { enabled: store.value.planDraft.enabled, dirty: store.value.planDraft.dirty, command: store.value.command,
+        pendingAction: store.value.pendingAction, notice: store.value.notice, status: store.value.resources.plans.status, reloads: run.reloads };
+      run.finish(); await pausing;
+      const paused = { enabled: store.value.planDraft.enabled, command: store.value.command, pendingAction: store.value.pendingAction,
+        notice: store.value.notice && { key: store.value.notice.key, tone: store.value.notice.tone }, reloads: run.reloads };
+      const [service, sent] = run.calls[0];
+      // The one request shape: a save of the fresh plan with the same change.
+      store.patch({ planView: "edit", planDraft: { ...m.draftForPlan({ ...catalog.plans[0], enabled: true }), enabled: false, dirty: true } });
+      run.service = (_service, data) => { catalog.plans[0].enabled = data.enabled; };
+      await effects.savePlan();
+      const sameShape = JSON.stringify(sent) === JSON.stringify(run.calls[1][1]);
+      store.patch({ planView: "run", planDraft: { ...store.value.planDraft, dirty: false } });
+      run.calls.length = 0;
+      await effects.setPlanEnabled(true);
+      const on = { enabled: store.value.planDraft.enabled, notice: store.value.notice?.key, sent: run.calls[0]?.[1].enabled };
+      effects.dispose();
+      return { originalEnabled: original.enabled, during, paused, service, name: sent.name, sameShape, on };
+    });
+    expect(result).toEqual({
+      originalEnabled: true,
+      during: { enabled: false, dirty: false, command: "pending", pendingAction: "save-plan", notice: null, status: "ready", reloads: 1 },
+      paused: { enabled: false, command: "idle", pendingAction: null, notice: { key: "v4_notice_plan_paused", tone: "success" }, reloads: 2 },
+      service: "save_plan",
+      name: "Renamed elsewhere",
+      sameShape: true,
+      on: { enabled: true, notice: "v4_notice_plan_on", sent: true },
+    });
+  });
+
+  for (const failure of ["reload", "send"]) {
+    test(`the switch reverts after a failed ${failure === "reload" ? "pre-send reload" : "send"}`, async ({ page }) => {
+      await loadPlanEffects(page);
+      const result = await page.evaluate(async (failure) => {
+        const run = await window.planEffects("plan-saved-intelligent");
+        const { store, effects } = run;
+        if (failure === "reload") run.plans = async () => { throw new Error("Unavailable"); };
+        if (failure === "send") run.service = async () => { throw new Error("Unavailable"); };
+        const original = store.value.planDraft;
+        await effects.setPlanEnabled(false);
+        effects.dispose();
+        return { calls: run.calls.length, reverted: store.value.planDraft === original, command: store.value.command,
+          pendingAction: store.value.pendingAction, notice: store.value.notice?.key, status: store.value.resources.plans.status };
+      }, failure);
+      expect(result).toEqual({ calls: failure === "send" ? 1 : 0, reverted: true, command: "idle", pendingAction: null,
+        notice: "v4_notice_plan_save_failed", status: "ready" });
+    });
+  }
+
+  for (const write of ["switch", "preflight"]) test(`the ${write} leaves for Your plans when its fresh read lost the plan`, async ({ page }) => {
+    await loadPlanEffects(page);
+    const result = await page.evaluate(async (write) => {
+      const run = await window.planEffects("plan-saved-intelligent");
+      const { store, effects } = run;
+      const catalog = structuredClone(store.value.resources.plans.value);
+      run.plans = async () => ({ ...catalog, plans: [] });
+      if (write === "switch") await effects.setPlanEnabled(false);
+      else await effects.executeAction("run-plan");
+      effects.dispose();
+      const state = store.value;
+      return { calls: run.calls.length, workflow: state.workflow, planView: state.planView, planId: state.selection.planId,
+        draft: { id: state.planDraft.id, dirty: state.planDraft.dirty }, command: state.command,
+        pendingAction: state.pendingAction, notice: state.notice?.key, tone: state.notice?.tone, status: state.resources.plans.status };
+    }, write);
+    expect(result).toEqual({ calls: 0, workflow: "plans", planView: "run", planId: null, draft: { id: null, dirty: false },
+      command: "idle", pendingAction: null, notice: "v4_notice_plan_removed", tone: "warning", status: "ready" });
+  });
+
+  // An in-place read keeps only a settled catalog: when it replaces a shown
+  // read that was loading and then fails, it reports the failure itself.
+  for (const write of ["switch", "save"]) {
+    test(`a failed ${write} reload that replaced a loading read does not stay loading`, async ({ page }) => {
+      await loadPlanEffects(page);
+      const result = await page.evaluate(async (write) => {
+        const run = await window.planEffects(write === "save" ? "plan-dirty" : "plan-saved-intelligent");
+        const { store, effects } = run;
+        run.plans = () => run.reloads === 1 ? run.hold() : Promise.reject(new Error("Unavailable"));
+        const shown = effects.loadPlans();
+        const loading = store.value.resources.plans.status;
+        if (write === "save") await effects.executeAction("save-plan");
+        else await effects.setPlanEnabled(false);
+        run.finish(); await shown;
+        const outcome = { loading, status: store.value.resources.plans.status, command: store.value.command, reloads: run.reloads };
+        effects.dispose();
+        return outcome;
+      }, write);
+      expect(result).toEqual({ loading: "loading", status: "error", command: "idle", reloads: 2 });
+    });
+  }
+
+  test("a background reload during the switch's read is skipped and the switch still saves", async ({ page }) => {
+    await loadPlanEffects(page);
+    const result = await page.evaluate(async () => {
+      const run = await window.planEffects("plan-saved-intelligent");
+      const { store, effects } = run;
+      const catalog = structuredClone(store.value.resources.plans.value);
+      run.plans = () => run.reloads === 1 ? run.hold().then(() => catalog) : Promise.resolve(catalog);
+      run.service = (_service, data) => { catalog.plans[0].enabled = data.enabled; };
+      const switching = effects.setPlanEnabled(false);
+      for (let i = 0; i < 20 && run.reloads === 0; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+      const background = await effects.loadPlans();
+      const skipped = { returned: background, reloads: run.reloads };
+      run.finish(); await switching;
+      const outcome = { skipped, calls: run.calls.map(([service]) => service), notice: store.value.notice?.key, enabled: store.value.planDraft.enabled };
+      effects.dispose();
+      return outcome;
+    });
+    expect(result).toEqual({ skipped: { returned: null, reloads: 1 }, calls: ["save_plan"], notice: "v4_notice_plan_paused", enabled: false });
+  });
+
+  test("the switch changes nothing outside a clean, idle Run on an editable map", async ({ page }) => {
+    await loadPlanEffects(page);
+    const result = await page.evaluate(async () => {
+      const refusals = {
+        edit: (store) => store.dispatch({ type: "set-plan-view", view: "edit" }),
+        picker: (store) => store.patch({ workflow: "plans" }),
+        dirty: (store) => store.patch({ planDraft: { ...store.value.planDraft, dirty: true } }),
+        unsaved: (store) => store.patch({ planDraft: { ...store.value.planDraft, id: null } }),
+        pending: (store) => store.patch({ command: "pending" }),
+        map:(store) => store.patch({ pageActive: false }),
+        working: (store) => store.patch({ activity: "cleaning" }),
+      };
+      const outcome = {};
+      for (const [name, refuse] of Object.entries(refusals)) {
+        const run = await window.planEffects("plan-saved-intelligent");
+        refuse(run.store);
+        const before = run.store.value;
+        await run.effects.setPlanEnabled(false);
+        outcome[name] = { unchanged: run.store.value === before, calls: run.calls.length, reloads: run.reloads };
+        run.effects.dispose();
+      }
+      return outcome;
+    });
+    for (const value of Object.values(result)) expect(value).toEqual({ unchanged: true, calls: 0, reloads: 0 });
+    expect(Object.keys(result)).toHaveLength(7);
+  });
+
+  // The switch looks enabled after a failed or settling command, so it works then too.
+  for (const command of ["failed", "settling"]) {
+    test(`the Run switch saves after a ${command} command`, async ({ page }) => {
+      await loadPlanEffects(page);
+      const result = await page.evaluate(async (command) => {
+        const run = await window.planEffects("plan-saved-intelligent");
+        run.store.patch({ command });
+        await run.effects.setPlanEnabled(false);
+        const outcome = { calls: run.calls.map(([service, data]) => [service, data.enabled]), command: run.store.value.command };
+        run.effects.dispose();
+        return outcome;
+      }, command);
+      expect(result).toEqual({ calls: [["save_plan", false]], command: "idle" });
+    });
+  }
+
+  for (const context of ["disposed", "robot", "user"]) {
+    for (const rejected of [false, true]) {
+      test(`a late ${rejected ? "failed" : "successful"} switch after context becomes ${context} changes nothing`, async ({ page }) => {
+        await loadPlanEffects(page);
+        const result = await page.evaluate(async ({ context, rejected }) => {
+          const run = await window.planEffects("plan-saved-intelligent");
+          const { store, effects } = run;
+          run.service = () => run.hold();
+          const switching = effects.setPlanEnabled(false);
+          await run.inFlight();
+          if (context === "disposed") effects.dispose();
+          else effects.sync({ ...run.projection, ...(context === "robot" ? { entryKey: "other-entry", vacuumEntityId: "vacuum.other" } : { userKey: "two" }) });
+          await Promise.resolve(); await Promise.resolve();
+          const before = store.value;
+          if (rejected) run.fail(new Error("Late failure")); else run.finish();
+          await switching;
+          const after = store.value;
+          effects.dispose();
+          return { unchanged: after === before, reloads: run.reloads };
+        }, { context, rejected });
+        expect(result).toEqual({ unchanged: true, reloads: 1 });
+      });
+    }
+  }
+});
+
+test("browser Back steps from Edit to Run to the picker before leaving the route", async ({ page }) => {
   await loadEffectHarness(page);
   const route = page.url();
   await page.evaluate(async () => {
@@ -7954,9 +9475,14 @@ test("browser Back closes the plan editor then picker before leaving the route",
     layers.start();
     store.dispatch({ type: "open-workflow", workflow: "plans" });
     store.dispatch({ type: "select-plan", planId: "daily" });
+    store.dispatch({ type: "set-plan-view", view: "edit", roomId: "room-a" });
     window.__planLayers = { store, layers };
   });
-  expect(await page.evaluate(() => history.state.maticMapLayer.depth)).toBe(2);
+  expect(await page.evaluate(() => history.state.maticMapLayer.depth)).toBe(3);
+  await page.evaluate(() => history.back());
+  await expect.poll(() => page.evaluate(() => window.__planLayers.store.value.planView)).toBe("run");
+  expect(await page.evaluate(() => ({ workflow: window.__planLayers.store.value.workflow, depth: history.state.maticMapLayer.depth })))
+    .toEqual({ workflow: "plan", depth: 2 });
   await page.evaluate(() => history.back());
   await expect.poll(() => page.evaluate(() => window.__planLayers.store.value.workflow)).toBe("plans");
   expect(await page.evaluate(() => history.state.maticMapLayer.depth)).toBe(1);
@@ -8073,6 +9599,8 @@ test("area save clears an obsolete discard prompt opened while the write was pen
     effects.loadAreas = async () => {};
     try {
       const saving = effects.saveArea();
+      // The write is pending once the lazily loaded save reaches the backend.
+      for (let i = 0; i < 20 && !finish; i++) await new Promise((resolve) => setTimeout(resolve, 0));
       store.dispatch({ type: "dismiss-top-layer" });
       const pendingDialog = store.value.dialog;
       finish("saved-zone");
@@ -8104,7 +9632,8 @@ test("map taps select run and plan rooms in both views and clear old deletion no
         document.body.append(element);
       }
       const initial = createGalleryState("rooms");
-      const store = new WorkspaceStore({ ...initial, workflow, view, selection: { ...initial.selection, roomIds: [], roomSettings: [] }, planDraft: { ...initial.planDraft, rooms: [] } });
+      // plan.md §5 Map: taps change the plan only in Edit.
+      const store = new WorkspaceStore({ ...initial, workflow, view, planView: "edit", selection: { ...initial.selection, roomIds: [], roomSettings: [] }, planDraft: { ...initial.planDraft, rooms: [] } });
       const renderer = new RendererController(canvas, overlay);
       renderer.setState(store.value);
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -8145,6 +9674,307 @@ test("map taps select run and plan rooms in both views and clear old deletion no
   }
 });
 
+// plan.md §3, §5 Navigation and focus, Dialogs; shell.md §5 discardDraft,
+// Sheet: the shell's heading, bar, dialogs, focus and detents for Run and Edit.
+test.describe("plan shell", () => {
+  const intent = (page, detail) => page.evaluate(({ tag, detail }) => {
+    document.querySelector(tag).shadowRoot.querySelector("matic-map-shell-v4").dispatchEvent(new CustomEvent("matic-workspace-intent", {
+      detail, bubbles: true, composed: true,
+    }));
+  }, { tag: GALLERY_TAG, detail });
+  // Replaces the gallery state with `values` over it, object values merged one level deep.
+  const patch = (page, values) => page.evaluate(({ tag, values }) => {
+    const element = document.querySelector(tag);
+    const state = element.getWorkspaceSnapshot();
+    element.replaceWorkspaceState({ ...state, ...Object.fromEntries(Object.entries(values).map(([key, value]) =>
+      [key, value && typeof value === "object" && key !== "notice" ? { ...state[key], ...value } : value])) });
+  }, { tag: GALLERY_TAG, values });
+  const wide = async (page, scenario) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    return loadGallery(page, { scenario });
+  };
+  const narrow = async (page, scenario) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    return loadGallery(page, { scenario, narrow: true });
+  };
+  const scenario = (gallery, name) => gallery.evaluate((element, name) => element.setScenario(name), name);
+  const catalog = () => ({
+    rooms: [{ room_id: "kitchen", name: "Kitchen", boundary: [[0, 0], [6, 0], [6, 5], [0, 5]] }],
+    selected_plan: "daily",
+    plans: [{
+      id: "daily", name: "Daily", enabled: true, run_behavior: "ordered",
+      rooms: [{ room_id: "kitchen", cleaning_mode: "vacuum", coverage_setting: "standard" }],
+      room_order: ["kitchen"], return_to_base: true, finish_current_room: false, finish_current_room_threshold: 50,
+    }],
+  });
+  const openPanelPlan = async (page) => {
+    const fixture = await installPanelFixture(page, { initialPlanCatalog: catalog() });
+    await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+    const panel = page.locator(fixture.panelTag);
+    await panel.getByRole("button", { name: /^Run a plan/ }).click();
+    await panel.getByRole("button", { name: /^Daily/ }).click();
+    await panel.getByRole("button", { name: "Edit Daily", exact: true }).click();
+    return { panel, fixture };
+  };
+
+  test("Run is titled with the plan's name, Edit with Edit plan or New plan and an unsaved chip", async ({ page }) => {
+    const gallery = await wide(page, "plan-saved-intelligent");
+    const heading = gallery.getByRole("heading", { level: 2 });
+    await expect(heading).toHaveText("Daily clean");
+    await expect(heading.locator("bdi")).toHaveText("Daily clean");
+    await expect(gallery.locator(".panel-description")).toHaveCount(0);
+    await intent(page, { type: "set-plan-view", view: "edit" });
+    await expect(heading).toHaveText("Edit plan");
+    await patch(page, { planDraft: { dirty: true } });
+    await expect(heading.locator(".ms-chip")).toHaveText("Unsaved changes");
+    await expect(heading).toHaveAccessibleName("Edit plan Unsaved changes");
+    await scenario(gallery, "plan-new");
+    await expect(heading).toHaveText("New plan");
+    await scenario(gallery, "plans");
+    await expect(gallery.locator(".panel-description")).toHaveText("Tap a plan to see its next run.");
+  });
+
+  test("Run goes back to the picker; Edit has no back button", async ({ page }) => {
+    const gallery = await wide(page, "plan-saved-intelligent");
+    await intent(page, { type: "set-plan-view", view: "edit" });
+    await expect(gallery.getByRole("heading", { level: 2 })).toHaveText("Edit plan");
+    await expect(gallery.getByRole("button", { name: /^Back to/ })).toHaveCount(0);
+    await intent(page, { type: "set-plan-view", view: "run" });
+    await gallery.getByRole("button", { name: "Back to plans", exact: true }).click();
+    expect((await snapshot(page)).workflow).toBe("plans");
+    await expect(gallery.getByRole("button", { name: "Back to all tasks", exact: true })).toBeVisible();
+  });
+
+  test("Run's Edit button opens Edit, names the plan, and waits while a save or check is pending", async ({ page }) => {
+    const gallery = await wide(page, "plan-saved-intelligent");
+    const edit = gallery.getByRole("button", { name: "Edit Daily clean", exact: true });
+    await expect(edit).toHaveText("Edit");
+    await edit.click();
+    expect((await snapshot(page)).planView).toBe("edit");
+    await expect(gallery.getByRole("heading", { level: 2 })).toBeFocused();
+    await gallery.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(edit).toBeFocused();
+    for (const [pendingAction, reason] of [
+      ["save-plan", "Waiting for Home Assistant to save the plan."],
+      ["run-plan", "Waiting for Home Assistant to check the next run."],
+    ]) {
+      await patch(page, { command: "pending", pendingAction });
+      await expect(edit).toHaveAttribute("aria-disabled", "true");
+      await expect(edit).toHaveAccessibleDescription(reason);
+      await edit.click({ force: true });
+      expect((await snapshot(page)).planView).toBe("run");
+    }
+  });
+
+  test("Edit's More actions menu holds Delete, which waits for unsaved changes", async ({ page }) => {
+    const gallery = await wide(page, "plan-saved-intelligent");
+    await intent(page, { type: "set-plan-view", view: "edit" });
+    const more = gallery.getByRole("button", { name: "More actions", exact: true });
+    const remove = gallery.getByRole("menu").getByRole("menuitem", { name: "Delete", exact: true });
+    await expect(more).toHaveAttribute("aria-haspopup", "menu");
+    await expect(more).toHaveAttribute("aria-expanded", "false");
+    await more.click();
+    await expect(more).toHaveAttribute("aria-expanded", "true");
+    await expect(remove).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(gallery.getByRole("menu")).toHaveCount(0);
+    await expect(more).toBeFocused();
+    expect((await snapshot(page)).planView).toBe("edit");
+    await more.click();
+    await remove.click();
+    const dialog = gallery.getByRole("dialog", { name: "Delete plan?" });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(more).toBeFocused();
+    await patch(page, { planDraft: { dirty: true } });
+    await more.click();
+    await expect(remove).toHaveAttribute("aria-disabled", "true");
+    await expect(remove).toHaveAccessibleDescription("Can't delete this plan until you save or cancel your changes.");
+    await remove.click({ force: true });
+    await expect(gallery.getByRole("dialog")).toHaveCount(0);
+    // A delete asked for while a command is pending would be refused after
+    // its dialog closed, so Delete waits and says why.
+    for (const [held, reason] of [
+      [{ command: "pending", pendingAction: "save-plan" }, "Waiting for Home Assistant to save the plan."],
+      [{ command: "pending", pendingAction: null }, "Waiting for the robot to finish what it's doing."],
+    ]) {
+      await patch(page, { planDraft: { dirty: false }, ...held });
+      await expect(remove, reason).toHaveAccessibleDescription(reason);
+      await expect(remove).toHaveAttribute("aria-disabled", "true");
+      await remove.click({ force: true });
+      await expect(gallery.getByRole("dialog")).toHaveCount(0);
+    }
+    await scenario(gallery, "plan-new");
+    await expect(gallery.getByRole("heading", { level: 2 })).toHaveText("New plan");
+    await expect(more).toHaveCount(0);
+  });
+
+  test("Edit's bar puts Cancel before the primary; Cancel leaves for Run or the picker and asks first when edited", async ({ page }) => {
+    const gallery = await wide(page, "plan-saved-intelligent");
+    await intent(page, { type: "set-plan-view", view: "edit" });
+    const bar = gallery.locator(".workflow > .action-bar");
+    const cancel = bar.getByRole("button", { name: "Cancel", exact: true });
+    await expect(bar.getByRole("button")).toHaveText(["Cancel", "Done"]);
+    await cancel.click();
+    expect((await snapshot(page)).planView).toBe("run");
+    await scenario(gallery, "plan-new");
+    await cancel.click();
+    expect((await snapshot(page)).workflow).toBe("plans");
+    await scenario(gallery, "plan-dirty");
+    await expect(bar.getByRole("button")).toHaveText(["Cancel", "Save"]);
+    await cancel.click();
+    const dialog = gallery.getByRole("dialog", { name: "Discard changes?" });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Keep editing", exact: true }).click();
+    await expect(cancel).toBeFocused();
+    await patch(page, { command: "pending", pendingAction: "save-plan" });
+    await expect(cancel).toHaveAttribute("aria-disabled", "true");
+    await expect(cancel).toHaveAccessibleDescription("Waiting for Home Assistant to save the plan.");
+    await cancel.click({ force: true });
+    await expect(dialog).toHaveCount(0);
+    expect((await snapshot(page)).planView).toBe("edit");
+  });
+
+  test("while the robot works, Edit keeps Cancel beside Stop on a phone and says when it can save on wide", async ({ page }) => {
+    let gallery = await narrow(page, "plan-dirty");
+    await patch(page, { activity: "cleaning" });
+    await expect(gallery.locator(".mobile-sheet > .action-bar").getByRole("button")).toHaveText(["Cancel", "Stop"]);
+    gallery = await wide(page, "plan-dirty");
+    await patch(page, { activity: "cleaning" });
+    const bar = gallery.locator(".workflow > .action-bar");
+    await expect(bar.getByRole("button")).toHaveText(["Cancel"]);
+    await expect(bar).toContainText("You can save when the robot finishes.");
+    await expect(gallery.locator(".status-strip").getByRole("button", { name: "Stop cleaning" })).toBeVisible();
+  });
+
+  test("Run plan is named for its plan", async ({ page }) => {
+    const gallery = await wide(page, "plan-saved-intelligent");
+    await expect(gallery.locator(".workflow > .action-bar").getByRole("button", { name: "Run plan Daily clean", exact: true }))
+      .toHaveText("Run plan");
+  });
+
+  test("a blocked run links to the room its reason names", async ({ page }) => {
+    const gallery = await wide(page, "plan-cadence-blocked");
+    await intent(page, { type: "set-plan-view", view: "run" });
+    const reason = gallery.locator(".workflow > .action-bar .action-reason");
+    await expect(reason).toContainText("Can't run this plan until you reset Kitchen's schedule progress, which Home Assistant can't confirm.");
+    await expect(reason.locator("bdi").first()).toHaveText("Kitchen");
+    const review = reason.getByRole("button", { name: "Review Kitchen", exact: true });
+    await expect(review.locator("bdi")).toHaveText("Kitchen");
+    expect(await review.evaluate((element) => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
+    await review.click();
+    expect(await snapshot(page)).toMatchObject({ planView: "edit", expandedRoom: "room-a" });
+  });
+
+  test("the picker and Run open at half height and Edit at full, again on each view change", async ({ page }) => {
+    const gallery = await narrow(page, "plans");
+    const sheet = gallery.locator(".mobile-sheet");
+    await expect(sheet).toHaveAttribute("data-detent", "half");
+    await intent(page, { type: "select-plan", planId: (await snapshot(page)).resources.plans.value.plans[0].id });
+    await expect(gallery.getByRole("heading", { level: 2 })).toHaveText("Daily clean");
+    await expect(sheet).toHaveAttribute("data-detent", "half");
+    await intent(page, { type: "set-plan-view", view: "edit" });
+    await expect(sheet).toHaveAttribute("data-detent", "full");
+    await intent(page, { type: "set-plan-view", view: "run" });
+    await expect(sheet).toHaveAttribute("data-detent", "half");
+  });
+
+  test("Discard changes? names the saved plan or area, or says the new one is lost", async ({ page }) => {
+    const gallery = await wide(page, "plan-dirty");
+    const dialog = gallery.getByRole("dialog", { name: "Discard changes?" });
+    await gallery.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(dialog).toHaveAccessibleDescription("Your changes to \"Daily clean\" haven't been saved, and discarding them can't be undone.");
+    await expect(dialog.getByRole("button")).toHaveText(["Keep editing", "Save", "Discard"]);
+    await expect(dialog.getByRole("button", { name: "Keep editing", exact: true })).toBeFocused();
+    await scenario(gallery, "plan-new");
+    await patch(page, { planDraft: { name: "Evening", dirty: true } });
+    await gallery.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(dialog).toHaveAccessibleDescription("This new plan hasn't been saved, and discarding it can't be undone.");
+    await expect(dialog.getByRole("button"), "a plan with no rooms can't be saved").toHaveText(["Keep editing", "Discard"]);
+    await scenario(gallery, "area-review-new");
+    await gallery.getByRole("button", { name: "Back to all tasks", exact: true }).click();
+    await expect(dialog).toHaveAccessibleDescription("This new area hasn't been saved, and discarding it can't be undone.");
+    await scenario(gallery, "area-review-rebind");
+    await patch(page, { areaDraft: { dirty: true } });
+    await gallery.getByRole("button", { name: "Back to all tasks", exact: true }).click();
+    await expect(dialog).toHaveAccessibleDescription("Your changes to \"Entryway\" haven't been saved, and discarding them can't be undone.");
+  });
+
+  test("Save in Discard changes? waits while saving, then goes on, or keeps the draft after a failure", async ({ page }) => {
+    const gallery = await wide(page, "plan-dirty");
+    // The gallery has no writes: the test plays the write, which answers the
+    // dialog through the action's `settled` callback, as effects.ts does.
+    await page.evaluate((tag) => {
+      window.__actions = [];
+      window.__settled = [];
+      document.querySelector(tag).addEventListener("matic-workspace-action", (event) => {
+        window.__actions.push(event.detail.id);
+        window.__settled.push(event.detail.settled);
+      });
+    }, GALLERY_TAG);
+    const settle = (saved) => page.evaluate((value) => window.__settled.shift()(value), saved);
+    const cancel = gallery.getByRole("button", { name: "Cancel", exact: true });
+    const dialog = gallery.getByRole("dialog", { name: "Discard changes?" });
+    const pending = { command: "pending", pendingAction: "save-plan" };
+    await cancel.click();
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    expect(await page.evaluate(() => window.__actions)).toEqual(["save-plan"]);
+    await patch(page, pending);
+    for (const name of ["Keep editing", "Save", "Discard"]) {
+      await expect(dialog.getByRole("button", { name, exact: true })).toHaveAttribute("aria-disabled", "true");
+    }
+    await expect(dialog.locator("#dialog-detail")).toContainText("Saving…");
+    await page.keyboard.press("Escape");
+    await dialog.getByRole("button", { name: "Discard", exact: true }).click({ force: true });
+    await expect(dialog).toBeVisible();
+    await patch(page, { command: "idle", notice: {
+      tone: "error", key: "v4_notice_plan_save_failed",
+      fallback: "Home Assistant can't confirm the plan was saved, so check your plans, then try again.",
+    } });
+    await expect(dialog, "the notice alone does not answer the dialog's save").toBeVisible();
+    await settle(false);
+    await expect(dialog).toHaveCount(0);
+    expect(await snapshot(page)).toMatchObject({ workflow: "plan", planView: "edit", planDraft: { dirty: true } });
+    await expect(cancel).toBeFocused();
+
+    await cancel.click();
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await patch(page, pending);
+    await patch(page, {
+      command: "idle", notice: { tone: "success", key: "v4_notice_plan_saved", fallback: "Plan saved" },
+      planDraft: { dirty: false, name: "Saved name" },
+    });
+    await settle(true);
+    await expect(dialog).toHaveCount(0);
+    expect(await snapshot(page)).toMatchObject({ planView: "run", planDraft: { dirty: false, name: "Saved name" } });
+    expect(await page.evaluate(() => window.__actions)).toEqual(["save-plan", "save-plan"]);
+  });
+
+  test("Save in Discard changes? saves the plan and goes on to Run", async ({ page }) => {
+    const { panel } = await openPanelPlan(page);
+    await panel.getByRole("textbox", { name: "Plan name" }).fill("Daily tidy");
+    await panel.getByRole("button", { name: "Cancel", exact: true }).click();
+    await panel.getByRole("dialog", { name: "Discard changes?" }).getByRole("button", { name: "Save", exact: true }).click();
+    await expect(panel.getByRole("heading", { level: 2 })).toHaveText("Daily tidy");
+    await expect(panel.getByRole("dialog")).toHaveCount(0);
+    await expect(panel.locator("[data-notice-slot]")).toHaveText("Plan saved");
+    expect(await page.evaluate(() => window.__panelFixture.serviceCalls.map(({ service, data }) => [service, data.name])))
+      .toEqual([["save_plan", "Daily tidy"]]);
+  });
+
+  test("Delete from Edit lands on the picker with Plan deleted and focus on its heading", async ({ page }) => {
+    const { panel } = await openPanelPlan(page);
+    await panel.getByRole("button", { name: "More actions", exact: true }).click();
+    await panel.getByRole("menuitem", { name: "Delete", exact: true }).click();
+    await panel.getByRole("dialog", { name: "Delete plan?" }).getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(panel.getByRole("heading", { level: 2, name: "Your plans" })).toBeFocused();
+    await expect(panel.locator("[data-notice-slot]")).toHaveText("Plan deleted");
+    await expect(panel.locator("[data-notice-toast]")).toHaveText("Plan deleted");
+    expect(await page.evaluate(() => window.__panelFixture.serviceCalls.map(({ service, data }) => [service, data])))
+      .toEqual([["delete_plan", { plan: "daily" }]]);
+  });
+});
+
 // design-system.md §8 and shell.md §8: axe serious and critical findings are
 // zero at every width, and aria-label sits only on a role that takes a name
 // (MS-AXE-01; axe files a named generic that has content under "incomplete").
@@ -8158,10 +9988,22 @@ async function settleWorkspace(gallery) {
   });
 }
 
+// plan.md §3: Create a plan is the picker's filled button only when it lists no plans.
+async function openEmptyPicker(gallery) {
+  await gallery.evaluate((element) => element.setScenario("plans"));
+  await settleWorkspace(gallery);
+  await gallery.evaluate((element) => {
+    const state = element.getWorkspaceSnapshot();
+    element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...state.resources.plans,
+      value: { ...state.resources.plans.value, plans: [], selectedPlan: null } } } });
+  });
+  await settleWorkspace(gallery);
+}
+
 const axeFindings = (results) => results.map(({ id, nodes }) => `${id}: ${nodes.map(({ target }) => target.flat().join(" >> ")).join(" | ")}`);
 
 test.describe("Map Studio accessibility baselines", () => {
-  for (const scenario of ["ready", "rooms", "plans", "plan-saved-intelligent", "draw", "history", "cleaning", "access"]) {
+  for (const scenario of ["ready", "rooms", "plans", "plan-saved-intelligent", "plan-saved-ordered", "plan-edit-ordered", "plan-run-paused", "plan-run-blocked", "plan-new", "plan-dirty", "draw", "history", "cleaning", "access"]) {
     for (const [width, height] of [[390, 844], [1024, 768]]) {
       const narrow = width < 1024;
       test(`${scenario} at ${width} has no serious axe finding and no name on an unnamed role${narrow ? " @mobile" : ""}`, async ({ page }) => {
@@ -8223,10 +10065,13 @@ test.describe("Map Studio accessibility baselines", () => {
   const scrollerState = (element, top) => element.evaluate((node, pinned) => {
     const target = pinned ? node.closest(".panel-top") : node;
     const tabbable = "a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])";
-    const nested = [...target.querySelectorAll("*")].some((child) => child.shadowRoot?.querySelector(tabbable));
+    // Workflow bodies can contain another custom element (for example the
+    // plan picker). Inspect the whole composed subtree, not just one host.
+    const containsTabbable = (root) => Boolean(root.querySelector(tabbable))
+      || [...root.querySelectorAll("*")].some((child) => child.shadowRoot && containsTabbable(child.shadowRoot));
     return {
       overflows: target.scrollHeight > target.clientHeight,
-      focusableChild: Boolean(target.querySelector(tabbable)) || nested,
+      focusableChild: containsTabbable(target),
       tabindex: target.getAttribute("tabindex"),
       role: target.getAttribute("role"),
       named: target.getAttribute("aria-labelledby") === "workspace-title",
@@ -8303,8 +10148,7 @@ test.describe("Map Studio accessibility baselines", () => {
     const stop = gallery.getByRole("button", { name: "Stop cleaning" });
     await expect.poll(() => pair(stop), "Stop: white on #db4437 is 4.29:1").toEqual({ label: "rgb(255, 255, 255)", fill: "rgb(208, 65, 52)", ratio: 4.68 });
 
-    await gallery.evaluate((element) => element.setScenario("plans"));
-    await settleWorkspace(gallery);
+    await openEmptyPicker(gallery);
     const create = gallery.getByRole("button", { name: "Create a plan" });
     await expect.poll(() => pair(create), "primary: white on #009ac7 is 3.26:1").toEqual({ label: "rgb(255, 255, 255)", fill: "rgb(0, 123, 159)", ratio: 4.85 });
     await theme({ "--primary-color": "#0b5394" });
@@ -8429,8 +10273,7 @@ test.describe("Map Studio resolved theme colours", () => {
       return { label, hover, active };
     };
     expect(await states(gallery.getByRole("button", { name: "Stop cleaning" }))).toEqual({ label: "rgb(255, 255, 255)", hover: 5.97, active: 7.43 });
-    await gallery.evaluate((element) => element.setScenario("plans"));
-    await settleWorkspace(gallery);
+    await openEmptyPicker(gallery);
     expect(await states(gallery.getByRole("button", { name: "Create a plan" }))).toEqual({ label: "rgb(255, 255, 255)", hover: 6.14, active: 7.61 });
   });
 
@@ -8439,7 +10282,7 @@ test.describe("Map Studio resolved theme colours", () => {
   test("a theme colour the resolver cannot measure leaves HA's own colour in place @mobile", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     const gallery = await loadGallery(page, { scenario: "plans", narrow: true });
-    await settleWorkspace(gallery);
+    await openEmptyPicker(gallery);
     const shell = gallery.locator("matic-map-shell-v4");
     const create = gallery.getByRole("button", { name: "Create a plan" });
     const state = async () => ({
@@ -8498,13 +10341,17 @@ test.describe("Map Studio resolved theme colours", () => {
     await gallery.getByRole("button", { name: /^Brush width, / }).click();
     await expect.poll(() => style(gallery.getByRole("slider", { name: "Brush width slider" }), "accentColor"), "brush slider").toBe(indicator);
 
-    await gallery.evaluate((element) => element.setScenario("plan-new"));
+    // Run's "Plan enabled" switch (plan.md §3), on for an enabled plan.
+    await gallery.evaluate((element) => element.setScenario("plan-saved-intelligent"));
     await settleWorkspace(gallery);
     const enabled = gallery.getByRole("switch", { name: "Plan enabled" });
-    if ((await enabled.getAttribute("aria-checked")) !== "true") await enabled.click();
     await expect(enabled).toHaveAttribute("aria-checked", "true");
     await expect.poll(() => enabled.evaluate((element) => getComputedStyle(element, "::before").backgroundColor), "checked switch").toBe(indicator);
-    await expect.poll(() => style(gallery.getByRole("checkbox", { name: /^Return to the dock when finished/ }), "accentColor"), "plan option").toBe(indicator);
+    await gallery.evaluate((element) => element.setScenario("plan-new"));
+    await settleWorkspace(gallery);
+    await expect.poll(() => style(gallery.getByRole("checkbox", { name: /^Include / }).first(), "accentColor"), "plan room").toBe(indicator);
+    const saved = gallery.getByRole("group", { name: "Cleaning order" }).locator('[aria-pressed="true"]');
+    await expect.poll(() => style(saved, "borderTopColor"), "pressed order").toBe(indicator);
 
     // The Room names checkbox sits in the phone sheet's Map display section.
     await page.setViewportSize({ width: 390, height: 844 });

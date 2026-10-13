@@ -4823,6 +4823,93 @@ def test_compatible_duration_history_is_room_and_settings_scoped() -> None:
     assert _compatible_duration_history({"rotations": []}, "room-hall", active) == []
 
 
+def _estimate_manager(hass, rotations: dict[str, Any]) -> CleaningPlanManager:
+    manager = CleaningPlanManager(hass)
+    manager._data = {"robots": {"serial": {"rotations": rotations}}}
+    return manager
+
+
+def _history(mode: str, coverage: str, samples: list[int]) -> dict[str, Any]:
+    return {
+        "cleaning_mode": mode,
+        "coverage_setting": coverage,
+        "duration_history_seconds": samples,
+    }
+
+
+def test_next_run_estimate_sums_room_medians_at_their_settings(hass) -> None:
+    manager = _estimate_manager(
+        hass,
+        {
+            "daily": {
+                "rooms": {
+                    "room-hall": _history("vacuum", "quick", [600, 660, 720]),
+                    "room-kitchen": _history("mop", "deep", [300, 900, 1200]),
+                    "room-den": _history("vacuum", "optimal", [100, 120, 140]),
+                }
+            }
+        },
+    )
+    rooms = [
+        ("room-hall", "vacuum", "quick"),
+        ("room-kitchen", "mop", "deep"),
+        ("room-den", "vacuum", "optimal"),
+    ]
+    manager._store = SimpleNamespace(async_save=AsyncMock())
+    listener = MagicMock()
+    manager.async_add_listener("serial", listener)
+
+    assert manager.next_run_estimate_seconds("serial", rooms) == 660 + 900 + 120
+    manager._store.async_save.assert_not_called()
+    listener.assert_not_called()
+
+
+def test_next_run_estimate_counts_samples_from_every_plan(hass) -> None:
+    manager = _estimate_manager(
+        hass,
+        {
+            "daily": {"rooms": {"room-hall": _history("vacuum", "quick", [600, 620])}},
+            "weekly": {"rooms": {"room-hall": _history("vacuum", "quick", [640])}},
+        },
+    )
+
+    assert (
+        manager.next_run_estimate_seconds("serial", [("room-hall", "vacuum", "quick")])
+        == 620
+    )
+
+
+def test_next_run_estimate_is_unknown_when_any_room_lacks_confidence(hass) -> None:
+    manager = _estimate_manager(
+        hass,
+        {
+            "daily": {
+                "rooms": {
+                    "room-hall": _history("vacuum", "quick", [600, 660, 720]),
+                    "room-kitchen": _history("vacuum", "quick", [300, 360]),
+                    "room-den": _history("mop", "quick", [100, 120, 140]),
+                }
+            }
+        },
+    )
+    hall = ("room-hall", "vacuum", "quick")
+
+    assert manager.next_run_estimate_seconds("serial", [hall]) == 660
+    assert (
+        manager.next_run_estimate_seconds(
+            "serial", [hall, ("room-kitchen", "vacuum", "quick")]
+        )
+        is None
+    )
+    assert (
+        manager.next_run_estimate_seconds(
+            "serial", [hall, ("room-den", "vacuum", "quick")]
+        )
+        is None
+    )
+    assert manager.next_run_estimate_seconds("serial", []) is None
+
+
 async def test_stop_policy_reuses_compatible_history_across_plans(hass) -> None:
     manager = CleaningPlanManager(hass)
     manager._store = SimpleNamespace(async_save=AsyncMock())

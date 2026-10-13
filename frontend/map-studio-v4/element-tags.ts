@@ -12,5 +12,7 @@ const suffix = buildToken === "dev" ? "" : `-${buildToken}`;
 export const MAP_CANVAS_TAG = `matic-map-canvas-v4${suffix}`;
 export const PRECISION_CONTROLS_TAG = `matic-precision-controls-v4${suffix}`;
 export const WORKFLOW_TAG = `matic-map-workflow-v4${suffix}`;
+export const PLAN_TOOLS_TAG = `matic-map-plan-tools-v4${suffix}`;
+export const PLAN_VIEWS_TAG = `matic-map-plan-views-v4${suffix}`;
 export const SHELL_TAG = `matic-map-shell-v4${suffix}`;
 export const PANEL_TAG = `matic-map-panel-v0-4-0${suffix}`;

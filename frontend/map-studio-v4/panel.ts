@@ -245,6 +245,10 @@ export class MaticMapPanelV4 extends LitElement {
       this.#effects?.selectPlan(intent.planId);
       return;
     }
+    if (intent.type === "set-plan-enabled") {
+      void this.#effects?.setPlanEnabled(intent.enabled);
+      return;
+    }
     if (intent.type === "select-area") {
       this.#effects?.selectArea(intent.areaId);
       if (intent.workflow === "areaReview") void this.#effects?.openWorkflow("areaReview");
@@ -259,7 +263,7 @@ export class MaticMapPanelV4 extends LitElement {
     if (event.detail.id === "reset-room-cadence" && "planId" in event.detail && "roomId" in event.detail && "mode" in event.detail) {
       void this.#effects?.executeAction(event.detail);
     } else {
-      void this.#effects?.executeAction(event.detail.id);
+      void this.#effects?.executeAction(event.detail.id, "settled" in event.detail ? event.detail.settled : undefined);
     }
     this.dispatchEvent(new CustomEvent("matic-map-v4-action-requested", {
       detail: { id: event.detail.id },

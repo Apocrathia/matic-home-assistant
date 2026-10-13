@@ -109,11 +109,85 @@ def test_v4_foundation_is_local_licensed_and_within_initial_budget() -> None:
     )
 
 
-def test_workflow_only_classes_ship_in_the_lazy_workflow_chunk() -> None:
-    """design-system.md: classes only workflow views use stay out of controls.ts."""
+def _startup_source() -> str:
+    _, assets = _startup_graph()
+    return "".join(
+        (_STUDIO_V4_DIRECTORY.parent / path).read_text(encoding="utf-8")
+        for path in assets
+    )
+
+
+def test_dialog_copy_ships_in_the_lazy_workflow_chunk() -> None:
+    """Only workflow controls open delete and reset dialogs, so their copy is lazy."""
+    startup = _startup_source()
+    assert "Reset mopping progress?" not in startup
+    assert "Delete plan?" not in startup
+
+
+def test_catalog_writes_ship_in_their_own_lazy_chunk() -> None:
+    """Plan and area writes run only from a workflow, so they load on first use."""
+    startup = _startup_source()
+    chunks = sorted(_STUDIO_V4_CHUNK_DIRECTORY.glob("catalog-writes-*.js"))
+    assert len(chunks) == 1
+    writes = chunks[0].read_text(encoding="utf-8")
+    assert len(gzip.compress(chunks[0].read_bytes(), mtime=0)) <= 30 * 1024
+    markers = ('"save_plan"', '"delete_plan"', '"reset_room_cadence"', "Area saved")
+    for marker in markers:
+        assert marker not in startup
+        assert marker in writes
+
+
+def test_outline_fill_ships_in_the_lazy_outline_chunk() -> None:
+    """Only the outline editor turns an outline into circles, so it loads with Draw."""
+    startup = _startup_source()
+    chunks = sorted(_STUDIO_V4_CHUNK_DIRECTORY.glob("outline-editor-*.js"))
+    assert len(chunks) == 1
+    # outlineCircles' radius cap, which minification keeps.
+    assert "Math.min(2.5," not in startup
+    assert "Math.min(2.5," in chunks[0].read_text(encoding="utf-8")
+    # The shell passes in the startup outline checks: a runtime import would
+    # split area-outline into a startup chunk of its own.
+    source = shipped_modules()["outline-editor.ts"]
+    assert not re.search(r'^import \{[^}]*\} from "\./area-outline"', source, re.M)
+
+
+def test_plan_focus_after_leaving_a_view_ships_in_the_lazy_workflow_chunk() -> None:
+    """Only the plan views render the controls focus returns to (plan.md §5)."""
+    startup = _startup_source()
+    workflow = _STUDIO_V4_WORKFLOW_CHUNK_PATHS[0].read_text(encoding="utf-8")
+    assert 'scrollIntoView({block:"nearest"})' not in startup
+    assert 'scrollIntoView({block:"nearest"})' in workflow
+
+
+def test_workflow_dialog_launch_and_confirm_ship_with_their_copy() -> None:
+    """Delete and reset dialogs open only from the views, which confirm them too."""
     modules = shipped_modules()
-    assert ".ms-chip" not in modules["controls.ts"]
-    assert ".ms-chip" in modules["workflow-panel.ts"]
+    for marker in ("cadenceResetRequest", "isWorkspaceIntent"):
+        assert marker not in modules["shell.ts"]
+        assert marker in modules["dialog-copy.ts"]
+
+
+def test_the_chip_ships_once_as_a_shared_control() -> None:
+    """plan.md §8: the shell's plan heading holds the chip, so it is shared."""
+    modules = shipped_modules()
+    assert ".ms-chip {" in modules["controls.ts"]
+    assert ".ms-chip" not in modules["workflow-panel.ts"]
+
+
+def test_style_comments_stay_in_the_sources_and_out_of_the_bundle() -> None:
+    """Developer notes sit beside their CSS rules; the build drops them."""
+    notes = [
+        " ".join(comment.split())
+        for path in (_REPOSITORY / "frontend" / "map-studio-v4").glob("*.ts")
+        for template in re.findall(r"\bcss`([^`]*)`", path.read_text(encoding="utf-8"))
+        for comment in re.findall(
+            r"^[ \t]*/\*(.*?)\*/[ \t]*$", template, re.MULTILINE | re.DOTALL
+        )
+    ]
+    assert len(notes) >= 16
+    shipped = " ".join(_STUDIO_V4_JS.split())
+    for note in notes:
+        assert note not in shipped, note
 
 
 def test_v4_bundle_is_ascii_safe_for_home_assistant_file_editor() -> None:

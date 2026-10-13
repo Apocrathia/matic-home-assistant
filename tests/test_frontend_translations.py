@@ -106,7 +106,8 @@ def test_common_values_are_simple_message_format() -> None:
     """HA localize runs IntlMessageFormat, so braces and quotes must stay plain."""
     for key, value in common_strings().items():
         assert isinstance(value, str), key
-        assert not re.search(r"['][{}]|[{}][']", value), f"{key}: quote beside a brace"
+        # An apostrophe quotes only when a brace follows it ("{room}'s" is plain text).
+        assert not re.search(r"'[{}]", value), f"{key}: apostrophe before a brace"
         assert "''" not in value, f"{key}: doubled apostrophe"
         assert "<" not in value and ">" not in value, f"{key}: angle bracket"
         bare = _SIMPLE_PLACEHOLDER.sub("", value)

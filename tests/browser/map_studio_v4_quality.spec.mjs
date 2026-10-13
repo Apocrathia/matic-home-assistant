@@ -5,7 +5,7 @@ test("keeps checkbox state attached to its room when selected rows move", async 
   const gallery = page.locator("matic-map-studio-gallery-v0-4-0");
   await gallery.getByRole("button", { name: /^Run a plan/ }).click();
   await gallery.getByRole("button", { name: "Create a plan", exact: true }).click();
-  const rows = gallery.locator(".plan-room");
+  const rows = gallery.getByRole("list", { name: "Rooms", exact: true }).getByRole("listitem");
   await rows.last().getByRole("checkbox").click();
   await expect(rows.first()).toHaveAttribute("data-selected", "true");
   const assertConsistent = async () => {
@@ -64,7 +64,7 @@ async function loadQualityModules(page) {
       export { WorkspaceStore } from "./frontend/map-studio-v4/state";
       export { createGalleryState, withGalleryRoomPreview } from "./frontend/map-studio-v4/gallery-state";
       export { PreferenceStore, preferencesKey } from "./frontend/map-studio-v4/preferences";
-      export { SHELL_TAG, WORKFLOW_TAG } from "./frontend/map-studio-v4/element-tags";
+      export { PLAN_TOOLS_TAG, PLAN_VIEWS_TAG, SHELL_TAG, WORKFLOW_TAG } from "./frontend/map-studio-v4/element-tags";
       import "./frontend/map-studio-v4/shell";`, resolveDir: process.cwd() },
     bundle: true, format: "esm", write: false,
   });
@@ -157,6 +157,8 @@ for (const context of ["disposed", "robot", "user"]) {
         const projection = { host: initial.host, activity: initial.activity, batteryPercent: 92, robotLabel: "Synthetic", robots: initial.robots, language: "en", userKey: "one", entryKey: initial.selection.entryId, vacuumEntityId: "vacuum.synthetic" };
         effects.sync(projection);
         const pending = effects.savePlan();
+        // The write is in flight once the lazily loaded save reaches the service.
+        for (let i = 0; i < 20 && !finish; i++) await new Promise((resolve) => setTimeout(resolve, 0));
         if (context === "disposed") effects.dispose();
         else effects.sync({ ...projection, ...(context === "robot" ? { entryKey: "other-entry", vacuumEntityId: "vacuum.other" } : { userKey: "two" }) });
         await Promise.resolve(); await Promise.resolve();
@@ -170,6 +172,68 @@ for (const context of ["disposed", "robot", "user"]) {
       expect(result).toBe(true);
     });
   }
+
+}
+
+// The writes module loads on the first save. A save owns its mutation from the
+// moment it is asked for, so a context change before the module arrives
+// cancels it before anything is sent; a hidden page no longer admits it.
+for (const context of ["disposed", "robot", "user", "floor", "pagehide"]) {
+  test(`drops a plan save whose context becomes ${context} while the writes load`, async ({ page }) => {
+    await loadQualityModules(page);
+    const result = await page.evaluate(async (context) => {
+      const { EffectController, WorkspaceStore, createGalleryState } = await import("/quality-modules.js");
+      const initial = createGalleryState("ready");
+      const store = new WorkspaceStore({ ...initial, planDraft: { ...initial.planDraft, dirty: true } });
+      const calls = [];
+      const aborted = async () => { throw new DOMException("Aborted", "AbortError"); };
+      const effects = new EffectController(store, { catalog: async () => [initial.resources.entry], scene: aborted, pose: aborted, history: aborted, plans: aborted,
+        service: async (...args) => { calls.push(args); }, dispose() {} });
+      const projection = { host: initial.host, activity: initial.activity, batteryPercent: 92, robotLabel: "Synthetic", robots: initial.robots, language: "en", userKey: "one", entryKey: initial.selection.entryId, vacuumEntityId: "vacuum.synthetic" };
+      effects.sync(projection);
+      const pending = effects.savePlan();
+      if (context === "disposed") effects.dispose();
+      else if (context === "floor") void effects.selectFloor("saved-1");
+      else if (context === "pagehide") window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true }));
+      else effects.sync({ ...projection, ...(context === "robot" ? { entryKey: "other-entry", vacuumEntityId: "vacuum.other" } : { userKey: "two" }) });
+      await pending;
+      const outcome = { calls: calls.length, command: store.value.command, saving: store.value.notice?.key === "v4_notice_saving" };
+      effects.dispose();
+      return outcome;
+    }, context);
+    expect(result).toEqual({ calls: 0, command: "idle", saving: false });
+  });
+}
+
+// A plan write gives back its resource once Home Assistant answers, so the
+// next plan write can start while the first one reloads the catalog.
+for (const [first, second] of [["save", "delete"], ["reset", "reset"]]) {
+  test(`a plan ${second} asked for while a ${first} reloads the catalog is sent`, async ({ page }) => {
+    await loadQualityModules(page);
+    const result = await page.evaluate(async ({ first, second }) => {
+      const { EffectController, WorkspaceStore, createGalleryState } = await import("/quality-modules.js");
+      const initial = createGalleryState("ready");
+      const store = new WorkspaceStore({ ...initial, workflow: "plan", planDraft: { ...initial.planDraft, dirty: first === "save" } });
+      const calls = [];
+      const effects = new EffectController(store, { service: async (_domain, service) => { calls.push(service); }, dispose() {} });
+      effects.sync({ host: initial.host, activity: initial.activity, batteryPercent: 92, robotLabel: "Synthetic", robots: initial.robots, language: "en", userKey: "one", entryKey: initial.selection.entryId, vacuumEntityId: "vacuum.synthetic" });
+      const reloads = [];
+      effects.loadPlans = () => new Promise((resolve) => { reloads.push(() => resolve(null)); });
+      const planId = store.value.selection.planId;
+      const write = (kind, roomId) => kind === "save" ? effects.savePlan() : kind === "delete" ? effects.deletePlan()
+        : effects.executeAction({ id: "reset-room-cadence", planId, roomId, mode: "mop" });
+      const writing = write(first, "room-a");
+      for (let i = 0; i < 20 && !reloads.length; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+      const next = write(second, "room-b");
+      for (let i = 0; i < 20 && reloads.length < 2; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+      for (const reload of reloads) reload();
+      await Promise.all([writing, next]);
+      effects.dispose();
+      return calls;
+    }, { first, second });
+    const services = { save: "save_plan", delete: "delete_plan", reset: "reset_room_cadence" };
+    expect(result).toEqual([services[first], services[second]]);
+  });
 }
 
 test("debounced preferences stay with the user who changed them", async ({ page }) => {
@@ -198,7 +262,7 @@ for (const colorScheme of ["light", "dark"]) {
       await page.goto("/map-studio-v4-review");
       if (surface === "primary") {
         await page.getByRole("button", { name: "Run a plan 1 saved plan", exact: true }).click();
-        await page.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
+        await page.getByRole("button", { name: /^Daily clean/ }).click();
       }
       else await page.getByRole("button", { name: "transition", exact: true }).click();
       const element = page.locator(surface === "primary" ? ".action-bar .ms-btn--primary" : ".map-message");
@@ -243,6 +307,7 @@ for (const action of ["saveArea", "deleteArea"]) {
         const projection = { host: initial.host, activity: initial.activity, batteryPercent: 92, robotLabel: "Synthetic", robots: initial.robots, language: "en", userKey: "one", entryKey: initial.selection.entryId, vacuumEntityId: "vacuum.synthetic" };
         effects.sync(projection);
         const pending = effects[action]();
+        for (let i = 0; i < 20 && !finish; i++) await new Promise((resolve) => setTimeout(resolve, 0));
         await effects[action]();
         effects.sync({ ...projection, userKey: "two" });
         await Promise.resolve(); await Promise.resolve();
@@ -257,6 +322,30 @@ for (const action of ["saveArea", "deleteArea"]) {
     });
   }
 }
+
+// As while a write is pending, a second write asked for while the first one's
+// module loads is refused; the first is never cancelled.
+test("an area delete asked for while an area save loads is refused", async ({ page }) => {
+  await loadQualityModules(page);
+  const result = await page.evaluate(async () => {
+    const { EffectController, WorkspaceStore, createGalleryState } = await import("/quality-modules.js");
+    const initial = createGalleryState("draw");
+    const store = new WorkspaceStore(initial);
+    const writes = [];
+    const effects = new EffectController(store, {
+      saveArea: async () => { writes.push("save"); return "entryway"; },
+      deleteArea: async () => { writes.push("delete"); },
+      areas: async () => initial.resources.areas.value,
+      dispose() {},
+    });
+    effects.sync({ host: initial.host, activity: initial.activity, batteryPercent: 92, robotLabel: "Synthetic", robots: initial.robots, language: "en", userKey: "one", entryKey: initial.selection.entryId, vacuumEntityId: "vacuum.synthetic" });
+    await Promise.all([effects.saveArea(), effects.deleteArea()]);
+    const outcome = { writes, notice: store.value.notice?.key };
+    effects.dispose();
+    return outcome;
+  });
+  expect(result).toEqual({ writes: ["save"], notice: "v4_notice_area_saved" });
+});
 
 for (const scenario of ["draw", "history"]) {
 for (const change of ["user", "robot", "access", "removed"]) {
@@ -392,6 +481,7 @@ for (const rejected of [false, true]) {
         service: () => new Promise((resolve, reject) => { finish = () => rejected ? reject(new Error("Late failure")) : resolve(); }), dispose() {} });
       effects.sync({ host: initial.host, activity: initial.activity, batteryPercent: 92, robotLabel: "Synthetic", robots: initial.robots, language: "en", userKey: "one", entryKey: initial.selection.entryId, vacuumEntityId: "vacuum.synthetic" });
       const pending = effects.savePlan();
+      for (let i = 0; i < 20 && !finish; i++) await new Promise((resolve) => setTimeout(resolve, 0));
       await effects.selectFloor("saved-1");
       const saved = { command: store.value.command, notice: store.value.notice };
       await effects.selectFloor("current");
@@ -437,7 +527,7 @@ for (const kind of ["plan", "area"]) {
   test(`a ${kind} delete dialog stays open through a catalog reload, even a failed one, that does not prove the ${kind} gone`, async ({ page }) => {
     await loadQualityModules(page);
     const result = await page.evaluate(async (kind) => {
-      const { EffectController, WorkspaceStore, createGalleryState, SHELL_TAG, WORKFLOW_TAG } = await import("/quality-modules.js");
+      const { EffectController, WorkspaceStore, createGalleryState, PLAN_TOOLS_TAG, SHELL_TAG, WORKFLOW_TAG } = await import("/quality-modules.js");
       const plan = kind === "plan";
       const initial = createGalleryState(plan ? "plans" : "area-review-rebind");
       const store = new WorkspaceStore(initial);
@@ -461,8 +551,11 @@ for (const kind of ["plan", "area"]) {
       store.patch({ map: initial.map, coherence: "current" });
       const load = () => plan ? effects.loadPlans({ force: true }) : effects.loadAreas();
       await load();
-      if (plan) effects.selectPlan("daily");
-      else {
+      if (plan) {
+        effects.selectPlan("daily");
+        // Delete lives in Edit (plan.md §3).
+        store.dispatch({ type: "set-plan-view", view: "edit" });
+      } else {
         effects.selectArea("entryway");
         store.patch({ workflow: "areaReview" });
       }
@@ -471,7 +564,9 @@ for (const kind of ["plan", "area"]) {
       store.subscribe((state) => { shell.state = state; });
       document.body.append(shell);
       const dialogName = plan ? "confirmDeletePlan" : "confirmDeleteArea";
-      const launcher = () => shell.shadowRoot.querySelector(WORKFLOW_TAG)?.shadowRoot
+      // A plan's Delete is in the heading's More actions (plan.md §3); an
+      // area's is in the area review.
+      const launcher = () => shell.shadowRoot.querySelector(plan ? PLAN_TOOLS_TAG : WORKFLOW_TAG)?.shadowRoot
         ?.querySelector(`[data-dialog-launcher="${dialogName}"]`) ?? null;
       const settle = async () => {
         await shell.updateComplete;
@@ -525,21 +620,22 @@ for (const kind of ["plan", "area"]) {
     expect(result.loading, "while the catalog reloads, the dialog and its Delete button stay").toEqual({ status: "loading", dialog, detail, sameButton: true });
     expect(result.reloaded, "after a reload that still holds the item").toEqual({ dialog, detail, sameButton: true });
     // A failed read proves nothing: the dialog still names the item, and the
-    // plan view behind it shows the problem (area review lists no catalog).
+    // The view behind it shows the resource problem for plans and saved areas.
+    // The heading's More actions stays, so the dialog keeps its launcher.
     expect(result.failed, "after a reload that fails").toEqual(kind === "plan"
-      ? { status: "error", problem: "Home Assistant couldn't load rooms and plans. Try again shortly.", dialog, detail, sameButton: false }
-      : { status: "error", problem: null, dialog, detail, sameButton: true });
+      ? { status: "error", problem: "Home Assistant couldn't load rooms and plans.", dialog, detail, sameButton: true }
+      : { status: "error", problem: "Saved areas are unavailable right now.", dialog, detail, sameButton: true });
     expect(result.removed, "a ready catalog without the item closes the dialog").toEqual({ dialog: null });
   });
 }
 
 for (const way of ["Escape", "Cancel", "outside"]) {
   test(way === "outside"
-    ? "closing a plan delete dialog whose Delete button a failed reload removed leaves focus that moved outside the shell alone"
-    : `${way} on a plan delete dialog whose Delete button a failed reload removed leaves focus on the panel heading`, async ({ page }) => {
+    ? "closing a plan delete dialog after a failed reload leaves focus that moved outside the shell alone"
+    : `${way} on a plan delete dialog after a failed reload returns focus to More actions`, async ({ page }) => {
     await loadQualityModules(page);
     await page.evaluate(async () => {
-      const { EffectController, WorkspaceStore, createGalleryState, SHELL_TAG, WORKFLOW_TAG } = await import("/quality-modules.js");
+      const { EffectController, WorkspaceStore, createGalleryState, PLAN_TOOLS_TAG, SHELL_TAG, WORKFLOW_TAG } = await import("/quality-modules.js");
       const initial = createGalleryState("plans");
       const store = new WorkspaceStore(initial);
       const gate = { fail: false };
@@ -559,6 +655,7 @@ for (const way of ["Escape", "Cancel", "outside"]) {
       store.patch({ map: initial.map, coherence: "current" });
       await effects.loadPlans({ force: true });
       effects.selectPlan("daily");
+      store.dispatch({ type: "set-plan-view", view: "edit" });
       const shell = document.createElement(SHELL_TAG);
       shell.state = store.value;
       store.subscribe((state) => { shell.state = state; });
@@ -566,10 +663,14 @@ for (const way of ["Escape", "Cancel", "outside"]) {
       shell.addEventListener("matic-workspace-intent", (event) => store.dispatch(event.detail));
       document.body.append(shell);
       const workflow = () => shell.shadowRoot.querySelector(WORKFLOW_TAG);
-      const launcher = () => workflow()?.shadowRoot?.querySelector('[data-dialog-launcher="confirmDeletePlan"]') ?? null;
+      // plan.md §3: Delete is in the heading's More actions.
+      const launcher = () => shell.shadowRoot.querySelector(PLAN_TOOLS_TAG)?.shadowRoot?.querySelector('[data-dialog-launcher="confirmDeletePlan"]') ?? null;
       for (let frame = 0; frame < 200 && !launcher(); frame += 1) await new Promise(requestAnimationFrame);
-      launcher().focus();
-      store.dispatch({ type: "open-dialog", dialog: "confirmDeletePlan" });
+      // Opened as a person does: More actions, then its Delete.
+      launcher().click();
+      const tools = launcher().getRootNode().host;
+      await tools.updateComplete;
+      tools.shadowRoot.querySelector('[role="menuitem"]').click();
       await shell.updateComplete;
       gate.fail = true;
       await effects.loadPlans({ force: true });
@@ -579,7 +680,7 @@ for (const way of ["Escape", "Cancel", "outside"]) {
     });
     const dialog = page.getByRole("dialog");
     await expect(dialog, "the dialog stays over the problem box").toBeVisible();
-    await expect(page.getByRole("button", { name: "Try again" }), "the Delete button is gone, the problem box shows").toBeVisible();
+    await expect(page.getByRole("button", { name: "Try again" }), "the problem box shows behind the dialog").toBeVisible();
     if (way === "outside") {
       await page.evaluate(() => {
         const button = Object.assign(document.createElement("button"), { textContent: "Outside the studio" });
@@ -595,7 +696,8 @@ for (const way of ["Escape", "Cancel", "outside"]) {
     if (way === "outside") {
       await expect(page.getByRole("button", { name: "Outside the studio" }), "focus the user moved elsewhere stays there").toBeFocused();
     } else {
-      await expect(page.getByRole("heading", { name: "Edit plan" }), "focus lands on the panel heading").toBeFocused();
+      // A failed read proves nothing, so the launcher stays and takes focus back.
+      await expect(page.getByRole("button", { name: "More actions" }), "focus returns to the launcher").toBeFocused();
     }
     await page.evaluate(() => { window.__ux0Fix10.effects.dispose(); window.__ux0Fix10.shell.remove(); });
   });
@@ -604,10 +706,10 @@ for (const way of ["Escape", "Cancel", "outside"]) {
 test("a catalog a suspended page sets back to idle keeps showing its value and Delete", async ({ page }) => {
   await loadQualityModules(page);
   const result = await page.evaluate(async () => {
-    const { createGalleryState, SHELL_TAG, WORKFLOW_TAG } = await import("/quality-modules.js");
+    const { createGalleryState, PLAN_TOOLS_TAG, PLAN_VIEWS_TAG, SHELL_TAG, WORKFLOW_TAG } = await import("/quality-modules.js");
     const initial = createGalleryState("plan-saved-intelligent");
     const shell = document.createElement(SHELL_TAG);
-    shell.state = { ...initial, resources: { ...initial.resources, plans: { ...initial.resources.plans, status: "idle" } } };
+    shell.state = { ...initial, planView: "edit", resources: { ...initial.resources, plans: { ...initial.resources.plans, status: "idle" } } };
     document.body.append(shell);
     let view = null;
     for (let frame = 0; frame < 200 && !view; frame += 1) {
@@ -616,12 +718,15 @@ test("a catalog a suspended page sets back to idle keeps showing its value and D
     }
     await view?.updateComplete;
     const root = view?.shadowRoot;
+    const tools = shell.shadowRoot.querySelector(PLAN_TOOLS_TAG);
+    await tools?.updateComplete;
     return {
       loading: root?.querySelector(".loading")?.textContent ?? null,
-      deleteLauncher: Boolean(root?.querySelector('[data-dialog-launcher="confirmDeletePlan"]')),
+      edit: Boolean(root?.querySelector(PLAN_VIEWS_TAG)),
+      deleteLauncher: Boolean(tools?.shadowRoot?.querySelector('[data-dialog-launcher="confirmDeletePlan"]')),
     };
   });
-  expect(result, "only an empty load waits (workflow-panel.ts #resource)").toEqual({ loading: null, deleteLauncher: true });
+  expect(result, "only an empty load waits (workflow-panel.ts #resource)").toEqual({ loading: null, edit: true, deleteLauncher: true });
 });
 
 test("external Area deletion preserves a dirty draft and turns later save into a create", async ({ page }) => {
@@ -841,9 +946,9 @@ for (const width of [320, 390, 820, 1280]) {
       await gallery.getByRole("button", { name: /^Run a plan/ }).click();
       await expect(gallery.getByRole("heading", { name: "Your plans", exact: true })).toBeVisible();
       await expect(gallery.getByRole("textbox", { name: "Plan name" })).toHaveCount(0);
-      await expect(gallery.getByRole("button", { name: "Run plan", exact: true })).toHaveCount(0);
+      await expect(gallery.getByRole("button", { name: /^Run plan/ })).toHaveCount(0);
       const create = gallery.getByRole("button", { name: "Create a plan", exact: true });
-      const choice = gallery.getByRole("button", { name: /Evening routine.*Paused.*Edit plan/ });
+      const choice = gallery.getByRole("button", { name: /^Evening routine.*Paused/ });
       const appearance = await choice.evaluate((element) => {
         const context = document.createElement("canvas").getContext("2d");
         const luminance = color => {
@@ -874,8 +979,9 @@ for (const width of [320, 390, 820, 1280]) {
       }
       await page.screenshot({ path: testInfo.outputPath(`picker-${width}-${theme}.png`) });
       await choice.click();
-      await expect(gallery.getByRole("heading", { name: "Edit plan", exact: true })).toBeVisible();
-      await expect(gallery.getByRole("textbox", { name: "Plan name" })).toHaveValue("Evening routine");
+      // plan.md §3: a saved plan opens in Run, headed by its name.
+      await expect(gallery.getByRole("heading", { name: "Evening routine", level: 2 })).toBeVisible();
+      await expect(gallery.getByRole("switch", { name: "Plan enabled" })).toHaveAttribute("aria-checked", "false");
       await gallery.getByRole("button", { name: "Back to plans", exact: true }).click();
       await create.click();
       await expect(gallery.getByRole("textbox", { name: "Plan name" })).toHaveValue("");
@@ -889,22 +995,31 @@ test("Escape from the plan editor returns to the picker", async ({ page }) => {
   await page.goto("/map-studio-v4-audit");
   const gallery = page.locator("matic-map-studio-gallery-v0-4-0");
   await gallery.getByRole("button", { name: /^Run a plan/ }).click();
-  await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
+  await gallery.getByRole("button", { name: /^Daily clean/ }).click();
   await page.keyboard.press("Escape");
   await expect(gallery.getByRole("heading", { name: "Your plans", exact: true })).toBeVisible();
 });
 
-test("discarding plan edits through Escape returns to the picker", async ({ page }) => {
+// plan.md §5 Navigation: discarding a saved plan's edits returns to its Run
+// view; Escape from Run then goes to the picker.
+test("discarding plan edits through Escape returns to the plan, then the picker", async ({ page }) => {
   await page.goto("/map-studio-v4-audit");
   const gallery = page.locator("matic-map-studio-gallery-v0-4-0");
   await gallery.getByRole("button", { name: /^Run a plan/ }).click();
-  await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
+  await gallery.getByRole("button", { name: /^Daily clean/ }).click();
+  await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
   await gallery.getByRole("textbox", { name: "Plan name" }).fill("Unsaved change");
   await page.keyboard.press("Escape");
-  const dialog = gallery.getByRole("dialog", { name: "Discard plan changes?" });
+  // shell.md §5: one title for every draft.
+  const dialog = gallery.getByRole("dialog", { name: "Discard changes?" });
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "Discard", exact: true }).click();
+  await expect(gallery.getByRole("heading", { name: "Daily clean", level: 2 })).toBeVisible();
+  await expect(gallery.getByRole("textbox", { name: "Plan name" })).toHaveCount(0);
+  expect(await gallery.evaluate((element) => {
+    const { workflow, planView, planDraft } = element.getWorkspaceSnapshot();
+    return { workflow, planView, dirty: planDraft.dirty };
+  })).toEqual({ workflow: "plan", planView: "run", dirty: false });
+  await page.keyboard.press("Escape");
   await expect(gallery.getByRole("heading", { name: "Your plans", exact: true })).toBeVisible();
-  await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
-  await expect(gallery.getByRole("textbox", { name: "Plan name" })).toHaveValue("Daily clean");
 });

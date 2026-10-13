@@ -6,7 +6,7 @@ import type {
   RoomCadenceProgress,
   SavedPlan,
 } from "./backend-contracts";
-import type { DialogKind, WorkspaceNotice, WorkspaceState } from "./contracts";
+import type { DialogKind, PlanView, WorkspaceNotice, WorkspaceState } from "./contracts";
 import { draftForPlan, initialWorkspaceState, manualRoomPreviewKey } from "./state";
 import {
   syntheticAreas,
@@ -37,6 +37,10 @@ export type GalleryScenario =
   | "plans"
   | "plan-saved-intelligent"
   | "plan-saved-ordered"
+  | "plan-run-paused"
+  | "plan-run-blocked"
+  | "plan-run-parts"
+  | "plan-edit-ordered"
   | "plan-new"
   | "plan-dirty"
   | "plan-cadence-shared"
@@ -137,13 +141,15 @@ const catalogWith = (
   ...overrides,
 });
 
-const planEditor = (
+const openPlan = (
   state: WorkspaceState,
   plan: SavedPlan,
+  planView: PlanView,
   catalog: PlansCatalog = catalogWith([plan]),
 ): WorkspaceState => ({
   ...withPlans(state, catalog),
   workflow: "plan",
+  planView,
   selection: { ...state.selection, planId: plan.id },
   planDraft: draftForPlan(plan),
 });
@@ -307,14 +313,19 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
         ],
       };
     case "plans": {
-      const daily = savedDailyPlan();
+      // The picker's line 3 kinds (plan.md §3): due work, a blocked run, a paused plan.
+      const saved = savedDailyPlan();
+      // Two rooms share mop due work, so the line joins them (plan.md §3).
+      const daily = planWithRooms(saved, saved.rooms.map((room, index): PlanRoom => index === 0
+        ? { ...room, cadenceReasons: ["mop_due", "coverage_due"] }
+        : index === 1 ? { ...room, cadenceReasons: ["mop_due"] } : room));
       const weekend = planWithRooms(
         { ...daily, id: "weekend", name: "Weekend refresh" },
         [
           { roomId: "room-b", cleaningMode: "vacuum_and_mop", coverageSetting: "heavy_duty" },
           { roomId: "room-d", cleaningMode: "vacuum", coverageSetting: "standard" },
         ],
-        { runBehavior: "ordered" },
+        { runBehavior: "ordered", nextRunPreview: previewFor([], { blocker: "cadence_progress_unverified" }) },
       );
       const guest = planWithRooms(
         { ...daily, id: "guest", name: "Guest prep", enabled: false },
@@ -326,7 +337,7 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
       };
     }
     case "plan-saved-intelligent":
-      return planEditor(state, savedDailyPlan());
+      return openPlan(state, savedDailyPlan(), "run");
     case "plan-saved-ordered": {
       const daily = savedDailyPlan();
       const byId = new Map(daily.rooms.map((room) => [room.roomId, room]));
@@ -334,17 +345,46 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
         const room = byId.get(roomId);
         return room ? [room] : [];
       });
-      return planEditor(state, planWithRooms(daily, ordered, { runBehavior: "ordered" }));
+      return openPlan(state, planWithRooms(daily, ordered, { runBehavior: "ordered" }), "run");
     }
+    case "plan-run-paused":
+      return openPlan(state, {
+        ...savedDailyPlan(),
+        enabled: false,
+        nextRunPreview: previewFor([], { blocker: "plan_disabled" }),
+        nextRunEstimateSeconds: null,
+      }, "run");
+    case "plan-run-blocked": {
+      const rooms = savedDailyPlan().rooms.map((room, index): PlanRoom => index === 1
+        ? { ...room, cadenceReasons: ["mop_progress_unverified"] }
+        : room);
+      return openPlan(state, planWithRooms(savedDailyPlan(), rooms, {
+        nextRunPreview: previewFor([], { blocker: "cadence_progress_unverified" }),
+        nextRunEstimateSeconds: null,
+      }), "run");
+    }
+    case "plan-run-parts": {
+      // Saved order with a mode change after the first room (plan.md R1 parts).
+      const rooms = savedDailyPlan().rooms.map((room, index): PlanRoom => index === 0
+        ? { ...room, cleaningMode: "vacuum_and_mop", cadenceReasons: ["mop_due"] }
+        : room);
+      return openPlan(state, planWithRooms(savedDailyPlan(), rooms, {
+        runBehavior: "ordered",
+        nextRunPreview: previewFor(rooms, { missionBoundaries: [1] }),
+      }), "run");
+    }
+    case "plan-edit-ordered":
+      return openPlan(state, { ...savedDailyPlan(), runBehavior: "ordered" }, "edit");
     case "plan-new":
       return {
         ...withPlans(state, catalogWith([savedDailyPlan()])),
         workflow: "plan",
+        planView: "edit",
         selection: { ...state.selection, planId: null },
         planDraft: initialWorkspaceState().planDraft,
       };
     case "plan-dirty": {
-      const edited = planEditor(state, savedDailyPlan());
+      const edited = openPlan(state, savedDailyPlan(), "edit");
       return {
         ...edited,
         planDraft: {
@@ -363,7 +403,7 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
         cadenceProgress: sharedCadenceProgress(),
       });
       const catalog = catalogWith([plan]);
-      return planEditor(state, plan, {
+      return openPlan(state, plan, "edit", {
         ...catalog,
         rooms: catalog.rooms.map((room) => room.roomId === "room-a"
           ? { ...room, sharedCadence: sharedCadencePolicy(), sharedCadenceProgress: sharedCadenceProgress() }
@@ -378,9 +418,9 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
           cadenceReasons: ["invalid_cadence_policy", "mop_progress_unverified"],
         }
         : room);
-      return planEditor(state, planWithRooms(savedDailyPlan(), rooms, {
+      return openPlan(state, planWithRooms(savedDailyPlan(), rooms, {
         nextRunPreview: previewFor(rooms, { blocker: "invalid_cadence_policy" }),
-      }));
+      }), "edit");
     }
     case "plan-legacy-oversized": {
       const catalogRooms = galleryRooms(101);
@@ -392,7 +432,7 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
       const plan = planWithRooms(savedDailyPlan(), rooms, {
         nextRunPreview: previewFor([], { blocker: "plan_room_limit" }),
       });
-      return planEditor(state, plan, catalogWith([plan], { rooms: catalogRooms }));
+      return openPlan(state, plan, "edit", catalogWith([plan], { rooms: catalogRooms }));
     }
     case "area-review-new":
       return {
@@ -563,6 +603,10 @@ export const GALLERY_SCENARIOS: readonly GalleryScenario[] = [
   "plans",
   "plan-saved-intelligent",
   "plan-saved-ordered",
+  "plan-run-paused",
+  "plan-run-blocked",
+  "plan-run-parts",
+  "plan-edit-ordered",
   "plan-new",
   "plan-dirty",
   "plan-cadence-shared",

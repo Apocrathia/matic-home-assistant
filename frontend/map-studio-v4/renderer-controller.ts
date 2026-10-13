@@ -381,6 +381,8 @@ export class RendererController {
   #fitActive = true;
   #disposed = false;
   #palette: CanvasPalette = DEFAULT_PALETTE;
+  // Saved-order numbers are drawn every frame; one formatter per locale.
+  #positionFormat: { readonly locale: string; readonly format: Intl.NumberFormat } | null = null;
 
   constructor(
     sceneCanvas: HTMLCanvasElement,
@@ -1405,6 +1407,15 @@ export class RendererController {
       context.drawImage(this.#fallbackCanvas, 0, 0, bounds.width, bounds.height);
     }
     const selectedNames = this.#selectedRoomNames(state);
+    const selectedPositions = state.workflow === "plan" && state.planDraft.runBehavior === "ordered"
+      ? (() => {
+        if (this.#positionFormat?.locale !== state.locale) {
+          this.#positionFormat = { locale: state.locale, format: new Intl.NumberFormat(state.locale) };
+        }
+        const { format } = this.#positionFormat;
+        return new Map(state.planDraft.rooms.map((room, index) => [room.roomId, format.format(index + 1)]));
+      })()
+      : null;
     if (state.labelsVisible || (state.view === "top" && state.appearance === "rooms")) {
       context.lineWidth = 1.5;
       context.font = "600 12px system-ui, sans-serif";
@@ -1442,8 +1453,13 @@ export class RendererController {
         if (!state.labelsVisible) continue;
         const center = this.#projectCell(room.center[0], room.center[1], 1);
         if (!center) continue;
+        const position = selectedPositions?.get(room.id);
+        const positionWidth = position ? context.measureText(position).width : 0;
+        const badgeWidth = position ? Math.max(16, positionWidth + 10) : 0;
+        const badgeGap = position ? 4 : 0;
         const textWidth = context.measureText(room.name).width;
-        const labelBounds = new DOMRect(center.x - textWidth / 2 - 6, center.y - 10, textWidth + 12, 20);
+        const contentWidth = badgeWidth + badgeGap + textWidth;
+        const labelBounds = new DOMRect(center.x - contentWidth / 2 - 6, center.y - 10, contentWidth + 12, 20);
         if (occupied.some((other) => labelBounds.left < other.right + 8
           && labelBounds.right + 8 > other.left
           && labelBounds.top < other.bottom + 4
@@ -1451,8 +1467,17 @@ export class RendererController {
         occupied.push(labelBounds);
         context.fillStyle = rgba(palette.plate, .88);
         context.fillRect(labelBounds.x, labelBounds.y, labelBounds.width, labelBounds.height);
+        if (position) {
+          const badgeX = center.x - contentWidth / 2 + badgeWidth / 2;
+          context.beginPath();
+          context.roundRect(badgeX - badgeWidth / 2, center.y - 8, badgeWidth, 16, 8);
+          context.fillStyle = rgba(palette.accent, 1);
+          context.fill();
+          context.fillStyle = rgba(palette.onAccent, 1);
+          context.fillText(position, badgeX, center.y);
+        }
         context.fillStyle = rgba(palette.text, 1);
-        context.fillText(room.name, center.x, center.y);
+        context.fillText(room.name, center.x + (badgeWidth + badgeGap) / 2, center.y);
       }
     }
     const preview = this.#circlePreview;

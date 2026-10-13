@@ -186,4 +186,52 @@ test.describe("Map Studio mobile sheet gesture ownership", () => {
     expect(gaps.during.map((during) => Math.round(during - gaps.rest))).toEqual([0, 0, 0]);
     await expect(sheet).toHaveAttribute("data-detent", "half");
   });
+
+  test("a view change sets the sheet height without a transition; a detent step still animates", async ({ page }) => {
+    const sheet = await loadNarrowGallery(page, "plan-saved-intelligent");
+    await expect(sheet).toHaveAttribute("data-detent", "half");
+    // Each change is made and read in one task, once the shell has rendered
+    // it, so a 180 ms transition cannot finish before it is counted.
+    const heightTransitions = (change) => page.evaluate(async ({ tag, change }) => {
+      const gallery = document.querySelector(tag);
+      const shell = gallery.shadowRoot.querySelector(".stage").firstElementChild;
+      const sheet = shell.shadowRoot.querySelector(".mobile-sheet");
+      if (change === "edit") {
+        shell.dispatchEvent(new CustomEvent("matic-workspace-intent", {
+          detail: { type: "set-plan-view", view: "edit" },
+          bubbles: true,
+          composed: true,
+        }));
+      } else {
+        sheet.querySelector('button[aria-label="Collapse panel"]').click();
+      }
+      await gallery.updateComplete;
+      await shell.updateComplete;
+      return {
+        detent: sheet.dataset.detent,
+        // Engines report the logical block-size as the physical height.
+        running: sheet.getAnimations()
+          .filter((animation) => ["block-size", "height"].includes(animation.transitionProperty)).length,
+      };
+    }, { tag: GALLERY_TAG, change });
+
+    // Run to Edit opens the sheet to full: the view, not the user, moved it,
+    // so it lands at once and leaves nothing running under the next click.
+    expect(await heightTransitions("edit")).toEqual({ detent: "full", running: 0 });
+    // A step the user asks for still eases between detents.
+    expect(await heightTransitions("step")).toEqual({ detent: "half", running: 1 });
+  });
+
+  test("More actions, which takes Edit's place under the pointer, changes colour without a fade", async ({ page }) => {
+    await loadNarrowGallery(page, "plan-saved-intelligent");
+    const edit = page.locator(GALLERY_TAG).getByRole("button", { name: "Edit Daily clean", exact: true });
+    await edit.hover();
+    await edit.click();
+    const more = page.locator(GALLERY_TAG).getByRole("button", { name: "More actions", exact: true });
+    await expect(more).toBeVisible();
+    // A colour fade started by the button appearing under a still pointer
+    // would still be running under the next click.
+    expect(await more.evaluate((button) => getComputedStyle(button).transitionDuration.split(", ")
+      .every((duration) => duration === "0s"))).toBe(true);
+  });
 });

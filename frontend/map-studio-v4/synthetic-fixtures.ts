@@ -154,6 +154,7 @@ export const syntheticPlans = (): PlansCatalog => ({
       missionBoundaries: [],
       blocker: null,
     },
+    nextRunEstimateSeconds: 1_980,
     roomOrder: rooms.slice(0, 3).map(({ roomId }) => roomId),
     returnToBase: true,
     finishCurrentRoom: false,
@@ -333,6 +334,7 @@ export const syntheticMockupPlans = (): PlansCatalog => ({
         missionBoundaries: [],
         blocker: null,
       },
+      nextRunEstimateSeconds: 2_880,
     },
     {
       id: "weekend",
@@ -362,6 +364,8 @@ export const syntheticMockupPlans = (): PlansCatalog => ({
         missionBoundaries: [3],
         blocker: null,
       },
+      // A room without enough timed cleans: Run hides the estimate.
+      nextRunEstimateSeconds: null,
     },
     {
       id: "guest",
@@ -377,17 +381,7 @@ export const syntheticMockupPlans = (): PlansCatalog => ({
       finishCurrentRoom: false,
       finishCurrentRoomThreshold: 50,
       nextRunPreview: { rooms: [], missionBoundaries: [], blocker: "plan_disabled" },
+      nextRunEstimateSeconds: null,
     },
   ],
 });
-
-/**
- * The `next_run_estimate_seconds` backend need (plan.md §9), per plan id.
- * `null` is the "a room has no estimate" case, where Run hides the line; a
- * paused plan has no next-run preview, so it has no estimate either.
- */
-export const syntheticMockupEstimateSeconds: Readonly<Record<string, number | null>> = {
-  daily: 2_880,
-  weekend: null,
-  guest: null,
-};

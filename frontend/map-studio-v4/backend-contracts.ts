@@ -251,6 +251,7 @@ export interface SavedPlan {
   readonly finishCurrentRoom: boolean;
   readonly finishCurrentRoomThreshold: number;
   readonly nextRunPreview?: NextRunPreview;
+  readonly nextRunEstimateSeconds: number | null;
 }
 
 export interface PlansCatalog {
@@ -757,6 +758,9 @@ export const parseSavedPlanId = (value: unknown): string => {
   return boundedString(plan.id, 128, "invalid-plan-save-response");
 };
 
+const estimateSeconds = (value: unknown): number | null =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+
 export const parsePlansCatalog = (value: unknown): PlansCatalog => {
   const payload = objectValue(value, "invalid-plans");
   if (!Array.isArray(payload.plans) || payload.plans.length > 256) {
@@ -812,6 +816,7 @@ export const parsePlansCatalog = (value: unknown): PlansCatalog => {
           "invalid-finish-threshold",
         ),
         ...(nextRunPreview === undefined ? {} : { nextRunPreview }),
+        nextRunEstimateSeconds: estimateSeconds(plan.next_run_estimate_seconds),
       } satisfies SavedPlan;
     }),
   };

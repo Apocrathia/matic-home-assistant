@@ -1,5 +1,5 @@
 import { build } from "esbuild";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { STAMP_FILE, hashSources } from "./source_stamp.mjs";
@@ -7,9 +7,26 @@ import { STAMP_FILE, hashSources } from "./source_stamp.mjs";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const production = resolve(root, "custom_components/matic_robot/map_studio_v4");
 const review = resolve(root, "tests/browser/.generated/map-studio-v4-review");
+// Developer notes stay beside their rules as CSS comments in the sources.
+// esbuild keeps template text verbatim, so the build drops each comment that
+// fills its own lines in a css`` template instead of shipping it. A comment
+// sharing a line with CSS is left alone rather than risk joining two tokens.
+const styleComments = {
+  name: "style-comments",
+  setup(compiler) {
+    compiler.onLoad({ filter: /frontend[\\/]map-studio-v4[\\/][^\\/]+\.ts$/ }, async ({ path }) => {
+      const source = await readFile(path, "utf8");
+      const contents = source.replace(/\bcss`[^`]*`/gu, (template) => template.replace(
+        /\n[ \t]*\/\*(?:(?!\$\{)[\s\S])*?\*\/[ \t]*(?=\n)/gu, "",
+      ));
+      return { contents, loader: "ts" };
+    });
+  },
+};
 // One compilation gives the review harness the exact same component chunks
 // as the installed panel. Only the production entry's reachable graph ships.
 const result = await build({
+  plugins: [styleComments],
   absWorkingDir: root,
   entryPoints: {
     index: "frontend/map-studio-v4/index.ts",

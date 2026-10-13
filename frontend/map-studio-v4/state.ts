@@ -17,7 +17,7 @@ import {
   type WorkspaceIntent,
   type WorkspaceState,
 } from "./contracts";
-import type { AreaCircle, SavedPlan } from "./backend-contracts";
+import type { AreaCircle, CadenceReason, NextRunPreviewBlocker, SavedPlan } from "./backend-contracts";
 import { readWorkspaceNotice, type CameraPreference } from "./contracts";
 
 const emptyResource = <T>(): { status: "idle"; value: T | null; problem: null } => ({
@@ -152,7 +152,11 @@ export const initialWorkspaceState = (): WorkspaceState => ({
     finishCurrentRoom: false,
     finishCurrentRoomThreshold: 50,
     dirty: false,
+    parkedRooms: [],
   },
+  planView: "run",
+  pendingAction: null,
+  expandedRoom: null,
   areaDraft: {
     id: null,
     name: "",
@@ -251,7 +255,46 @@ export const draftForPlan = (plan: SavedPlan): WorkspaceState["planDraft"] => {
     finishCurrentRoom: plan.finishCurrentRoom,
     finishCurrentRoomThreshold: plan.finishCurrentRoomThreshold,
     dirty: false,
+    parkedRooms: [],
   };
+};
+
+/**
+ * Opens a plan (plan.md §5 State): Create opens in Edit; another saved plan,
+ * or entering the plan workflow, opens in Run. Reselecting the open plan, as a
+ * reload after a write does, keeps the view and the open row.
+ */
+export const planSelection = (
+  state: WorkspaceState,
+  planId: string | null,
+  preserveNotice: boolean,
+): Partial<WorkspaceState> => {
+  const plan = state.resources.plans.value?.plans.find((candidate) => candidate.id === planId);
+  const reselect = planId !== null && state.workflow === "plan" && state.selection.planId === planId;
+  return {
+    workflow: "plan",
+    notice: !preserveNotice && state.notice?.tone === "success" ? null : state.notice,
+    selection: { ...state.selection, planId },
+    planDraft: plan ? draftForPlan(plan) : initialWorkspaceState().planDraft,
+    planView: reselect ? state.planView : planId === null ? "edit" : "run",
+    expandedRoom: reselect ? state.expandedRoom : null,
+  };
+};
+
+// Discarding a saved plan's edits returns to its Run view; a new plan has
+// none, so it returns to the picker (plan.md §5 Navigation).
+const discardPlanDraft = (state: WorkspaceState): WorkspaceState => {
+  const saved = state.resources.plans.value?.plans.find((plan) => plan.id === state.planDraft.id);
+  return saved
+    ? { ...state, planDraft: draftForPlan(saved), planView: "run", expandedRoom: null, dialog: null, precisionOpen: false }
+    : {
+      ...state,
+      planDraft: initialWorkspaceState().planDraft,
+      selection: { ...state.selection, planId: null },
+      dialog: null,
+      workflow: "plans",
+      precisionOpen: false,
+    };
 };
 
 
@@ -391,14 +434,7 @@ export const reduceWorkspace = (
       });
     }
     case "discard-draft":
-      if (state.workflow === "plan") return {
-        ...state,
-        planDraft: initialWorkspaceState().planDraft,
-        selection: { ...state.selection, planId: null },
-        dialog: null,
-        workflow: "plans",
-        precisionOpen: false,
-      };
+      if (state.workflow === "plan") return discardPlanDraft(state);
       return {
         ...updateDraw(state, {
           dirty: false,
@@ -416,20 +452,28 @@ export const reduceWorkspace = (
       };
     case "toggle-room": {
       if (state.workflow === "plan") {
-        const rooms = state.planDraft.rooms;
-        const selected = rooms.some((room) => room.roomId === intent.roomId);
-        if (!selected && rooms.length >= MAX_ROOM_SEQUENCE_SIZE) return state;
+        // Map taps never change the plan in Run (plan.md §5 Map).
+        if (state.planView === "run") return state;
+        const { rooms, parkedRooms } = state.planDraft;
+        const room = rooms.find((candidate) => candidate.roomId === intent.roomId);
+        if (!room && rooms.length >= MAX_ROOM_SEQUENCE_SIZE) return state;
+        // An unticked room keeps its settings and schedule until Save, so
+        // ticking it again restores them.
+        const parked = parkedRooms.find((candidate) => candidate.roomId === intent.roomId);
+        const others = (list: typeof rooms) => list.filter((candidate) => candidate.roomId !== intent.roomId);
         return {
           ...state,
           planDraft: {
             ...state.planDraft,
             dirty: true,
-            rooms: selected
-              ? rooms.filter((room) => room.roomId !== intent.roomId)
-              : [...rooms, { roomId: intent.roomId, cleaningMode: "vacuum", coverageSetting: "standard" }],
+            rooms: room
+              ? others(rooms)
+              : [...rooms, parked ?? { roomId: intent.roomId, cleaningMode: "vacuum", coverageSetting: "standard" }],
+            parkedRooms: room ? [...others(parkedRooms), room] : others(parkedRooms),
           },
         };
       }
+      if (state.workflow === "rooms" && !canSelectRooms(state)) return state;
       const selected = state.selection.roomIds.includes(intent.roomId);
       if (!selected && state.selection.roomIds.length >= MAX_ROOM_SEQUENCE_SIZE) return state;
       return {
@@ -516,16 +560,25 @@ export const reduceWorkspace = (
         dataMode: intent.historyId ? "history" : "live",
         selection: { ...state.selection, historyId: intent.historyId },
       };
-    case "select-plan": {
-      const plan = state.resources.plans.value?.plans.find((candidate) => candidate.id === intent.planId);
-      return {
+    case "select-plan":
+      return { ...state, ...planSelection(state, intent.planId, false) };
+    case "set-plan-view":
+      if (state.workflow !== "plan") return state;
+      if (intent.view === "edit") return {
         ...state,
-        workflow: "plan",
-        notice: state.notice?.tone === "success" ? null : state.notice,
-        selection: { ...state.selection, planId: intent.planId },
-        planDraft: plan ? draftForPlan(plan) : initialWorkspaceState().planDraft,
+        planView: "edit",
+        expandedRoom: intent.roomId === undefined ? state.expandedRoom : intent.roomId,
       };
-    }
+      // Run never shows a dirty or unsaved draft: Save or discard first.
+      return state.planDraft.id !== null && !state.planDraft.dirty
+        ? { ...state, planView: "run", expandedRoom: null }
+        : state;
+    case "set-plan-enabled":
+      // Reflects the Run switch; the effect owns the request.
+      return state.workflow === "plan" && state.planView === "run"
+        && state.planDraft.id !== null && !state.planDraft.dirty
+        ? { ...state, planDraft: { ...state.planDraft, enabled: intent.enabled, dirty: false } }
+        : state;
     case "select-area":
       return {
         ...state,
@@ -565,6 +618,11 @@ export const reduceWorkspace = (
       if (state.dialog) return { ...state, dialog: null };
       if (state.precisionOpen) return { ...state, precisionOpen: false };
       if (state.fullMap) return { ...state, fullMap: false };
+      // A saved plan's Edit steps back to its Run view; Run and a new plan's
+      // Edit step back to the picker.
+      if (state.workflow === "plan" && state.planView === "edit" && state.planDraft.id !== null) {
+        return { ...state, planView: "run", expandedRoom: null };
+      }
       if (state.workflow !== "none") {
         return {
           ...state,
@@ -639,11 +697,18 @@ export class WorkspaceStore {
   // not, keeps the last catalog (effects.ts loadPlans, loadAreas), so only a
   // ready read without the item, or a reset that empties the catalog, closes
   // it; a dialog left with nothing to name would block the workspace unseen.
+  // Every way out of the plan workflow, an effect's included, resets its view
+  // to Run with no open row (plan.md §5 State). A pending action names only a
+  // pending command, so every way a command settles or is cancelled clears it.
   replace(next: WorkspaceState): WorkspaceState {
     if (next === this.#state) return next;
-    const noticed = next.notice && next.notice !== this.#state.notice
-      ? { ...next, notice: readWorkspaceNotice(next.notice) ?? this.#state.notice }
-      : next;
+    const settled = next.pendingAction && next.command !== "pending" ? { ...next, pendingAction: null } : next;
+    const left = settled.workflow !== "plan" && (settled.planView !== "run" || settled.expandedRoom !== null)
+      ? { ...settled, planView: "run" as const, expandedRoom: null }
+      : settled;
+    const noticed = left.notice && left.notice !== this.#state.notice
+      ? { ...left, notice: readWorkspaceNotice(left.notice) ?? this.#state.notice }
+      : left;
     const committed = noticed.dialog?.startsWith("confirmDelete") && !deleteSubject(noticed)
       ? { ...noticed, dialog: null } : noticed;
     this.#state = committed;
@@ -817,9 +882,10 @@ export const canStartMotion = (state: WorkspaceState): boolean =>
   && state.command === "idle"
   && (state.activity === "idle" || state.activity === "docked");
 
-const motionBlockReason = (
-  state: WorkspaceState,
-): { readonly reason: string; readonly reasonKey: string } => {
+type Reason = { readonly reason: string; readonly reasonKey: string };
+const PLAN_SAVING: Reason = { reason: "Waiting for Home Assistant to save the plan.", reasonKey: "v4_reason_plan_saving" };
+
+const motionBlockReason = (state: WorkspaceState): Reason => {
   if (!canEditCoordinates(state)) {
     return {
       reason: "Waiting for the map to be ready.",
@@ -832,10 +898,78 @@ const motionBlockReason = (
       reasonKey: "v4_reason_stop_settle_pending",
     };
   }
-  return {
-    reason: "Waiting for the robot to finish what it's doing.",
-    reasonKey: "v4_reason_robot_operation_waiting",
-  };
+  return state.pendingAction === "run-plan"
+    ? { reason: "Waiting for Home Assistant to check the next run.", reasonKey: "v4_reason_run_plan_checking" }
+    : state.pendingAction === "save-plan"
+      ? PLAN_SAVING
+      : { reason: "Waiting for the robot to finish what it's doing.", reasonKey: "v4_reason_robot_operation_waiting" };
+};
+
+const PLAN_PAUSED: Reason = { reason: "Can't run this plan until you turn it on.", reasonKey: "v4_reason_run_plan_paused" };
+export const PLAN_PREVIEW: Reason = {
+  reason: "Can't run this plan until you retry its next-run preview.",
+  reasonKey: "v4_reason_run_plan_preview",
+};
+const PLAN_IDENTITY: Reason = {
+  reason: "Can't run this plan until Home Assistant can match its rooms to the current map.",
+  reasonKey: "v4_preview_identity_unavailable",
+};
+/** Run plan's reason for a preview blocker that names no room (plan.md R4); others retry the preview. */
+export const PLAN_BLOCKERS: Partial<Record<NextRunPreviewBlocker, Reason>> = {
+  cadence_identity_unavailable: PLAN_IDENTITY,
+  cadence_identity_changed: PLAN_IDENTITY,
+  plan_has_no_rooms: { reason: "Can't run this plan until it has at least one room.", reasonKey: "v4_preview_no_rooms" },
+  plan_room_limit: { reason: "Can't run this plan until it has 100 rooms or fewer.", reasonKey: "v4_preview_room_limit" },
+  invalid_plan: { reason: "Can't run this plan until you open Edit and save it again.", reasonKey: "v4_preview_invalid" },
+  // No `plan_disabled`: a paused draft gives PLAN_PAUSED first, and a preview
+  // still paused after the switch turned it on is stale, so it is retried.
+};
+
+/** One room's blocking schedule reason, most specific first (plan.md R3), or null when it can run. */
+const roomBlockReason = (reasons: readonly CadenceReason[], room: string) => {
+  const has = (...blocking: CadenceReason[]): boolean => blocking.some((reason) => reasons.includes(reason));
+  return has("mop_progress_unverified", "coverage_progress_unverified")
+    ? {
+      reason: "Can't run this plan until you reset {room}'s schedule progress, which Home Assistant can't confirm.",
+      reasonKey: "v4_reason_plan_room_progress",
+      reasonPlaceholders: { room },
+    }
+    : has("identity_changed")
+      ? {
+        reason: "Can't run this plan until you review {room}'s schedule on this map.",
+        reasonKey: "v4_reason_plan_room_map",
+        reasonPlaceholders: { room },
+      }
+      : has("room_not_on_current_map")
+        ? {
+          reason: "Can't run this plan until {room} is on the current map or removed from the plan.",
+          reasonKey: "v4_reason_plan_room_off_map",
+          reasonPlaceholders: { room },
+        }
+        : has("shared_schedule_unavailable", "invalid_cadence_policy")
+          ? { reason: "Can't run this plan until you fix {room}'s schedule.", reasonKey: "v4_reason_plan_room_schedule", reasonPlaceholders: { room } }
+          : has("coverage_requires_vacuum")
+            ? {
+              reason: "Can't run this plan until {room} uses a vacuum mode or its vacuum rotation is off.",
+              reasonKey: "v4_reason_plan_room_mode",
+              reasonPlaceholders: { room },
+            }
+            : null;
+};
+
+/**
+ * The first room in saved order whose schedule blocks the run, with its reason
+ * and a link to it; null when none blocks or that room has no catalog name.
+ */
+export const roomBlocker = (state: WorkspaceState, plan: SavedPlan) => {
+  const blocking = draftForPlan(plan).rooms.find(({ cadenceReasons = [] }) => roomBlockReason(cadenceReasons, ""));
+  const room = blocking && state.resources.plans.value?.rooms.find((candidate) => candidate.roomId === blocking.roomId)?.name;
+  return blocking && room
+    ? {
+      ...roomBlockReason(blocking.cadenceReasons ?? [], room),
+      jump: { label: "Review {room}", labelKey: "v4_review_room", labelPlaceholders: { room }, roomId: blocking.roomId },
+    }
+    : null;
 };
 
 export const canResumeMotion = (state: WorkspaceState): boolean =>
@@ -862,7 +996,7 @@ const disabledAction = (
 
 const noButton = (id: string): NoButtonAction => ({ id, enabled: false });
 
-const hasStoppableWork = (state: WorkspaceState): boolean =>
+export const hasStoppableWork = (state: WorkspaceState): boolean =>
   state.command === "starting"
   || state.activity === "cleaning" || state.activity === "paused"
   || state.activity === "returning" || state.activity === "recharging"
@@ -870,6 +1004,9 @@ const hasStoppableWork = (state: WorkspaceState): boolean =>
     && (state.resources.entry?.runnerLocked === true
       || state.resources.entry?.activePlan === true
       || state.resources.entry?.nativeSessionActive === true));
+
+/** Rooms can be picked only on an editable map with no robot work to stop (home-rooms.md §5). */
+export const canSelectRooms = (state: WorkspaceState): boolean => canEditCoordinates(state) && !hasStoppableWork(state);
 
 export const canStopMotion = (state: WorkspaceState): boolean =>
   state.pageActive && state.host.connected && state.host.administrator && state.host.robotConnected
@@ -1026,29 +1163,38 @@ export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction | NoBu
     };
   }
   if (state.workflow === "plan") {
-    if (state.planDraft.dirty || !state.planDraft.id) {
+    if (state.planView === "edit" || state.planDraft.dirty || !state.planDraft.id) {
       const legacyReduction = isLegacyPlanReduction(state, state.planDraft.rooms);
       const withinRoomLimit = state.planDraft.rooms.length <= MAX_ROOM_SEQUENCE_SIZE || legacyReduction;
-      const valid = canEditCoordinates(state)
+      const editable = canEditCoordinates(state);
+      const enabled = editable
         && state.planDraft.name.trim().length > 0
         && state.planDraft.rooms.length > 0
-        && withinRoomLimit;
+        && withinRoomLimit
+        && state.command !== "pending";
       return {
         id: "save-plan",
-        label: "Save",
-        labelKey: "v4_action_save_plan",
+        // A clean saved plan has nothing to save: Done returns to Run (plan.md E1).
+        ...(state.planDraft.id && !state.planDraft.dirty
+          ? { label: "Done", labelKey: "v4_action_done" }
+          : { label: "Save", labelKey: "v4_action_save_plan" }),
         kind: "primary",
-        enabled: valid,
-        ...(valid ? {} : withinRoomLimit
-          ? { reason: "Can't save until the plan has a name and at least one room.", reasonKey: "v4_reason_save_plan" }
-          : {
-            reason: "Can't save until the plan has 100 rooms or fewer.",
-            reasonKey: "v4_reason_save_plan_room_limit",
-          }),
+        enabled,
+        ...(enabled ? {} : state.command === "pending"
+          ? PLAN_SAVING
+          : !editable
+            ? { reason: "Waiting for the map to be ready.", reasonKey: "v4_reason_save_plan_map" }
+            : withinRoomLimit
+              ? { reason: "Can't save until the plan has a name and at least one room.", reasonKey: "v4_reason_save_plan" }
+              : {
+                reason: "Can't save until the plan has 100 rooms or fewer.",
+                reasonKey: "v4_reason_save_plan_room_limit",
+              }),
       };
     }
     const plan = state.resources.plans.value?.plans.find((candidate) => candidate.id === state.planDraft.id);
-    const previewReady = Boolean(plan?.nextRunPreview && !plan.nextRunPreview.blocker
+    const blocker = plan?.nextRunPreview?.blocker;
+    const previewReady = Boolean(plan?.nextRunPreview && !blocker
       && /^[0-9a-f]{64}$/u.test(plan.nextRunPreview.previewToken ?? ""));
     return {
       id: "run-plan",
@@ -1059,10 +1205,10 @@ export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction | NoBu
       ...(!canStartMotion(state)
         ? motionBlockReason(state)
         : !state.planDraft.enabled
-          ? { reason: "Can't run this plan until you turn it on.", reasonKey: "v4_reason_run_plan_paused" }
-          : !previewReady
-            ? { reason: "Can't run this plan until you retry its next-run preview.", reasonKey: "v4_reason_run_plan_preview" }
-            : {}),
+          ? PLAN_PAUSED
+          : previewReady
+            ? {}
+            : (plan && blocker && (roomBlocker(state, plan) ?? PLAN_BLOCKERS[blocker])) || PLAN_PREVIEW),
     };
   }
   if (state.workflow === "areaReview") {

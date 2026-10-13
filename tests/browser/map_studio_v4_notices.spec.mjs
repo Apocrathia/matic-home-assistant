@@ -139,7 +139,8 @@ test("a coverage guard rejection maps to its notice key", async ({ page }) => {
     translation_domain: "matic_robot",
     translation_key: "coverage_native_session_active",
   }));
-  await panel.getByRole("button", { name: "Run plan", exact: true }).first().click();
+  // plan.md §6 (v4_action_run_plan_named): Run plan is named with the plan.
+  await panel.getByRole("button", { name: "Run plan Daily clean", exact: true }).first().click();
 
   await expect.poll(async () => (await snapshot(page)).command).toBe("failed");
   expect((await snapshot(page)).notice).toMatchObject({ tone: "error", key: "v4_notice_coverage_robot_busy" });
@@ -252,11 +253,12 @@ test("the notice slot sits directly under the workflow heading in every workflow
     const order = await slot.evaluate((element) => {
       const root = element.getRootNode();
       const heading = root.querySelector("h2");
-      const description = root.querySelector(".panel-description");
+      // The body region: Run and Edit have no description (plan.md §3).
+      const body = root.querySelector("[role=region]");
       const follows = (a, b) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
       return {
         afterHeading: follows(heading, element),
-        beforeDescription: follows(element, description),
+        beforeBody: follows(element, body),
         previous: element.previousElementSibling?.className ?? null,
         pinnedWith: element.parentElement.className,
         next: element.nextElementSibling?.className ?? null,
@@ -264,7 +266,7 @@ test("the notice slot sits directly under the workflow heading in every workflow
     });
     expect(order, scenario).toEqual({
       afterHeading: true,
-      beforeDescription: true,
+      beforeBody: true,
       previous: "panel-heading",
       pinnedWith: "panel-top",
       next: null,
@@ -889,8 +891,12 @@ test("rows the spec marks No button render no footer button and carry no copy", 
 // design-system.md: text never uses a raw tone colour; the tone is the rule
 // and the tint.
 test("workflow problems and warnings keep their text in the primary text colour", async ({ page }) => {
-  for (const [scenario, selector] of [["plan-cadence-blocked", ".problem"], ["area-review-rebind", '.notice[data-tone="warning"]']]) {
+  for (const [scenario, selector] of [["plan-legacy-oversized", ".problem"], ["area-review-rebind", '.notice[data-tone="warning"]']]) {
     const gallery = await loadGallery(page, { scenario });
+    // Run's R4 problem line (plan.md §3); the scenario opens in Edit.
+    if (scenario === "plan-legacy-oversized") {
+      await gallery.evaluate((element) => element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), planView: "run" }));
+    }
     const box = gallery.locator(selector).first();
     await expect(box, scenario).toBeVisible();
     const colours = await box.evaluate((element) => {
@@ -952,7 +958,8 @@ test("slot, toast and canvas chip carry no live role", async ({ page }) => {
 test("the heading and notice slot stay put while the plan editor body scrolls", async ({ page }) => {
   for (const [width, height, narrow] of [[1024, 768, false], [390, 844, true]]) {
     await page.setViewportSize({ width, height });
-    const gallery = await loadGallery(page, { scenario: "plan-saved-intelligent", narrow });
+    // A saved plan's Edit view (plan.md §3), long enough to scroll.
+    const gallery = await loadGallery(page, { scenario: "plan-cadence-shared", narrow });
     await setGalleryNotice(page, sampleNotice("warning", `Pinned at ${width}`));
     await expect(gallery.locator("[data-notice-slot]")).toBeVisible();
     const moved = await gallery.getByRole("heading", { level: 2 }).evaluate(async (heading) => {
@@ -963,7 +970,8 @@ test("the heading and notice slot stay put while the plan editor body scrolls", 
       const tops = () => ({
         heading: heading.getBoundingClientRect().top,
         slot: root.querySelector("[data-notice-slot]").getBoundingClientRect().top,
-        description: root.querySelector(".panel-description").getBoundingClientRect().top,
+        // The body's first content: Run has no description (plan.md §3).
+        content: root.querySelector("[role=region] > *").getBoundingClientRect().top,
       });
       const before = tops();
       body.scrollTop = body.scrollHeight;
@@ -973,11 +981,11 @@ test("the heading and notice slot stay put while the plan editor body scrolls", 
         scrolled: body.scrollTop,
         heading: after.heading - before.heading,
         slot: after.slot - before.slot,
-        description: after.description - before.description,
+        content: after.content - before.content,
       };
     });
     expect(moved.scrolled, `body scrolls at ${width}`).toBeGreaterThan(40);
-    expect(moved.description, `description scrolls at ${width}`).toBeLessThan(-40);
+    expect(moved.content, `content scrolls at ${width}`).toBeLessThan(-40);
     expect({ heading: moved.heading, slot: moved.slot }, `pinned at ${width}`).toEqual({ heading: 0, slot: 0 });
   }
 });

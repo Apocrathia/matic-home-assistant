@@ -12,6 +12,7 @@ export const needsDraftConfirmation = (state: WorkspaceState, intent: WorkspaceI
       return plan ? intent.workflow !== "plan"
         : intent.workflow !== "draw" && intent.workflow !== "areaReview";
     case "select-plan": return plan;
+    case "set-plan-view": return plan && intent.view === "run";
     case "select-area": return area;
     case "set-floor": return intent.floorId !== state.selection.floorId;
     case "select-entry": return intent.entryId !== state.selection.entryId;

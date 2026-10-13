@@ -5,7 +5,7 @@ import type {
   RoomCadenceProgress,
   SavedPlan,
 } from "../backend-contracts";
-import { syntheticMockupEstimateSeconds, syntheticMockupPlans } from "../synthetic-fixtures";
+import { syntheticMockupPlans } from "../synthetic-fixtures";
 import { ROTATION_LEVEL, listOf, num, t, type CopyKey, type RotationLevel } from "./copy";
 import type { Variants } from "./frame";
 
@@ -94,12 +94,12 @@ export const planLine3 = (plan: SavedPlan, variants: Variants, focusId: string):
 
 /**
  * Run's summary (plan.md §3, §6): "{count} rooms", or the estimate string
- * when the plan.md §9 field exists and the preview is runnable. The order
- * is not repeated here: the rotation hint or the numbers carry it.
+ * when the plan.md §9 estimate is known and the preview is runnable. The
+ * order is not repeated here: the rotation hint or the numbers carry it.
  */
 export const runSummary = (plan: SavedPlan, runnable: boolean): string => {
   const count = num(plan.rooms.length);
-  const seconds = syntheticMockupEstimateSeconds[plan.id] ?? null;
+  const seconds = plan.nextRunEstimateSeconds;
   if (!runnable || seconds === null || plan.nextRunPreview?.blocker) return t("v4_plan_summary_rooms", { count });
   return t("v4_plan_summary_rooms_estimate", { count, minutes: num(Math.round(seconds / 60)) });
 };

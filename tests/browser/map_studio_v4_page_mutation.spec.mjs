@@ -6,7 +6,7 @@ async function loadMutationHarness(page) {
     stdin: {
       contents: `
         export { EffectController } from "./frontend/map-studio-v4/effects";
-        export { WorkspaceStore } from "./frontend/map-studio-v4/state";
+        export { WorkspaceStore, selectPrimaryAction } from "./frontend/map-studio-v4/state";
         export { createGalleryState } from "./frontend/map-studio-v4/gallery-state";
         export { MaticBackend } from "./frontend/map-studio-v4/backend";
       `,
@@ -199,6 +199,22 @@ async function suspendPendingMutation(page) {
   });
 }
 
+// A hidden page holds every workflow on "Live map required"; shown again, the
+// workspace's own primary returns.
+async function primaryAfterPageShow(page) {
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true })));
+  let primary;
+  await expect.poll(async () => {
+    primary = await page.evaluate(async () => {
+      const { selectPrimaryAction } = await import("/page-mutation-ownership.js");
+      const action = selectPrimaryAction(window.__pageMutation.store.value);
+      return { id: action.id, enabled: action.enabled };
+    });
+    return primary.id;
+  }).not.toBe("read-only");
+  return primary;
+}
+
 test.describe("page suspension preserves transmitted map mutations", () => {
   for (const outcome of ["success", "failure"]) {
     test(`held Area save remains owned through pagehide and settles once (${outcome}) @safety`, async ({ page }) => {
@@ -220,14 +236,12 @@ test.describe("page suspension preserves transmitted map mutations", () => {
         else run.pending.reject(new Error("synthetic save failure"));
         await run.saving;
         const state = run.store.value;
-        const value = {
+        return {
           writes: run.writes.length,
           command: state.command,
           notice: state.notice?.key,
           draft: { id: state.areaDraft.id, name: state.areaDraft.name, dirty: state.areaDraft.dirty },
         };
-        run.effects.dispose();
-        return value;
       }, outcome);
       expect(settled.writes).toBe(1);
       if (outcome === "success") {
@@ -237,12 +251,17 @@ test.describe("page suspension preserves transmitted map mutations", () => {
           draft: { id: "created-area", name: "New area draft", dirty: false },
         });
       } else {
+        // plan.md §9, shell.md §6: a failed Home Assistant write shows its
+        // own error notice and returns `command` to idle, so once the page
+        // is shown again the primary is the save, not "Check robot status".
         expect(settled).toMatchObject({
-          command: "failed",
+          command: "idle",
           notice: "v4_notice_area_save_failed",
           draft: { id: null, name: "New area draft", dirty: true },
         });
+        expect(await primaryAfterPageShow(page)).toEqual({ id: "save-area", enabled: true });
       }
+      await page.evaluate(() => window.__pageMutation.effects.dispose());
     });
 
     test(`held save_plan remains owned through pagehide and settles once (${outcome}) @safety`, async ({ page }) => {
@@ -264,15 +283,13 @@ test.describe("page suspension preserves transmitted map mutations", () => {
         else run.pending.reject(new Error("synthetic save failure"));
         await run.saving;
         const state = run.store.value;
-        const value = {
+        return {
           writes: run.writes.length,
           write: run.writes[0],
           command: state.command,
           notice: state.notice?.key,
           draft: { id: state.planDraft.id, name: state.planDraft.name, dirty: state.planDraft.dirty },
         };
-        run.effects.dispose();
-        return value;
       }, outcome);
       expect(settled.writes).toBe(1);
       expect(settled.write).toMatchObject({
@@ -288,12 +305,15 @@ test.describe("page suspension preserves transmitted map mutations", () => {
           draft: { id: "daily", name: "Updated daily draft", dirty: false },
         });
       } else {
+        // plan.md §9, shell.md §6: idle, the save's own notice, Save again.
         expect(settled).toMatchObject({
-          command: "failed",
+          command: "idle",
           notice: "v4_notice_plan_save_failed",
           draft: { id: "daily", name: "Updated daily draft", dirty: true },
         });
+        expect(await primaryAfterPageShow(page)).toEqual({ id: "save-plan", enabled: true });
       }
+      await page.evaluate(() => window.__pageMutation.effects.dispose());
     });
   }
 
@@ -644,26 +664,36 @@ test.describe("page suspension preserves transmitted map mutations", () => {
         vacuumEntityId: "vacuum.synthetic",
       });
       await run.effects.refreshCatalog(true);
-      store.patch({ selection: { ...store.value.selection, planId: "daily" } });
+      // Delete is offered from the saved plan's Edit view (plan.md E7).
+      await run.effects.loadPlans({ force: true });
+      run.effects.selectPlan("daily");
+      store.dispatch({ type: "set-plan-view", view: "edit" });
       run.deleting = run.effects.deletePlan();
     });
     await expect.poll(() => page.evaluate(() => window.__boundedPlanMutation.calls.length)).toBe(1);
     await page.clock.fastForward(20_000);
-    await expect.poll(() => page.evaluate(() => window.__boundedPlanMutation.store.value.command)).toBe("failed");
-    const timedOut = await page.evaluate(() => {
+    await expect.poll(() => page.evaluate(() => window.__boundedPlanMutation.store.value.notice?.key))
+      .toBe("v4_notice_plan_delete_failed");
+    const timedOut = await page.evaluate(async () => {
+      const { selectPrimaryAction } = await import("/page-mutation-ownership.js");
       const run = window.__boundedPlanMutation;
+      const primary = selectPrimaryAction(run.store.value);
       return {
         command: run.store.value.command,
         notice: run.store.value.notice?.key,
+        primary: { id: primary.id, enabled: primary.enabled },
         calls: run.calls.map((args) => args.slice()),
         timeoutCount: run.timerIds.filter(({ delay }) => delay === 20_000).length,
         timeoutCleared: run.timerIds.filter(({ delay, timerId }) => delay === 20_000
           && run.clearedTimerIds.includes(timerId)).length,
       };
     });
+    // plan.md E7 and §9, shell.md §6: a failed delete returns `command` to
+    // idle with its own notice, and Edit keeps Done as its primary.
     expect(timedOut).toEqual({
-      command: "failed",
+      command: "idle",
       notice: "v4_notice_plan_delete_failed",
+      primary: { id: "save-plan", enabled: true },
       calls: [["matic_robot", "delete_plan", { plan: "daily" }, { entity_id: "vacuum.synthetic" }]],
       timeoutCount: 1,
       timeoutCleared: 1,
@@ -679,7 +709,7 @@ test.describe("page suspension preserves transmitted map mutations", () => {
       window.clearTimeout = run.nativeClearTimeout;
       return value;
     });
-    expect(afterLateAck).toEqual({ command: "failed", notice: "v4_notice_plan_delete_failed", calls: 1 });
+    expect(afterLateAck).toEqual({ command: "idle", notice: "v4_notice_plan_delete_failed", calls: 1 });
   });
 
   test("disposing a bounded service wait rejects with AbortError and clears its timer", async ({ page }) => {

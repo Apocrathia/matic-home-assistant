@@ -152,14 +152,22 @@ export async function installPanelFixture(page, {
     const pendingHistoryScenes = [];
     const serviceCalls = [];
     const serviceFailures = [];
+    let deferredServices = 0;
+    const pendingServices = [];
+    let deferredAreaWrites = 0;
+    const pendingAreaWrites = [];
     let planReads = 0;
     let deltaReads = 0;
     let deltaPayloadResponses = 0;
     let deltaNoChangeResponses = 0;
     const planCatalog = structuredClone(plans || { rooms: [], plans: [], selected_plan: null });
     const applySavedPlan = (data) => {
-      const plan = planCatalog.plans.find((candidate) => candidate.id === data.plan_id);
-      if (!plan) throw new Error(`unknown synthetic plan: ${data.plan_id}`);
+      let plan = data.plan_id && planCatalog.plans.find((candidate) => candidate.id === data.plan_id);
+      if (data.plan_id && !plan) throw new Error(`unknown synthetic plan: ${data.plan_id}`);
+      if (!plan) {
+        plan = { id: `synthetic-plan-${planCatalog.plans.length + 1}` };
+        planCatalog.plans.push(plan);
+      }
       plan.name = data.name;
       plan.enabled = data.enabled;
       plan.run_behavior = data.run_behavior;
@@ -183,10 +191,19 @@ export async function installPanelFixture(page, {
           do_coverage_next: room.cadence.do_coverage_next,
         },
       }));
-      if (data.select) planCatalog.selected_plan = plan.id;
+      if (data.select || !planCatalog.selected_plan) planCatalog.selected_plan = plan.id;
+      return { response: { plan: { id: plan.id } } };
     };
-    const fetchWithAuth = async (path) => {
+    const fetchWithAuth = async (path, options = {}) => {
       const entryB = path.endsWith("-b");
+      if (/areas\/synthetic(?:-b)?$/.test(path) && options.method === "POST") {
+        const result = json({ id: "synthetic-area" });
+        if (deferredAreaWrites > 0) {
+          deferredAreaWrites -= 1;
+          return new Promise((resolve, reject) => pendingAreaWrites.push({ release: () => resolve(result), reject }));
+        }
+        return result;
+      }
       if (path.endsWith("slam_entries")) {
         catalogReads += 1;
         const result = json({ entries: structuredClone(catalogEntries) });
@@ -253,9 +270,22 @@ export async function installPanelFixture(page, {
           serviceCalls.push({ domain, service, data: structuredClone(data), target: structuredClone(target) });
           const failure = serviceFailures.findIndex((candidate) => candidate.service === service);
           if (failure >= 0) throw serviceFailures.splice(failure, 1)[0].error;
-          if (domain === "matic_robot" && service === "save_plan") {
-            applySavedPlan(data);
+          const apply = () => {
+            if (domain === "matic_robot" && service === "save_plan") return applySavedPlan(data);
+            if (domain === "matic_robot" && service === "delete_plan") {
+              planCatalog.plans = planCatalog.plans.filter((plan) => plan.id !== data.plan);
+              if (planCatalog.selected_plan === data.plan) planCatalog.selected_plan = planCatalog.plans[0]?.id ?? null;
+            }
+            return undefined;
+          };
+          if (deferredServices > 0) {
+            deferredServices -= 1;
+            return new Promise((resolve, reject) => pendingServices.push({
+              release: () => { try { resolve(apply()); } catch (error) { reject(error); } },
+              reject,
+            }));
           }
+          return apply();
         },
       };
       return panel;
@@ -273,6 +303,30 @@ export async function installPanelFixture(page, {
       pendingCatalogCount: () => pendingCatalogs.length,
       get catalogReads() { return catalogReads; },
       serviceCalls,
+      deferNextService: () => { deferredServices += 1; },
+      pendingServiceCount: () => pendingServices.length,
+      releaseService: (index = 0) => {
+        const pending = pendingServices.splice(index, 1)[0];
+        if (!pending) throw new Error("no deferred service call");
+        pending.release();
+      },
+      rejectService: (index = 0, error = new Error("synthetic deferred service failure")) => {
+        const pending = pendingServices.splice(index, 1)[0];
+        if (!pending) throw new Error("no deferred service call");
+        pending.reject(error);
+      },
+      deferNextAreaWrite: () => { deferredAreaWrites += 1; },
+      pendingAreaWriteCount: () => pendingAreaWrites.length,
+      releaseAreaWrite: (index = 0) => {
+        const pending = pendingAreaWrites.splice(index, 1)[0];
+        if (!pending) throw new Error("no deferred area write");
+        pending.release();
+      },
+      rejectAreaWrite: (index = 0, error = new Error("synthetic deferred area failure")) => {
+        const pending = pendingAreaWrites.splice(index, 1)[0];
+        if (!pending) throw new Error("no deferred area write");
+        pending.reject(error);
+      },
       // Record the next call to `service`, then reject it once with `error`.
       failNextService: (service, error = new Error("synthetic failure")) => {
         serviceFailures.push({ service, error });

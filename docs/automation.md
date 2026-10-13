@@ -55,6 +55,9 @@ waited longest; Run saved order (`clean_entire_plan`) keeps the saved order.
 Stop cleaning (`stop_intelligent_cleaning`) applies the plan's
 [stop setting](cleaning.md#stopping-a-plan).
 
+To run, pause or change a plan in Matic Map, see
+[plan Run and Edit](cleaning.md#run-and-edit).
+
 <a id="painted-custom-areas"></a>
 <a id="drawn-custom-areas"></a>
 

@@ -2,7 +2,6 @@ import { LitElement, nothing } from "lit";
 import { shellStyles } from "./shell-styles";
 import { html, unsafeStatic } from "lit/static-html.js";
 import type { PropertyValues } from "lit";
-import { isWorkspaceIntent } from "./contracts";
 
 import type {
   DateFormat,
@@ -12,6 +11,7 @@ import type {
   NoButtonAction,
   PrimaryAction,
   ResetCadenceAction,
+  SaveSettled,
   WorkspaceIntent,
   WorkspaceNotice,
   WorkspaceState,
@@ -19,10 +19,12 @@ import type {
 } from "./contracts";
 import {
   MAP_CANVAS_TAG,
+  PLAN_TOOLS_TAG,
   PRECISION_CONTROLS_TAG,
   SHELL_TAG,
   WORKFLOW_TAG,
 } from "./element-tags";
+import { edgeDistance, validOutline } from "./area-outline";
 import { renderDrawTools } from "./draw-tools";
 import { LazyChunk, chunkStatus, reloadInto, takeResume, type ChunkStatus } from "./lazy-chunk";
 import { isNativeSelectControl } from "./gesture-controller";
@@ -64,8 +66,8 @@ import {
   isSelectedRobotUnavailable,
   selectStopSecondaryAction,
   selectPrimaryAction,
-  type DeleteSubject,
 } from "./state";
+import type { DialogPresentation } from "./dialog-copy";
 
 const mapCanvasTag = unsafeStatic(MAP_CANVAS_TAG);
 const precisionControlsTag = unsafeStatic(PRECISION_CONTROLS_TAG);
@@ -181,9 +183,14 @@ const workflowCopy = (state: WorkspaceState, localize?: Localize): {
     case "draw":
       return { title: t("v4_draw_area", "Draw an area"), description: t("v4_draw_area_detail", "Outline or paint the area, then review it before saving.") };
     case "plans":
-      return { title: t("v4_your_plans", "Your plans"), description: t("v4_choose_plan_detail", "Choose a plan to edit or run, or create a new one.") };
+      // An empty picker is its card alone (plan.md §3).
+      return { title: t("v4_your_plans", "Your plans"), description: state.resources.plans.value?.plans.length === 0 ? "" : t("v4_choose_plan_detail", "Tap a plan to see its next run.") };
     case "plan":
-      return { title: state.planDraft.id ? t("v4_edit_plan", "Edit plan") : t("v4_create_plan", "Create a plan"), description: t("v4_plan_detail", "Review rooms and cleaning settings.") };
+      // Run is titled with the plan's saved name: Run never shows a dirty draft.
+      return {
+        title: state.planView === "run" ? state.planDraft.name : state.planDraft.id ? t("v4_edit_plan", "Edit plan") : t("v4_new_plan", "New plan"),
+        description: "",
+      };
     case "areaReview":
       return { title: t("v4_name_this_area", "Name this area"), description: t("area_details_hint", "Name the area and choose cleaning settings.") };
     case "history":
@@ -216,19 +223,22 @@ const NOTICE_ICONS: Readonly<Record<NoticeTone, string>> = {
 };
 const TOAST_MS: Readonly<Record<NoticeTone, number>> = { info: 6000, success: 4000, warning: 6000, error: 10000 };
 
-// Where the sheet rests when a workflow opens. The map is the document, so a
-// drawing starts at peek; room choices stay visible at half height, while
-// longer forms (plans, diagnostics) start at full height.
+// Where the sheet rests when a workflow or plan view opens (shell.md §5
+// Sheet). The map is the document, so a drawing starts at peek; room and
+// plan choices stay visible at half height, while the long forms (plan Edit,
+// diagnostics) start at full height.
 const DEFAULT_DETENT: Readonly<Record<Workflow, SheetDetent>> = {
   none: "half",
   rooms: "half",
   draw: "peek",
-  plan: "full",
-  plans: "full",
+  plan: "half",
+  plans: "half",
   areaReview: "half",
   history: "half",
   support: "full",
 };
+const startingDetent = (state: WorkspaceState): SheetDetent =>
+  state.workflow === "plan" && state.planView === "edit" ? "full" : DEFAULT_DETENT[state.workflow];
 
 // Faster than this on release and the sheet goes to the next detent in the
 // direction of travel regardless of where the finger let go.
@@ -293,79 +303,6 @@ const FOCUSABLE = [
 const hasFocusable = (root: ParentNode): boolean => Boolean(root.querySelector(FOCUSABLE))
   || [...root.querySelectorAll("*")].some((element) => element.shadowRoot !== null && hasFocusable(element.shadowRoot));
 
-interface DialogPresentation {
-  readonly title: string;
-  readonly detail: string;
-  /** What else the delete changes: the default plan or the selected custom area. */
-  readonly consequence?: string;
-  readonly cancelLabel: string;
-  readonly confirmLabel: string;
-  readonly action: "discard" | "delete-plan" | "delete-area" | "reset-room-cadence";
-}
-
-const dialogCopy = (
-  dialog: WorkspaceState["dialog"],
-  localize?: Localize,
-  plan = false,
-  resetRoomName = "room",
-  sharedCadence = false,
-  resetMode: "mop" | "coverage" = "mop",
-  subject?: DeleteSubject,
-): DialogPresentation | undefined => {
-  const t = (key: string, fallback: string, placeholders?: Record<string, string | number>): string =>
-    translate(localize, key, fallback, placeholders);
-  switch (dialog) {
-    case "discardDraft":
-      return {
-        title: plan ? t("v4_discard_plan", "Discard plan changes?") : t("v4_discard_area", "Discard area changes?"),
-        detail: plan ? t("v4_discard_plan_detail", "Your plan changes have not been saved. Keep editing or discard them.") : t("v4_discard_area_detail", "Your area changes have not been saved. Keep editing or discard them."),
-        cancelLabel: t("v4_keep_area_editing", "Keep editing"),
-        confirmLabel: t("v4_discard", "Discard"),
-        action: "discard",
-      };
-    case "confirmDeletePlan":
-      return subject && {
-        title: t("v4_delete_plan", "Delete plan?"),
-        detail: t("v4_delete_plan_detail", "Automations that run \"{name}\" will stop working, and the robot won't move.", { name: subject.name }),
-        ...(subject.successor === undefined ? {} : {
-          consequence: subject.successor === null
-            ? t("v4_delete_plan_none", "You'll have no default plan.")
-            : t("v4_delete_plan_default", "{new_default} becomes your default plan.", { new_default: subject.successor }),
-        }),
-        cancelLabel: t("v4_cancel", "Cancel"),
-        confirmLabel: t("plan_delete", "Delete"),
-        action: "delete-plan",
-      };
-    case "confirmDeleteArea":
-      return subject && {
-        title: t("v4_delete_area", "Delete area?"),
-        detail: t("v4_delete_area_detail", "Automations that clean \"{name}\" will stop working, and the robot won't move.", { name: subject.name }),
-        ...(subject.successor === undefined ? {} : {
-          consequence: subject.successor === null
-            ? t("v4_delete_area_none", "No custom area will be selected.")
-            : t("v4_delete_area_selected", "{area} becomes the selected custom area.", { area: subject.successor }),
-        }),
-        cancelLabel: t("v4_cancel", "Cancel"),
-        confirmLabel: t("area_delete", "Delete"),
-        action: "delete-area",
-      };
-    case "confirmResetCadence":
-      return {
-        title: resetMode === "mop"
-          ? t("v4_reset_mop_cadence_title", "Reset mopping progress?")
-          : t("v4_reset_coverage_cadence_title", "Reset vacuum rotation progress?"),
-        detail: sharedCadence
-          ? t("v4_reset_shared_cadence_detail", "The count for {room} starts again in every plan that shares its schedule, and work brought forward to the next clean goes back to its schedule. Other work and cleaning history don't change.", { room: resetRoomName })
-          : t("v4_reset_private_cadence_detail", "The count for {room} starts again in this plan only, and work brought forward to the next clean goes back to its schedule. Other work and cleaning history don't change.", { room: resetRoomName }),
-        cancelLabel: t("v4_cancel", "Cancel"),
-        confirmLabel: t("v4_reset", "Reset"),
-        action: "reset-room-cadence",
-      };
-    case null:
-      return undefined;
-  }
-};
-
 const deepActiveElement = (root: Document | ShadowRoot = document): HTMLElement | null => {
   let active = root.activeElement as HTMLElement | null;
   while (active?.shadowRoot?.activeElement) {
@@ -374,7 +311,7 @@ const deepActiveElement = (root: Document | ShadowRoot = document): HTMLElement 
   return active;
 };
 
-const isVisible = (element: HTMLElement | null): element is HTMLElement =>
+const isVisible = (element: HTMLElement | null | undefined): element is HTMLElement =>
   Boolean(element && element.isConnected && element.offsetParent !== null);
 
 export class MaticMapShellV4 extends LitElement {
@@ -430,7 +367,7 @@ export class MaticMapShellV4 extends LitElement {
   // editor and hands it to the canvas, so the sheet is the one place a failure
   // of either, building included, is said.
   readonly #views = new LazyChunk(this, () => import("./workflow-panel"));
-  readonly #outline = new LazyChunk(this, async () => new (await import("./outline-editor")).OutlineEditor());
+  readonly #outline = new LazyChunk(this, async () => new (await import("./outline-editor")).OutlineEditor({ edgeDistance, validOutline }));
   // The workflow a Try again reload was pressed in (lazy-chunk.ts).
   #resume = takeResume();
   #toastTimer: ReturnType<typeof setTimeout> | undefined;
@@ -449,6 +386,11 @@ export class MaticMapShellV4 extends LitElement {
   #helpLauncher: HTMLElement | null = null;
   // What Discard goes on to: the intent that asked, or Try again's reload.
   #pendingNavigation: WorkspaceIntent | "reload" | null = null;
+  // The save Discard changes? started; only that save's own answer settles it.
+  #dialogSave: object | null = null;
+  // Where a saved dialog goes once the dialog has closed: two dismissals in
+  // one task would race the browser history traversal the first one starts.
+  #afterDialog: WorkspaceIntent | "reload" | null = null;
   // The workflows the entry screen's enabled rows offered at its last render
   // (#launch), plus Map diagnostics, which Map options offers on any screen.
   #launchers = new Set<string>();
@@ -670,6 +612,13 @@ export class MaticMapShellV4 extends LitElement {
     // Protected reactive fields are not in `keyof this`, so the map is read
     // through the untyped view for those.
     const local = changed as PropertyValues;
+    const instant = this.renderRoot.querySelector<HTMLElement>(".mobile-sheet.instant");
+    if (instant) {
+      // Resolve the new height while transitions are off, so turning them
+      // back on starts none; detent steps and drags ease as before.
+      void getComputedStyle(instant).blockSize;
+      instant.classList.remove("instant");
+    }
     const focused = this.#focused;
     this.#focused = null;
     if (focused && (!focused.isConnected || focused.closest("[hidden]"))) this.#focusPanel();
@@ -735,6 +684,18 @@ export class MaticMapShellV4 extends LitElement {
         });
       }
       if (!previous?.dialog && this.state.dialog) {
+        this.#afterDialog = null;
+        if (this.state.dialog === "discardDraft" && !this.#pendingNavigation && previous) {
+          // Browser Back opens this dialog in the history controller, outside
+          // #intent. Capture the view Back was leaving before a save changes it.
+          if (previous.workflow === "plan") {
+            this.#pendingNavigation = previous.planDraft.id !== null && previous.planView === "edit"
+              ? { type: "set-plan-view", view: "run" }
+              : { type: "open-workflow", workflow: "plans" };
+          } else {
+            this.#pendingNavigation = { type: "dismiss-top-layer" };
+          }
+        }
         const active = deepActiveElement(this.shadowRoot || document);
         if (active?.hasAttribute("data-dialog-launcher")) this.#dialogLauncher = active;
         void this.updateComplete.then(() => {
@@ -746,9 +707,13 @@ export class MaticMapShellV4 extends LitElement {
           // Browser Back dismisses the dialog through the layer controller,
           // bypassing the button/keyboard handler. Clear the pending intent
           // and restore the native selector so it cannot show a floor that
-          // the store did not select.
-          this.#pendingNavigation = null;
+          // the store did not select. A save in flight keeps it: its answer
+          // decides whether the navigation goes on.
+          if (!this.#dialogSave) this.#pendingNavigation = null;
           this.#restoreSelectors();
+          const next = this.#afterDialog;
+          this.#afterDialog = null;
+          this.#continue(next);
         }
         // Safari does not focus a button on a pointing-device click. Use the
         // explicit workflow launcher if there was no nested active element.
@@ -763,6 +728,13 @@ export class MaticMapShellV4 extends LitElement {
         // user moved elsewhere in the document is left alone.
         void this.updateComplete.then(() => {
           requestAnimationFrame(() => {
+            const active = deepActiveElement(document);
+            let target: Node | null = active;
+            while (target && target !== this) {
+              const root = target.getRootNode();
+              target = root instanceof ShadowRoot ? root.host : null;
+            }
+            if (active && active !== document.body && target !== this) return;
             launcher?.focus({ preventScroll: true });
             const body = !document.activeElement || document.activeElement === document.body;
             if (!this.shadowRoot?.activeElement && body) this.#focusPanel();
@@ -770,12 +742,28 @@ export class MaticMapShellV4 extends LitElement {
         });
       }
       if (!previous) {
-        this._sheetDetent = DEFAULT_DETENT[this.state.workflow];
-      } else if (previous.workflow !== this.state.workflow) {
-        // Only on a workflow CHANGE: a state tick inside a workflow must not
-        // yank the sheet back to its default while the user is reading.
-        this._sheetDetent = DEFAULT_DETENT[this.state.workflow];
-        void this.updateComplete.then(() => this.#focusPanel());
+        this._sheetDetent = startingDetent(this.state);
+      } else if (previous.workflow !== this.state.workflow || previous.planView !== this.state.planView) {
+        // Only on a workflow or view CHANGE: a state tick inside a view must
+        // not yank the sheet back to its default while the user is reading.
+        const detent = startingDetent(this.state);
+        if (detent !== this._sheetDetent) {
+          // The view, not the user, moved the sheet: it lands at the new
+          // height at once. An eased resize here would still be running
+          // under the next click and hold that click's frame back a vsync.
+          this.#sheet()?.classList.add("instant");
+          this._sheetDetent = detent;
+        }
+        const state = this.state;
+        // Leaving a plan view, the control that led there takes focus once
+        // the views have rendered it (plan.md §5); else, at once, the heading,
+        // so a key pressed straight away still reaches the shell.
+        void this.updateComplete.then(() => {
+          if (previous.workflow !== "plan") return this.#focusPanel();
+          requestAnimationFrame(() => {
+            if (!this.#views.value?.focusPlanTarget(previous, state, this.renderRoot, isVisible)) this.#focusPanel();
+          });
+        });
       }
     }
   }
@@ -822,6 +810,10 @@ export class MaticMapShellV4 extends LitElement {
       this.#intent({ type: "open-dialog", dialog: "discardDraft" });
       return;
     }
+    this.#emit(intent);
+  }
+
+  #emit(intent: WorkspaceIntent): void {
     this.dispatchEvent(new CustomEvent<WorkspaceIntent>(WORKSPACE_INTENT_EVENT, {
       detail: intent,
       bubbles: true,
@@ -843,7 +835,10 @@ export class MaticMapShellV4 extends LitElement {
   }
 
   #workflow(workflow: Workflow, launcher?: EventTarget | null): void {
-    const intent: WorkspaceIntent = { type: "open-workflow", workflow };
+    this.#leave({ type: "open-workflow", workflow }, launcher);
+  }
+
+  #leave(intent: WorkspaceIntent, launcher?: EventTarget | null): void {
     // Retain a pointer launcher explicitly: Safari does not focus clicked
     // buttons, and the collapsed sheet's heading is not a visible fallback.
     if (launcher instanceof HTMLElement && needsDraftConfirmation(this.state, intent)) {
@@ -898,12 +893,36 @@ export class MaticMapShellV4 extends LitElement {
     } else {
       this.#intent({ type: "discard-draft" });
     }
-    if (pending && pending.type !== "dismiss-top-layer") queueMicrotask(() => this.dispatchEvent(new CustomEvent<WorkspaceIntent>(WORKSPACE_INTENT_EVENT, {
-      detail: pending, bubbles: true, composed: true,
-    })));
+    if (pending && pending.type !== "dismiss-top-layer") queueMicrotask(() => this.#emit(pending));
+  }
+
+  // shell.md §5: the save Discard changes? started has answered. Saved, the
+  // dialog closes and the navigation that asked goes on without discarding;
+  // not saved, it closes and the user stays with the draft. The answer comes
+  // from inside the write, so this waits a task for the state it left.
+  #dialogSaveSettled(token: object, saved: boolean): void {
+    setTimeout(() => {
+      if (this.#dialogSave !== token) return;
+      this.#dialogSave = null;
+      this.requestUpdate();
+      const next = saved ? this.#pendingNavigation : null;
+      this.#pendingNavigation = null;
+      if (this.state.dialog !== "discardDraft") return this.#continue(next);
+      this.#afterDialog = next;
+      this.#dismissDialog();
+    });
+  }
+
+  #continue(next: WorkspaceIntent | "reload" | null): void {
+    if (next === "reload") reloadInto(this.state.workflow);
+    // The draft this shell holds may still read dirty for a render, so the
+    // intent skips the confirmation the saved draft no longer needs.
+    else if (next) this.#emit(next);
   }
 
   #keepDraft(): void {
+    // A save from the dialog is in flight; it closes the dialog itself.
+    if (this.state.command === "pending" || this.#dialogSave) return;
     this.#pendingNavigation = null;
     this.#dismissDialog();
     this.#restoreSelectors();
@@ -928,36 +947,18 @@ export class MaticMapShellV4 extends LitElement {
     if (launcher) requestAnimationFrame(() => launcher.focus({ preventScroll: true }));
   }
 
-  #dispatchAction(action: string | ResetCadenceAction): void {
+  #dispatchAction(action: string | ResetCadenceAction, settled?: SaveSettled): void {
     this.dispatchEvent(new CustomEvent(WORKSPACE_ACTION_EVENT, {
-      detail: typeof action === "string" ? { id: action } : action,
+      detail: typeof action === "string" ? { id: action, settled } : action,
       bubbles: true,
       composed: true,
     }));
   }
 
-  #confirmDelete(id: "delete-plan" | "delete-area"): void {
-    this.#intent({ type: "dismiss-top-layer" });
-    this.#dispatchAction(id);
-  }
-
+  // Every dialog but Discard changes? comes from the views, which confirm it.
   #confirmDialog(presentation: DialogPresentation): void {
-    if (presentation.action === "discard") {
-      this.#discardAndContinue();
-      return;
-    }
-    if (presentation.action === "delete-plan" || presentation.action === "delete-area") {
-      this.#confirmDelete(presentation.action);
-      return;
-    }
-    const resetRequest = this.state.cadenceResetRequest;
-    this.#intent({ type: "dismiss-top-layer" });
-    if (resetRequest) this.#dispatchAction({
-      id: "reset-room-cadence",
-      planId: resetRequest.planId,
-      roomId: resetRequest.roomId,
-      mode: resetRequest.mode,
-    });
+    if (presentation.action === "discard") this.#discardAndContinue();
+    else this.#views.value?.confirmDialog(this.state, presentation.action, (intent) => this.#intent(intent), (action) => this.#dispatchAction(action));
   }
 
   // ---- Bottom sheet -------------------------------------------------------
@@ -1171,23 +1172,18 @@ export class MaticMapShellV4 extends LitElement {
     this._helpOpen = true;
   }
 
+  // Only the views send intents through here (dialog-copy.ts dialogLauncher).
   #captureDialogLauncher(event: Event): void {
-    const intent = event as CustomEvent<WorkspaceIntent>;
-    if (!isWorkspaceIntent(intent.detail)) return;
-    if (needsDraftConfirmation(this.state, intent.detail)) {
-      event.stopPropagation();
-      this.#intent(intent.detail);
-      return;
-    }
-    if (intent.detail?.type !== "open-dialog") return;
-    // Safari does not focus a button when it is clicked with a pointing device.
-    // The composed path may be retargeted, so keep only an explicit launcher.
-    const launcher = intent.composedPath().find((candidate) => candidate instanceof HTMLElement
-      && candidate.hasAttribute("data-dialog-launcher"));
-    if (launcher instanceof HTMLElement) this.#dialogLauncher = launcher;
+    const launcher = this.#views.value?.dialogLauncher(event, this.state, (intent) => this.#intent(intent));
+    if (launcher) this.#dialogLauncher = launcher;
   }
 
   #dialogLauncherFor(dialog: NonNullable<WorkspaceState["dialog"]>): HTMLElement | null {
+    if (dialog === "confirmDeletePlan") {
+      const tools = this.renderRoot.querySelector<HTMLElement>(PLAN_TOOLS_TAG);
+      const launcher = tools?.shadowRoot?.querySelector<HTMLElement>(`[data-dialog-launcher="${dialog}"]`);
+      if (launcher) return launcher;
+    }
     const workflow = this.renderRoot.querySelector<HTMLElement>(WORKFLOW_TAG);
     return workflow?.shadowRoot?.querySelector<HTMLElement>(
       `[data-dialog-launcher="${dialog}"]`,
@@ -1248,21 +1244,27 @@ export class MaticMapShellV4 extends LitElement {
     if (!("label" in action)) return nothing;
     const label = action.labelKey ? this.#t(action.labelKey, action.label, action.labelPlaceholders) : action.label;
     const reason = !action.enabled && action.reason
-      ? (action.reasonKey ? this.#t(action.reasonKey, action.reason) : action.reason)
+      ? (action.reasonKey
+        ? this.#views.value?.actionReason(this.#tr, action, reasonId === "primary-reason", (intent) => this.#intent(intent))
+          ?? this.#t(action.reasonKey, action.reason, action.reasonPlaceholders)
+        : action.reason)
       : null;
-    const stop = action.id === "stop";
     return html`
       <button
         class=${`${classes} ${action.kind === "danger" ? "ms-btn--danger" : ""}`}
         type="button"
         aria-disabled=${action.enabled ? nothing : "true"}
         aria-describedby=${reason ? reasonId : nothing}
-        aria-label=${stop ? this.#t("v4_stop_cleaning_label", "Stop cleaning") : nothing}
+        aria-label=${action.id === "stop" ? this.#t("v4_stop_cleaning_label", "Stop cleaning")
+          : action.id === "run-plan" ? this.#t("v4_action_run_plan_named", "Run plan {plan}", { plan: this.state.planDraft.name })
+          : nothing}
         @click=${() => this.#action(action)}
       >${label}</button>
       ${reason ? html`<p class="action-reason" id=${reasonId}>${reason}</p>` : nothing}
     `;
   }
+
+  readonly #tr = (key: string, fallback: string, placeholders?: NoticePlaceholders): string => this.#t(key, fallback, placeholders);
 
   #rooms(state: WorkspaceState): string {
     const rooms = state.resources.plans.value?.rooms
@@ -1279,9 +1281,12 @@ export class MaticMapShellV4 extends LitElement {
         ? this.#t("v4_rooms_summary_dock", "{rooms} · returns to the dock", { rooms })
         : rooms)
       : "";
+    const editing = state.workflow === "plan" && state.planView === "edit";
+    // Edit pairs Cancel with the primary.
     return html`
-      <div class="action-bar">
+      <div class=${editing ? "action-bar paired" : "action-bar"}>
         ${summary ? html`<p class="action-summary">${summary}</p>` : nothing}
+        ${editing ? this.#views.value?.planCancel(state, primary, this.#tr, (intent, launcher) => this.#leave(intent, launcher)) : nothing}
         ${primary ? this.#actionButton(primary, "ms-btn ms-btn--block ms-btn--lg ms-btn--primary", "primary-reason") : nothing}
         ${secondary ? this.#actionButton(secondary, "ms-btn ms-btn--block ms-btn--lg ms-btn--secondary", "secondary-reason") : nothing}
       </div>
@@ -1465,7 +1470,7 @@ export class MaticMapShellV4 extends LitElement {
                     ? t("v4_plans_unavailable_hint", "Try again to load your plans.")
                     : planCount
                       ? planCount === 1 ? t("v4_saved_routine", "1 saved plan") : t("v4_saved_routines", "{count} saved plans", { count: planCount })
-                      : t("v4_no_plans_hint", "Save a plan to repeat a set of rooms"))}</small>
+                      : t("v4_no_plans_hint", "Save a plan to repeat a set of rooms."))}</small>
               </span>
               <span class="ms-row__trail">${icon(iconChevronRight)}</span>
             </button>
@@ -1498,7 +1503,7 @@ export class MaticMapShellV4 extends LitElement {
               type="button"
               aria-pressed=${String(state.appearance === "rooms")}
               @click=${() => this.#intent({ type: "set-appearance", appearance: "rooms" })}
-            >${t("v4_room_colours", "Room colors")}</button>
+            >${t("map_style_room_colours", "Room colors")}</button>
           </div>
           <label class="ms-checkbox">
             <input type="checkbox" .checked=${state.labelsVisible} @change=${() => this.#intent({ type: "toggle-labels" })}>
@@ -1538,20 +1543,34 @@ export class MaticMapShellV4 extends LitElement {
 
   // The heading and notice slot sit outside the scroller, so they stay put
   // and never cover a control the body scrolls into view.
+  // The back chevron, in the heading or, at peek, the grip. Run goes back to
+  // the picker, every other workflow to all tasks; Edit has none, since
+  // Cancel replaces it (plan.md §3).
+  #back(state: WorkspaceState, grip: boolean) {
+    const plan = state.workflow === "plan";
+    if (state.workflow === "none" || (plan && state.planView === "edit")) return nothing;
+    const name = plan ? this.#t("v4_back_to_plans", "Back to plans") : this.#t("v4_back_to_all_tasks", "Back to all tasks");
+    return html`
+      <button
+        class=${grip ? "sheet-back ms-btn ms-btn--icon ms-btn--sm" : "panel-back ms-btn ms-btn--secondary"}
+        type="button"
+        aria-label=${name}
+        title=${grip ? name : nothing}
+        data-dialog-launcher="discardDraft"
+        @click=${(event: Event) => this.#workflow(plan ? "plans" : "none", event.currentTarget)}
+      >${icon(iconBack)}${grip ? nothing : html`<span class="ms-btn__label">${plan ? this.#t("v4_your_plans", "Your plans") : this.#t("v4_all_tasks", "All tasks")}</span>`}</button>
+    `;
+  }
+
   #panelTop(state: WorkspaceState) {
+    const plan = state.workflow === "plan";
+    const title = workflowCopy(state, this.localize).title;
     return html`
       <div class="panel-top">
         <div class="panel-heading">
-          ${state.workflow !== "none" ? html`
-            <button
-              class="panel-back ms-btn ms-btn--secondary"
-              type="button"
-              aria-label=${state.workflow === "plan" ? this.#t("v4_back_to_plans", "Back to plans") : this.#t("v4_back_to_all_tasks", "Back to all tasks")}
-              data-dialog-launcher="discardDraft"
-              @click=${(event: Event) => this.#workflow(state.workflow === "plan" ? "plans" : "none", event.currentTarget)}
-            >${icon(iconBack)}<span class="ms-btn__label">${state.workflow === "plan" ? this.#t("v4_your_plans", "Your plans") : this.#t("v4_all_tasks", "All tasks")}</span></button>
-          ` : nothing}
-          <h2 id="workspace-title" tabindex="-1">${workflowCopy(state, this.localize).title}</h2>
+          ${this.#back(state, false)}
+          <h2 id="workspace-title" tabindex="-1">${(plan && this.#views.value?.planTitle(state, title, this.#tr)) || title}</h2>
+          ${plan ? this.#views.value?.planTools(state, this.localize, this.#captureDialogLauncher) : nothing}
         </div>
         ${state.notice ? html`<div class="notice" data-notice-slot data-tone=${state.notice.tone}>${this.#noticeBody(state.notice, this.#closeNotice, this.#t("v4_close", "Close"))}</div>` : nothing}
       </div>
@@ -1559,8 +1578,9 @@ export class MaticMapShellV4 extends LitElement {
   }
 
   #panel(state: WorkspaceState, narrow: boolean, status: StatusPresentation) {
+    const { description } = workflowCopy(state, this.localize);
     return html`
-      <p class="panel-description">${workflowCopy(state, this.localize).description}</p>
+      ${description ? html`<p class="panel-description">${description}</p>` : nothing}
       ${this.#workflowBody(state, narrow, status)}
     `;
   }
@@ -1641,23 +1661,30 @@ export class MaticMapShellV4 extends LitElement {
     const canToggleWorkspace = state.fullMap || (
       state.host.administrator && state.host.robotCount > 0 && state.map.available
     );
-    const resetRoom = state.cadenceResetRequest
-      ? state.resources.plans.value?.rooms.find((room) => room.roomId === state.cadenceResetRequest?.roomId)
-      : undefined;
-    const resetPlanRoom = state.cadenceResetRequest
-      ? state.resources.plans.value?.plans.find((plan) => plan.id === state.cadenceResetRequest?.planId)
-        ?.rooms.find((room) => room.roomId === state.cadenceResetRequest?.roomId)
-      : undefined;
-    const dialog = dialogCopy(
-      state.dialog,
-      this.localize,
-      state.workflow === "plan",
-      resetRoom?.name || state.cadenceResetRequest?.roomId || "room",
-      resetPlanRoom?.cadence?.scope === "shared",
-      state.cadenceResetRequest?.mode,
-      // Automations name the saved plan or area, never an unsaved rename.
-      deleteSubject(state),
-    );
+    const plan = state.workflow === "plan";
+    // The shell asks before a draft is lost, so its copy is here: a draft can
+    // be dirty in Draw while the views chunk failed. Every other dialog opens
+    // from a control in the views chunk, which carries its copy.
+    const discard = state.dialog === "discardDraft";
+    // shell.md §5: the saved plan or area by its saved name, else a new one.
+    const saved = discard ? deleteSubject(state, plan ? "confirmDeletePlan" : "confirmDeleteArea")?.name : undefined;
+    const dialog: DialogPresentation | undefined = discard ? {
+      title: this.#t("v4_discard_title", "Discard changes?"),
+      detail: saved === undefined
+        ? plan
+          ? this.#t("v4_discard_new_plan_detail", "This new plan hasn't been saved, and discarding it can't be undone.")
+          : this.#t("v4_discard_new_area_detail", "This new area hasn't been saved, and discarding it can't be undone.")
+        : plan
+          ? this.#t("v4_discard_plan_detail", "Your changes to \"{name}\" haven't been saved, and discarding them can't be undone.", { name: saved })
+          : this.#t("v4_discard_area_detail", "Your changes to \"{name}\" haven't been saved, and discarding them can't be undone.", { name: saved }),
+      cancelLabel: this.#t("v4_keep_area_editing", "Keep editing"),
+      confirmLabel: this.#t("v4_discard", "Discard"),
+      action: "discard",
+    } : state.dialog === null ? undefined : this.#views.value?.dialogCopy(state.dialog, state, this.localize);
+    // Discard changes? offers the save the primary would make, and holds every
+    // button while that save is in flight.
+    const busy = discard && (state.command === "pending" || this.#dialogSave !== null);
+    const save = discard && (primary.id === "save-plan" || primary.id === "save-area") && (primary.enabled || busy) ? primary.id : null;
     const sheetOffset = narrow && !state.fullMap ? `--map-sheet-offset:${this._sheetOffset}px` : "--map-sheet-offset:0px";
     const showDrawTools = narrow && state.workflow === "draw";
     const precisionOpen = state.precisionOpen && state.workflow === "draw";
@@ -1810,16 +1837,7 @@ export class MaticMapShellV4 extends LitElement {
                   @pointercancel=${this.#gripUp}
                 >
                   <span class="sheet-handle" role="presentation"></span>
-                  ${state.workflow !== "none" && this._sheetDetent === "peek" ? html`
-                    <button
-                      class="sheet-back ms-btn ms-btn--icon ms-btn--sm"
-                      type="button"
-                      aria-label=${state.workflow === "plan" ? this.#t("v4_back_to_plans", "Back to plans") : this.#t("v4_back_to_all_tasks", "Back to all tasks")}
-                      title=${state.workflow === "plan" ? this.#t("v4_back_to_plans", "Back to plans") : this.#t("v4_back_to_all_tasks", "Back to all tasks")}
-                      data-dialog-launcher="discardDraft"
-                      @click=${(event: Event) => this.#workflow(state.workflow === "plan" ? "plans" : "none", event.currentTarget)}
-                    >${icon(iconBack)}</button>
-                  ` : nothing}
+                  ${this._sheetDetent === "peek" ? this.#back(state, true) : nothing}
                   <span class="sheet-status">${this.#sheetStatus(state, status)}</span>
                   <button
                     class="ms-btn ms-btn--icon ms-btn--sm"
@@ -1926,20 +1944,36 @@ export class MaticMapShellV4 extends LitElement {
               <div id="dialog-detail">
                 <p>${dialog.detail}</p>
                 ${dialog.consequence ? html`<p>${dialog.consequence}</p>` : nothing}
+                ${busy ? html`<p id="dialog-saving" role="status">${this.#t("v4_notice_saving", "Saving…")}</p>` : nothing}
               </div>
               <div class="dialog-actions">
                 <button
-                  class="ms-btn ms-btn--secondary"
+                  class=${discard ? "ms-btn" : "ms-btn ms-btn--secondary"}
                   type="button"
                   data-dialog-initial-focus
-                  @click=${state.dialog === "discardDraft"
-                    ? this.#keepDraft
-                    : this.#dismissDialog}
+                  aria-disabled=${busy ? "true" : nothing}
+                  aria-describedby=${busy ? "dialog-saving" : nothing}
+                  @click=${discard ? this.#keepDraft : this.#dismissDialog}
                 >${dialog.cancelLabel}</button>
+                ${save ? html`<button
+                  class="ms-btn ms-btn--secondary"
+                  type="button"
+                  aria-disabled=${busy ? "true" : nothing}
+                  aria-describedby=${busy ? "dialog-saving" : nothing}
+                  @click=${() => {
+                    if (busy) return;
+                    const token = {};
+                    this.#dialogSave = token;
+                    this.requestUpdate();
+                    this.#dispatchAction(save, (saved) => this.#dialogSaveSettled(token, saved));
+                  }}
+                >${this.#t("v4_save", "Save")}</button>` : nothing}
                 <button
                   class="discard ms-btn ms-btn--primary ms-btn--danger"
                   type="button"
-                  @click=${() => this.#confirmDialog(dialog)}
+                  aria-disabled=${busy ? "true" : nothing}
+                  aria-describedby=${busy ? "dialog-saving" : nothing}
+                  @click=${() => { if (!busy) this.#confirmDialog(dialog); }}
                 >${dialog.confirmLabel}</button>
               </div>
             </section>
