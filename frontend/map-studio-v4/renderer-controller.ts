@@ -381,6 +381,8 @@ export class RendererController {
   #fitActive = true;
   #disposed = false;
   #palette: CanvasPalette = DEFAULT_PALETTE;
+  // Saved-order numbers are drawn every frame; one formatter per locale.
+  #positionFormat: { readonly locale: string; readonly format: Intl.NumberFormat } | null = null;
 
   constructor(
     sceneCanvas: HTMLCanvasElement,
@@ -1407,8 +1409,11 @@ export class RendererController {
     const selectedNames = this.#selectedRoomNames(state);
     const selectedPositions = state.workflow === "plan" && state.planDraft.runBehavior === "ordered"
       ? (() => {
-        const formatPosition = new Intl.NumberFormat(state.locale);
-        return new Map(state.planDraft.rooms.map((room, index) => [room.roomId, formatPosition.format(index + 1)]));
+        if (this.#positionFormat?.locale !== state.locale) {
+          this.#positionFormat = { locale: state.locale, format: new Intl.NumberFormat(state.locale) };
+        }
+        const { format } = this.#positionFormat;
+        return new Map(state.planDraft.rooms.map((room, index) => [room.roomId, format.format(index + 1)]));
       })()
       : null;
     if (state.labelsVisible || (state.view === "top" && state.appearance === "rooms")) {
