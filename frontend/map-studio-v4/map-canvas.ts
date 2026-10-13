@@ -712,7 +712,7 @@ export class MaticMapCanvasV4 extends LitElement {
 
         ${this.#renderDock(showScene)}
 
-        ${message && !(state.fullMap && (locating || !state.host.administrator)) ? html`
+        ${message ? html`
           <div class="map-message ms-surface ms-surface--floating">
             <strong>${message.title}</strong>
             <span>${message.detail}</span>

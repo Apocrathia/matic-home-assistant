@@ -217,7 +217,6 @@ export const shellStyles = [tokens, base, controls, css`
       inline-size: min(24rem, calc(100% - 1.5rem));
       max-inline-size: none;
     }
-    .wide:has(.full-map-hud.above-dock) > .notice-toast { inset-block-end: calc(max(var(--ms-space-3), var(--ms-safe-bottom)) + var(--ms-control-lg) + 4 * var(--ms-space-3) + 3.5rem + var(--ms-space-2)); }
 
     /* minmax(0, 1fr): a card's one-line name must not widen the column. */
     .quick-actions, .shelf { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--ms-space-2); }
@@ -258,18 +257,17 @@ export const shellStyles = [tokens, base, controls, css`
       inset-inline-end: var(--ms-space-3);
       inset-block-end: max(var(--ms-space-3), var(--ms-safe-bottom));
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-columns: minmax(0, 1fr);
+      grid-auto-flow: column;
+      grid-auto-columns: auto;
       gap: var(--ms-space-3);
       align-items: center;
-      inline-size: min(24rem, calc(100% - 1.5rem));
+      inline-size: fit-content;
+      max-inline-size: calc(100% - 1.5rem);
       padding: var(--ms-space-3);
       background: var(--ms-local);
     }
-    .full-map-hud.has-secondary { grid-template-columns: minmax(0, 1fr) auto auto; }
-    /* The map dock (the Draw tools, or the rooms selection chip -- one 44px
-       row) sits bottom-centre; on a wide layout the HUD is bottom-right and
-       the two collide below about 1400px. Lift the HUD clear of the dock. */
-    .wide .full-map-hud.above-dock { inset-block-end: calc(var(--ms-space-3) + 3.5rem + var(--ms-space-2)); }
+    .hud-exit { gap: var(--ms-space-1); }
     .hud-copy { min-inline-size: 0; }
     .hud-copy strong, .hud-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .hud-copy strong { font-size: var(--ms-t-sm); }
@@ -404,7 +402,9 @@ export const shellStyles = [tokens, base, controls, css`
     .narrow .title { font-size: var(--ms-t-md); }
     .narrow .context-switcher { max-inline-size: 7rem; }
     .narrow .robot-switcher { flex: 1 1 auto; min-inline-size: 0; max-inline-size: none; }
-    .narrow .full-map-hud { inset-block-end: max(var(--ms-space-3), var(--ms-safe-bottom)); }
+    .narrow .full-map-hud { inset-inline-start: var(--ms-space-3); inset-block-end: max(var(--ms-space-3), var(--ms-safe-bottom)); inline-size: auto; max-inline-size: none; }
+    .narrow .hud-exit { min-inline-size: var(--ms-control); padding-inline: var(--ms-space-2); }
+    .narrow .hud-exit .ms-btn__label { position: absolute; overflow: hidden; inline-size: 1px; block-size: 1px; margin: -1px; clip-path: inset(50%); white-space: nowrap; }
     .narrow .workspace.full-map .mobile-sheet { display: none; }
     .narrow .sheet-scrim {
       position: absolute;

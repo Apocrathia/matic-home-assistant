@@ -219,7 +219,7 @@ test("keeps keyboard dismissal on the shell after unfocused Full map activation"
   }, module);
   const shell = page.locator("matic-map-shell-v4");
   const toggle = shell.locator(".workspace-toggle");
-  await expect(toggle).toHaveAccessibleName("Hide cleaning panel");
+  await expect(toggle).toHaveAccessibleName("Full map");
   await toggle.evaluate((button) => {
     document.activeElement instanceof HTMLElement && document.activeElement.blur();
     button.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));

@@ -53,7 +53,8 @@ import {
   iconOverflow,
   iconPaused,
   iconRobot,
-  iconWorkspace,
+  iconExitFullMap,
+  iconFullMap,
 } from "./icons";
 import {
   WORKSPACE_ACTION_EVENT,
@@ -390,7 +391,6 @@ export class MaticMapShellV4 extends LitElement {
     dates: { attribute: false },
     _measuredNarrow: { state: true },
     _sheetOffset: { state: true },
-    _browserFullscreen: { state: true },
     _helpOpen: { state: true },
     _sheetDetent: { state: true },
     _polite: { state: true },
@@ -418,7 +418,6 @@ export class MaticMapShellV4 extends LitElement {
   }
   protected _measuredNarrow = false;
   protected _sheetOffset = 0;
-  protected _browserFullscreen = false;
   // The help popover (map-help.ts, in the views chunk) is the shell's: it
   // opens from the rail "?" and closes from Close, Escape (after the menu,
   // shell.md §5) or a change of workflow or Full map. The canvas renders it
@@ -489,31 +488,13 @@ export class MaticMapShellV4 extends LitElement {
   #drag: SheetDrag | null = null;
   #bodySwipe: BodySwipe | null = null;
 
-  #fullscreenElement(): Element | null {
-    const root = this.renderRoot;
-    return root instanceof ShadowRoot
-      ? root.fullscreenElement ?? document.fullscreenElement
-      : document.fullscreenElement;
-  }
-
+  // D3 (map-surfaces.md §10): Full map asks the browser for full screen
+  // and leaves it on exit; leaving the browser's full screen (its own
+  // Escape, say) leaves Full map with the same focus return. A browser
+  // that refuses keeps the panel-only Full map.
   readonly #fullscreenChange = (): void => {
-    this._browserFullscreen = this.#isAppFullscreen();
+    if (!document.fullscreenElement && this.state.fullMap) this.#intent({ type: "exit-full-map" });
   };
-
-  #isAppFullscreen(): boolean {
-    const root = this.renderRoot;
-    const app = root.querySelector(".app");
-    const scopedFullscreenElement = root instanceof ShadowRoot ? root.fullscreenElement : null;
-    if (scopedFullscreenElement) return scopedFullscreenElement === app;
-
-    const documentFullscreenElement = document.fullscreenElement;
-    for (let current: Node | null = this; current;) {
-      if (current === documentFullscreenElement) return true;
-      const tree = current.getRootNode();
-      current = tree instanceof ShadowRoot ? tree.host : null;
-    }
-    return false;
-  }
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -730,6 +711,7 @@ export class MaticMapShellV4 extends LitElement {
         this.#closeHelp(false);
       }
       if (previous?.fullMap && !this.state.fullMap) {
+        if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
         const launcher = this.#workspaceLauncher;
         this.#workspaceLauncher = null;
         void this.updateComplete.then(() => {
@@ -1205,8 +1187,17 @@ export class MaticMapShellV4 extends LitElement {
 
   #toggleWorkspace(event: Event): void {
     this.#workspaceLauncher = event.currentTarget as HTMLElement;
-    this.#intent({ type: this.state.fullMap ? "exit-full-map" : "enter-full-map" });
+    if (this.state.fullMap) {
+      this.#intent({ type: "exit-full-map" });
+      return;
+    }
+    this.#intent({ type: "enter-full-map" });
+    Promise.resolve(this.renderRoot.querySelector<HTMLElement>(".app")?.requestFullscreen?.()).catch(() => undefined);
   }
+
+  readonly #exitFullMap = (): void => {
+    this.#intent({ type: "exit-full-map" });
+  };
 
   // A failed menu load gets the chunk recovery every other chunk has.
   readonly #toggleOptions = (event: Event): void => {
@@ -1246,12 +1237,6 @@ export class MaticMapShellV4 extends LitElement {
     this._helpOpen = false;
     if (restoreFocus) this.#helpLauncher?.focus();
   }
-
-  readonly #toggleFullscreen = (): void => {
-    const app = this.renderRoot.querySelector<HTMLElement>(".app");
-    if (this.#fullscreenElement()) void document.exitFullscreen();
-    else void app?.requestFullscreen();
-  };
 
   #openBrush(): void {
     this.#intent({
@@ -1744,7 +1729,10 @@ export class MaticMapShellV4 extends LitElement {
     // button while that save is in flight.
     const busy = discard && (state.command === "pending" || this.#dialogSave !== null);
     const save = discard && (primary.id === "save-plan" || primary.id === "save-area") && (primary.enabled || busy) ? primary.id : null;
-    const sheetOffset = narrow && !state.fullMap ? `--map-sheet-offset:${this._sheetOffset}px` : "--map-sheet-offset:0px";
+    // The HUD takes the sheet's band in Full map, so the rail, dock and
+    // scale lift above it as they do above the sheet (nothing is covered).
+    const sheetOffset = state.fullMap ? "--map-sheet-offset:calc(var(--ms-control-lg) + 3 * var(--ms-space-3))"
+      : narrow ? `--map-sheet-offset:${this._sheetOffset}px` : "--map-sheet-offset:0px";
     const showDrawTools = narrow && state.workflow === "draw";
     const help = !this._helpOpen ? null : this.#views.value
       ? this.#views.value.renderMapHelp({ state, coarse: this.#helpCoarse, t: (key, fallback) => this.#t(key, fallback), close: () => this.#closeHelp(true) })
@@ -1801,16 +1789,11 @@ export class MaticMapShellV4 extends LitElement {
               <button
                 class="workspace-toggle ms-btn ms-btn--icon"
                 type="button"
-                aria-label=${state.fullMap
-                  ? this.#t("v4_show_workspace", "Show cleaning panel")
-                  : this.#t("v4_hide_workspace", "Hide cleaning panel")}
-                aria-controls="map-workspace"
-                aria-expanded=${String(!state.fullMap)}
-                title=${state.fullMap
-                  ? this.#t("v4_show_workspace", "Show cleaning panel")
-                  : this.#t("v4_hide_workspace", "Hide cleaning panel")}
+                aria-label=${this.#t("v4_full_map", "Full map")}
+                aria-pressed=${String(state.fullMap)}
+                title=${this.#t("v4_full_map", "Full map")}
                 @click=${this.#toggleWorkspace}
-              >${icon(iconWorkspace)}</button>
+              >${icon(iconFullMap)}</button>
             ` : nothing}
             <div class="overflow-wrap" @keydown=${options?.menu.keydown} @focusout=${options?.menu.focusout}>
               <button
@@ -1825,11 +1808,9 @@ export class MaticMapShellV4 extends LitElement {
               ${options?.menu.open ? options.render({
                 state,
                 narrow,
-                browserFullscreen: this._browserFullscreen,
                 t: (key, fallback) => this.#t(key, fallback),
                 intent: (intent) => this.#intent(intent),
                 diagnostics: this.#openDiagnostics,
-                fullscreen: this.#toggleFullscreen,
               }) : nothing}
             </div>
           </header>
@@ -1952,7 +1933,7 @@ export class MaticMapShellV4 extends LitElement {
 
             ${state.fullMap ? html`
               <section
-                class=${`full-map-hud ms-surface ms-surface--floating ${secondary ? "has-secondary" : ""} ${!narrow && (state.workflow === "draw" || (state.workflow === "rooms" && state.selection.roomIds.length > 0)) ? "above-dock" : ""}`}
+                class="full-map-hud ms-surface ms-surface--floating"
                 aria-label=${this.#t("v4_robot_status_and_action", "Robot status and action")}
               >
                 <span class="hud-copy"><strong>${status.title}</strong><small>${status.detail}</small></span>
@@ -1960,6 +1941,12 @@ export class MaticMapShellV4 extends LitElement {
                 ${secondary && (!locatingInFullMap || secondary.id === "stop")
                   ? this.#actionButton(secondary, "ms-btn ms-btn--lg ms-btn--secondary", "hud-secondary-reason")
                   : nothing}
+                <button
+                  class="hud-exit ms-btn ms-btn--lg ms-btn--secondary"
+                  type="button"
+                  title=${this.#t("v4_exit_full_map", "Exit full map")}
+                  @click=${this.#exitFullMap}
+                >${icon(iconExitFullMap)}<span class="ms-btn__label">${this.#t("v4_exit_full_map", "Exit full map")}</span></button>
               </section>
             ` : nothing}
           </main>

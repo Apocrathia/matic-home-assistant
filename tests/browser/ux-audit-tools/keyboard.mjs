@@ -202,16 +202,16 @@ for (const [w, h] of [[1440, 900], [390, 844]]) {
 for (const [w, h] of [[390, 844], [1440, 900]]) {
   await openScenario(page, "ready", { width: w, height: h });
   await inject(page);
-  const t = await tabTo((x) => /Hide cleaning panel/.test(x.name));
+  const t = await tabTo((x) => /Full map/.test(x.name));
   await page.keyboard.press("Enter");
   await settleAll();
   let a = await active();
-  log(`K8a Full map entered; focus stays on toggle @${w}`, /Show cleaning panel/.test(a.name), `${fmt(a)} ${JSON.stringify(await snap())}`);
+  log(`K8a Full map entered; focus stays on toggle @${w}`, /Full map/.test(a.name) && (await snap()).fullMap === true, `${fmt(a)} ${JSON.stringify(await snap())}`);
   await page.keyboard.press("Escape");
   await settleAll();
   a = await active();
   const s = await snap();
-  log(`K8b Escape leaves Full map, focus returns to toggle @${w}`, s.fullMap === false && /Hide cleaning panel/.test(a.name), `${fmt(a)} ${JSON.stringify(s)}`);
+  log(`K8b Escape leaves Full map, focus returns to toggle @${w}`, s.fullMap === false && /Full map/.test(a.name), `${fmt(a)} ${JSON.stringify(s)}`);
 }
 
 // ---------- K9: skip links ----------

@@ -941,7 +941,7 @@ for (const width of [320, 390, 820, 1280]) {
       });
       const menu = gallery.getByRole("button", { name: "Open Home Assistant sidebar" });
       const title = gallery.getByRole("heading", { name: "Matic Map", exact: true });
-      const toggle = gallery.getByRole("button", { name: "Hide cleaning panel", exact: true });
+      const toggle = gallery.getByRole("button", { name: "Full map", exact: true });
       const [m, t, w] = await Promise.all([menu.boundingBox(), title.boundingBox(), toggle.boundingBox()]);
       expect(m.x + m.width).toBeLessThanOrEqual(t.x);
       expect(w.x).toBeGreaterThan(t.x);

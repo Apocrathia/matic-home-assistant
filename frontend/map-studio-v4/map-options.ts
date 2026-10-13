@@ -8,17 +8,15 @@ type Host = ReactiveControllerHost & HTMLElement & { readonly renderRoot: Parent
 export type MapOptionsContext = {
   state: WorkspaceState;
   narrow: boolean;
-  browserFullscreen: boolean;
   t: (key: string, fallback: string) => string;
   intent: (intent: WorkspaceIntent) => void;
   diagnostics: () => void;
-  fullscreen: () => void;
 };
 
 /**
  * The ⋮ Map options menu (home-rooms.md §5 Display; design-system.md §5
- * Menus): the phone's Map display rows, the map detail choice and the two
- * actions. The shell loads it on the first press, since the menu is off the
+ * Menus): the phone's Map display rows, the map detail choice and the
+ * diagnostics action. The shell loads it on the first press, since the menu is off the
  * startup path. A display or detail row keeps the menu open so
  * the change shows on the map behind it; an action row closes it.
  */
@@ -29,7 +27,7 @@ export class MapOptions {
     this.menu = new MenuController(host, ".overflow-wrap", ".overflow");
   }
 
-  render({ state, narrow, browserFullscreen, t, intent, diagnostics, fullscreen }: MapOptionsContext) {
+  render({ state, narrow, t, intent, diagnostics }: MapOptionsContext) {
     const radio = (checked: boolean, label: string, select: () => void) => html`
       <button class="ms-row ms-row--menu" type="button" role="menuitemradio" aria-checked=${String(checked)} data-selected=${checked ? "true" : nothing} tabindex="-1" @click=${select}><span>${label}</span>${checked ? icon(iconDone) : nothing}</button>
     `;
@@ -62,7 +60,6 @@ export class MapOptions {
           ${detail("maximum", t("map_quality_maximum", "Maximum"))}
         </div>
         <button class="ms-row ms-row--menu" type="button" role="menuitem" tabindex="-1" @click=${() => { this.menu.close(false); diagnostics(); }}>${t("v4_map_diagnostics", "Map diagnostics")}</button>
-        <button class="ms-row ms-row--menu" type="button" role="menuitem" tabindex="-1" @click=${() => { this.menu.close(true); fullscreen(); }}>${browserFullscreen ? t("v4_leave_full_screen", "Leave full screen") : t("v4_full_screen", "Full screen")}</button>
       </div>
     `;
   }

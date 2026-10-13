@@ -186,3 +186,184 @@ test.describe("help (map-surfaces.md §5 Help, §11 MS-HELP-01/02)", () => {
   });
 });
 
+
+const fullMapToggle = (gallery) => gallery.getByRole("button", { name: "Full map", exact: true });
+const hudOf = (gallery) => gallery.getByRole("region", { name: "Robot status and action" });
+const exitButton = (gallery) => hudOf(gallery).getByRole("button", { name: "Exit full map", exact: true });
+
+// A browser full screen double: records requests on the app, answers
+// fullscreenchange, and lets a test leave full screen from outside.
+const installFullscreen = (page) => page.evaluate((tag) => {
+  const shell = document.querySelector(tag).shadowRoot.querySelector("matic-map-shell-v4");
+  const app = shell.shadowRoot.querySelector(".app");
+  let current = null;
+  window.__fs = { requests: 0, exits: 0 };
+  Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => current });
+  Element.prototype.requestFullscreen = async function requestFullscreen() {
+    window.__fs.requests += this === app ? 1 : 0;
+    current = this;
+    document.dispatchEvent(new Event("fullscreenchange"));
+  };
+  document.exitFullscreen = async () => {
+    window.__fs.exits += 1;
+    current = null;
+    document.dispatchEvent(new Event("fullscreenchange"));
+  };
+  window.__fs.leave = () => { current = null; document.dispatchEvent(new Event("fullscreenchange")); };
+}, GALLERY_TAG);
+
+test.describe("Full map (map-surfaces.md §5 Full map, §11 MS-FULL-01…04)", () => {
+  for (const narrow of [false, true]) {
+    test(`the toggle is pressed in Full map and the HUD holds the status, the primary and Exit${narrow ? " @mobile" : ""}`, async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "ready", narrow, viewport: narrow ? null : { width: 1024, height: 768 } });
+      const toggle = fullMapToggle(gallery);
+      await expect(toggle).toHaveAttribute("aria-pressed", "false");
+      await expect(toggle).not.toHaveAttribute("aria-expanded", /.*/);
+      await expect(gallery.getByRole("button", { name: /cleaning panel/ })).toHaveCount(0);
+      await toggle.click();
+      await expect(toggle).toHaveAttribute("aria-pressed", "true");
+      await expect(panelOf(gallery)).toBeHidden();
+      const hud = hudOf(gallery);
+      await expect(hud).toContainText("Docked");
+      await expect(exitButton(gallery)).toBeVisible();
+      await expect(toggle).toBeFocused();
+      await exitButton(gallery).click();
+      await expect.poll(async () => (await snapshot(page)).fullMap).toBe(false);
+      await expect(toggle).toHaveAttribute("aria-pressed", "false");
+      await expect(toggle).toBeFocused();
+      await expect(panelOf(gallery)).toBeVisible();
+    });
+  }
+
+  test("every exit lands on the toggle and closes precision and help", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "draw", viewport: { width: 1024, height: 768 } });
+    // Browser full screen is stubbed: a real one would turn Escape into
+    // its own exit (the D3 trade-off), which the @safety test covers.
+    await installFullscreen(page);
+    const toggle = fullMapToggle(gallery);
+    await toggle.click();
+    await expect.poll(async () => (await snapshot(page)).fullMap).toBe(true);
+    await helpButton(gallery).click();
+    await expect(helpDialog(gallery)).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(helpDialog(gallery)).toHaveCount(0);
+    expect((await snapshot(page)).fullMap).toBe(true);
+    await helpButton(gallery).click();
+    await expect(helpDialog(gallery)).toBeVisible();
+    await patchState(gallery, { precisionOpen: true });
+    await exitButton(gallery).click();
+    await expect.poll(async () => (await snapshot(page)).fullMap).toBe(false);
+    expect((await snapshot(page)).precisionOpen).toBe(false);
+    await expect(helpDialog(gallery)).toHaveCount(0);
+    await expect(toggle).toBeFocused();
+    expect((await snapshot(page)).workflow).toBe("draw");
+
+    await toggle.click();
+    await expect.poll(async () => (await snapshot(page)).fullMap).toBe(true);
+    await toggle.press("Escape");
+    await expect.poll(async () => (await snapshot(page)).fullMap).toBe(false);
+    await expect(toggle).toBeFocused();
+  });
+
+  test("a working robot keeps Stop in the HUD and Locating keeps Stop and Exit only with the canvas card", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "cleaning", viewport: { width: 1024, height: 768 } });
+    await fullMapToggle(gallery).click();
+    const hud = hudOf(gallery);
+    await expect(hud.getByRole("button")).toHaveText([/Stop/, "Exit full map"]);
+    await expect(hud.getByRole("button", { name: "Stop cleaning" })).toHaveClass(/ms-btn--danger/);
+
+    const locating = await loadGallery(page, { scenario: "full-map-locating", viewport: { width: 1024, height: 768 } });
+    await expect(hudOf(locating).getByRole("button")).toHaveText(["Exit full map"]);
+    await expect(locating.locator(".map-message")).toContainText("Locating");
+  });
+
+  test("entering asks the browser for full screen, leaving releases it, and an outside exit leaves Full map @safety", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "ready", viewport: { width: 1024, height: 768 } });
+    await installFullscreen(page);
+    const toggle = fullMapToggle(gallery);
+    await toggle.click();
+    await expect.poll(() => page.evaluate(() => window.__fs.requests)).toBe(1);
+    expect((await snapshot(page)).fullMap).toBe(true);
+    await exitButton(gallery).click();
+    await expect.poll(() => page.evaluate(() => window.__fs.exits)).toBe(1);
+    await expect.poll(async () => (await snapshot(page)).fullMap).toBe(false);
+
+    await toggle.click();
+    await expect.poll(async () => (await snapshot(page)).fullMap).toBe(true);
+    await page.evaluate(() => window.__fs.leave());
+    await expect.poll(async () => (await snapshot(page)).fullMap).toBe(false);
+    await expect(toggle).toBeFocused();
+    expect(await page.evaluate(() => window.__fs.exits)).toBe(1);
+
+    await optionsButton(gallery).click();
+    await expect(optionsMenu(gallery).getByRole("menuitem")).toHaveText(["Map diagnostics"]);
+  });
+
+  test("the HUD is content-sized at the bottom inline-end on wide and the Draw dock sits above it", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "ready", viewport: { width: 1024, height: 768 } });
+    await fullMapToggle(gallery).click();
+    const hud = hudOf(gallery);
+    const canvas = await canvasOf(gallery).boundingBox();
+    let box = await hud.boundingBox();
+    expect(canvas.x + canvas.width - (box.x + box.width)).toBeLessThanOrEqual(12.5);
+    expect(canvas.y + canvas.height - (box.y + box.height)).toBeLessThanOrEqual(12.5);
+    expect(box.width).toBeLessThan(24 * 16);
+
+    const draw = await loadGallery(page, { scenario: "draw", viewport: { width: 1024, height: 768 } });
+    await fullMapToggle(draw).click();
+    await expect(hudOf(draw)).toBeVisible();
+    const dock = await draw.getByRole("toolbar", { name: "Draw area tools" }).boundingBox();
+    box = await hudOf(draw).boundingBox();
+    expect(dock.y + dock.height).toBeLessThanOrEqual(box.y);
+    const help = await helpButton(draw).boundingBox();
+    expect(help.y + help.height).toBeLessThanOrEqual(box.y);
+  });
+
+  test("the HUD spans the phone's width minus the gutters and its Exit is 44 px @mobile", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "full-map", narrow: true });
+    const hud = hudOf(gallery);
+    const box = await hud.boundingBox();
+    expect(box.width).toBeCloseTo(390 - 24, 0);
+    const exit = await exitButton(gallery).boundingBox();
+    expect(exit.height).toBeGreaterThanOrEqual(44);
+    expect(exit.width).toBeGreaterThanOrEqual(44);
+  });
+
+  test("a fitted map stays fitted across the toggle and a moved one keeps its target (framed bounds)", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "ready", viewport: { width: 1024, height: 768 } });
+    await gallery.getByRole("button", { name: "3D", exact: true }).click();
+    const fit = gallery.getByRole("button", { name: "Fit the whole map on screen" });
+    await fit.click();
+    const three = async () => (await snapshot(page)).cameras.three;
+    const renderer = () => canvasOf(gallery).evaluate((canvas) => canvas.rendererDiagnostics());
+    await expect.poll(async () => (await renderer()).fitActive).toBe(true);
+    const fitted = await renderer();
+    expect(fitted.cameraDistance).toBeCloseTo(fitted.fitDistance, 6);
+    const width = (await canvasOf(gallery).boundingBox()).width;
+    await fullMapToggle(gallery).click();
+    await expect.poll(async () => (await snapshot(page)).fullMap).toBe(true);
+    // The wider canvas keeps the framed map: the camera sits at its fit distance.
+    await expect.poll(async () => (await canvasOf(gallery).boundingBox()).width).toBeGreaterThan(width);
+    await page.waitForTimeout(100);
+    const refitted = await renderer();
+    expect(refitted.fitActive).toBe(true);
+    expect(refitted.cameraDistance).toBeCloseTo(refitted.fitDistance, 6);
+    await exitButton(gallery).click();
+    await expect.poll(async () => (await snapshot(page)).fullMap).toBe(false);
+
+    const bounds = await gallery.locator(".map-root").boundingBox();
+    const from = { x: bounds.x + bounds.width * 0.45, y: bounds.y + bounds.height * 0.48 };
+    await drag(page, from, { x: from.x + 80, y: from.y + 30 });
+    await expect.poll(async () => (await renderer()).fitActive).toBe(false);
+    const moved = await three();
+    const movedDistance = (await renderer()).cameraDistance;
+    await fullMapToggle(gallery).click();
+    await expect.poll(async () => (await snapshot(page)).fullMap).toBe(true);
+    await page.waitForTimeout(100);
+    const after = await three();
+    expect(after.targetX).toBeCloseTo(moved.targetX, 4);
+    expect(after.targetZ).toBeCloseTo(moved.targetZ, 4);
+    expect(after.yaw).toBeCloseTo(moved.yaw, 4);
+    expect((await renderer()).cameraDistance).toBeCloseTo(movedDistance, 6);
+  });
+});

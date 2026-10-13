@@ -4453,11 +4453,15 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(gallery.getByRole("button", { name: /^Brush width, 0\.20 m/ })).toBeFocused();
 
     const workspaceToggle = gallery.locator(".workspace-toggle");
-    await expect(workspaceToggle).toHaveAccessibleName("Hide cleaning panel");
+    await expect(workspaceToggle).toHaveAccessibleName("Full map");
+    await expect(workspaceToggle).toHaveAttribute("aria-pressed", "false");
+    // Full map asks for browser full screen (D3), where the browser's own
+    // Escape would leave both at once; the panel-only order is tested here.
+    await page.evaluate(() => { Element.prototype.requestFullscreen = async () => undefined; });
     await workspaceToggle.click();
     await expect.poll(async () => (await snapshot(page)).fullMap).toBe(true);
     await expect(gallery.locator(".inspector")).toBeHidden();
-    await expect(workspaceToggle).toHaveAccessibleName("Show cleaning panel");
+    await expect(workspaceToggle).toHaveAttribute("aria-pressed", "true");
     const precision = gallery.getByRole("button", { name: /^Brush width, 0\.20 m/ });
     await expect(precision).toBeVisible();
     await precision.click();
@@ -5258,7 +5262,7 @@ test.describe("Map Studio v0.4 foundation", () => {
 
   test("keeps Stop reachable while paused and strips transition expanded map to safety controls @safety", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "paused" });
-    await gallery.getByRole("button", { name: "Hide cleaning panel" }).click();
+    await gallery.getByRole("button", { name: "Full map", exact: true }).click();
     await expect(gallery.getByRole("button", { name: "Resume cleaning" })).toBeVisible();
     await expect(gallery.getByRole("button", { name: "Stop cleaning" })).toBeVisible();
 
@@ -5272,9 +5276,10 @@ test.describe("Map Studio v0.4 foundation", () => {
     }, GALLERY_TAG);
     await expect.poll(async () => (await snapshot(page)).fullMap).toBe(true);
     await expect(gallery.locator(".map-tools button")).toHaveCount(0);
-    await expect(gallery.getByRole("button", { name: "Show cleaning panel" })).toBeVisible();
+    await expect(gallery.getByRole("button", { name: "Exit full map", exact: true })).toBeVisible();
     await expect(gallery.locator(".full-map-hud")).toContainText("Locating");
-    await expect(gallery.locator(".map-message")).toHaveCount(0);
+    // The canvas card stays while Locating (map-surfaces.md §4 Full map, Locating).
+    await expect(gallery.locator(".map-message")).toContainText("Locating");
   });
 
   test("uses identical map math for the brush cursor and scale", async ({ page }) => {
@@ -6038,7 +6043,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       const strings = {
         map_studio_title: "Mapa Matic",
         v4_how_to_move: "Cómo mover el mapa",
-        v4_hide_workspace: "Ocultar espacio de trabajo",
+        v4_full_map: "Mapa completo",
         v4_trackpad: "Panel táctil",
         v4_trackpad_help: "Desplázate para mover · pellizca para ampliar · gira para rotar",
         v4_clean_rooms: "Limpiar habitaciones",
@@ -6052,7 +6057,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     });
     await expect(gallery.getByRole("heading", { name: "Mapa Matic" })).toBeVisible();
     await expect(gallery.getByRole("complementary", { name: "Espacio de trabajo del mapa", exact: true })).toBeVisible();
-    await expect(gallery.getByRole("button", { name: "Ocultar espacio de trabajo" })).toBeVisible();
+    await expect(gallery.getByRole("button", { name: "Mapa completo" })).toBeVisible();
     const help = gallery.getByRole("button", { name: "Cómo mover el mapa" });
     await help.click();
     await expect(gallery.getByRole("dialog", { name: "Cómo mover el mapa" }))
@@ -6116,84 +6121,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await page.evaluate(() => window.__modernPanel.remove());
   });
 
-  test("keeps native browser fullscreen as an optional secondary control @safety", async ({ page }) => {
-    const gallery = await loadGallery(page, { scenario: "ready" });
-    await page.evaluate(() => {
-      window.__v4FullscreenRequested = false;
-      const panel = document.querySelector("matic-map-studio-gallery-v0-4-0");
-      const shell = panel.shadowRoot.querySelector("matic-map-shell-v4");
-      const root = shell.shadowRoot;
-      const app = root.querySelector(".app");
-      let fullscreenElement = null;
-      let exposesScopedFullscreen = true;
-      Object.defineProperty(root, "fullscreenElement", {
-        configurable: true,
-        get: () => exposesScopedFullscreen ? fullscreenElement : null,
-      });
-      Object.defineProperty(document, "fullscreenElement", {
-        configurable: true,
-        get: () => fullscreenElement ? panel : null,
-      });
-      window.__v4ExposeScopedFullscreen = (expose) => {
-        exposesScopedFullscreen = expose;
-      };
-      Element.prototype.requestFullscreen = async function requestFullscreen() {
-        window.__v4FullscreenRequested = this === app;
-        fullscreenElement = this;
-        document.dispatchEvent(new Event("fullscreenchange"));
-      };
-      document.exitFullscreen = async () => {
-        fullscreenElement = null;
-        document.dispatchEvent(new Event("fullscreenchange"));
-      };
-    });
-    await gallery.getByRole("button", { name: "Map options" }).click();
-    // Map options is an ARIA menu (design-system.md §5 Menus); the two
-    // actions are its plain menuitems after the detail radios.
-    const menu = gallery.locator("#map-options");
-    await expect(menu).toHaveAttribute("role", "menu");
-    await expect(menu.getByRole("menuitem")).toHaveText(["Map diagnostics", "Full screen"]);
-    await expect(menu.getByRole("menuitem", { name: /classic/i })).toHaveCount(0);
-    await menu.getByRole("menuitem", { name: "Full screen", exact: true }).click();
-    expect(await page.evaluate(() => window.__v4FullscreenRequested)).toBe(true);
-
-    await gallery.getByRole("button", { name: "Map options" }).click();
-    await expect(gallery.locator("#map-options").getByRole("menuitem", {
-      name: "Leave full screen",
-      exact: true,
-    })).toBeVisible();
-    await gallery.locator("#map-options").getByRole("menuitem", {
-      name: "Leave full screen",
-      exact: true,
-    }).click();
-
-    await gallery.getByRole("button", { name: "Map options" }).click();
-    await expect(gallery.locator("#map-options").getByRole("menuitem", {
-      name: "Full screen",
-      exact: true,
-    })).toBeVisible();
-
-    await page.evaluate(() => window.__v4ExposeScopedFullscreen(false));
-    await gallery.locator("#map-options").getByRole("menuitem", {
-      name: "Full screen",
-      exact: true,
-    }).click();
-    await gallery.getByRole("button", { name: "Map options" }).click();
-    await expect(gallery.locator("#map-options").getByRole("menuitem", {
-      name: "Leave full screen",
-      exact: true,
-    })).toBeVisible();
-    await gallery.locator("#map-options").getByRole("menuitem", {
-      name: "Leave full screen",
-      exact: true,
-    }).click();
-
-    await gallery.getByRole("button", { name: "Map options" }).click();
-    await expect(gallery.locator("#map-options").getByRole("menuitem", {
-      name: "Full screen",
-      exact: true,
-    })).toBeVisible();
-  });
+  // Browser full screen folded into Full map (D3): map_studio_v4_map_surfaces.spec.mjs.
 
   test("coalesces 100 unrelated Home Assistant updates without workspace churn", async ({ page }) => {
     let catalogRequests = 0;

@@ -19,7 +19,8 @@ import {
   mdiContentCopy,
   mdiCursorMove,
   mdiDotsVertical,
-  mdiDockRight,
+  mdiFullscreen,
+  mdiFullscreenExit,
   mdiEraser,
   mdiFormatText,
   mdiHelpCircleOutline,
@@ -49,7 +50,8 @@ import {
 export const iconBack = mdiArrowLeft;
 export const iconOverflow = mdiDotsVertical;
 export const iconMenu = mdiMenu;
-export const iconWorkspace = mdiDockRight;
+export const iconFullMap = mdiFullscreen;
+export const iconExitFullMap = mdiFullscreenExit;
 export const iconChevronRight = mdiChevronRight;
 export const iconChevronUp = mdiChevronUp;
 export const iconChevronDown = mdiChevronDown;
