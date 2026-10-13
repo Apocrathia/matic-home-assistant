@@ -168,15 +168,12 @@ const NOTICE_BASES = [
   ["area-review", "area-review-new"],
 ];
 const HELP_BASES = ["ready", "plan-saved-intelligent"];
-// Scenarios whose collapsed "Room schedule" sections are the point of the state.
-const OPEN_SCHEDULE_SCENARIOS = new Set(["plan-cadence-shared", "plan-cadence-blocked"]);
 
 const ITEMS = [
   ...GALLERY_SCENARIOS.map((scenario) => ({
     id: scenario,
     scenario,
     variants: SCENARIO_VARIANTS,
-    openSchedule: OPEN_SCHEDULE_SCENARIOS.has(scenario),
   })),
   ...GALLERY_DIALOGS.map((kind) => ({
     id: `dialog-${kind}`,
@@ -399,19 +396,6 @@ async function measureScroll(page) {
   }, GALLERY_TAG);
 }
 
-// Expands the first room's schedule (the room these states configure) and keeps
-// the panel scrolled to the top so the capture starts at the plan heading.
-async function openFirstSchedule(page) {
-  await page.locator("details.cadence-config").first().evaluate((details) => { details.open = true; });
-  await settle(page);
-  await page.evaluate((tag) => {
-    const shell = document.querySelector(tag).shadowRoot.querySelector(".stage").firstElementChild;
-    for (const scroller of shell.shadowRoot.querySelectorAll(".sheet-body, .workflow-body, .inspector")) {
-      scroller.scrollTop = 0;
-    }
-  }, GALLERY_TAG);
-}
-
 // Returns a reason string when the launcher is not reachable in this state.
 async function openHelp(page) {
   const launcher = page.getByRole("button", { name: "How to move the map", exact: true });
@@ -452,7 +436,6 @@ async function captureVariant(page, item, size, directory) {
   const records = [];
   try {
     await openScenario(page, item, size);
-    if (item.openSchedule) await openFirstSchedule(page);
     if (item.help) {
       const skipped = await openHelp(page);
       if (skipped) {

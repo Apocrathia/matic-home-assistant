@@ -5,43 +5,42 @@
 These optional schedules are part of the 0.5 development branch. Existing
 plans keep their fixed settings until you enable a room schedule.
 
-## Choose the work and interval
+## Choose the work and how often
 
-Open a saved plan in Matic Map, choose **Edit**, then open a room and its
-**Room schedule**. For each room, you can independently enable:
+Open a saved plan in Matic Map, choose **Edit**, then open a room. Its
+**Schedule** has two rows, each set with **−** and **+** or by typing 1 to 100
+(empty is Off):
 
-- Mopping: vacuum normally, then vacuum and mop every N verified cleans.
-- Vacuum rotation: use the normal vacuum coverage, then the chosen vacuum
-  rotation level every N verified cleans. Quick, Optimal, and Heavy duty can
-  be used in any pairing for Vacuum and Vacuum + mop. Mop-only rooms cannot
-  use this rule. Existing incompatible rules remain visible for repair; choose
-  a vacuum mode or clear the room rule. Clearing it leaves shared schedules
-  unchanged for other participants.
+- **Mop**: vacuum normally, then vacuum and mop every few cleans. It needs the
+  room's cleaning mode to be Vacuum.
+- **{Level} vacuum**: a vacuum rotation at the level you pick (Quick, Optimal or
+  Heavy duty; a new rotation starts at Heavy duty) every few cleans. Mop-only
+  rooms can't use it; a rotation left on such a room shows **Turn off**.
 
-Intervals range from 1 to 100. A new interval of 3 applies scheduled work on
-the third qualifying clean. If both rules are due, that clean includes both.
-**Do vacuum and mop on the next clean** and **Add a vacuum rotation on the next
-clean** request that work without resetting progress.
-Verified mopping clears its next-clean request. A vacuum rotation is
-credited only when the robot confirms the requested goals at dispatch and again
-after the same native session completes. Missing or changed setting evidence
-keeps the rotation due. A completed-looking run alone does not clear it.
+Under each row, a line says when the work is next due: "Due in 3 cleans",
+"Due next clean", "Due every clean" or "Not scheduled". A schedule of 3 runs on
+the third counted clean, and when both are due that clean includes both.
+**… on the next clean** brings the work forward once without resetting
+progress; the schedule then continues as usual.
 
 ## Choose where progress is shared
 
-**In this plan only** keeps settings and progress private to that plan.
-**Across all plans (recommended)** lets participating plans and tracked Matic Map room
-cleans use the same schedule and progress.
+New schedules count cleans **Across all plans**, so every plan that uses the
+room shares one schedule and its progress. To keep a schedule to one plan, open
+**Advanced** and choose **In this plan only** under **Count cleans**. The
+`save_plan` action still counts progress in that plan only unless you pass
+`scope: shared`.
 
-Creating a schedule starts at zero. Joining an existing shared schedule adopts
-its progress. Leaving it for a new private schedule starts fresh for that
-plan; other participants keep their shared progress. Review the explanation
-beside the scope choice before saving.
+When a room already has a shared schedule, turning on either row uses it: the
+rows show the shared values, read-only until you save, and saving picks up any
+progress already counted. Choose **In this plan only** first to set your own
+values instead. Leaving a shared schedule starts new progress for this plan;
+other plans keep theirs. The line under the rows says what saving will do.
 
-Creating or joining a shared schedule requires the verified live floor.
-If the map is being checked, keep the draft and retry once the floor is ready.
-Room renames preserve progress; an uncertain room or floor identity cannot
-carry progress to another map.
+Creating or joining a shared schedule requires the live floor. If the map is
+being checked, keep the draft and retry once the floor is ready. Room renames
+keep progress; a room Home Assistant can't match to the current map can't carry
+progress to it.
 
 ## One-time room cleans
 
@@ -72,10 +71,11 @@ until Matic can verify that a clean used the selected setting; it can therefore
 be requested again on later cleans. Delayed results and restart recovery cannot
 count the same clean twice.
 
-Changing an interval preserves progress. Disabling a rule pauses it. Use the
-separate **Reset mopping** or **Reset vacuum rotation** action in a saved plan's
-**Edit** view to start that interval fresh. It asks before resetting and works
-while the robot is idle; cleaning history is kept separately. A shared reset affects every
+Changing how often keeps progress. Turning a schedule off pauses it. To start
+one fresh, open the room in a saved plan's **Edit** view and choose **Reset
+mopping** or **Reset vacuum rotation** from **More for {room}** (⋮). It asks
+before resetting and works while the robot is idle, the map is live and the
+plan has no unsaved changes; cleaning history is kept separately. A shared reset affects every
 participant in that room's shared schedule. Edits and resets wait while the
 affected room is queued, running, or its result is being verified.
 
