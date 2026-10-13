@@ -180,7 +180,9 @@ def test_style_comments_stay_in_the_sources_and_out_of_the_bundle() -> None:
         " ".join(comment.split())
         for path in (_REPOSITORY / "frontend" / "map-studio-v4").glob("*.ts")
         for template in re.findall(r"\bcss`([^`]*)`", path.read_text(encoding="utf-8"))
-        for comment in re.findall(r"^[ \t]*/\*(.*?)\*/[ \t]*$", template, re.MULTILINE | re.DOTALL)
+        for comment in re.findall(
+            r"^[ \t]*/\*(.*?)\*/[ \t]*$", template, re.MULTILINE | re.DOTALL
+        )
     ]
     assert len(notes) >= 16
     shipped = " ".join(_STUDIO_V4_JS.split())
