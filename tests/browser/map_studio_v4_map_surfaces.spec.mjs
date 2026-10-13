@@ -367,3 +367,253 @@ test.describe("Full map (map-surfaces.md §5 Full map, §11 MS-FULL-01…04)", (
     expect((await renderer()).cameraDistance).toBeCloseTo(movedDistance, 6);
   });
 });
+
+// ---- Draw (map-surfaces.md §3-§8 Draw, §11 MS-DRAW-01…07, MS-RESP-02) ------
+const DRAW_TOOLS = ["Points", "Paint", "Erase", "Move map", "Undo", "Redo", "Clear", "Brush width, 60 cm. Opens brush settings."];
+const toolbarOf = (scope) => scope.getByRole("toolbar", { name: "Draw area tools" });
+const labelWidth = (button) => button.locator(".ms-btn__label").evaluate((label) => label.getBoundingClientRect().width);
+const describedBy = (control) => control.evaluate((element) => {
+  const id = element.getAttribute("aria-describedby");
+  return id ? element.getRootNode().getElementById(id)?.textContent.trim() ?? null : null;
+});
+
+test.describe("Draw tools", () => {
+  for (const width of [390, 360, 320]) {
+    test(`the sheet holds the eight tools in two rows at ${width}px, labelled from 360 @mobile`, async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "draw", viewport: { width, height: 844 } });
+      const toolbar = toolbarOf(gallery.locator(".sheet-tools"));
+      const tools = toolbar.locator("button");
+      await expect(tools).toHaveCount(8);
+      for (const [index, name] of DRAW_TOOLS.entries()) {
+        const tool = tools.nth(index);
+        await expect(tool).toHaveAccessibleName(name);
+        const box = await tool.boundingBox();
+        expect(box.width, `${name} width`).toBeGreaterThanOrEqual(44);
+        expect(box.height, `${name} height`).toBeGreaterThanOrEqual(44);
+        if (width >= 360) expect(await labelWidth(tool), `${name} label shows`).toBeGreaterThan(8);
+        else expect(await labelWidth(tool), `${name} label is assistive`).toBeLessThanOrEqual(1);
+      }
+      const rowsY = new Set((await Promise.all((await tools.all()).map(async (tool) => Math.round((await tool.boundingBox()).y)))));
+      expect(rowsY.size, "two rows").toBe(2);
+      await expect(tools.nth(7)).toHaveText("Brush · 60 cm");
+      const brush = await tools.nth(7).boundingBox();
+      expect(brush.height, "Brush never wraps").toBeLessThan(60);
+      expect(await page.evaluate((limit) => document.documentElement.scrollWidth <= limit, width)).toBe(true);
+      const sheet = await gallery.locator(".mobile-sheet").boundingBox();
+      const bar = await toolbar.boundingBox();
+      expect(bar.x + bar.width).toBeLessThanOrEqual(sheet.x + sheet.width + 0.5);
+      await tools.nth(0).click();
+      await expect(tools).toHaveCount(7);
+    });
+  }
+
+  test("a landscape phone gets one icon-only row that scrolls sideways when the sheet is narrower @mobile", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "draw", viewport: { width: 844, height: 390 } });
+    const toolbar = toolbarOf(gallery.locator(".sheet-tools"));
+    const tools = toolbar.locator("button");
+    await expect(tools).toHaveCount(8);
+    const boxes = await Promise.all((await tools.all()).map((tool) => tool.boundingBox()));
+    expect(new Set(boxes.map((box) => Math.round(box.y))).size, "one row").toBe(1);
+    for (const [index, box] of boxes.entries()) {
+      expect(box.width, `${DRAW_TOOLS[index]} width`).toBeGreaterThanOrEqual(44);
+      expect(box.width, `${DRAW_TOOLS[index]} icon-only`).toBeLessThanOrEqual(48);
+      expect(box.height).toBeGreaterThanOrEqual(44);
+      expect(await labelWidth(tools.nth(index))).toBeLessThanOrEqual(1);
+    }
+    expect(await toolbar.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await page.setViewportSize({ width: 320, height: 256 });
+    await expect.poll(() => toolbar.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+    expect(await toolbar.evaluate((element) => getComputedStyle(element).overflowX)).toMatch(/auto|scroll/);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= 320)).toBe(true);
+    await expect(tools.nth(7)).toHaveAccessibleName(DRAW_TOOLS[7]);
+  });
+
+  test("the desktop dock holds the eight labelled tools and Clear leaves the action bar", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "draw", viewport: { width: 1024, height: 768 } });
+    const toolbar = toolbarOf(canvasOf(gallery));
+    const tools = toolbar.locator("button");
+    await expect(tools).toHaveCount(8);
+    for (const [index, name] of DRAW_TOOLS.entries()) await expect(tools.nth(index)).toHaveAccessibleName(name);
+    await expect(gallery.locator(".action-bar").getByRole("button", { name: "Clear" })).toHaveCount(0);
+    const clear = toolbar.getByRole("button", { name: "Clear", exact: true });
+    const before = (await snapshot(page)).draw.circles.length;
+    expect(before).toBeGreaterThan(0);
+    await expect(clear).toBeEnabled();
+    await clear.click();
+    await expect.poll(async () => (await snapshot(page)).draw.circles.length).toBe(0);
+    await expect(clear).toBeDisabled();
+    await toolbar.getByRole("button", { name: "Undo", exact: true }).click();
+    await expect.poll(async () => (await snapshot(page)).draw.circles.length).toBe(before);
+    await expect(clear).toBeEnabled();
+  });
+
+  test("the brush reads in centimetres through Intl in the host locale", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "draw" });
+    const brush = toolbarOf(canvasOf(gallery)).locator(".draw-brush");
+    await expect(brush).toHaveText("Brush · 60 cm");
+    await expect(brush).toHaveAccessibleName("Brush width, 60 cm. Opens brush settings.");
+    const state = await snapshot(page);
+    await patchState(gallery, { draw: { ...state.draw, brushMeters: 1.5 }, locale: "de" });
+    const expected = await page.evaluate(() => new Intl.NumberFormat("de", { style: "unit", unit: "centimeter", unitDisplay: "short" }).format(150));
+    await expect(brush).toHaveText(`Brush · ${expected}`);
+    await expect(brush).toHaveAccessibleName(`Brush width, ${expected}. Opens brush settings.`);
+  });
+
+  test("Undo and Redo mirror under RTL; Points does not", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "draw" });
+    await page.evaluate(() => { document.documentElement.dir = "rtl"; });
+    const toolbar = toolbarOf(canvasOf(gallery));
+    const scaleOf = (name) => toolbar.getByRole("button", { name, exact: true }).locator(".ms-icon").evaluate((icon) => getComputedStyle(icon).scale);
+    expect(await scaleOf("Undo")).toBe("-1 1");
+    expect(await scaleOf("Redo")).toBe("-1 1");
+    expect(await scaleOf("Points")).toBe("none");
+    await page.evaluate(() => { document.documentElement.dir = "ltr"; });
+    expect(await scaleOf("Undo")).toBe("none");
+  });
+
+  test("the panel shows one pointer hint per tool and no keyboard paragraph", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "draw" });
+    const panel = panelOf(gallery);
+    const hint = panel.locator(".draw-hint");
+    await expect(hint).toHaveText("Drag to paint · right-drag or Space-drag to move the map");
+    await gallery.getByRole("button", { name: "Erase", exact: true }).click();
+    await expect(hint).toHaveText("Drag to paint · right-drag or Space-drag to move the map");
+    await gallery.getByRole("button", { name: "Points", exact: true }).click();
+    await expect(hint).toHaveText("Click to add points · right-drag to move the map");
+    await gallery.getByRole("button", { name: "Move map", exact: true }).click();
+    await expect(hint).toHaveCount(0);
+    await expect(panel.getByText(/Keyboard/)).toHaveCount(0);
+    await expect(panel.getByText(/mapped floor|narrow edges/)).toHaveCount(0);
+  });
+
+  test("a touch screen reads the touch hints @mobile", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "draw", narrow: true });
+    await gallery.getByRole("button", { name: "Expand panel", exact: true }).click();
+    const hint = gallery.locator(".mobile-sheet .draw-hint");
+    await expect(hint).toHaveText("Drag to paint · two fingers to move the map");
+    await gallery.getByRole("button", { name: "Points", exact: true }).click();
+    await expect(hint).toHaveText("Tap to add points · two fingers to move the map");
+  });
+});
+
+test.describe("Draw bar and Custom areas", () => {
+  test("Draw pairs Cancel with Name and save; a redraw reads Done and returns to Redraw", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "draw" });
+    const bar = gallery.locator(".action-bar");
+    await expect(bar).toHaveClass(/paired/);
+    await expect(bar.getByRole("button")).toHaveText(["Cancel", "Name and save"]);
+    await gallery.evaluate((element) => element.setScenario("area-review-rebind"));
+    const redraw = gallery.getByRole("button", { name: "Redraw", exact: true });
+    await redraw.click();
+    await expect.poll(async () => (await snapshot(page)).workflow).toBe("draw");
+    await expect(bar.getByRole("button")).toHaveText(["Cancel", "Done"]);
+    const done = bar.getByRole("button", { name: "Done", exact: true });
+    await expect(done).toBeEnabled();
+    await done.click();
+    await expect.poll(async () => (await snapshot(page)).workflow).toBe("areaReview");
+    await expect(redraw).toBeFocused();
+  });
+
+  test("Cancel from a dirty fresh Draw asks, then lands on the home card that opened it", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "ready" });
+    const card = gallery.getByRole("button", { name: /^Clean custom area/ });
+    await card.click();
+    await expect.poll(async () => (await snapshot(page)).workflow).toBe("draw");
+    const state = await snapshot(page);
+    await patchState(gallery, { draw: { ...state.draw, dirty: true, strokeCount: 1, circles: [{ x: 1, z: 1, radius: 0.3 }] } });
+    const cancel = gallery.locator(".action-bar").getByRole("button", { name: "Cancel", exact: true });
+    await cancel.click();
+    const dialog = gallery.getByRole("dialog", { name: "Discard changes?" });
+    await expect(dialog).toHaveAccessibleDescription("This new area hasn't been saved, and discarding it can't be undone.");
+    await dialog.getByRole("button", { name: "Keep editing", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(cancel).toBeFocused();
+    expect((await snapshot(page)).workflow).toBe("draw");
+    await cancel.click();
+    await dialog.getByRole("button", { name: "Discard", exact: true }).click();
+    await expect.poll(async () => (await snapshot(page)).workflow).toBe("none");
+    await expect(card).toBeFocused();
+  });
+
+  test("Cancel from a redraw asks, then restores the saved outline in the review", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "area-review-rebind" });
+    const saved = (await snapshot(page)).resources.areas.value.areas[0].circles;
+    await gallery.getByRole("button", { name: "Redraw", exact: true }).click();
+    await expect.poll(async () => (await snapshot(page)).workflow).toBe("draw");
+    const state = await snapshot(page);
+    await patchState(gallery, { draw: { ...state.draw, circles: [], dirty: true, strokeCount: 1 } });
+    await gallery.locator(".action-bar").getByRole("button", { name: "Cancel", exact: true }).click();
+    const dialog = gallery.getByRole("dialog", { name: "Discard changes?" });
+    await expect(dialog).toHaveAccessibleDescription("Your changes to \"Entryway\" haven't been saved, and discarding them can't be undone.");
+    await dialog.getByRole("button", { name: "Discard", exact: true }).click();
+    await expect.poll(async () => (await snapshot(page)).workflow).toBe("areaReview");
+    const after = await snapshot(page);
+    expect(after.draw.circles).toEqual(saved);
+    expect(after.areaDraft).toMatchObject({ id: "entryway", name: "Entryway", dirty: false });
+    // The heading's Back takes the same road.
+    await gallery.getByRole("button", { name: "Redraw", exact: true }).click();
+    await expect.poll(async () => (await snapshot(page)).workflow).toBe("draw");
+    const back = gallery.getByRole("button", { name: "Back to Entryway", exact: true });
+    await expect(back).toHaveText("Entryway");
+    await back.click();
+    await expect.poll(async () => (await snapshot(page)).workflow).toBe("areaReview");
+  });
+
+  for (const narrow of [false, true]) {
+    test(`held Draw controls say why while a command runs${narrow ? " @mobile" : ""}`, async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "draw", narrow });
+      if (narrow) await gallery.getByRole("button", { name: "Expand panel", exact: true }).click();
+      const toolbar = toolbarOf(narrow ? gallery.locator(".sheet-tools") : canvasOf(gallery));
+      const panel = narrow ? gallery.locator(".mobile-sheet") : panelOf(gallery);
+      const before = (await snapshot(page)).draw;
+      await patchState(gallery, { command: "pending" });
+      for (const name of ["Undo", "Redo", "Clear"]) {
+        const tool = toolbar.getByRole("button", { name, exact: true });
+        await expect(tool).toHaveAttribute("aria-disabled", "true");
+        expect(await describedBy(tool), name).toBe("Waiting for the current change to finish.");
+      }
+      await toolbar.getByRole("button", { name: "Clear", exact: true }).click({ force: true });
+      expect((await snapshot(page)).draw).toEqual(before);
+      for (const name of ["Points", "Paint", "Erase", "Move map"]) {
+        const tool = toolbar.getByRole("button", { name, exact: true });
+        await expect(tool).toBeEnabled();
+        await expect(tool).not.toHaveAttribute("aria-disabled", "true");
+      }
+      const row = panel.getByRole("button", { name: "New area", exact: true });
+      await expect(row).toHaveAttribute("aria-disabled", "true");
+      expect(await describedBy(row)).toBe("Waiting for the current change to finish.");
+      await row.click({ force: true });
+      expect((await snapshot(page)).workflow).toBe("draw");
+      expect((await snapshot(page)).draw).toEqual(before);
+      await patchState(gallery, { command: "starting" });
+      expect(await describedBy(toolbar.getByRole("button", { name: "Undo", exact: true }))).toBe("Waiting for the robot to begin.");
+      await patchState(gallery, { command: "settling" });
+      expect(await describedBy(toolbar.getByRole("button", { name: "Undo", exact: true }))).toBe("Waiting for the robot to stop.");
+      await patchState(gallery, { command: "idle" });
+      await expect(toolbar.getByRole("button", { name: "Undo", exact: true })).not.toHaveAttribute("aria-disabled", "true");
+      await expect(row).not.toHaveAttribute("aria-disabled", "true");
+      await expect(panel.locator("fieldset")).toHaveCount(0);
+    });
+  }
+
+  test("Custom areas is a section with New area first, names in bdi and a Review trail only when the map changed", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "draw" });
+    const panel = panelOf(gallery);
+    const heading = panel.getByRole("heading", { level: 3, name: "Custom areas" });
+    await expect(heading).toHaveClass(/ms-section-heading/);
+    const list = panel.getByRole("group", { name: "Custom areas" });
+    await expect(list.getByRole("button")).toHaveText(["New area", "Entryway"]);
+    await expect(list.locator("bdi")).toHaveText(["Entryway"]);
+    await expect(panel.getByText("Ready", { exact: true })).toHaveCount(0);
+    await expect(list.getByRole("button", { name: "Entryway", exact: true })).toHaveCount(1);
+    const state = await snapshot(page);
+    const areas = state.resources.areas.value;
+    await patchState(gallery, { resources: { ...state.resources, areas: { ...state.resources.areas, value: { ...areas, areas: areas.areas.map((area) => ({ ...area, status: "review", canRebind: true })) } } } });
+    await expect(list.getByRole("button")).toHaveText(["New area", "Entryway Review"]);
+    // A dirty draft would ask first; a clean one opens the review at once.
+    await patchState(gallery, { draw: { ...(await snapshot(page)).draw, dirty: false } });
+    await list.getByRole("button", { name: /^Entryway/ }).click();
+    await expect.poll(async () => (await snapshot(page)).workflow).toBe("areaReview");
+    expect((await snapshot(page)).areaDraft.id).toBe("entryway");
+  });
+});

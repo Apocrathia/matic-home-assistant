@@ -809,7 +809,7 @@ export class MaticMapShellV4 extends LitElement {
         // so a key pressed straight away still reaches the shell.
         void this.updateComplete.then(() => {
           if (state.workflow === "none") return this.#focusHomeLauncher();
-          if (previous.workflow !== "plan") return this.#focusPanel();
+          if (previous.workflow !== "plan" && previous.workflow !== "draw") return this.#focusPanel();
           requestAnimationFrame(() => {
             if (!this.#views.value?.focusPlanTarget(previous, state, this.renderRoot, isVisible)) this.#focusPanel();
           });
@@ -875,10 +875,6 @@ export class MaticMapShellV4 extends LitElement {
     if (!action.enabled) return;
     if (action.id === "return-live") {
       this.#intent({ type: "set-history", historyId: null });
-      return;
-    }
-    if (action.id === "clear-draft") {
-      this.#intent({ type: "clear-draft" });
       return;
     }
     this.#dispatchAction(action.id);
@@ -1373,13 +1369,16 @@ export class MaticMapShellV4 extends LitElement {
       ? this.#views.value?.roomsSummary(this.#tr, state) ?? ""
       : "";
     const editing = state.workflow === "plan" && state.planView === "edit";
+    // Draw pairs Cancel with its primary too, unless Stop holds the bar's
+    // second place (shell.md §3); Back in the heading then keeps the exit.
+    const drawing = state.workflow === "draw" && !secondary;
     // No bar when it would be empty: idle home has none (home-rooms.md §3).
-    if (!summary && !editing && !(primary && "label" in primary) && !secondary) return nothing;
-    // Edit pairs Cancel with the primary.
+    if (!summary && !editing && !drawing && !(primary && "label" in primary) && !secondary) return nothing;
+    const leave = (intent: WorkspaceIntent, launcher: EventTarget | null) => this.#leave(intent, launcher);
     return html`
-      <div class=${editing ? "action-bar paired" : "action-bar"}>
+      <div class=${editing || drawing ? "action-bar paired" : "action-bar"}>
         ${summary ? html`<p class="action-summary">${summary}</p>` : nothing}
-        ${editing ? this.#views.value?.planCancel(state, primary, this.#tr, (intent, launcher) => this.#leave(intent, launcher)) : nothing}
+        ${editing ? this.#views.value?.planCancel(state, primary, this.#tr, leave) : drawing ? this.#views.value?.drawCancel(state, this.#tr, leave) : nothing}
         ${primary ? this.#actionButton(primary, "ms-btn ms-btn--block ms-btn--lg ms-btn--primary", "primary-reason") : nothing}
         ${secondary ? this.#actionButton(secondary, "ms-btn ms-btn--block ms-btn--lg ms-btn--secondary", "secondary-reason") : nothing}
       </div>
@@ -1632,7 +1631,10 @@ export class MaticMapShellV4 extends LitElement {
   #back(state: WorkspaceState, grip: boolean) {
     if (state.workflow === "none" || (state.workflow === "plan" && state.planView === "edit")) return nothing;
     const plan = state.workflow === "plan" && state.planOrigin !== "home";
-    const name = plan ? this.#t("v4_back_to_plans", "Back to plans") : this.#t("v4_back_to_all_tasks", "Back to all tasks");
+    const area = state.workflow === "draw" && state.areaDraft.id !== null ? state.areaDraft.name : null;
+    const name = plan ? this.#t("v4_back_to_plans", "Back to plans")
+      : area !== null ? this.#t("v4_back_to_area", "Back to {name}", { name: area })
+        : this.#t("v4_back_to_all_tasks", "Back to all tasks");
     return html`
       <button
         class=${grip ? "sheet-back ms-btn ms-btn--icon ms-btn--sm" : "panel-back ms-btn ms-btn--secondary"}
@@ -1640,8 +1642,13 @@ export class MaticMapShellV4 extends LitElement {
         aria-label=${name}
         title=${grip ? name : nothing}
         data-dialog-launcher="discardDraft"
-        @click=${(event: Event) => this.#leave({ type: "open-workflow", workflow: plan ? "plans" : "none" }, event.currentTarget)}
-      >${icon(iconBack)}${grip ? nothing : html`<span class="ms-btn__label">${plan ? this.#t("v4_your_plans", "Your plans") : this.#t("v4_all_tasks", "All tasks")}</span>`}</button>
+        @click=${(event: Event) => this.#leave(
+          plan ? { type: "open-workflow", workflow: "plans" }
+            : area !== null ? { type: "select-area", areaId: state.areaDraft.id, workflow: "areaReview" }
+              : { type: "open-workflow", workflow: "none" },
+          event.currentTarget,
+        )}
+      >${icon(iconBack, { directional: true })}${grip ? nothing : html`<span class="ms-btn__label">${plan ? this.#t("v4_your_plans", "Your plans") : area !== null ? html`<bdi>${area}</bdi>` : this.#t("v4_all_tasks", "All tasks")}</span>`}</button>
     `;
   }
 
@@ -1690,16 +1697,7 @@ export class MaticMapShellV4 extends LitElement {
       ? primary
       : !narrow && secondary?.id === "stop" ? secondary : null;
     const footerPrimary = statusAction && statusAction === primary ? null : primary;
-    const clearDrawing: PrimaryAction | null = state.workflow === "draw" && state.dataMode === "live"
-      ? {
-        id: "clear-draft",
-        label: "Clear",
-        labelKey: "v4_clear_drawing",
-        kind: "neutral",
-        enabled: state.draw.circles.length > 0 || Boolean(state.draw.outline?.points.length),
-      }
-      : null;
-    const footerSecondary = statusAction && statusAction === secondary ? null : (secondary ?? clearDrawing);
+    const footerSecondary = statusAction && statusAction === secondary ? null : secondary;
     const locatingInFullMap = state.fullMap
       && (state.coherence === "verifying" || state.coherence === "booting");
     const canToggleWorkspace = state.fullMap || (

@@ -4396,7 +4396,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       const module = window.__galleryModule;
       const galleryElement = document.querySelector(tag);
       galleryElement.replaceWorkspaceState({
-        ...module.createGalleryState("draw"),
+        ...module.createGalleryState("draw-saved"),
         workflow: "areaReview",
       });
     }, GALLERY_TAG);
@@ -4435,7 +4435,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     // Precision is a brush popover opened from the dock's Brush button; the
     // zoom stepper and the "400% · 0.20 m" chip no longer exist. Zoom is a
     // view concern handled by the map itself.
-    const brushButton = gallery.getByRole("button", { name: /^Brush width, 0\.60 m/ });
+    const brushButton = gallery.getByRole("button", { name: /^Brush width, 60 cm/ });
     await expect(brushButton).toHaveAttribute("aria-haspopup", "dialog");
     await expect(brushButton).toHaveAttribute("aria-expanded", "false");
     await expect(gallery.getByLabel("Map zoom percent")).toHaveCount(0);
@@ -4450,7 +4450,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect.poll(async () => (await snapshot(page)).draw.brushMeters).toBe(0.2);
     await brush.press("Escape");
     await expect.poll(async () => (await snapshot(page)).precisionOpen).toBe(false);
-    await expect(gallery.getByRole("button", { name: /^Brush width, 0\.20 m/ })).toBeFocused();
+    await expect(gallery.getByRole("button", { name: /^Brush width, 20 cm/ })).toBeFocused();
 
     const workspaceToggle = gallery.locator(".workspace-toggle");
     await expect(workspaceToggle).toHaveAccessibleName("Full map");
@@ -4462,7 +4462,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect.poll(async () => (await snapshot(page)).fullMap).toBe(true);
     await expect(gallery.locator(".inspector")).toBeHidden();
     await expect(workspaceToggle).toHaveAttribute("aria-pressed", "true");
-    const precision = gallery.getByRole("button", { name: /^Brush width, 0\.20 m/ });
+    const precision = gallery.getByRole("button", { name: /^Brush width, 20 cm/ });
     await expect(precision).toBeVisible();
     await precision.click();
     await expect.poll(async () => (await snapshot(page)).precisionOpen).toBe(true);
@@ -5020,13 +5020,14 @@ test.describe("Map Studio v0.4 foundation", () => {
       const state = element.getWorkspaceSnapshot();
       element.replaceWorkspaceState({ ...state, resources: { ...state.resources, areas: { ...state.resources.areas, value: { ...state.resources.areas.value, areas: [...state.resources.areas.value.areas, { ...state.resources.areas.value.areas[0], id: "other-area", name: "Other area" }] } } } });
     }, GALLERY_TAG);
-    const target = gallery.getByRole("button", { name: "Other area Ready", exact: true });
+    // A saved row reads its name alone (no "Ready" tag, map-surfaces.md §3).
+    const target = gallery.getByRole("button", { name: "Other area", exact: true });
     await target.click();
     const dialog = gallery.getByRole("dialog", { name: "Discard changes?" });
     await expect(dialog).toBeVisible();
-    expect(await snapshot(page)).toMatchObject({ workflow: "draw", selection: { areaId: "entryway" }, draw: { dirty: true } });
+    expect(await snapshot(page)).toMatchObject({ workflow: "draw", selection: { areaId: null }, draw: { dirty: true } });
     await dialog.getByRole("button", { name: "Keep editing" }).click();
-    expect(await snapshot(page)).toMatchObject({ workflow: "draw", selection: { areaId: "entryway" }, draw: { dirty: true } });
+    expect(await snapshot(page)).toMatchObject({ workflow: "draw", selection: { areaId: null }, draw: { dirty: true } });
     await target.click();
     await dialog.getByRole("button", { name: "Discard", exact: true }).click();
     await expect.poll(async () => {
@@ -5315,11 +5316,11 @@ test.describe("Map Studio v0.4 foundation", () => {
     }
   });
 
-  const DRAW_TOOL_NAMES = ["Points", "Paint", "Erase", "Move map", "Undo", "Redo", /^Brush width, 0\.60 m/];
+  const DRAW_TOOL_NAMES = ["Points", "Paint", "Erase", "Move map", "Undo", "Redo", "Clear", /^Brush width, 60 cm/];
 
   async function expectDrawTools(gallery, tools) {
-    await expect(tools).toHaveCount(7);
-    for (let index = 0; index < 7; index += 1) {
+    await expect(tools).toHaveCount(8);
+    for (let index = 0; index < 8; index += 1) {
       const tool = tools.nth(index);
       await expect(tool).toHaveAccessibleName(DRAW_TOOL_NAMES[index]);
       const bounds = await tool.boundingBox();
@@ -5335,7 +5336,7 @@ test.describe("Map Studio v0.4 foundation", () => {
   }
 
   for (const width of [320, 390]) {
-    test(`fits all seven 44px Draw tools inside the sheet without horizontal overflow at ${width}px`, async ({ page }) => {
+    test(`fits all eight 44px Draw tools inside the sheet without horizontal overflow at ${width}px`, async ({ page }) => {
       await page.setViewportSize({ width, height: 740 });
       const gallery = await loadGallery(page, { scenario: "draw", narrow: true });
       const toolbar = gallery.locator(".draw-tools");
@@ -5356,7 +5357,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     });
   }
 
-  test("docks the seven Draw tools on the map without overlapping the inspector at desktop width", async ({ page }) => {
+  test("docks the eight Draw tools on the map without overlapping the inspector at desktop width", async ({ page }) => {
     await page.setViewportSize({ width: 1180, height: 760 });
     const gallery = await loadGallery(page, { scenario: "draw" });
     const dock = gallery.locator("matic-map-canvas-v4 .map-dock");
@@ -5703,7 +5704,8 @@ test.describe("Map Studio v0.4 foundation", () => {
       // The Rooms rows still on screen match the row selector, so wait for the
       // Draw list itself before measuring its rows.
       await expect(gallery.getByRole("group", { name: "Custom areas" })).toBeVisible();
-      await expectContrast(".list .ms-row small");
+      await expectContrast(".draw-hint");
+      await expectContrast(".ms-section-heading");
       await gallery.evaluate((element) => { element.narrow = true; element.setScenario("rooms"); });
       await expectContrast(".sheet-status");
       await gallery.evaluate((element) => { element.narrow = false; });
@@ -5902,13 +5904,14 @@ test.describe("Map Studio v0.4 foundation", () => {
     const before = await snapshot(page);
     expect(before.draw.circles.length).toBeGreaterThan(0);
 
-    // "Clear" is the draw workflow's secondary action in the action
-    // bar; the toolbar itself no longer carries a Clear button.
-    const clear = gallery.locator(".action-bar").getByRole("button", { name: "Clear", exact: true });
-    await expect(clear).not.toHaveAttribute("aria-disabled", "true");
+    // Clear is a tool in the toolbar (map-surfaces.md §5), undoable, so the
+    // action bar carries only Cancel and the primary.
+    await expect(gallery.locator(".action-bar").getByRole("button", { name: "Clear", exact: true })).toHaveCount(0);
+    const clear = gallery.getByRole("toolbar", { name: "Draw area tools" }).getByRole("button", { name: "Clear", exact: true });
+    await expect(clear).toBeEnabled();
     await clear.click();
     await expect.poll(async () => (await snapshot(page)).draw.circles.length).toBe(0);
-    await expect(clear).toHaveAttribute("aria-disabled", "true");
+    await expect(clear).toBeDisabled();
     await gallery.getByRole("button", { name: "Undo", exact: true }).click();
     await expect.poll(async () => (await snapshot(page)).draw.circles.length)
       .toBe(before.draw.circles.length);
@@ -7424,8 +7427,8 @@ test.describe("Map Studio v0.4 on touch @mobile", () => {
 
     await gallery.evaluate((element) => element.setScenario("draw"));
     const tools = gallery.locator(".sheet-tools .draw-tools button");
-    await expect(tools).toHaveCount(7);
-    for (let index = 0; index < 7; index += 1) await reach(tools.nth(index), `draw tool ${index}`);
+    await expect(tools).toHaveCount(8);
+    for (let index = 0; index < 8; index += 1) await reach(tools.nth(index), `draw tool ${index}`);
   });
 
   for (const width of [320, 390]) {

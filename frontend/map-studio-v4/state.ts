@@ -709,6 +709,29 @@ export const deleteSubject = (
     : { name: item.name });
 };
 
+// Selecting a saved area loads its draft and outline; null starts a fresh
+// one. Pure, so the review gallery can play it without the effects.
+export const areaSelection = (state: WorkspaceState, areaId: string | null): Pick<WorkspaceState, "selection" | "areaDraft" | "draw"> => {
+  const area = state.resources.areas.value?.areas.find((candidate) => candidate.id === areaId);
+  return {
+    selection: { ...state.selection, areaId },
+    areaDraft: area
+      ? { id: area.id, name: area.name, cleaningMode: area.cleaningMode, coverageSetting: area.coverageSetting, status: area.status, canRebind: area.canRebind, dirty: false }
+      : initialWorkspaceState().areaDraft,
+    draw: {
+      ...state.draw,
+      circles: area?.circles || [],
+      outline: area?.outline ?? null,
+      outlineUndo: [], outlineRedo: [],
+      tool: !area || area.outline ? "outline" : "paint",
+      undo: [],
+      redo: [],
+      dirty: false,
+      strokeCount: 0,
+    },
+  };
+};
+
 export class WorkspaceStore {
   readonly #listeners = new Set<(state: WorkspaceState) => void>();
   #state: WorkspaceState;
@@ -1175,8 +1198,10 @@ export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction | NoBu
     const editable = canEditCoordinates(state);
     return {
       id: "review-area",
-      label: "Name and save",
-      labelKey: "v4_action_review_area",
+      // A saved area's redraw is Done; a new one is named next (R11).
+      ...(state.areaDraft.id !== null
+        ? { label: "Done", labelKey: "v4_action_done_outline" }
+        : { label: "Name and save", labelKey: "v4_action_review_area" }),
       kind: "primary",
       enabled: hasCoverage && editable,
       ...(!hasCoverage ? drawFirst : editable ? {} : mapLimited),

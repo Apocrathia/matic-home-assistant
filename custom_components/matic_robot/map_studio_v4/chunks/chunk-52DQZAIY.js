@@ -1,4 +1,4 @@
-import{R as e}from"./chunk-6FC35FD6.js";var i=e`
+import{S as e}from"./chunk-YNEKT7MH.js";var s=e`
 .ms-switch {
 position: relative;
 flex: none;
@@ -46,7 +46,7 @@ transition: translate var(--ms-fast) var(--ms-ease);
 .ms-switch[aria-checked="true"]::after { background: HighlightText; }
 }
 .ms-field { display: grid; gap: var(--ms-space-1); color: var(--ms-text-quiet); font-size: var(--ms-t-xs); font-weight: var(--ms-w-medium); }
-`;var t=e`
+`;var a=e`
     .precision-popover {
       position: absolute;
       z-index: 9;
@@ -55,6 +55,22 @@ transition: translate var(--ms-fast) var(--ms-ease);
       inline-size: 0;
       block-size: 0;
     }
+
+    .overflow-menu {
+      position: absolute;
+      z-index: 18;
+      inset-block-start: calc(100% + var(--ms-space-1));
+      inset-inline-end: 0;
+      display: grid;
+      gap: var(--ms-space-1);
+      min-inline-size: 14rem;
+      padding: var(--ms-space-1);
+    }
+    .overflow-menu .ms-row { justify-content: flex-start; }
+    .overflow-menu [role="menuitemcheckbox"] { justify-content: space-between; gap: var(--ms-space-3); }
+    .overflow-menu [role="group"] { display: grid; gap: var(--ms-space-1); }
+    .overflow-menu [role="group"] + * { border-block-start: 1px solid var(--ms-line); padding-block-start: var(--ms-space-1); }
+    .menu-heading { margin: 0; padding: var(--ms-space-2) var(--ms-space-3) var(--ms-space-1); color: var(--ms-text-quiet); font-size: var(--ms-t-sm); font-weight: var(--ms-w-bold); }
 
     .panel-back { flex: none; }
 
@@ -78,4 +94,4 @@ transition: translate var(--ms-fast) var(--ms-ease);
     .narrow .sheet-grip:has(.sheet-back) { grid-template-columns: auto minmax(0, 1fr) auto auto; }
     .narrow .precision-popover { position: static; inline-size: auto; block-size: auto; }
 
-`;export{i as a,t as b};
+`;export{s as a,a as b};

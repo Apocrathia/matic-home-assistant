@@ -28,6 +28,7 @@ export type GalleryScenario =
   | "recharging"
   | "rooms"
   | "draw"
+  | "draw-saved"
   | "history"
   | "transition"
   | "problem"
@@ -240,19 +241,25 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
       return {
         ...state,
         workflow: "draw",
-        areaDraft: {
-          ...state.areaDraft,
-          id: "entryway",
-          name: "Entryway",
-          status: "current",
-        },
-        selection: { ...state.selection, areaId: "entryway" },
+        // A fresh draw from home with three strokes down; a redraw is reached
+        // from area-review-rebind's Redraw.
+        areaDraft: { ...state.areaDraft, id: null, name: "", status: "new", canRebind: false, dirty: false },
+        selection: { ...state.selection, areaId: null },
         draw: {
           ...state.draw,
           dirty: true,
           strokeCount: 3,
           circles: syntheticAreas().areas[0]?.circles || [],
         },
+      };
+    case "draw-saved":
+      // Redrawing the saved Entryway, dirty: the effects tests' subject.
+      return {
+        ...state,
+        workflow: "draw",
+        areaDraft: { ...state.areaDraft, id: "entryway", name: "Entryway", status: "current" },
+        selection: { ...state.selection, areaId: "entryway" },
+        draw: { ...state.draw, dirty: true, strokeCount: 3, circles: syntheticAreas().areas[0]?.circles || [] },
       };
     case "history":
       return {
@@ -750,6 +757,7 @@ export const GALLERY_SCENARIOS: readonly GalleryScenario[] = [
   "plan-schedule-available",
   "plan-schedule-joining",
   "plan-legacy-oversized",
+  "draw-saved",
   "area-review-new",
   "area-review-rebind",
   "support",

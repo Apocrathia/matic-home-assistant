@@ -86,21 +86,6 @@ export const shellStyles = [tokens, base, controls, css`
     .spacer { flex: 1; }
 
     .overflow-wrap { position: relative; }
-    .overflow-menu {
-      position: absolute;
-      z-index: 18;
-      inset-block-start: calc(100% + var(--ms-space-1));
-      inset-inline-end: 0;
-      display: grid;
-      gap: var(--ms-space-1);
-      min-inline-size: 14rem;
-      padding: var(--ms-space-1);
-    }
-    .overflow-menu .ms-row { justify-content: flex-start; }
-    .overflow-menu [role="menuitemcheckbox"] { justify-content: space-between; gap: var(--ms-space-3); }
-    .overflow-menu [role="group"] { display: grid; gap: var(--ms-space-1); }
-    .overflow-menu [role="group"] + * { border-block-start: 1px solid var(--ms-line); padding-block-start: var(--ms-space-1); }
-    .menu-heading { margin: 0; padding: var(--ms-space-2) var(--ms-space-3) var(--ms-space-1); color: var(--ms-text-quiet); font-size: var(--ms-t-sm); font-weight: var(--ms-w-bold); }
 
     .workspace {
       position: relative;
@@ -366,34 +351,32 @@ export const shellStyles = [tokens, base, controls, css`
     }
     .narrow .sheet-tools { display: block; padding-block: var(--ms-space-1) var(--ms-space-2); }
     .sheet-tools > :is(.loading, .problem) { margin-block-end: var(--ms-space-2); }
-    .narrow .draw-tools--grid {
-      display: grid;
-      grid-template-columns: repeat(12, minmax(0, 1fr));
-      gap: var(--ms-space-1);
-      padding: 0;
-    }
+    /* Two rows: Points to Move map, Undo to Brush; the last column takes its
+       content so "Brush · 60 cm" never wraps. Points has no Brush, so its
+       second row splits three ways (map-surfaces.md §5 collapse rule). */
+    .narrow .draw-tools--grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: var(--ms-space-1); padding: 0; }
+    .narrow .draw-tools--grid[data-zone="true"] { grid-template-columns: repeat(12, minmax(0, 1fr)); }
     .narrow .draw-tools--grid .ms-btn {
-      grid-column: span 4;
       flex-direction: column;
       gap: var(--ms-space-1);
-      min-inline-size: 0;
+      min-inline-size: var(--ms-control);
       min-block-size: var(--ms-control);
-      padding: var(--ms-space-1) var(--ms-space-2);
+      padding: var(--ms-space-1);
       border-color: var(--ms-line);
       font-size: var(--ms-t-xs);
-      white-space: normal;
     }
-    .narrow .draw-tools--grid .ms-btn[data-tool] { grid-column: span 3; padding-inline: 3px; }
-    .narrow .draw-tools--grid[data-zone="true"] .ms-btn:not([data-tool]) { grid-column: span 6; }
-    .narrow .draw-tools--grid .ms-btn__label {
-      position: static;
-      overflow: visible;
-      inline-size: auto;
-      block-size: auto;
-      margin: 0;
-      clip-path: none;
-      white-space: nowrap;
+    .narrow .draw-tools--grid[data-zone="true"] .ms-btn { grid-column: span 4; }
+    .narrow .draw-tools--grid[data-zone="true"] .ms-btn[data-tool] { grid-column: span 3; }
+    /* Labels drop first (under 360 px), rows second (a landscape phone keeps
+       one 44 px row that scrolls sideways when the sheet is narrower). */
+    @media (max-width: 359px), (max-height: 479px) {
+      .narrow .draw-tools--grid .ms-btn__label { position: absolute; overflow: hidden; inline-size: 1px; block-size: 1px; clip-path: inset(50%); }
     }
+    @media (max-height: 479px) {
+      .narrow .draw-tools--grid, .narrow .draw-tools--grid[data-zone="true"] { display: flex; overflow-x: auto; }
+      .narrow .draw-tools--grid .ms-btn { flex: none; inline-size: var(--ms-control); padding-inline: 0; }
+    }
+    .sr-only { position: absolute; overflow: hidden; inline-size: 1px; block-size: 1px; clip-path: inset(50%); white-space: nowrap; }
     .narrow .sheet-panel { display: flex; flex: 1; flex-direction: column; min-block-size: 0; }
     /* On a short sheet the pinned heading and notice give the body at least half. */
     .narrow .panel-top { max-block-size: 50%; padding-block-start: var(--ms-space-1); overflow: auto; overscroll-behavior: contain; }

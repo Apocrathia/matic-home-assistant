@@ -18,6 +18,7 @@ import { WORKSPACE_INTENT_EVENT } from "./map-canvas";
 import { deleteSubject, initialWorkspaceState } from "./state";
 import { formatDateTime, translate } from "./localize";
 import { LazyChunk, chunkStatus } from "./lazy-chunk";
+import { heldReason } from "./draw-tools";
 import { COVERAGES, MODES, coverageLabel, modeLabel } from "./plan-cadence";
 // The plan picker, Run and Edit, and the Rooms view.
 import "./plan-views";
@@ -27,7 +28,7 @@ import "./rooms-view";
 import "./precision-controls";
 // The plan heading's tools, which the shell renders once these views load,
 // and the shell's other plan-only pieces.
-export { actionReason, focusPlanTarget, planCancel, planTitle, planTools } from "./plan-heading";
+export { actionReason, drawCancel, drawExit, focusPlanTarget, planCancel, planTitle, planTools } from "./plan-heading";
 
 // Dialogs that only these views' controls open carry their copy, launcher and
 // confirm here.
@@ -54,6 +55,7 @@ export class MaticMapWorkflowV4 extends LitElement {
   static override styles = [tokens, base, controls, formControls, css`
 :host { display: block; min-inline-size: 0; container-type: inline-size; }
 .workflow-fields { border: 0; margin: 0; padding: 0; min-inline-size: 0; }
+.sr-only { position: absolute; overflow: hidden; inline-size: 1px; block-size: 1px; margin: -1px; clip-path: inset(50%); white-space: nowrap; }
 button, select, input[type="checkbox"] { cursor: pointer; }
 .stack { display: grid; gap: var(--ms-space-3); }
 .subtle { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
@@ -195,25 +197,51 @@ line-height: var(--ms-lh-snug);
     ></${planViewsTag}>`, workflow);
   }
 
+  // One hint for the tool in hand, chosen by the pointer that will use it;
+  // Move map needs none (map-surfaces.md §6). The keyboard recipes are
+  // assistive text on the map (map-help.ts).
+  #drawHint(): string | null {
+    const { tool } = this.state.draw;
+    if (tool === "pan") return null;
+    const coarse = window.matchMedia("(any-pointer: coarse)").matches;
+    if (tool === "outline") {
+      return coarse
+        ? this.#t("v4_points_hint_touch", "Tap to add points · two fingers to move the map")
+        : this.#t("v4_points_hint_pointer", "Click to add points · right-drag to move the map");
+    }
+    return coarse
+      ? this.#t("v4_draw_hint_touch", "Drag to paint · two fingers to move the map")
+      : this.#t("v4_draw_hint_pointer", "Drag to paint · right-drag or Space-drag to move the map");
+  }
+
   #draw() {
     const areas = this.state.resources.areas;
+    const hint = this.#drawHint();
+    // Rows are held while a command runs, with the toolbar's reason (R12).
+    const held = heldReason(this.state, (key, fallback) => this.#t(key, fallback));
+    const row = (content: unknown, intent: WorkspaceIntent) => html`
+      <button
+        class="list-button ms-row"
+        type="button"
+        aria-disabled=${held ? "true" : nothing}
+        aria-describedby=${held ? "areas-held-reason" : nothing}
+        @click=${() => { if (!held) this.#intent(intent); }}
+      >${content}</button>
+    `;
     return html`
       <div class="stack">
-        <p class="subtle">${this.state.draw.tool === "outline" ? this.#t("v4_zone_coverage", "Place points around the area. Shading shows where the robot cleans inside the outline; narrow edges may stay uncovered.") : this.#t("v4_draw_floor_hint", "Paint only on the mapped floor. Zooming and panning never change the area.")}</p>
+        ${hint ? html`<p class="subtle draw-hint">${hint}</p>` : nothing}
         ${this.#resource(areas, html`
           <div class="group">
-            <h3 class="group-heading" id="areas-heading">${this.#t("area_workspace_title", "Custom areas")}</h3>
+            <h3 class="ms-section-heading" id="areas-heading">${this.#t("area_workspace_title", "Custom areas")}</h3>
             <div class="list" role="group" aria-labelledby="areas-heading">
-            <button class="list-button ms-row ms-row" type="button" @click=${() => this.#intent({ type: "select-area", areaId: null })}>${this.#t("area_new", "New area")}</button>
-            ${(areas.value?.areas || []).map((area) => html`
-              <button class="list-button ms-row ms-row" type="button" @click=${() => {
-                this.#intent({ type: "select-area", areaId: area.id, workflow: "areaReview" });
-              }}>
-                <span>${area.name}</span>
-                <small>${area.status === "current" ? this.#t("area_workspace_ready", "Ready") : this.#t("v4_review", "Review")}</small>
-              </button>
-            `)}
+              ${row(this.#t("area_new", "New area"), { type: "select-area", areaId: null })}
+              ${(areas.value?.areas || []).map((area) => row(
+                html`<bdi>${area.name}</bdi> ${area.status === "current" ? nothing : html`<small>${this.#t("v4_review", "Review")}</small>`}`,
+                { type: "select-area", areaId: area.id, workflow: "areaReview" },
+              ))}
             </div>
+            ${held ? html`<p class="sr-only" id="areas-held-reason">${held}</p>` : nothing}
           </div>
         `, "draw")}
       </div>
@@ -248,7 +276,7 @@ line-height: var(--ms-lh-snug);
         </div>
         ${this.#mopCoverageHint(draft.cleaningMode)}
         <div class="toolbar">
-          <button class="ms-btn ms-btn--secondary" type="button" @click=${() => this.#intent({ type: "open-workflow", workflow: "draw" })}>${this.#t("v4_edit_outline", "Redraw")}</button>
+          <button class="ms-btn ms-btn--secondary" type="button" data-redraw @click=${() => this.#intent({ type: "open-workflow", workflow: "draw" })}>${this.#t("v4_edit_outline", "Redraw")}</button>
           ${deleteSubject(this.state, "confirmDeleteArea") ? html`
             <button
               class="danger ms-btn ms-btn--secondary ms-btn--danger"
@@ -357,7 +385,7 @@ line-height: var(--ms-lh-snug);
       case "rooms": return this.#rooms();
       case "plans":
       case "plan": return this.#planViews();
-      case "draw": return this.#held(this.#draw());
+      case "draw": return this.#draw();
       case "areaReview": return this.#held(this.#areaReview());
       case "history": return this.#held(this.#history());
       case "support": return this.#support();

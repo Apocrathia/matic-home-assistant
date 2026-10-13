@@ -294,7 +294,7 @@ for (const action of ["saveArea", "deleteArea"]) {
       await loadQualityModules(page);
       const result = await page.evaluate(async ({ action, rejected }) => {
         const { EffectController, WorkspaceStore, createGalleryState } = await import("/quality-modules.js");
-        const initial = createGalleryState("draw");
+        const initial = createGalleryState("draw-saved");
         const store = new WorkspaceStore(initial);
         let finish;
         let writes = 0;
@@ -331,7 +331,7 @@ test("an area delete asked for while an area save loads is refused", async ({ pa
   await loadQualityModules(page);
   const result = await page.evaluate(async () => {
     const { EffectController, WorkspaceStore, createGalleryState } = await import("/quality-modules.js");
-    const initial = createGalleryState("draw");
+    const initial = createGalleryState("draw-saved");
     const store = new WorkspaceStore(initial);
     const writes = [];
     const effects = new EffectController(store, {
@@ -387,7 +387,7 @@ test("a changed live floor clears drafts and retains the previous map read only 
   await loadQualityModules(page);
   const result = await page.evaluate(async () => {
     const { EffectController, WorkspaceStore, createGalleryState } = await import("/quality-modules.js");
-    const initial = createGalleryState("draw");
+    const initial = createGalleryState("draw-saved");
     const store = new WorkspaceStore({ ...initial, precisionOpen: true, dialog: "confirmDeleteArea", fullMap: true });
     const next = { ...initial.resources.entry, selectedFloorOrdinal: 9, mapFloorOrdinal: 9, mapSessionKey: "next-floor" };
     const aborted = async () => { throw new DOMException("Aborted", "AbortError"); };
@@ -421,7 +421,7 @@ for (const outcome of ["success", "failure", "settle-timer"]) {
     await page.clock.install();
     const result = await page.evaluate(async (outcome) => {
       const { EffectController, WorkspaceStore, createGalleryState } = await import("/quality-modules.js");
-      const initial = createGalleryState("draw");
+      const initial = createGalleryState("draw-saved");
       const store = new WorkspaceStore(initial);
       let finish;
       const next = { ...initial.resources.entry, selectedFloorOrdinal: 9, mapFloorOrdinal: 9, mapSessionKey: "next-floor" };
@@ -453,7 +453,7 @@ for (const sameOwner of [true, false]) {
     await loadQualityModules(page);
     const result = await page.evaluate(async (sameOwner) => {
       const { EffectController, WorkspaceStore, createGalleryState } = await import("/quality-modules.js");
-      const initial = createGalleryState("draw");
+      const initial = createGalleryState("draw-saved");
       const store = new WorkspaceStore(initial);
       const backend = () => ({ catalog: async () => { throw new DOMException("Aborted", "AbortError"); }, dispose() {} });
       const projection = { host: initial.host, activity: initial.activity, batteryPercent: 92, robotLabel: "Synthetic", robots: initial.robots, language: "en", userKey: "one", entryKey: initial.selection.entryId, vacuumEntityId: "vacuum.synthetic" };
@@ -502,7 +502,7 @@ for (const sameFloor of [true, false]) {
     await loadQualityModules(page);
     const result = await page.evaluate(async (sameFloor) => {
       const { EffectController, WorkspaceStore, createGalleryState } = await import("/quality-modules.js");
-      const initial = createGalleryState("draw");
+      const initial = createGalleryState("draw-saved");
       const store = new WorkspaceStore({ ...initial, areaDraft: { ...initial.areaDraft, name: "Edited outline", dirty: true }, planDraft: { ...initial.planDraft, name: "Edited plan", dirty: true } });
       let entry = { ...initial.resources.entry, mapFloorOrdinal: null, mapFloorCoherent: false };
       const aborted = async () => { throw new DOMException("Aborted", "AbortError"); };
@@ -735,7 +735,7 @@ test("external Area deletion preserves a dirty draft and turns later save into a
   await loadQualityModules(page);
   const result = await page.evaluate(async () => {
     const { EffectController, WorkspaceStore, createGalleryState } = await import("/quality-modules.js");
-    const initial = createGalleryState("draw");
+    const initial = createGalleryState("draw-saved");
     const editedCircles = [...initial.draw.circles, { x: 2, y: 3, radius: 0.4 }];
     const store = new WorkspaceStore({
       ...initial,
@@ -793,7 +793,7 @@ test("external Area deletion still reconciles a clean selection", async ({ page 
   await loadQualityModules(page);
   const result = await page.evaluate(async () => {
     const { EffectController, WorkspaceStore, createGalleryState } = await import("/quality-modules.js");
-    const initial = createGalleryState("draw");
+    const initial = createGalleryState("draw-saved");
     const store = new WorkspaceStore({ ...initial, draw: { ...initial.draw, dirty: false, strokeCount: 0 } });
     const effects = new EffectController(store, {
       catalog: async () => [initial.resources.entry],
@@ -820,7 +820,7 @@ test("revalidation clears drafts when the verified map session changes at the sa
   await loadQualityModules(page);
   const result = await page.evaluate(async () => {
     const { EffectController, WorkspaceStore, createGalleryState } = await import("/quality-modules.js");
-    const initial = createGalleryState("draw");
+    const initial = createGalleryState("draw-saved");
     const store = new WorkspaceStore({ ...initial, areaDraft: { ...initial.areaDraft, name: "Old frame", dirty: true }, planDraft: { ...initial.planDraft, name: "Old plan", dirty: true } });
     let entry = { ...initial.resources.entry, mapFloorOrdinal: null, mapFloorCoherent: false, mapSessionVerified: false, mapSessionKey: null };
     const aborted = async () => { throw new DOMException("Aborted", "AbortError"); };

@@ -3,7 +3,7 @@ import { base, tokens } from "./tokens";
 import { html, unsafeStatic } from "lit/static-html.js";
 import type { PropertyValues } from "lit";
 
-import type { WorkspaceState } from "./contracts";
+import type { WorkspaceAction, WorkspaceState } from "./contracts";
 import { isWorkspaceIntent } from "./contracts";
 import { SHELL_TAG } from "./element-tags";
 import {
@@ -13,7 +13,7 @@ import {
   type GalleryScenario,
 } from "./gallery-state";
 import "./shell";
-import { WorkspaceStore } from "./state";
+import { WorkspaceStore, areaSelection } from "./state";
 
 const shellTag = unsafeStatic(SHELL_TAG);
 
@@ -121,9 +121,20 @@ export class MaticMapStudioGalleryV4 extends LitElement {
     if (!isWorkspaceIntent(event.detail)) return;
     event.stopPropagation();
     this.#store.dispatch(event.detail);
+    // The effects' share of an area selection, played on the synthetic catalog.
+    if (event.detail.type === "select-area") {
+      this.#store.replace({ ...this.#store.value, ...areaSelection(this.#store.value, event.detail.areaId) });
+    }
     if (this.#store.value.workflow === "rooms") {
       this.#store.replace(withGalleryRoomPreview(this.#store.value));
     }
+  }
+
+  // The one action with no write behind it: Name and save / Done opens the review.
+  #action(event: CustomEvent<WorkspaceAction>): void {
+    if (event.detail?.id !== "review-area") return;
+    event.stopPropagation();
+    this.#store.dispatch({ type: "open-workflow", workflow: "areaReview" });
   }
 
   protected override render() {
@@ -144,6 +155,7 @@ export class MaticMapStudioGalleryV4 extends LitElement {
           class="shell"
           .state=${this._workspace}
           @matic-workspace-intent=${this.#intent}
+          @matic-workspace-action=${this.#action}
         ></${shellTag}>
       </div>
     `;

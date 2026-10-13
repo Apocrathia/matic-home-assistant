@@ -19,7 +19,6 @@ import {
   type AreasCatalog,
   type PlansCatalog,
   type PlanRoom,
-  type SavedArea,
 } from "./backend-contracts";
 import { BackendError, MaticBackend } from "./backend";
 import type { CatalogWriteContext, CatalogWriteHelpers } from "./catalog-writes";
@@ -37,6 +36,7 @@ import {
   manualRoomPreviewKey,
   planSelection,
   WorkspaceStore,
+  areaSelection,
 } from "./state";
 import { PreferenceStore, type MapPreferences } from "./preferences";
 import { WorkspaceTransport, type WorkspaceConnection } from "./workspace-transport";
@@ -2236,43 +2236,7 @@ export class EffectController {
   }
 
   selectArea(areaId: string | null): void {
-    const area = this.#store.value.resources.areas.value?.areas.find((candidate) => candidate.id === areaId);
-    const state = this.#store.value;
-    this.#store.patch({
-      selection: { ...state.selection, areaId },
-      areaDraft: area ? this.#draftForArea(area) : {
-        id: null,
-        name: "",
-        cleaningMode: "vacuum",
-        coverageSetting: "standard",
-        status: "new",
-        canRebind: false,
-        dirty: false,
-      },
-      draw: {
-        ...state.draw,
-        circles: area?.circles || [],
-        outline: area?.outline ?? null,
-        outlineUndo: [], outlineRedo: [],
-        tool: !area || area.outline ? "outline" : "paint",
-        undo: [],
-        redo: [],
-        dirty: false,
-        strokeCount: 0,
-      },
-    });
-  }
-
-  #draftForArea(area: SavedArea): WorkspaceState["areaDraft"] {
-    return {
-      id: area.id,
-      name: area.name,
-      cleaningMode: area.cleaningMode,
-      coverageSetting: area.coverageSetting,
-      status: area.status,
-      canRebind: area.canRebind,
-      dirty: false,
-    };
+    this.#store.patch(areaSelection(this.#store.value, areaId));
   }
 
   saveArea(settled?: SaveSettled): Promise<void> {
