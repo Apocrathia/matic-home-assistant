@@ -1450,18 +1450,20 @@ test.describe("Map Studio v0.4 foundation", () => {
 
   test("area review holds its controls while a command runs, so Delete can't seem to run", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "area-review-rebind" });
-    const remove = gallery.getByRole("button", { name: "Delete area" });
+    const remove = gallery.getByRole("button", { name: "Delete", exact: true });
     const name = gallery.getByRole("textbox", { name: "Area name" });
     await expect(remove).toBeEnabled();
-    await expect(name).toBeEnabled();
+    await expect(name).toBeEditable();
     await gallery.evaluate((element) => element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), command: "pending" }));
-    await expect(remove).toBeDisabled();
-    await expect(name).toBeDisabled();
+    // Held with a reason (map-surfaces.md §5 R12): focusable, described, inert.
+    await expect(remove).toHaveAttribute("aria-disabled", "true");
+    await expect(name).toHaveAttribute("aria-disabled", "true");
+    await expect(name).toHaveAttribute("readonly", "");
     await remove.click({ force: true });
     await expect(gallery.getByRole("dialog")).toHaveCount(0);
     expect(await gallery.evaluate((element) => element.getWorkspaceSnapshot().dialog)).toBeNull();
     await gallery.evaluate((element) => element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), command: "idle" }));
-    await expect(remove).toBeEnabled();
+    await expect(remove).not.toHaveAttribute("aria-disabled", "true");
   });
 
   test("Delete shows and its dialog stands only while the catalog holds the saved item", async ({ page }) => {
@@ -1477,9 +1479,9 @@ test.describe("Map Studio v0.4 foundation", () => {
       return element.getWorkspaceSnapshot().dialog;
     }, { patch });
 
-    await expect(gallery.getByRole("button", { name: "Delete area" })).toBeVisible();
+    await expect(gallery.getByRole("button", { name: "Delete", exact: true })).toBeVisible();
     expect(await unresolved("area-loading"), "a delete dialog for an area the catalog has not loaded").toBeNull();
-    await expect(gallery.getByRole("button", { name: "Delete area" })).toHaveCount(0);
+    await expect(gallery.getByRole("button", { name: "Delete", exact: true })).toHaveCount(0);
     await expect(gallery.getByRole("dialog")).toHaveCount(0);
 
     await page.evaluate((tag) => document.querySelector(tag).setScenario("plan-saved-intelligent"), GALLERY_TAG);
@@ -4400,7 +4402,7 @@ test.describe("Map Studio v0.4 foundation", () => {
         workflow: "areaReview",
       });
     }, GALLERY_TAG);
-    const deleteArea = gallery.getByRole("button", { name: "Delete area" });
+    const deleteArea = gallery.getByRole("button", { name: "Delete", exact: true });
     await deleteArea.click();
     await gallery.getByRole("button", { name: "Cancel" }).click();
     await expect(deleteArea).toBeFocused();

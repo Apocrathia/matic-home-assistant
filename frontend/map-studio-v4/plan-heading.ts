@@ -228,7 +228,11 @@ export const drawExit = (state: WorkspaceState): WorkspaceIntent =>
 const planFocusTarget = (previous: WorkspaceState, state: WorkspaceState, root: ParentNode): HTMLElement | null | undefined => {
   const panel = root.querySelector(WORKFLOW_TAG)?.shadowRoot;
   // Done or Cancel from a redraw lands on the review's Redraw (map-surfaces.md §4).
-  if (previous.workflow === "draw") return state.workflow === "areaReview" && previous.areaDraft.id !== null ? panel?.querySelector("[data-redraw]") : null;
+  if (previous.workflow === "draw") {
+    return state.workflow === "areaReview" && previous.areaDraft.id !== null
+      ? root.querySelector("[data-redraw]") ?? panel?.querySelector("[data-redraw]")
+      : null;
+  }
   const views = panel?.querySelector(PLAN_VIEWS_TAG)?.shadowRoot;
   // Run's rows are never open, so an open row on entering Edit is Review's.
   if (state.workflow === "plan" && state.planView === "edit" && state.expandedRoom) {

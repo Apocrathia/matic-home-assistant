@@ -11,7 +11,7 @@ import type { DateFormat, Localize, NoticePlaceholders, WorkspaceIntent, Workspa
 import type { OutlineEditor } from "./outline-editor";
 import { MAP_CANVAS_TAG } from "./element-tags";
 import { GestureController, isNativeSelectControl } from "./gesture-controller";
-import { RendererController, type RendererDiagnostics } from "./renderer-controller";
+import { RendererController, topView, type RendererDiagnostics } from "./renderer-controller";
 import {
   canSelectRooms,
   canShowExactPose,
@@ -321,7 +321,7 @@ export class MaticMapCanvasV4 extends LitElement {
       onCamera: (camera, zoomPercent, origin) => {
         this.#intent({
           type: "set-camera",
-          view: this.state.workflow === "draw" ? "top" : this.state.view,
+          view: topView(this.state),
           camera: {
             yaw: camera.yaw,
             pitch: camera.pitch,

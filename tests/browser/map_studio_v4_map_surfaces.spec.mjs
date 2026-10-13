@@ -732,3 +732,177 @@ test.describe("Precision", () => {
     expect(await slider.evaluate((element) => [element.min, element.max, element.step])).toEqual(["20", "250", "1"]);
   });
 });
+
+// ---- Area review (map-surfaces.md §4 Area review, §5 Area review, §11 MS-AREA-01…04) ----
+const overlayAlpha = (gallery, x, y) => canvasOf(gallery).locator(".overlay-canvas").evaluate((canvas, point) => {
+  const ratio = canvas.width / canvas.getBoundingClientRect().width;
+  return canvas.getContext("2d").getImageData(Math.round(point.x * ratio), Math.round(point.y * ratio), 1, 1).data[3];
+}, { x, y });
+
+test.describe("Area review", () => {
+  test("a new area is titled Name this area with Redraw paired to a reasoned Save area and no Delete", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "area-review-new" });
+    const panel = panelOf(gallery);
+    await expect(panel.getByRole("heading", { level: 2 })).toHaveText("Name this area");
+    await expect(panel).toContainText("Name the area and choose cleaning settings.");
+    await expect(panel.getByRole("textbox", { name: "Area name" })).toBeVisible();
+    await expect(panel.getByRole("combobox", { name: "Cleaning mode" })).toBeVisible();
+    await expect(panel.getByRole("combobox", { name: "Vacuum coverage" })).toBeVisible();
+    const bar = gallery.locator(".action-bar");
+    await expect(bar).toHaveClass(/paired/);
+    await expect(bar.getByRole("button")).toHaveText(["Redraw", "Save area"]);
+    const save = bar.getByRole("button", { name: "Save area", exact: true });
+    await expect(save).toHaveAttribute("aria-disabled", "true");
+    await expect(save).toHaveAccessibleDescription("Can't save until you name the area.");
+    await expect(panel.getByRole("button", { name: "Delete", exact: true })).toHaveCount(0);
+    // Redraw lives in the bar, not the body, while the bar is Stop-free.
+    await expect(panel.locator(".workflow-body").getByRole("button", { name: "Redraw", exact: true })).toHaveCount(0);
+  });
+
+  test("a saved area is titled by its name, cleans from the bar and deletes from the last body row", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "draw" });
+    const panel = panelOf(gallery);
+    await panel.getByRole("button", { name: "Entryway", exact: true }).click();
+    // The fresh draw is dirty, so opening a saved area asks first (shell.md §5).
+    const discard = gallery.getByRole("dialog", { name: "Discard changes?" });
+    await expect(discard).toBeVisible();
+    await discard.getByRole("button", { name: "Discard", exact: true }).click();
+    await expect.poll(async () => (await snapshot(page)).workflow).toBe("areaReview");
+    const heading = panel.getByRole("heading", { level: 2 });
+    await expect(heading).toHaveText("Entryway");
+    await expect(heading.locator("bdi")).toHaveText("Entryway");
+    await expect(panel.getByText("Name the area and choose cleaning settings.")).toHaveCount(0);
+    const bar = gallery.locator(".action-bar");
+    await expect(bar.getByRole("button")).toHaveText(["Redraw", "Clean this area"]);
+    const remove = panel.getByRole("button", { name: "Delete", exact: true });
+    await expect(remove).toHaveClass(/ms-row--danger/);
+    expect(await panel.locator(".workflow-body .stack > :last-child").evaluate((last) => last.textContent.trim())).toBe("Delete");
+    await remove.click();
+    const dialog = gallery.getByRole("dialog", { name: "Delete area?" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("button")).toHaveText(["Cancel", "Delete"]);
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(remove).toBeFocused();
+  });
+
+  test("a changed map titles the review Check {name} with the warning first and Save area ready", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "area-review-rebind" });
+    const panel = panelOf(gallery);
+    await expect(panel.getByRole("heading", { level: 2 })).toHaveText("Check Entryway");
+    const body = panel.locator(".workflow-body .stack");
+    await expect(body.locator("> :first-child")).toHaveText("The map changed since you saved this area, so save it again or redraw it.");
+    await expect(body.locator("> :first-child")).toHaveAttribute("data-tone", "warning");
+    const save = gallery.locator(".action-bar").getByRole("button", { name: "Save area", exact: true });
+    await expect(save).toBeEnabled();
+    const state = await snapshot(page);
+    await patchState(gallery, { areaDraft: { ...state.areaDraft, status: "stale", canRebind: false } });
+    await expect(panel.getByRole("heading", { level: 2 })).toHaveText("Entryway");
+    await expect(body.locator("> :first-child")).toHaveText("Home Assistant can't use this area as it was saved, so redraw it.");
+    await expect(body.locator("> :first-child")).toHaveRole("alert");
+    await expect(gallery.locator(".action-bar").getByRole("button", { name: "Clean this area", exact: true })).toHaveAccessibleDescription("Can't clean this area until you save it on the current map.");
+  });
+
+  test("entering the review frames the area in the top view and dims the rest; leaving restores the camera", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "draw", viewport: { width: 1024, height: 768 } });
+    await page.waitForTimeout(150);
+    const bounds = await gallery.locator(".map-root").boundingBox();
+    const corner = { x: 4, y: 4 };
+    expect(await overlayAlpha(gallery, corner.x, corner.y), "no scrim in Draw").toBe(0);
+    const top = async () => (await snapshot(page)).cameras.top ?? { targetX: 0, targetZ: 0, zoom: 1 };
+    const before = await top();
+    // Use the drawn circles' centre in map metres and the scene's origin.
+    const expected = await page.evaluate((tag) => {
+      const state = document.querySelector(tag).getWorkspaceSnapshot();
+      const { span, metersPerCell: m, origin } = state.resources.scene.value.metadata;
+      const circles = state.draw.circles;
+      const xs = circles.flatMap((c) => [c.x - c.radius, c.x + c.radius]);
+      const ys = circles.flatMap((c) => [c.y - c.radius, c.y + c.radius]);
+      const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+      return { targetX: -cx + m * (origin[0] + (span[0] - 1) / 2), targetZ: cy - m * (origin[1] + (span[1] - 1) / 2) };
+    }, GALLERY_TAG);
+    await gallery.locator(".action-bar").getByRole("button", { name: "Name and save", exact: true }).click();
+    await expect.poll(async () => (await snapshot(page)).workflow).toBe("areaReview");
+    await page.waitForTimeout(150);
+    const framed = await top();
+    expect(framed.targetX).toBeCloseTo(expected.targetX, 1);
+    expect(framed.targetZ).toBeCloseTo(expected.targetZ, 1);
+    expect(framed.zoom).toBeGreaterThan(before.zoom + 0.5);
+    expect(await overlayAlpha(gallery, corner.x, corner.y), "scrim outside the area").toBeGreaterThan(60);
+    // The area itself is cut out of the scrim: its centre pixel is not dimmed
+    // beyond the area fill the Draw view already paints.
+    const centre = await overlayAlpha(gallery, bounds.width / 2, bounds.height / 2);
+    expect(centre).toBeLessThan(await overlayAlpha(gallery, corner.x, corner.y) + 1);
+    await gallery.locator(".action-bar").getByRole("button", { name: "Redraw", exact: true }).click();
+    await expect.poll(async () => (await snapshot(page)).workflow).toBe("draw");
+    await page.waitForTimeout(150);
+    const restored = await top();
+    expect(restored.targetX).toBeCloseTo(before.targetX, 4);
+    expect(restored.targetZ).toBeCloseTo(before.targetZ, 4);
+    expect(restored.zoom).toBeCloseTo(before.zoom, 4);
+    expect(await overlayAlpha(gallery, corner.x, corner.y), "scrim gone").toBe(0);
+    expect((await snapshot(page)).areaDraft.id).toBeNull();
+    expect((await snapshot(page)).draw.circles.length).toBeGreaterThan(0);
+  });
+
+  test("reduced motion lands on the same framed camera", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    const gallery = await loadGallery(page, { scenario: "draw", viewport: { width: 1024, height: 768 } });
+    await page.waitForTimeout(150);
+    await gallery.locator(".action-bar").getByRole("button", { name: "Name and save", exact: true }).click();
+    await expect.poll(async () => (await snapshot(page)).cameras.top?.zoom ?? 1).toBeGreaterThan(1.5);
+    expect(await overlayAlpha(gallery, 4, 4)).toBeGreaterThan(60);
+  });
+
+  test("Redraw from a saved review keeps the outline and Done comes back to Redraw", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "area-review-rebind" });
+    const circles = (await snapshot(page)).draw.circles;
+    const redraw = gallery.locator(".action-bar").getByRole("button", { name: "Redraw", exact: true });
+    await redraw.click();
+    await expect.poll(async () => (await snapshot(page)).workflow).toBe("draw");
+    expect((await snapshot(page)).draw.circles).toEqual(circles);
+    expect((await snapshot(page)).areaDraft.id).toBe("entryway");
+    await gallery.locator(".action-bar").getByRole("button", { name: "Done", exact: true }).click();
+    await expect.poll(async () => (await snapshot(page)).workflow).toBe("areaReview");
+    await expect(redraw).toBeFocused();
+  });
+
+  for (const narrow of [false, true]) {
+    test(`held review controls say why while a command runs${narrow ? " @mobile" : ""}`, async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "area-review-rebind", narrow });
+      const panel = narrow ? gallery.locator(".mobile-sheet") : panelOf(gallery);
+      const name = panel.getByRole("textbox", { name: "Area name" });
+      const mode = panel.getByRole("combobox", { name: "Cleaning mode" });
+      const remove = panel.getByRole("button", { name: "Delete", exact: true });
+      const redraw = gallery.locator(".action-bar").getByRole("button", { name: "Redraw", exact: true });
+      await expect(name).toBeEditable();
+      await patchState(gallery, { command: "pending" });
+      for (const [control, label] of [[name, "name"], [mode, "mode"], [remove, "Delete"], [redraw, "Redraw"]]) {
+        await expect(control, label).toHaveAttribute("aria-disabled", "true");
+        await expect(control, label).toHaveAccessibleDescription("Waiting for the current change to finish.");
+      }
+      await expect(name).toHaveAttribute("readonly", "");
+      await remove.click({ force: true });
+      await expect(gallery.getByRole("dialog")).toHaveCount(0);
+      expect((await snapshot(page)).dialog).toBeNull();
+      await redraw.click({ force: true });
+      expect((await snapshot(page)).workflow).toBe("areaReview");
+      await expect(panel.locator("fieldset")).toHaveCount(0);
+      await patchState(gallery, { command: "starting" });
+      await expect(remove).toHaveAccessibleDescription("Waiting for the robot to begin.");
+      await patchState(gallery, { command: "idle" });
+      await expect(remove).not.toHaveAttribute("aria-disabled", "true");
+      await expect(name).not.toHaveAttribute("readonly", "");
+    });
+  }
+
+  test("while Stop holds the bar, Redraw is a body button", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "area-review-rebind", narrow: true });
+    await patchState(gallery, { activity: "cleaning" });
+    const bar = gallery.locator(".action-bar");
+    await expect(bar.getByRole("button", { name: "Stop cleaning" })).toBeVisible();
+    await expect(bar.getByRole("button", { name: "Redraw", exact: true })).toHaveCount(0);
+    await expect(bar).not.toHaveClass(/paired/);
+    await expect(gallery.locator(".mobile-sheet .sheet-body").getByRole("button", { name: "Redraw", exact: true })).toBeVisible();
+  });
+});

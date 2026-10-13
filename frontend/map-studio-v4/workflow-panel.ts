@@ -15,7 +15,7 @@ import {
 } from "./contracts";
 import { PLAN_VIEWS_TAG, PRECISION_CONTROLS_TAG, ROOMS_VIEW_TAG, WORKFLOW_TAG } from "./element-tags";
 import { WORKSPACE_INTENT_EVENT } from "./map-canvas";
-import { deleteSubject, initialWorkspaceState } from "./state";
+import { deleteSubject, hasStoppableWork, initialWorkspaceState } from "./state";
 import { formatDateTime, translate } from "./localize";
 import { LazyChunk, chunkStatus } from "./lazy-chunk";
 import { heldReason } from "./draw-tools";
@@ -57,6 +57,7 @@ export class MaticMapWorkflowV4 extends LitElement {
   static override styles = [tokens, base, controls, formControls, css`
 :host { display: block; min-inline-size: 0; container-type: inline-size; }
 .workflow-fields { border: 0; margin: 0; padding: 0; min-inline-size: 0; }
+.ms-row--danger { color: var(--ms-danger); }
 .sr-only { position: absolute; overflow: hidden; inline-size: 1px; block-size: 1px; margin: -1px; clip-path: inset(50%); white-space: nowrap; }
 button, select, input[type="checkbox"] { cursor: pointer; }
 .stack { display: grid; gap: var(--ms-space-3); }
@@ -258,40 +259,58 @@ line-height: var(--ms-lh-snug);
     const areas = this.state.resources.areas;
     const needsReview = draft.canRebind || draft.status === "review";
     const stale = !needsReview && (draft.status === "stale" || draft.status === "unknown");
+    // Held while a command runs (R12): fields stay focusable and say why.
+    const held = heldReason(this.state, (key, fallback) => this.#t(key, fallback));
+    const heldBy = held ? "review-held-reason" : nothing;
+    const disabled = held ? "true" : nothing;
+    // While Stop holds the bar, as primary or secondary, Redraw is a body
+    // button (shell.md §3): Stop never shares its place with an edit.
+    const bodyRedraw = hasStoppableWork(this.state);
+    const canDelete = deleteSubject(this.state, "confirmDeleteArea") !== undefined;
     return html`
       <div class="stack">
+        ${needsReview ? html`<div class="notice" data-tone="warning" role="status">${this.#t("area_review_required", "The map changed since you saved this area, so save it again or redraw it.")}</div>` : nothing}
+        ${stale ? html`<div class="problem" role="alert">${this.#t("area_redraw_required", "Home Assistant can't use this area as it was saved, so redraw it.")}</div>` : nothing}
         ${areas.status === "error" ? html`
           <div class="stack">
             <div class="problem" role="alert">${this.#resourceCopy("areaReview").unavailable}</div>
             <div class="toolbar"><button class="ms-btn ms-btn--secondary" type="button" @click=${() => this.#intent({ type: "open-workflow", workflow: "areaReview" })}>${this.#t("v4_retry", "Try again")}</button></div>
           </div>
         ` : nothing}
-        ${needsReview ? html`<div class="notice" data-tone="warning" role="status">${this.#t("area_review_required", "The map changed since you saved this area, so save it again or redraw it.")}</div>` : nothing}
-        ${stale ? html`<div class="problem" role="alert">${this.#t("area_redraw_required", "Home Assistant can't use this area as it was saved, so redraw it.")}</div>` : nothing}
         <label class="field ms-field">${this.#t("area_name", "Area name")}
-          <input maxlength="128" autocomplete="off" .value=${draft.name} @input=${(event: Event) => this.#intent({ type: "patch-area-draft", patch: { name: eventValue(event) } })}>
+          <input maxlength="128" autocomplete="off" .value=${draft.name} ?readonly=${Boolean(held)} aria-disabled=${disabled} aria-describedby=${heldBy} @input=${(event: Event) => { if (!held) this.#intent({ type: "patch-area-draft", patch: { name: eventValue(event) } }); }}>
         </label>
         <div class="split">
           <label class="field ms-field">${this.#t("v4_cleaning_system", "Cleaning mode")}
-            <select .value=${draft.cleaningMode} @change=${(event: Event) => this.#intent({ type: "patch-area-draft", patch: { cleaningMode: eventValue(event) as CleaningMode } })}>${MODES.map((mode) => html`<option value=${mode} ?selected=${mode === draft.cleaningMode}>${this.#modeLabel(mode)}</option>`)}</select>
+            <select .value=${draft.cleaningMode} aria-disabled=${disabled} aria-describedby=${heldBy} @change=${(event: Event) => {
+              if (held) { (event.currentTarget as HTMLSelectElement).value = draft.cleaningMode; return; }
+              this.#intent({ type: "patch-area-draft", patch: { cleaningMode: eventValue(event) as CleaningMode } });
+            }}>${MODES.map((mode) => html`<option value=${mode} ?selected=${mode === draft.cleaningMode}>${this.#modeLabel(mode)}</option>`)}</select>
           </label>
           <label class="field ms-field">${this.#t("vacuum_coverage", "Vacuum coverage")}
-            <select ?disabled=${draft.cleaningMode === "mop"} .value=${draft.coverageSetting} @change=${(event: Event) => this.#intent({ type: "patch-area-draft", patch: { coverageSetting: eventValue(event) as CoverageSetting } })}>${COVERAGES.map((option) => html`<option value=${option} ?selected=${option === draft.coverageSetting}>${this.#coverageLabel(option)}</option>`)}</select>
+            <select ?disabled=${draft.cleaningMode === "mop"} .value=${draft.coverageSetting} aria-disabled=${disabled} aria-describedby=${heldBy} @change=${(event: Event) => {
+              if (held) { (event.currentTarget as HTMLSelectElement).value = draft.coverageSetting; return; }
+              this.#intent({ type: "patch-area-draft", patch: { coverageSetting: eventValue(event) as CoverageSetting } });
+            }}>${COVERAGES.map((option) => html`<option value=${option} ?selected=${option === draft.coverageSetting}>${this.#coverageLabel(option)}</option>`)}</select>
           </label>
         </div>
         ${this.#mopCoverageHint(draft.cleaningMode)}
-        <div class="toolbar">
-          <button class="ms-btn ms-btn--secondary" type="button" data-redraw @click=${() => this.#intent({ type: "open-workflow", workflow: "draw" })}>${this.#t("v4_edit_outline", "Redraw")}</button>
-          ${deleteSubject(this.state, "confirmDeleteArea") ? html`
-            <button
-              class="danger ms-btn ms-btn--secondary ms-btn--danger"
-              type="button"
-              aria-label=${this.#t("v4_delete_area_label", "Delete area")}
-              data-dialog-launcher="confirmDeleteArea"
-              @click=${() => this.#intent({ type: "open-dialog", dialog: "confirmDeleteArea" })}
-            >${this.#t("area_delete", "Delete")}</button>
-          ` : nothing}
-        </div>
+        ${bodyRedraw ? html`
+          <div class="toolbar">
+            <button class="ms-btn ms-btn--secondary" type="button" data-redraw aria-disabled=${disabled} aria-describedby=${heldBy} @click=${() => { if (!held) this.#intent({ type: "open-workflow", workflow: "draw" }); }}>${this.#t("v4_edit_outline", "Redraw")}</button>
+          </div>
+        ` : nothing}
+        ${held ? html`<p class="sr-only" id="review-held-reason">${held}</p>` : nothing}
+        ${canDelete ? html`
+          <button
+            class="list-button ms-row ms-row--danger"
+            type="button"
+            data-dialog-launcher="confirmDeleteArea"
+            aria-disabled=${disabled}
+            aria-describedby=${heldBy}
+            @click=${() => { if (!held) this.#intent({ type: "open-dialog", dialog: "confirmDeleteArea" }); }}
+          >${this.#t("area_delete", "Delete")}</button>
+        ` : nothing}
       </div>
     `;
   }
@@ -391,7 +410,7 @@ line-height: var(--ms-lh-snug);
       case "plans":
       case "plan": return this.#planViews();
       case "draw": return this.#draw();
-      case "areaReview": return this.#held(this.#areaReview());
+      case "areaReview": return this.#areaReview();
       case "history": return this.#held(this.#history());
       case "support": return this.#support();
       case "none": return nothing;

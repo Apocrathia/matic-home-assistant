@@ -25,7 +25,7 @@ import {
   WORKFLOW_TAG,
 } from "./element-tags";
 import { edgeDistance, validOutline } from "./area-outline";
-import { renderDrawTools } from "./draw-tools";
+import { heldReasonKey, renderDrawTools } from "./draw-tools";
 import { LazyChunk, chunkStatus, reloadInto, takeResume, type ChunkStatus } from "./lazy-chunk";
 import type { MapOptions } from "./map-options";
 import { isNativeSelectControl } from "./gesture-controller";
@@ -253,7 +253,7 @@ const workflowCopy = (state: WorkspaceState, localize?: Localize): {
   readonly title: string;
   readonly description: string;
 } => {
-  const t = (key: string, fallback: string): string => translate(localize, key, fallback);
+  const t = (key: string, fallback: string, placeholders?: NoticePlaceholders): string => translate(localize, key, fallback, placeholders);
   switch (state.workflow) {
     case "rooms":
       // The view renders its own description, so the rows can be described by it (R6).
@@ -269,8 +269,12 @@ const workflowCopy = (state: WorkspaceState, localize?: Localize): {
         title: state.planView === "run" ? state.planDraft.name : state.planDraft.id ? t("v4_edit_plan", "Edit plan") : t("v4_new_plan", "New plan"),
         description: "",
       };
-    case "areaReview":
-      return { title: t("v4_name_this_area", "Name this area"), description: t("area_details_hint", "Name the area and choose cleaning settings.") };
+    case "areaReview": {
+      // New: a name to give. Saved: its name; after a map change, a check (map-surfaces.md §4).
+      const draft = state.areaDraft;
+      if (draft.id === null) return { title: t("v4_name_this_area", "Name this area"), description: t("area_details_hint", "Name the area and choose cleaning settings.") };
+      return { title: draft.canRebind || draft.status === "review" ? t("v4_check_area", "Check {name}", { name: draft.name }) : draft.name, description: "" };
+    }
     case "history":
       return { title: t("v4_map_history", "Map history"), description: t("v4_map_history_detail", "Saved maps show one floor each. They can't be edited and never show where the robot is now.") };
     case "support":
@@ -877,6 +881,10 @@ export class MaticMapShellV4 extends LitElement {
       this.#intent({ type: "set-history", historyId: null });
       return;
     }
+    if (action.id === "redraw") {
+      this.#intent({ type: "open-workflow", workflow: "draw" });
+      return;
+    }
     this.#dispatchAction(action.id);
   }
 
@@ -1352,6 +1360,7 @@ export class MaticMapShellV4 extends LitElement {
         type="button"
         aria-disabled=${action.enabled ? nothing : "true"}
         aria-describedby=${reason ? reasonId : nothing}
+        data-redraw=${action.id === "redraw" ? "" : nothing}
         aria-label=${action.id === "stop" ? this.#t("v4_stop_cleaning_label", "Stop cleaning")
           : action.id === "run-plan" ? this.#t("v4_action_run_plan_named", "Run plan {plan}", { plan: this.state.planDraft.name })
           : nothing}
@@ -1372,15 +1381,19 @@ export class MaticMapShellV4 extends LitElement {
     // Draw pairs Cancel with its primary too, unless Stop holds the bar's
     // second place (shell.md §3); Back in the heading then keeps the exit.
     const drawing = state.workflow === "draw" && !secondary;
+    // The area review pairs Redraw, first, with its primary (map-surfaces.md §4).
+    const reviewing = secondary?.id === "redraw";
     // No bar when it would be empty: idle home has none (home-rooms.md §3).
     if (!summary && !editing && !drawing && !(primary && "label" in primary) && !secondary) return nothing;
     const leave = (intent: WorkspaceIntent, launcher: EventTarget | null) => this.#leave(intent, launcher);
+    const second = secondary ? this.#actionButton(secondary, "ms-btn ms-btn--block ms-btn--lg ms-btn--secondary", "secondary-reason") : nothing;
     return html`
-      <div class=${editing || drawing ? "action-bar paired" : "action-bar"}>
+      <div class=${editing || drawing || reviewing ? "action-bar paired" : "action-bar"}>
         ${summary ? html`<p class="action-summary">${summary}</p>` : nothing}
         ${editing ? this.#views.value?.planCancel(state, primary, this.#tr, leave) : drawing ? this.#views.value?.drawCancel(state, this.#tr, leave) : nothing}
+        ${reviewing ? second : nothing}
         ${primary ? this.#actionButton(primary, "ms-btn ms-btn--block ms-btn--lg ms-btn--primary", "primary-reason") : nothing}
-        ${secondary ? this.#actionButton(secondary, "ms-btn ms-btn--block ms-btn--lg ms-btn--secondary", "secondary-reason") : nothing}
+        ${reviewing ? nothing : second}
       </div>
     `;
   }
@@ -1660,7 +1673,7 @@ export class MaticMapShellV4 extends LitElement {
       <div class="panel-top">
         <div class="panel-heading">
           ${this.#back(state, false)}
-          <h2 id="workspace-title" tabindex="-1">${(plan && this.#views.value?.planTitle(state, title, this.#tr)) || title}</h2>
+          <h2 id="workspace-title" tabindex="-1">${(plan && this.#views.value?.planTitle(state, title, this.#tr)) || (state.workflow === "areaReview" && state.areaDraft.id !== null ? html`<bdi>${title}</bdi>` : title)}</h2>
           ${plan ? this.#views.value?.planTools(state, this.localize, this.#captureDialogLauncher) : nothing}
         </div>
         ${state.notice ? html`<div class="notice" data-notice-slot data-tone=${state.notice.tone}>${this.#noticeBody(state.notice, this.#closeNotice, this.#t("v4_close", "Close"))}</div>` : nothing}
@@ -1693,7 +1706,14 @@ export class MaticMapShellV4 extends LitElement {
     const status = statusCopy(state, this.localize);
     const selectedRobotUnavailable = isSelectedRobotUnavailable(state);
     const primary = selectPrimaryAction({ ...state, narrowHint: narrow });
-    const secondary = selectStopSecondaryAction(state);
+    // Stop takes the bar when work is stoppable (shell.md §3) and Redraw moves
+    // into the body; else the area review pairs Redraw with its primary, held
+    // with the R12 reason (map-surfaces.md §4).
+    const held = heldReasonKey(state);
+    const redraw: PrimaryAction | null = state.workflow === "areaReview" && !hasStoppableWork(state)
+      ? { id: "redraw", label: "Redraw", labelKey: "v4_edit_outline", kind: "neutral", enabled: !held, ...(held ?? {}) }
+      : null;
+    const secondary = selectStopSecondaryAction(state) ?? redraw;
     const statusAction = !narrow && primary.id === "stop"
       ? primary
       : !narrow && secondary?.id === "stop" ? secondary : null;

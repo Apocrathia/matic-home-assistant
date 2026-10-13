@@ -23,11 +23,15 @@ const TOOLS = ["outline", "paint", "erase", "pan"] as const;
 
 // While a command runs, the edits that would race it are held and say why
 // (shell.md §5); choosing a tool stays open, since painting is refused anyway.
-export const heldReason = (state: WorkspaceState, t: DrawToolsHandlers["t"]): string | null =>
-  state.command === "pending" ? t("v4_reason_stop_busy", "Waiting for the current change to finish.")
-    : state.command === "starting" ? t("v4_reason_starting", "Waiting for the robot to begin.")
-      : state.command === "settling" ? t("v4_reason_stop", "Waiting for the robot to stop.")
+export const heldReasonKey = (state: WorkspaceState): { readonly reason: string; readonly reasonKey: string } | null =>
+  state.command === "pending" ? { reason: "Waiting for the current change to finish.", reasonKey: "v4_reason_stop_busy" }
+    : state.command === "starting" ? { reason: "Waiting for the robot to begin.", reasonKey: "v4_reason_starting" }
+      : state.command === "settling" ? { reason: "Waiting for the robot to stop.", reasonKey: "v4_reason_stop" }
         : null;
+export const heldReason = (state: WorkspaceState, t: DrawToolsHandlers["t"]): string | null => {
+  const held = heldReasonKey(state);
+  return held ? t(held.reasonKey, held.reason) : null;
+};
 
 export const renderDrawTools = (
   state: WorkspaceState,
