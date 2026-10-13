@@ -438,6 +438,7 @@ import{E as tt,H as st,I as ot,Q as H,S as T,T as ge,U as at,V as nt,a as ae,b a
 .ms-disclosure:dir(rtl) > .ms-icon { scale: -1 1; }
 .ms-disclosure[aria-expanded="true"]:dir(rtl) > .ms-icon { rotate: -90deg; }
 .settings-body, .row-expanded { display: grid; gap: var(--ms-space-3); padding: var(--ms-space-3); border-block-start: 1px solid var(--ms-line); }
+.settings-body .ms-field, .row-expanded .ms-field { color: color-mix(in srgb, var(--ms-text-quiet) 70%, var(--ms-text)); }
 .split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--ms-space-2); }
 @media (max-width: 25rem) { .split { grid-template-columns: 1fr; } }
 .hint { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }

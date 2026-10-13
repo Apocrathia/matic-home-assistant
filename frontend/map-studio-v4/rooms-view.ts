@@ -117,6 +117,9 @@ export class MaticRoomsViewV4 extends LitElement {
 /* scale applies before rotate, so the mirrored chevron turns the other way to point down. */
 .ms-disclosure[aria-expanded="true"]:dir(rtl) > .ms-icon { rotate: -90deg; }
 .settings-body, .row-expanded { display: grid; gap: var(--ms-space-3); padding: var(--ms-space-3); border-block-start: 1px solid var(--ms-line); }
+/* Field labels sit on the selected (or hovered) row tint, which drops quiet
+   text under AA; pull them towards the body colour as the featured card does. */
+.settings-body .ms-field, .row-expanded .ms-field { color: color-mix(in srgb, var(--ms-text-quiet) 70%, var(--ms-text)); }
 .split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--ms-space-2); }
 @media (max-width: 25rem) { .split { grid-template-columns: 1fr; } }
 .hint { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
