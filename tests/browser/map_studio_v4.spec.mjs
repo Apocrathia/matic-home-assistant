@@ -10031,7 +10031,10 @@ const axeFindings = (results) => results.map(({ id, nodes }) => `${id}: ${nodes.
 test.describe("Map Studio accessibility baselines", () => {
   for (const scenario of ["ready", "rooms", "plans", "plan-saved-intelligent", "plan-saved-ordered", "plan-edit-ordered", "plan-run-paused", "plan-run-blocked", "plan-new", "plan-dirty",
     "plan-cadence-shared", "plan-cadence-blocked", "plan-schedule-available", "plan-schedule-joining", "plan-schedule-conflict",
-    "draw", "history", "cleaning", "access"]) {
+    "draw", "history", "cleaning", "access",
+    // home-rooms.md §4: home by state and the Rooms states (UX4).
+    "rooms-ready", "rooms-busy", "rooms-failed", "rooms-empty", "room-limit", "home-plan-due", "home-plan-paused",
+    "problem", "map-unavailable", "empty", "robot-offline"]) {
     for (const [width, height] of [[390, 844], [1024, 768]]) {
       const narrow = width < 1024;
       test(`${scenario} at ${width} has no serious axe finding and no name on an unnamed role${narrow ? " @mobile" : ""}`, async ({ page }) => {
@@ -10043,6 +10046,58 @@ test.describe("Map Studio accessibility baselines", () => {
         expect(axeFindings(incomplete.filter(({ id }) => id === "aria-prohibited-attr"))).toEqual([]);
       });
     }
+  }
+
+  // home-rooms.md §5 Display: the Map options menu on a phone.
+  test("Map options open at 390 has no serious axe finding @mobile", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const gallery = await loadGallery(page, { scenario: "rooms-ready", narrow: true });
+    await settleWorkspace(gallery);
+    await gallery.getByRole("button", { name: "Map options" }).click();
+    await expect(gallery.getByRole("menu", { name: "Map options" })).toBeVisible();
+    const { violations, incomplete } = await new AxeBuilder({ page }).analyze();
+    expect(axeFindings(violations.filter(({ impact }) => impact === "serious" || impact === "critical"))).toEqual([]);
+    expect(axeFindings(incomplete.filter(({ id }) => id === "aria-prohibited-attr"))).toEqual([]);
+  });
+
+  // home-rooms.md §5 Settings, Due work: the open disclosures.
+  test("Rooms with the settings row and a room's settings open has no serious axe finding", async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    const gallery = await loadGallery(page, { scenario: "rooms-ready" });
+    await settleWorkspace(gallery);
+    await gallery.getByRole("button", { name: /^Cleaning settings/ }).click();
+    await expect(gallery.getByRole("switch", { name: "Include scheduled work that's due" })).toBeVisible();
+    const kitchen = gallery.getByRole("button", { name: "Settings for Kitchen", exact: true });
+    await kitchen.click();
+    await expect(kitchen).toHaveAttribute("aria-expanded", "true");
+    await expect(gallery.getByLabel("Cleaning mode for Kitchen")).toBeVisible();
+    const { violations, incomplete } = await new AxeBuilder({ page }).analyze();
+    expect(axeFindings(violations.filter(({ impact }) => impact === "serious" || impact === "critical"))).toEqual([]);
+    expect(axeFindings(incomplete.filter(({ id }) => id === "aria-prohibited-attr"))).toEqual([]);
+  });
+
+  // home-rooms.md §8 Forced colors, RTL; MS-HOME-11 dark tints.
+  for (const [label, setup] of [
+    ["dark", (page) => page.emulateMedia({ colorScheme: "dark" })],
+    ["RTL", (page) => page.addInitScript(() => { document.documentElement.dir = "rtl"; })],
+    ["forced colors", (page) => page.emulateMedia({ forcedColors: "active" })],
+  ]) {
+    test(`rooms-ready at 390 in ${label} has no serious axe finding and keeps Settings in its row @mobile`, async ({ page }) => {
+      await setup(page);
+      await page.setViewportSize({ width: 390, height: 844 });
+      const gallery = await loadGallery(page, { scenario: "rooms-ready", narrow: true });
+      await settleWorkspace(gallery);
+      await gallery.getByRole("button", { name: "Expand panel" }).click();
+      const kitchen = gallery.getByRole("button", { name: "Settings for Kitchen", exact: true });
+      await expect(kitchen).toBeVisible();
+      const row = await kitchen.locator("xpath=ancestor::*[contains(@class, 'room-row')]").boundingBox();
+      const button = await kitchen.boundingBox();
+      expect(button.x).toBeGreaterThanOrEqual(row.x - 0.5);
+      expect(button.x + button.width).toBeLessThanOrEqual(row.x + row.width + 0.5);
+      const { violations, incomplete } = await new AxeBuilder({ page }).analyze();
+      expect(axeFindings(violations.filter(({ impact }) => impact === "serious" || impact === "critical"))).toEqual([]);
+      expect(axeFindings(incomplete.filter(({ id }) => id === "aria-prohibited-attr"))).toEqual([]);
+    });
   }
 
   test("the toast sits in a region named Notifications, so axe finds no content outside a landmark", async ({ page }) => {

@@ -42,15 +42,15 @@ for (const [w, h] of [[1440, 900], [390, 844]]) {
   console.log(`  @${w}: Tab to menu row then Escape -> menuOpen=${await dom("#map-options")} focus=${await active()}`);
 }
 
-console.log("\n== P2 Help dialog on phone (launcher is in sheet body)");
+console.log("\n== P2 Help popover on phone (launcher is the rail ?)");
 for (const [w, h] of [[390, 844]]) {
   await openScenario(page, "ready", { width: w, height: h });
   await inject(page);
   console.log("  Tab count to launcher:", await tabTo(/How to move the map/));
   await page.keyboard.press("Enter"); await go();
-  console.log("  after Enter: focus=", await active(), "dialog present=", await dom(".help-dialog"));
+  console.log("  after Enter: focus=", await active(), "popover present=", await dom(".navigation-help"));
   await page.keyboard.press("Escape"); await go();
-  console.log("  after Escape: focus=", await active(), "dialog present=", await dom(".help-dialog"));
+  console.log("  after Escape: focus=", await active(), "popover present=", await dom(".navigation-help"));
 }
 
 console.log("\n== P3 Real flow: cleaning -> Stop (action bar) -> Escape -> focus + next Escape");

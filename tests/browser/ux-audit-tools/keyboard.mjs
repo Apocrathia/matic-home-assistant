@@ -165,7 +165,7 @@ await inject(page);
   log("K6c Tab leaves the toolbar (roving, single tab stop)", !/Zone|Paint|Erase|Move map|Undo|Redo|Brush/.test(a3.name), fmt(a3));
 }
 
-// ---------- K7: overflow menu + help dialog Escape/focus return ----------
+// ---------- K7: Map options menu + help popover Escape/focus return ----------
 for (const [w, h] of [[1440, 900], [390, 844]]) {
   await openScenario(page, "ready", { width: w, height: h });
   await inject(page);
@@ -188,7 +188,7 @@ for (const [w, h] of [[1440, 900], [390, 844]]) {
     await page.keyboard.press("Enter");
     await settleAll();
     a = await active();
-    log(`K7c Help opens, focus enters dialog @${w}`, /Close/.test(a.name), fmt(a));
+    log(`K7c Help opens, focus enters popover @${w}`, /Close/.test(a.name), fmt(a));
     await page.keyboard.press("Escape");
     await settleAll();
     a = await active();
