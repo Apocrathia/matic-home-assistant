@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
-import { installPanelFixture } from "./map_studio_v4_panel_fixture.mjs";
+import { installPanelFixture, openPlanPicker } from "./map_studio_v4_panel_fixture.mjs";
 
 const cadence = (scope, mopEvery, coverageEvery, periodicCoverage, doMopNext = false, doCoverageNext = false) => ({
   scope,
@@ -92,7 +92,7 @@ const exerciseCadenceRoundtrip = async ({ page }) => {
     return { status: resource.status, problem: resource.problem };
   })).toEqual({ status: "ready", problem: null });
   await expectNoSeriousAccessibilityViolations(page, "ready workspace");
-  await panel.getByRole("button", { name: /^Run a plan/ }).click();
+  await openPlanPicker(panel);
   const editPlan = panel.getByRole("button", { name: /^Daily clean/ });
   await expect(editPlan).toBeVisible();
   await editPlan.click();
@@ -266,7 +266,7 @@ test("mop-only legacy vacuum rules stay visible and can leave shared participati
   const fixture = await installPanelFixture(page, { initialPlanCatalog: catalog, moduleSource: "packaged" });
   await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
   const panel = page.locator(fixture.panelTag);
-  await panel.getByRole("button", { name: /^Run a plan/ }).click();
+  await openPlanPicker(panel);
   await panel.getByRole("button", { name: /^Daily clean/ }).click();
   await expect(panel.getByRole("button", { name: "Run plan Daily clean", exact: true })).toBeDisabled();
   // The schedule changes in Edit, which opens at full height (plan.md §3).

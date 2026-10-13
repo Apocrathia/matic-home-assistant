@@ -1,5 +1,6 @@
 import { LitElement, css, html } from "lit";
 import { controls } from "./controls";
+import { formControls } from "./form-controls";
 import { base, tokens } from "./tokens";
 
 import {
@@ -25,7 +26,7 @@ export class MaticPrecisionControlsV4 extends LitElement {
     inline: { type: Boolean, reflect: true },
   };
 
-  static override styles = [tokens, base, controls, css`
+  static override styles = [tokens, base, controls, formControls, css`
 :host { display: block; color: var(--ms-text); }
 .controls { display: grid; gap: var(--ms-space-3); padding: var(--ms-space-3); }
 .stepper { display: grid; grid-template-columns: var(--ms-control) minmax(0, 1fr) var(--ms-control); gap: var(--ms-space-1); align-items: stretch; }

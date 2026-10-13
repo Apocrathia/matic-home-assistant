@@ -1,6 +1,7 @@
 import {
   notice,
   type HassProjection,
+  type PlanOrigin,
   type ResourceStamp,
   type ResourceState,
   type ResetCadenceAction,
@@ -2153,8 +2154,9 @@ export class EffectController {
     }
   }
 
-  selectPlan(planId: string | null, preserveNotice = false): void {
-    this.#store.patch(planSelection(this.#store.value, planId, preserveNotice));
+  // The home plan card passes origin "home" (home-rooms.md §5 Cards).
+  selectPlan(planId: string | null, preserveNotice = false, origin?: PlanOrigin): void {
+    this.#store.patch(planSelection(this.#store.value, planId, preserveNotice, origin));
   }
 
   setPlanEnabled(enabled: boolean): Promise<void> {

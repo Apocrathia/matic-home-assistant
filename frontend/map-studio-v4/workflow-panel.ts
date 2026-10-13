@@ -2,26 +2,26 @@ import { LitElement, css, html, nothing } from "lit";
 import type { PropertyValues } from "lit";
 import { html as staticHtml, unsafeStatic } from "lit/static-html.js";
 import { controls } from "./controls";
+import { formControls } from "./form-controls";
 import { base, tokens } from "./tokens";
 
-import type { CleaningMode, CoverageSetting, PlanRoom } from "./backend-contracts";
+import type { CleaningMode, CoverageSetting } from "./backend-contracts";
 import {
-  MAX_ROOM_SEQUENCE_SIZE,
   type DateFormat,
   type Localize,
   type ResourceState,
   type WorkspaceIntent,
   type WorkspaceState,
 } from "./contracts";
-import { PLAN_VIEWS_TAG, WORKFLOW_TAG } from "./element-tags";
+import { PLAN_VIEWS_TAG, ROOMS_VIEW_TAG, WORKFLOW_TAG } from "./element-tags";
 import { WORKSPACE_INTENT_EVENT } from "./map-canvas";
-import { admittedManualRoomPreview, canSelectRooms, deleteSubject, hasStoppableWork, initialWorkspaceState } from "./state";
+import { deleteSubject, initialWorkspaceState } from "./state";
 import { formatDateTime, translate } from "./localize";
 import { LazyChunk, chunkStatus } from "./lazy-chunk";
-import { settingLabel } from "./plan-copy";
-import { COVERAGES, MODES, cadenceSummary, coverageLabel, modeLabel } from "./plan-cadence";
-// The plan picker, Run and Edit.
+import { COVERAGES, MODES, coverageLabel, modeLabel } from "./plan-cadence";
+// The plan picker, Run and Edit, and the Rooms view.
 import "./plan-views";
+import "./rooms-view";
 // Draw's precision controls load with the other workflow tools; the shell
 // renders them only in the draw workflow.
 import "./precision-controls";
@@ -32,11 +32,15 @@ export { actionReason, focusPlanTarget, planCancel, planTitle, planTools } from 
 // Dialogs that only these views' controls open carry their copy, launcher and
 // confirm here.
 export { confirmDialog, dialogCopy, dialogLauncher, dialogReturnTarget } from "./dialog-copy";
+export { MapOptions } from "./map-options";
+export { roomTapAnnouncement, roomsGripLine, roomsSummary } from "./rooms-view";
+export { shellWorkflowStyles } from "./workflow-styles";
+export { formControls } from "./form-controls";
 
 const planViewsTag = unsafeStatic(PLAN_VIEWS_TAG);
+const roomsViewTag = unsafeStatic(ROOMS_VIEW_TAG);
 
 const eventValue = (event: Event): string => (event.currentTarget as HTMLInputElement).value;
-const eventChecked = (event: Event): boolean => (event.currentTarget as HTMLInputElement).checked;
 
 export class MaticMapWorkflowV4 extends LitElement {
   static override properties = {
@@ -46,7 +50,7 @@ export class MaticMapWorkflowV4 extends LitElement {
     _historyPreviewPosition: { state: true },
   };
 
-  static override styles = [tokens, base, controls, css`
+  static override styles = [tokens, base, controls, formControls, css`
 :host { display: block; min-inline-size: 0; container-type: inline-size; }
 .workflow-fields { border: 0; margin: 0; padding: 0; min-inline-size: 0; }
 button, select, input[type="checkbox"] { cursor: pointer; }
@@ -72,16 +76,6 @@ line-height: var(--ms-lh-snug);
 .floor[aria-current="true"] { border-color: var(--ms-resolved-indicator, var(--ms-accent)); background: color-mix(in srgb, var(--ms-accent) 12%, var(--ms-local)); }
 .problem p { margin: 0; }
 @media (forced-colors: active) { .floor[aria-current="true"] { forced-color-adjust: none; color: HighlightText; background: Highlight; border-color: Highlight; } }
-.room { display: grid; gap: var(--ms-space-2); }
-.room-choice { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--ms-space-2); min-block-size: var(--ms-control-sm); }
-.room-choice input { inline-size: 1.2rem; block-size: 1.2rem; }
-.room-settings { padding-block-start: 0.125rem; padding-inline-start: 1.8rem; }
-.room-choice input[aria-disabled="true"] { cursor: not-allowed; opacity: 0.55; }
-.plan-option { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: var(--ms-space-2); }
-.plan-option input[type="checkbox"] { inline-size: 1.2rem; block-size: 1.2rem; margin: 0.1rem 0 0; accent-color: var(--ms-resolved-indicator, var(--ms-accent)); }
-.plan-option-copy { display: grid; gap: var(--ms-space-1); min-inline-size: 0; }
-.plan-option-copy strong { font-size: var(--ms-t-sm); line-height: var(--ms-lh-snug); }
-.plan-option-copy small { color: var(--ms-text-quiet); font-size: var(--ms-t-xs); font-weight: var(--ms-w-regular); line-height: var(--ms-lh-snug); }
 .toolbar { display: flex; flex-wrap: wrap; gap: var(--ms-space-2); }
 .checkbox { display: flex; align-items: center; gap: var(--ms-space-2); min-block-size: var(--ms-control); font-size: var(--ms-t-xs); font-weight: var(--ms-w-medium); }
 .checkbox input { inline-size: 1.2rem; block-size: 1.2rem; }
@@ -131,14 +125,6 @@ line-height: var(--ms-lh-snug);
 
   #mopCoverageHint(mode: CleaningMode) {
     return mode === "vacuum" ? nothing : html`<p class="subtle">${this.#t("v4_mop_coverage_hint", "Vacuum coverage applies only when vacuuming. Use the robot's Double-pass mopping setting for an extra mop pass.")}</p>`;
-  }
-
-  #cadenceReason(reason: string): string {
-    if (reason === "mop_due") return this.#t("v4_cadence_mop_due_reason", "Vacuum and mop are due");
-    if (reason === "coverage_due") return this.#t("v4_cadence_coverage_due_reason", "Vacuum rotation is due");
-    if (reason === "mop_progress_unverified") return this.#t("v4_cadence_mop_progress_unverified", "Can't run this schedule until you reset its mopping progress, which Home Assistant can't confirm.");
-    if (reason === "coverage_progress_unverified") return this.#t("v4_cadence_coverage_progress_unverified", "Can't run this schedule until you reset its vacuum rotation progress, which Home Assistant can't confirm.");
-    return this.#t("v4_cadence_due_unknown_reason", "Schedule setting due");
   }
 
   #intent(intent: WorkspaceIntent): void {
@@ -194,134 +180,10 @@ line-height: var(--ms-lh-snug);
   }
 
   #rooms() {
-    const plans = this.state.resources.plans;
-    const admitted = admittedManualRoomPreview(this.state);
-    const previewCurrent = admitted !== null;
-    const atRoomLimit = this.state.selection.roomIds.length >= MAX_ROOM_SEQUENCE_SIZE;
-    // home-rooms.md §4: while the robot works, the rows stay readable and
-    // focusable but don't change; a shared line says why.
-    const locked = !canSelectRooms(this.state);
-    const busy = hasStoppableWork(this.state);
-    return this.#resource(plans, html`
-      <div class="stack">
-        <h3 class="group-heading" id="rooms-heading">${this.#t("v4_rooms_to_clean", "Rooms to clean")}</h3>
-        ${busy ? html`<p class="subtle" id="rooms-busy">${this.#t("v4_rooms_busy", "Can't change rooms until the robot finishes or stops.")}</p>` : nothing}
-        <div class="list" role="group" aria-labelledby="rooms-heading">
-          ${(plans.value?.rooms || []).map((room) => {
-            const checked = this.state.selection.roomIds.includes(room.roomId);
-            return html`
-              <div class="room ms-row ms-row--stack" data-selected=${String(checked)}>
-                <label class="room-choice">
-                  <input
-                    type="checkbox"
-                    .checked=${checked}
-                    ?disabled=${!checked && atRoomLimit}
-                    aria-disabled=${locked ? "true" : nothing}
-                    aria-describedby=${busy ? "rooms-busy" : nothing}
-                    @click=${(event: Event) => { if (locked) event.preventDefault(); }}
-                    @change=${() => this.#intent({ type: "toggle-room", roomId: room.roomId })}
-                  >
-                  <strong>${room.name}</strong>
-                  ${checked ? html`<small>${this.#t("v4_room_ready", "Ready")}</small>` : nothing}
-                </label>
-                ${checked ? this.#roomSettings(
-                  room.roomId,
-                  this.state.selection.roomSettings.find((candidate) => candidate.roomId === room.roomId)
-                    || { roomId: room.roomId, cleaningMode: "vacuum", coverageSetting: "standard" },
-                ) : nothing}
-              </div>
-            `;
-          })}
-        </div>
-        ${atRoomLimit ? html`<p class="subtle" role="status">${this.#t("v4_room_limit_reached", "Up to {limit} rooms fit, so remove one to add another.", { limit: MAX_ROOM_SEQUENCE_SIZE })}</p>` : nothing}
-        <p class="subtle">${this.#t("v4_room_selection_hint", "Select rooms here or directly on the map. The map and list stay in sync.")}</p>
-        <label class="plan-option">
-          <input type="checkbox" .checked=${!this.state.selection.useRoomSchedule} @change=${(event: Event) => this.#intent({ type: "set-use-room-schedule", value: !eventChecked(event) })}>
-          <span class="plan-option-copy">
-            <strong>${this.#t("v4_override_room_schedule", "Override shared schedule settings")}</strong>
-            <small>${this.#t("v4_override_room_schedule_hint", "This clean follows the shared schedule unless you turn this on to use the settings chosen here. Anything due stays due, and matching cleans still count toward the schedule.")}</small>
-          </span>
-        </label>
-        ${this.state.selection.roomIds.map((roomId) => {
-          const room = plans.value?.rooms.find((candidate) => candidate.roomId === roomId);
-          return room?.sharedCadence || room?.sharedCadenceProgress || room?.sharedCadenceReasons?.length
-            ? html`<p class="subtle">${room.name}: ${cadenceSummary(this.#tr, room.sharedCadence, room.sharedCadenceProgress, room.sharedCadenceReasons)}</p>`
-            : nothing;
-        })}
-        ${this.state.manualRoomPreview.status === "loading"
-          ? html`<p role="status" class="subtle">${this.#t("v4_room_preview_loading", "Checking settings…")}</p>`
-          : nothing}
-        ${this.state.manualRoomPreview.status === "error"
-          ? html`<div class="stack">
-            <div role="alert" class="problem">${this.#t("v4_room_preview_unavailable", "Home Assistant couldn't check the room settings.")}</div>
-            <div class="toolbar"><button class="ms-btn ms-btn--secondary" type="button" @click=${() => this.#intent({ type: "retry-room-preview" })}>${this.#t("v4_retry", "Try again")}</button></div>
-          </div>`
-          : nothing}
-        ${previewCurrent ? this.#manualRoomPreview(admitted.preview) : nothing}
-      </div>
-    `, "rooms");
-  }
-
-  #manualRoomPreview(preview: NonNullable<WorkspaceState["manualRoomPreview"]["value"]>["preview"]) {
-    const boundaries = new Set(preview.missionBoundaries);
-    return html`
-      <section class="stack" aria-labelledby="effective-rooms-heading" aria-live="polite">
-        <h3 class="group-heading" id="effective-rooms-heading">${this.#t("v4_effective_room_preview", "Effective cleaning preview")}</h3>
-        ${preview.blocker
-          ? html`<p class="problem" role="alert">${preview.blocker === "invalid_cadence_policy"
-              && this.state.selection.useRoomSchedule
-              && this.state.selection.roomSettings.some((room) => room.cleaningMode !== "vacuum")
-              ? this.#t("v4_room_preview_schedule_override", "The shared schedule can't use the cleaning mode you chose. Turn on Override shared schedule settings, or choose a mode that works with the schedule.")
-              : this.#t("v4_room_preview_blocked", "These rooms can't be cleaned with the current settings. Change the settings or the rooms, then try again.")}</p>`
-          : nothing}
-        ${preview.rooms.length
-          ? html`<ol class="list" aria-label=${this.#t("v4_effective_room_order", "Effective room order")}>
-            ${preview.rooms.map((room, index) => html`
-              <li class="ms-row ms-row--stack">
-                ${boundaries.has(index) ? html`<strong>${this.#t("v4_room_mission_boundary", "New part (the robot may stop at the dock first)")}</strong>` : nothing}
-                <strong>${room.name}</strong>
-                <span class="subtle">${settingLabel(this.#tr, room)}</span>
-                ${room.cadenceReasons.length
-                  ? html`<span class="subtle">${room.cadenceReasons.map((reason) => this.#cadenceReason(reason)).join("; ")}</span>`
-                  : nothing}
-              </li>
-            `)}
-          </ol>`
-          : nothing}
-      </section>
-    `;
-  }
-
-  #roomSettings(roomId: string, room: PlanRoom) {
-    const name = this.state.resources.plans.value?.rooms.find((candidate) => candidate.roomId === roomId)?.name || this.#t("v4_room", "Room");
-    return html`
-      <div class="split room-settings">
-        <label class="field ms-field">${this.#t("v4_cleaning_system", "Cleaning mode")}
-          <select
-            aria-label=${this.#t("v4_room_cleaning_system_named", "Cleaning mode for {room}", { room: name })}
-            .value=${room.cleaningMode}
-            @change=${(event: Event) => this.#intent({
-              type: "patch-room-settings",
-              roomId,
-              cleaningMode: eventValue(event) as CleaningMode,
-            })}
-          >${MODES.map((mode) => html`<option value=${mode} ?selected=${mode === room.cleaningMode}>${this.#modeLabel(mode)}</option>`)}</select>
-        </label>
-        <label class="field ms-field">${this.#t("vacuum_coverage", "Vacuum coverage")}
-          <select
-            aria-label=${this.#t("v4_room_vacuum_coverage_named", "Vacuum coverage for {room}", { room: name })}
-            ?disabled=${room.cleaningMode === "mop"}
-            .value=${room.coverageSetting}
-            @change=${(event: Event) => this.#intent({
-              type: "patch-room-settings",
-              roomId,
-              coverageSetting: eventValue(event) as CoverageSetting,
-            })}
-          >${COVERAGES.map((option) => html`<option value=${option} ?selected=${option === room.coverageSetting}>${this.#coverageLabel(option)}</option>`)}</select>
-        </label>
-      </div>
-      ${this.#mopCoverageHint(room.cleaningMode)}
-    `;
+    return this.#resource(this.state.resources.plans, staticHtml`<${roomsViewTag}
+      .state=${this.state}
+      .localize=${this.localize}
+    ></${roomsViewTag}>`, "rooms");
   }
 
   #planViews() {

@@ -7,8 +7,8 @@ should stop. Open **Matic Map** in the Home Assistant sidebar to get started.
 
 ## Saved plans
 
-Choose **Create a plan**, or open **Run a plan** to select an existing plan.
-Each plan saves:
+Choose **Create a plan**. On the home screen, **Run {plan}** opens your
+selected plan, and **Your plans** under it lists every plan. Each plan saves:
 
 - Included rooms and their order.
 - Cleaning mode and vacuum coverage for each room.
@@ -71,8 +71,9 @@ Open **Matic Map** from Home Assistant's sidebar. Choose **3D** for the photogra
 map or **2D** for a top-down view. The 2D appearance can show the photo or room map.
 
 Drag to move around the map; use pinch or the wheel to zoom. **Fit map** recenters
-the floor. **How to move the map** lists mouse, touch, and keyboard controls.
-Map options include appearance, refresh, and full screen.
+the floor. The **?** on the map lists touch, trackpad, mouse, and keyboard controls.
+**Map options** holds map detail, map diagnostics, and full screen; on a phone it
+also holds the 2D appearance and room names.
 When choosing rooms for a run or plan, click a room on either map view to select
 or deselect it. The map and room list stay in sync.
 
@@ -85,10 +86,15 @@ The map panel requires a Home Assistant administrator. For a dashboard, add
 
 ## One-time cleaning
 
-Choose **Clean rooms**, select rooms, and pick vacuum, mop, or both.
-Vacuum coverage choices are **Quick**, **Optimal**, and **Heavy duty**. They do
-not change mopping; use the robot's **Double-pass mopping** setting for an extra
-mop pass. Start the run from its summary; use the active cleaning controls to pause, resume, or stop.
+Choose **Clean rooms**, then tick rooms on the map or in the list. **Cleaning
+settings** picks vacuum, mop, or both and the vacuum coverage for the whole
+clean; **Settings for {room}** changes one room. Vacuum coverage choices are
+**Quick**, **Optimal**, and **Heavy duty**. They do not change mopping; use the
+robot's **Double-pass mopping** setting for an extra mop pass. When scheduled
+work is due, **Include scheduled work that's due** is on; turn it off to use
+only your settings. The line above the button lists the rooms in run order,
+then the robot returns to the dock. Use the active cleaning controls to pause,
+resume, or stop.
 
 Home Assistant Areas can map to Matic rooms. Exact names and unique aliases
 match automatically; manage other matches in the vacuum entity's cleaning-area

@@ -47,14 +47,15 @@ progress to it.
 ## One-time room cleans
 
 Matic Map room cleans use an existing shared schedule by default and do not
-create a saved plan. Choose **Override shared schedule settings** to use your
-selected settings for that clean. Compatible verified work still counts;
-omitting a due mode or coverage leaves that work due.
+create a saved plan. When scheduled work is due, **Cleaning settings** shows
+**Include scheduled work that's due**; turn it off to use only your settings for
+that clean. Compatible verified work still counts; skipped work stays due for
+the next clean.
 
-Review the effective room order, modes, coverage, and due-work explanations
-before starting. Matic Map refreshes that preview when you start; if it changed,
-review the updated settings before starting again. A failed preview keeps your
-selection and offers **Try again**.
+Each selected room shows what will run under its name, and lines above the
+rooms explain due work and any extra passes. Matic Map refreshes that check
+when you start; if it changed, review the updated settings before starting
+again. A failed check keeps your selection and offers **Try again**.
 
 Starts from the Matic app, physical controls, and custom-area cleans do not
 advance room schedules. Existing Home Assistant service calls keep their

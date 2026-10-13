@@ -12,6 +12,8 @@ import "../index";
 import { LitElement, css, html, nothing } from "lit";
 import type { CSSResultGroup, PropertyValues, TemplateResult } from "lit";
 import { SHELL_TAG } from "../element-tags";
+import { formControls } from "../form-controls";
+import { shellWorkflowStyles } from "../workflow-styles";
 import { iconChevronDown, iconChevronRight, iconChevronUp, iconDiagnostics, iconHelp, iconMenu, iconOverflow } from "../icons";
 import { syntheticMockupFloor, syntheticMockupRobot } from "../synthetic-fixtures";
 import { t } from "./copy";
@@ -328,7 +330,7 @@ button.ms-disclosure > span:first-child { flex: 1; min-inline-size: 0; }
 details.mock-details > .mock-details__body { display: grid; gap: var(--ms-space-3); padding: var(--ms-space-2) var(--ms-space-3) var(--ms-space-3); }
 `;
 
-export const screenStyles: CSSResultGroup[] = [shellCss(), previewTokens, previewControls, previewChips, previewShell, frameCss, bodyCss];
+export const screenStyles: CSSResultGroup[] = [shellCss(), shellWorkflowStyles, formControls, previewTokens, previewControls, previewChips, previewShell, frameCss, bodyCss];
 
 // ---- The frame -----------------------------------------------------------------
 

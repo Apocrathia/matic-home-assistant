@@ -1,7 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 import { build } from "esbuild";
-import { installPanelFixture } from "./map_studio_v4_panel_fixture.mjs";
+import { installPanelFixture, openPlanPicker } from "./map_studio_v4_panel_fixture.mjs";
 
 // room-schedule.md: the pure schedule model (plan-cadence.ts), tested through
 // an esbuild-bundled harness route, then the Schedule block in the gallery.
@@ -903,7 +903,7 @@ test.describe("saving next to a shared schedule", () => {
     const fixture = await installPanelFixture(page, { initialPlanCatalog: catalog, moduleSource: "packaged" });
     await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
     const panel = page.locator(fixture.panelTag);
-    await panel.getByRole("button", { name: /^Run a plan/ }).click();
+    await openPlanPicker(panel);
     await panel.getByRole("button", { name: /^Daily clean/ }).click();
     await panel.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
     await panel.getByRole("button", { name: "Settings for Kitchen", exact: true }).click();
@@ -1088,7 +1088,7 @@ test.describe("Reset through Home Assistant", () => {
       const fixture = await installPanelFixture(page, { initialPlanCatalog: catalog, moduleSource: "packaged" });
       await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
       const panel = page.locator(fixture.panelTag);
-      await panel.getByRole("button", { name: /^Run a plan/ }).click();
+      await openPlanPicker(panel);
       await panel.getByRole("button", { name: /^Daily clean/ }).click();
       await panel.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
       await panel.getByRole("button", { name: "Settings for Kitchen", exact: true }).click();

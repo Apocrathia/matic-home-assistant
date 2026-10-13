@@ -23,7 +23,7 @@ const TEMPLATES = {
   v4_map_scale: "Maßstab {distance}",
   v4_rooms_selected: "Gewählt: {count} Räume",
   v4_rooms_selected_names: "Räume gewählt: {count} · {rooms}",
-  v4_rooms_summary_dock: "{rooms}, danach zurück zum Dock",
+  v4_clean_rooms_summary: "{rooms}, danach zurück zum Dock",
   v4_zone_add_point_after: "Punkt nach {number} hinzufügen",
   v4_history_position: "{position} von {count}",
 };
@@ -331,7 +331,7 @@ test("room lists are joined for the panel language", async ({ page }) => {
     const list = await joinRooms(page, language, names);
     // Found by class: the summary is a plain paragraph with no role or name.
     await expect(page.locator(GALLERY_TAG).locator(".action-summary"), language)
-      .toHaveText(`${list} · returns to the dock`);
+      .toHaveText(`${list}, then back to the dock`);
   }
 });
 
@@ -342,12 +342,15 @@ test("the room summary and selection chip take their rooms and count from placeh
 
   // Found by class: the summary is a plain paragraph with no role or name.
   await expect(gallery.locator(".action-summary")).toHaveText(`${list}, danach zurück zum Dock`);
-  // The chip has no role or name of its own; its text is the contract.
-  await expect(gallery.getByText("Gewählt: 3 Räume", { exact: true })).toBeVisible();
-  const dock = await localizeCalls(page, "v4_rooms_summary_dock");
+  // The chip has no role or name of its own; its text is the contract. The
+  // Rooms list header carries the same count (home-rooms.md §4).
+  await expect(gallery.locator(".selection-chip").getByText("Gewählt: 3 Räume", { exact: true })).toBeVisible();
+  await expect(gallery.locator(".list-header").getByText("Gewählt: 3 Räume", { exact: true })).toBeVisible();
+  const dock = await localizeCalls(page, "v4_clean_rooms_summary");
   expect(dock.at(-1).placeholders).toEqual({ rooms: list });
+  // Counts arrive written for the locale (home-rooms.md §8 RTL; plan.md §8).
   const chip = await localizeCalls(page, "v4_rooms_selected");
-  expect(chip.at(-1).placeholders).toEqual({ count: 3 });
+  expect(chip.at(-1).placeholders).toEqual({ count: "3" });
 });
 
 test("@mobile the sheet's status line names the selected rooms beside a paused robot", async ({ page }) => {
@@ -362,7 +365,7 @@ test("@mobile the sheet's status line names the selected rooms beside a paused r
 
   await expect(gallery.getByRole("complementary", { name: "Cleaning panel" })).toContainText(`Paused · Räume gewählt: 2 · ${list}`);
   const status = await localizeCalls(page, "v4_rooms_selected_names");
-  expect(status.at(-1).placeholders).toEqual({ count: 2, rooms: list });
+  expect(status.at(-1).placeholders).toEqual({ count: "2", rooms: list });
 });
 
 test("the history list numbers its saved maps from placeholders", async ({ page }) => {

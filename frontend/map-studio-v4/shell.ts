@@ -1,4 +1,4 @@
-import { LitElement, nothing } from "lit";
+import { LitElement, adoptStyles, nothing } from "lit";
 import { shellStyles } from "./shell-styles";
 import { html, unsafeStatic } from "lit/static-html.js";
 import type { PropertyValues } from "lit";
@@ -27,6 +27,7 @@ import {
 import { edgeDistance, validOutline } from "./area-outline";
 import { renderDrawTools } from "./draw-tools";
 import { LazyChunk, chunkStatus, reloadInto, takeResume, type ChunkStatus } from "./lazy-chunk";
+import type { MapOptions } from "./map-options";
 import { isNativeSelectControl } from "./gesture-controller";
 import { RovingFocusController } from "./roving-focus";
 import { opaque, readColors, resolveFill, resolveTone, rgba, watchTheme, type Channel } from "./theme-probe";
@@ -40,6 +41,7 @@ import {
   iconCleaning,
   iconClose,
   iconDiagnostics,
+  iconDue,
   iconHistory,
   iconMenu,
   iconPlan,
@@ -58,10 +60,12 @@ import {
   WORKSPACE_INTENT_EVENT,
 } from "./map-canvas";
 import "./map-canvas";
-import { formatList, translate } from "./localize";
+import { translate } from "./localize";
+import { planRowLine2, planRowLine3 } from "./plan-copy";
 import { needsDraftConfirmation } from "./draft-navigation";
 import {
   deleteSubject,
+  hasStoppableWork,
   initialWorkspaceState,
   isSelectedRobotUnavailable,
   selectStopSecondaryAction,
@@ -138,7 +142,7 @@ const statusCopy = (state: WorkspaceState, localize?: Localize): StatusPresentat
   if (state.activity === "recharging") {
     const battery = state.batteryPercent === null
       ? t("v4_recharging_detail", "Will resume automatically when ready")
-      : t("v4_recharging_battery", "Charging to resume · {percent}% battery", { percent: state.batteryPercent });
+      : t("v4_battery", "{percent}% battery", { percent: state.batteryPercent });
     return { title: t("v4_recharging", "Charging to resume"), detail: withMapConsequence(battery), icon: iconCharging, notable: true };
   }
   if (state.activity === "paused") return { title: t("v4_paused", "Paused"), detail: withMapConsequence(t("v4_can_resume", "Cleaning can resume")), icon: iconPaused, notable: true };
@@ -172,6 +176,78 @@ const statusCopy = (state: WorkspaceState, localize?: Localize): StatusPresentat
   };
 };
 
+/**
+ * Home's one state (home-rooms.md §4 H1-H11), checked in the strip's order.
+ * Each state has one heading and at most one description; the cards and
+ * the Maps group follow from it, so nothing is stated twice (MS-HOME-03).
+ */
+type HomeKind =
+  | "ready" | "locating" | "busy" | "paused" | "problem" | "map-unavailable" | "map-limited"
+  | "offline" | "reconnecting" | "administrator" | "robot-unavailable" | "read-only" | "setup";
+
+// Home reads the catalog only once it is ready (home-rooms.md §4 H2): a read
+// in flight or failed keeps the last catalog (loadPlans) but shows as such,
+// as the picker's own loading and unavailable lines do.
+const readyPlans = (state: WorkspaceState) => (state.resources.plans.status === "ready" ? state.resources.plans.value : null);
+
+const homeState = (state: WorkspaceState): HomeKind => {
+  const { host } = state;
+  if (!host.connected) return "reconnecting";
+  if (!host.administrator) return "administrator";
+  if (host.robotCount === 0) return "setup";
+  if (isSelectedRobotUnavailable(state)) return "robot-unavailable";
+  if (!host.robotConnected) return "offline";
+  if (isReadOnlyWorkspace(state)) return "read-only";
+  if (state.activity === "problem") return "problem";
+  if ((hasStoppableWork(state) && state.activity !== "paused")
+    || state.activity === "stopping" || state.command === "settling"
+    || state.resources.entry?.stopSettlePending === true) return "busy";
+  if (state.activity === "paused") return "paused";
+  if (state.coherence === "unavailable" || state.coherence === "blocked") return "map-unavailable";
+  if (state.coherence === "degraded") return "map-limited";
+  if (state.coherence === "verifying" || state.coherence === "booting") return "locating";
+  return "ready";
+};
+
+const homeCopy = (kind: HomeKind, state: WorkspaceState, t: (key: string, fallback: string) => string): {
+  readonly title: string;
+  readonly description: string;
+} => {
+  switch (kind) {
+    case "ready":
+      return { title: t("v4_what_to_clean", "Choose what to clean"), description: "" };
+    case "locating":
+      return { title: t("v4_what_to_clean", "Choose what to clean"), description: t("v4_reason_locating", "Waiting for the robot to confirm which floor it is on.") };
+    case "busy":
+      return { title: t("v4_home_busy_title", "The robot is busy"), description: t("v4_home_busy_detail", "You can start a new clean when it's done.") };
+    case "paused":
+      return { title: t("v4_home_busy_title", "The robot is busy"), description: t("v4_home_paused_detail", "Resume or stop this clean before starting a new one.") };
+    case "problem":
+      return { title: t("v4_attention_title", "The robot needs attention"), description: t("v4_attention_body", "The robot reported a problem. Check it in the Matic app, then start a new clean.") };
+    case "map-unavailable":
+      return { title: t("v4_what_to_clean", "Choose what to clean"), description: t("v4_map_unavailable_status", "Home Assistant can't show the map right now, so cleaning can't start.") };
+    case "map-limited":
+      return { title: t("v4_what_to_clean", "Choose what to clean"), description: t("v4_map_limited_body", "Home Assistant can show this map but can't confirm it well enough to start cleaning.") };
+    case "offline":
+      return { title: t("v4_robot_offline_title", "Robot offline"), description: t("v4_robot_offline_body", "Showing the last known map. Cleaning comes back when the robot reconnects.") };
+    case "reconnecting":
+      return { title: t("v4_reconnecting_title", "Reconnecting to Home Assistant"), description: t("v4_reconnecting_body", "Cleaning controls come back when Home Assistant reconnects.") };
+    case "administrator":
+      return { title: t("v4_admin_title", "Administrator access required"), description: t("v4_admin_body", "Ask a Home Assistant administrator to open this map.") };
+    case "robot-unavailable":
+      return { title: t("v4_selected_robot_unavailable", "Selected robot unavailable"), description: t("v4_choose_another_robot", "Choose another robot to open its map.") };
+    case "read-only":
+      return {
+        title: t("v4_saved_map_read_only_title", "Saved map is read only"),
+        description: state.dataMode === "live"
+          ? t("v4_map_recovery_automatic", "Cleaning controls return automatically when the live map is ready.")
+          : t("v4_saved_map_read_only_detail", "Return to the live map to choose rooms, run a plan, or draw a custom area."),
+      };
+    case "setup":
+      return { title: t("v4_setup_title", "Set up your robot"), description: t("v4_no_robot_body", "Add the Matic (Unofficial) integration to see a map here.") };
+  }
+};
+
 const workflowCopy = (state: WorkspaceState, localize?: Localize): {
   readonly title: string;
   readonly description: string;
@@ -179,7 +255,8 @@ const workflowCopy = (state: WorkspaceState, localize?: Localize): {
   const t = (key: string, fallback: string): string => translate(localize, key, fallback);
   switch (state.workflow) {
     case "rooms":
-      return { title: t("v4_choose_rooms", "Choose rooms"), description: t("v4_choose_rooms_detail", "Choose rooms on the map or in the list.") };
+      // The view renders its own description, so the rows can be described by it (R6).
+      return { title: t("v4_choose_rooms", "Choose rooms"), description: "" };
     case "draw":
       return { title: t("v4_draw_area", "Draw an area"), description: t("v4_draw_area_detail", "Outline or paint the area, then review it before saving.") };
     case "plans":
@@ -198,15 +275,7 @@ const workflowCopy = (state: WorkspaceState, localize?: Localize): {
     case "support":
       return { title: t("v4_map_diagnostics", "Map diagnostics"), description: t("v4_map_support_detail", "Details to share with support") };
     case "none":
-      if (isReadOnlyWorkspace(state)) {
-        return {
-          title: t("v4_saved_map_read_only_title", "Saved map is read only"),
-          description: state.dataMode === "live"
-            ? t("v4_map_recovery_automatic", "Cleaning controls return automatically when the live map is ready.")
-            : t("v4_saved_map_read_only_detail", "Return to the live map to choose rooms, run a plan, or draw a custom area."),
-        };
-      }
-      return { title: t("v4_what_to_clean", "Choose what to clean"), description: t("v4_clean_detail", "Choose rooms, a saved plan, or a custom area.") };
+      return homeCopy(homeState(state), state, t);
   }
 };
 
@@ -321,8 +390,6 @@ export class MaticMapShellV4 extends LitElement {
     dates: { attribute: false },
     _measuredNarrow: { state: true },
     _sheetOffset: { state: true },
-    _overflowOpen: { state: true },
-    _helpOpen: { state: true },
     _browserFullscreen: { state: true },
     _sheetDetent: { state: true },
     _polite: { state: true },
@@ -350,8 +417,6 @@ export class MaticMapShellV4 extends LitElement {
   }
   protected _measuredNarrow = false;
   protected _sheetOffset = 0;
-  protected _overflowOpen = false;
-  protected _helpOpen = false;
   protected _browserFullscreen = false;
   protected _sheetDetent: SheetDetent = "half";
   // The two live regions (shell.md §4 rule 6). Each holds only its newest
@@ -366,8 +431,13 @@ export class MaticMapShellV4 extends LitElement {
   // with any workflow, the outline editor with Draw. The shell builds the
   // editor and hands it to the canvas, so the sheet is the one place a failure
   // of either, building included, is said.
-  readonly #views = new LazyChunk(this, () => import("./workflow-panel"));
+  readonly #views = new LazyChunk(this, () => this.#workflowModule());
   readonly #outline = new LazyChunk(this, async () => new (await import("./outline-editor")).OutlineEditor({ edgeDistance, validOutline }));
+  // The Map options menu (map-options.ts) ships in the views chunk, which a
+  // module of its own would split the shared lit chunk for, and loads on its
+  // first press; that press opens it once the load has settled.
+  readonly #options: LazyChunk<MapOptions> = new LazyChunk(this, async () => new (await this.#workflowModule()).MapOptions(this));
+  #optionsPending = false;
   // The workflow a Try again reload was pressed in (lazy-chunk.ts).
   #resume = takeResume();
   #toastTimer: ReturnType<typeof setTimeout> | undefined;
@@ -383,7 +453,6 @@ export class MaticMapShellV4 extends LitElement {
   #observedSheet: Element | null = null;
   #dialogLauncher: HTMLElement | null = null;
   #workspaceLauncher: HTMLElement | null = null;
-  #helpLauncher: HTMLElement | null = null;
   // What Discard goes on to: the intent that asked, or Try again's reload.
   #pendingNavigation: WorkspaceIntent | "reload" | null = null;
   // The save Discard changes? started; only that save's own answer settles it.
@@ -394,6 +463,21 @@ export class MaticMapShellV4 extends LitElement {
   // The workflows the entry screen's enabled rows offered at its last render
   // (#launch), plus Map diagnostics, which Map options offers on any screen.
   #launchers = new Set<string>();
+  /** The home launcher last pressed; it takes focus back when its workflow closes (home-rooms.md §5 Keyboard). */
+  #homeLauncher: string | null = null;
+  #workflowStyled = false;
+
+  // The views chunk brings the shell rules its markup needs (workflow-styles.ts,
+  // and form-controls.ts for the Map options switch); either loader adopts
+  // them once, before the chunk's own update renders that markup.
+  async #workflowModule(): Promise<typeof import("./workflow-panel")> {
+    const views = await import("./workflow-panel");
+    if (!this.#workflowStyled) {
+      this.#workflowStyled = true;
+      adoptStyles(this.renderRoot as ShadowRoot, [...shellStyles, views.shellWorkflowStyles, views.formControls]);
+    }
+    return views;
+  }
   #drag: SheetDrag | null = null;
   #bodySwipe: BodySwipe | null = null;
 
@@ -423,12 +507,6 @@ export class MaticMapShellV4 extends LitElement {
     return false;
   }
 
-  readonly #outsidePointer = (event: PointerEvent): void => {
-    if (!this._overflowOpen) return;
-    const overflow = this.renderRoot.querySelector(".overflow-wrap");
-    if (!overflow || !event.composedPath().includes(overflow)) this._overflowOpen = false;
-  };
-
   override connectedCallback(): void {
     super.connectedCallback();
     this.#resizeObserver = new ResizeObserver(([entry]) => {
@@ -437,7 +515,6 @@ export class MaticMapShellV4 extends LitElement {
       if (next !== this._measuredNarrow) this._measuredNarrow = next;
     });
     this.#resizeObserver.observe(this);
-    window.addEventListener("pointerdown", this.#outsidePointer, true);
     document.addEventListener("fullscreenchange", this.#fullscreenChange);
     // Reads the box height, which a translateY drag does not change, so a
     // drag never relayouts the canvas. Only the committed detent does.
@@ -491,7 +568,6 @@ export class MaticMapShellV4 extends LitElement {
     this.#unwatchTheme?.();
     this.#unwatchTheme = null;
     this.#observedSheet = null;
-    window.removeEventListener("pointerdown", this.#outsidePointer, true);
     document.removeEventListener("fullscreenchange", this.#fullscreenChange);
     super.disconnectedCallback();
   }
@@ -609,9 +685,6 @@ export class MaticMapShellV4 extends LitElement {
   }
 
   protected override updated(changed: PropertyValues<this>): void {
-    // Protected reactive fields are not in `keyof this`, so the map is read
-    // through the untyped view for those.
-    const local = changed as PropertyValues;
     const instant = this.renderRoot.querySelector<HTMLElement>(".mobile-sheet.instant");
     if (instant) {
       // Resolve the new height while transitions are off, so turning them
@@ -635,23 +708,9 @@ export class MaticMapShellV4 extends LitElement {
     for (const scroller of this.renderRoot.querySelectorAll(SCROLLERS)) {
       for (const element of [scroller, ...scroller.children]) this.#scrollerResizeObserver?.observe(element);
     }
-    if (local.has("_overflowOpen") && this._overflowOpen) {
-      void this.updateComplete.then(() => {
-        this.renderRoot.querySelector<HTMLElement>("#map-options select, #map-options button")?.focus();
-      });
-    }
-    if (local.has("_helpOpen")) {
-      if (this._helpOpen) {
-        void this.updateComplete.then(() => {
-          this.renderRoot.querySelector<HTMLElement>(".help-dialog [data-dialog-initial-focus]")?.focus();
-        });
-      } else if (local.get("_helpOpen")) {
-        const launcher = this.#helpLauncher;
-        this.#helpLauncher = null;
-        void this.updateComplete.then(() => {
-          requestAnimationFrame(() => launcher?.focus({ preventScroll: true }));
-        });
-      }
+    if (this.#optionsPending && this.#options.status !== "loading") {
+      this.#optionsPending = false;
+      this.#options.value?.menu.toggle();
     }
     if (changed.has("state")) {
       this.#resumeWorkflow();
@@ -756,6 +815,7 @@ export class MaticMapShellV4 extends LitElement {
         // the views have rendered it (plan.md §5); else, at once, the heading,
         // so a key pressed straight away still reaches the shell.
         void this.updateComplete.then(() => {
+          if (state.workflow === "none") return this.#focusHomeLauncher();
           if (previous.workflow !== "plan") return this.#focusPanel();
           requestAnimationFrame(() => {
             if (!this.#views.value?.focusPlanTarget(previous, state, this.renderRoot, isVisible)) this.#focusPanel();
@@ -831,7 +891,11 @@ export class MaticMapShellV4 extends LitElement {
     this.#dispatchAction(action.id);
   }
 
+  // Opening a workflow any other way than from a home launcher clears the
+  // launcher, so Back lands on the heading (home-rooms.md R18). Back does
+  // not come through here.
   #workflow(workflow: Workflow, launcher?: EventTarget | null): void {
+    this.#homeLauncher = null;
     this.#leave({ type: "open-workflow", workflow }, launcher);
   }
 
@@ -1133,25 +1197,30 @@ export class MaticMapShellV4 extends LitElement {
     this.#intent({ type: this.state.fullMap ? "exit-full-map" : "enter-full-map" });
   }
 
-  #closeOverflow(restoreFocus: boolean): void {
-    this._overflowOpen = false;
-    if (restoreFocus) {
-      void this.updateComplete.then(() => {
-        this.renderRoot.querySelector<HTMLElement>(".overflow")?.focus();
-      });
-    }
-  }
-
-  #overflowAction(id: "support" | "fullscreen"): void {
-    this.#closeOverflow(id === "fullscreen");
-    if (id === "support") {
-      this.#workflow("support");
+  // A failed menu load gets the chunk recovery every other chunk has.
+  readonly #toggleOptions = (event: Event): void => {
+    const options = this.#options.value;
+    if (options) {
+      options.menu.toggle();
       return;
     }
+    if (this.#options.status === "failed") {
+      this.#retry(event);
+      return;
+    }
+    this.#optionsPending = true;
+    this.#options.request();
+  };
+
+  readonly #openDiagnostics = (): void => {
+    this.#workflow("support");
+  };
+
+  readonly #toggleFullscreen = (): void => {
     const app = this.renderRoot.querySelector<HTMLElement>(".app");
     if (this.#fullscreenElement()) void document.exitFullscreen();
     else void app?.requestFullscreen();
-  }
+  };
 
   #openBrush(): void {
     this.#intent({
@@ -1160,12 +1229,24 @@ export class MaticMapShellV4 extends LitElement {
     });
   }
 
-  #openHelp(event: Event): void {
-    this.#helpLauncher = event.currentTarget as HTMLElement;
-    this._helpOpen = true;
-  }
-
   // Only the views send intents through here (dialog-copy.ts dialogLauncher).
+  // A map tap in Rooms (R7) is announced once the host has handled the
+  // intent and handed back the state (a task later, after its render): a
+  // refused one repeats the reason on screen (the state is the same), an
+  // accepted one names the change. The list's own controls speak for
+  // themselves. This relies on the host dispatching the intent to its store
+  // synchronously in its listener and setting `state` in its own render (a
+  // microtask), so a macrotask always sees the handed-back state.
+  readonly #mapIntent = (event: Event): void => {
+    const intent = (event as CustomEvent<WorkspaceIntent>).detail;
+    const before = this.state;
+    if (before.workflow !== "rooms" || intent?.type !== "toggle-room") return;
+    setTimeout(() => {
+      const text = this.#views.value?.roomTapAnnouncement(this.#tr, before, this.state, intent.roomId);
+      if (text) this.#announce("_polite", text);
+    });
+  };
+
   #captureDialogLauncher(event: Event): void {
     const launcher = this.#views.value?.dialogLauncher(event, this.state, (intent) => this.#intent(intent));
     if (launcher) this.#dialogLauncher = launcher;
@@ -1197,12 +1278,8 @@ export class MaticMapShellV4 extends LitElement {
     if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
     if (event.key !== "Escape") return;
     event.preventDefault();
-    if (this._overflowOpen) {
-      this.#closeOverflow(true);
-      return;
-    }
-    if (this._helpOpen) {
-      this._helpOpen = false;
+    if (this.#options.value?.menu.open) {
+      this.#options.value.menu.close(true);
       return;
     }
     if (this.state.dialog === "discardDraft") {
@@ -1251,6 +1328,8 @@ export class MaticMapShellV4 extends LitElement {
           ?? this.#t(action.reasonKey, action.reason, action.reasonPlaceholders)
         : action.reason)
       : null;
+    // A link primary opens its page itself (home-rooms.md D2).
+    if (action.kind === "link") return html`<a class=${classes} href=${action.href ?? "#"}>${label}</a>`;
     return html`
       <button
         class=${`${classes} ${action.kind === "danger" ? "ms-btn--danger" : ""}`}
@@ -1268,22 +1347,14 @@ export class MaticMapShellV4 extends LitElement {
 
   readonly #tr = (key: string, fallback: string, placeholders?: NoticePlaceholders): string => this.#t(key, fallback, placeholders);
 
-  #rooms(state: WorkspaceState): string {
-    const rooms = state.resources.plans.value?.rooms
-      ?? state.resources.areas.value?.rooms
-      ?? [];
-    return formatList(state.locale, state.selection.roomIds.map((roomId) =>
-      rooms.find((room) => room.roomId === roomId)?.name ?? roomId));
-  }
-
   #actionBar(state: WorkspaceState, primary: PrimaryAction | NoButtonAction | null, secondary: PrimaryAction | null) {
-    const rooms = this.#rooms(state);
+    // The rooms in run order, then the dock (home-rooms.md §5 Clean).
     const summary = primary?.enabled && state.workflow === "rooms" && primary.id === "clean-rooms"
-      ? (state.planDraft.returnToBase && rooms
-        ? this.#t("v4_rooms_summary_dock", "{rooms} · returns to the dock", { rooms })
-        : rooms)
+      ? this.#views.value?.roomsSummary(this.#tr, state) ?? ""
       : "";
     const editing = state.workflow === "plan" && state.planView === "edit";
+    // No bar when it would be empty: idle home has none (home-rooms.md §3).
+    if (!summary && !editing && !(primary && "label" in primary) && !secondary) return nothing;
     // Edit pairs Cancel with the primary.
     return html`
       <div class=${editing ? "action-bar paired" : "action-bar"}>
@@ -1295,28 +1366,37 @@ export class MaticMapShellV4 extends LitElement {
     `;
   }
 
-  #hostState(title: string, body: string, extra: unknown = nothing) {
-    return html`
-      <div class="host-state">
-        <h3>${title}</h3>
-        <p>${body}</p>
-        ${extra}
-      </div>
-    `;
-  }
-
-  // An entry row's tap; an enabled row also records it for a resumed Try again.
-  #launch(workflow: Workflow, disabled = false): () => void {
+  // An entry row's tap; an enabled row also records it for a resumed Try again,
+  // and the press records which launcher takes focus back.
+  #launch(workflow: Workflow, disabled = false, launcher: string = workflow): () => void {
     if (!disabled) this.#launchers.add(workflow);
-    return () => { if (!disabled) this.#workflow(workflow); };
+    return () => {
+      if (disabled) return;
+      this.#workflow(workflow);
+      this.#homeLauncher = launcher;
+    };
   }
 
-  #shelfRow(label: string, glyph: string, workflow: Workflow, detail?: string, disabled = false) {
+  // Back on home: the launcher that opened the workflow, if it is still shown,
+  // else the heading (shell.md §5 Focus).
+  #focusHomeLauncher(): void {
+    const key = this.#homeLauncher;
+    this.#homeLauncher = null;
+    const target = key ? this.renderRoot.querySelector<HTMLElement>(`[data-launcher="${key}"]`) : null;
+    if (isVisible(target)) target.focus({ preventScroll: true });
+    else this.#focusPanel();
+  }
+
+  // `described` links a held control to the home reason, which only the held
+  // home states render (R12), so a row disabled on its own never points at it.
+  #shelfRow(label: string, glyph: string, workflow: Workflow, detail?: string, disabled = false, described = false, classes = "ms-row") {
     return html`
       <button
-        class="ms-row"
+        class=${classes}
         type="button"
+        data-launcher=${workflow}
         aria-disabled=${disabled ? "true" : nothing}
+        aria-describedby=${described ? "home-reason" : nothing}
         @click=${this.#launch(workflow, disabled)}
       >
         <span class="ms-row__lead">${icon(glyph)}</span>
@@ -1360,171 +1440,150 @@ export class MaticMapShellV4 extends LitElement {
     `;
   }
 
-  #entry(state: WorkspaceState, narrow: boolean, status: StatusPresentation) {
+  // Home (home-rooms.md §3): the heading and description come from homeCopy;
+  // this is the body under them. Cards are demoted, never hidden, while the
+  // robot is busy or the map is not ready, and they share the one reason the
+  // description states (MS-HOME-03). Maps keeps history and diagnostics one
+  // tap away; a map or robot problem lists diagnostics first.
+  #entry(state: WorkspaceState) {
     const t = (key: string, fallback: string, placeholders?: Record<string, string | number>): string =>
       this.#t(key, fallback, placeholders);
     this.#launchers = new Set(["support"]);
+    const kind = homeState(state);
     // Built where shown, so only a shown row counts as a launcher.
-    const historyRow = () => this.#shelfRow(
-      t("v4_map_history", "Map history"),
-      iconHistory,
-      "history",
-      t("v4_map_history_detail", "Saved maps show one floor each. They can't be edited and never show where the robot is now."),
-    );
-    const diagnosticsRow = () => this.#shelfRow(
-      t("v4_map_diagnostics", "Map diagnostics"),
-      iconDiagnostics,
-      "support",
-      t("v4_map_support_detail", "Details to share with support"),
-    );
-    const { host } = state;
-    if (!host.connected) return this.#hostState(t("v4_reconnecting_title", "Reconnecting to Home Assistant"), t("v4_reconnecting_body", "Cleaning controls come back when Home Assistant reconnects."));
-    if (!host.administrator) return this.#hostState(t("v4_admin_title", "Administrator access required"), t("v4_admin_body", "Ask a Home Assistant administrator to open this map."));
-    if (host.robotCount === 0) {
-      return this.#hostState(
-        t("v4_no_robot_title", "No robot set up"),
-        t("v4_no_robot_body", "Add the Matic (Unofficial) integration to see a map here."),
-        html`<a class="ms-btn ms-btn--secondary" href="/config/integrations/integration/matic_robot">${t("v4_open_integration", "Open integration")}</a>`,
-      );
-    }
-    if (isSelectedRobotUnavailable(state)) {
-      return this.#hostState(t("v4_selected_robot_unavailable", "Selected robot unavailable"), t("v4_choose_another_robot", "Choose another robot to open its map."));
-    }
-    if (!host.robotConnected) {
+    const maps = (diagnosticsFirst: boolean) => {
+      const history = this.#shelfRow(t("v4_map_history", "Map history"), iconHistory, "history", t("v4_history_quick_detail", "Browse earlier floor maps."));
+      const diagnostics = this.#shelfRow(t("v4_map_diagnostics", "Map diagnostics"), iconDiagnostics, "support", t("v4_diagnostics_quick_detail", "Check the map and copy details for support."));
       return html`
-        ${this.#hostState(t("v4_robot_offline_title", "Robot offline"), t("v4_robot_offline_body", "Showing the last known map. Cleaning comes back when the robot reconnects."))}
-        <h3 class="shelf-heading">${t("v4_more", "Map tools")}</h3>
-        <div class="shelf">${historyRow()}${diagnosticsRow()}</div>
+        <h3 class="ms-section-heading">${t("v4_maps_heading", "Maps")}</h3>
+        <div class="shelf maps">${diagnosticsFirst ? [diagnostics, history] : [history, diagnostics]}</div>
       `;
+    };
+    switch (kind) {
+      case "reconnecting":
+      case "administrator":
+      case "robot-unavailable":
+      case "setup":
+        return nothing;
+      case "offline":
+      case "read-only":
+        return maps(false);
+      case "problem":
+        return html`
+          <div class="home-actions">
+            <button class="ms-btn ms-btn--secondary" type="button" data-launcher="support-open" @click=${this.#launch("support", false, "support-open")}>${t("v4_open_diagnostics", "Open map diagnostics")}</button>
+          </div>
+          ${maps(true)}
+        `;
+      default:
+        break;
     }
-    if (isReadOnlyWorkspace(state)) {
-      return html`
-        <h3 class="shelf-heading">${t("v4_more", "Map tools")}</h3>
-        <div class="shelf">
-          ${historyRow()}
-          ${diagnosticsRow()}
-        </div>
-      `;
-    }
-    const locating = state.coherence === "verifying" || state.coherence === "booting";
-    const plansResource = state.resources.plans;
-    const plans = plansResource.value;
+    const held = kind !== "ready";
+    const plans = readyPlans(state);
     const noRooms = plans !== null && plans.rooms.length === 0;
-    const planCount = plans?.plans.length ?? 0;
-    const plansLoading = plansResource.status === "loading";
-    const plansUnavailable = plansResource.status === "error";
-    const roomsDisabled = locating || noRooms;
-    const roomsReason = locating
-      ? t("v4_reason_locating", "Waiting for the robot to confirm which floor it is on.")
-      : noRooms ? t("v4_no_rooms_reason", "Can't clean rooms until you name them in the Matic app.") : null;
-    const planReason = locating
-      ? t("v4_reason_locating", "Waiting for the robot to confirm which floor it is on.")
-      : null;
-    const customAreaReason = locating
-      ? t("v4_reason_locating", "Waiting for the robot to confirm which floor it is on.")
-      : t("v4_areas_quick_detail", "Draw or choose a custom area");
+    const roomsDisabled = held || noRooms;
+    // A card disabled on its own (no named rooms) carries its reason in its
+    // detail; a held one is described by the home reason.
+    const card = (launcher: Workflow, featured: boolean, glyph: string, disabled: boolean, title: string, detail: string) =>
+      this.#shelfRow(title, glyph, launcher, detail, disabled, held, featured ? "ms-row ms-row--card ms-row--featured" : "ms-row ms-row--card");
     return html`
-      ${state.activity === "problem"
-        ? this.#hostState(t("v4_attention_title", "The robot needs attention"), t("v4_attention_body", "The robot reported a problem. Check it in the Matic app, then start a new clean."))
-        : status.recheck ? html`
-          <div class="host-state">
-            <p>${t("v4_map_limited_body", "Home Assistant can show this map but can't confirm it well enough to start cleaning.")}</p>
-            <button
-              class="ms-btn ms-btn--secondary"
-              type="button"
-              aria-disabled=${state.rechecking ? "true" : nothing}
-              @click=${() => { if (!this.state.rechecking) this.#dispatchAction("recheck-status"); }}
-            >${t("v4_retry", "Try again")}</button>
-          </div>
-        ` : html`
-          <div class="quick-actions" role="group" aria-label=${t("v4_cleaning_choices", "Cleaning choices")}>
-            <button
-              class="ms-row ms-row--card ms-row--featured"
-              type="button"
-              aria-disabled=${roomsDisabled ? "true" : nothing}
-              @click=${this.#launch("rooms", roomsDisabled)}
-            >
-              <span class="ms-row__lead">${icon(iconRobot)}</span>
-              <span class="ms-row__body">
-                <strong>${t("v4_clean_rooms", "Clean rooms")}</strong>
-                <small>${roomsReason ?? t("v4_clean_rooms_hint", "Choose rooms for this run")}</small>
-              </span>
-              <span class="ms-row__trail">${icon(iconChevronRight)}</span>
-            </button>
-            <button
-              class="ms-row ms-row--card"
-              type="button"
-              aria-disabled=${locating ? "true" : nothing}
-              @click=${this.#launch("plans", locating)}
-            >
-              <span class="ms-row__lead">${icon(iconPlan)}</span>
-              <span class="ms-row__body">
-                <strong>${plansLoading
-                  ? t("v4_plans_loading", "Checking saved plans")
-                  : plansUnavailable
-                    ? t("v4_plans_unavailable", "Plans unavailable")
-                    : planCount
-                      ? t("v4_run_a_plan", "Run a plan")
-                      : t("v4_create_plan", "Create a plan")}</strong>
-                <small>${planReason ?? (plansLoading
-                  ? t("v4_plans_loading_hint", "Reading plans for this floor")
-                  : plansUnavailable
-                    ? t("v4_plans_unavailable_hint", "Try again to load your plans.")
-                    : planCount
-                      ? planCount === 1 ? t("v4_saved_routine", "1 saved plan") : t("v4_saved_routines", "{count} saved plans", { count: planCount })
-                      : t("v4_no_plans_hint", "Save a plan to repeat a set of rooms."))}</small>
-              </span>
-              <span class="ms-row__trail">${icon(iconChevronRight)}</span>
-            </button>
-          </div>
-        `}
-      <h3 class="shelf-heading">${t("v4_more", "Map tools")}</h3>
-      <div class="shelf">
-        ${this.#shelfRow(
-          t("v4_custom_areas", "Clean custom area"),
-          iconNewArea,
-          "draw",
-          customAreaReason,
-          locating,
-        )}
-        ${historyRow()}
-
-      </div>
-      ${narrow ? html`
-        <h3 class="shelf-heading" id="map-display-heading">${t("v4_map_display", "Map display")}</h3>
-        <div class="map-display">
-          <div class="ms-segment" role="group" aria-labelledby="map-display-heading">
-            <button
-              class="ms-btn"
-              type="button"
-              aria-pressed=${String(state.appearance === "photo")}
-              @click=${() => this.#intent({ type: "set-appearance", appearance: "photo" })}
-            >${t("map_style_photo", "Photo")}</button>
-            <button
-              class="ms-btn"
-              type="button"
-              aria-pressed=${String(state.appearance === "rooms")}
-              @click=${() => this.#intent({ type: "set-appearance", appearance: "rooms" })}
-            >${t("map_style_room_colours", "Room colors")}</button>
-          </div>
-          <label class="ms-checkbox">
-            <input type="checkbox" .checked=${state.labelsVisible} @change=${() => this.#intent({ type: "toggle-labels" })}>
-            ${t("v4_room_names", "Room names")}
-          </label>
+      ${kind === "map-unavailable" || kind === "map-limited" ? html`
+        <div class="home-actions">
           <button
-            class="ms-btn ms-btn--secondary help-launcher"
+            class="ms-btn ms-btn--secondary"
             type="button"
-            aria-haspopup="dialog"
-            aria-expanded=${String(this._helpOpen)}
-            @click=${this.#openHelp}
-          >${t("v4_how_to_move", "How to move the map")}</button>
+            aria-disabled=${state.rechecking ? "true" : nothing}
+            @click=${() => { if (!this.state.rechecking) this.#dispatchAction("recheck-status"); }}
+          >${t("v4_retry", "Try again")}</button>
         </div>
       ` : nothing}
+      <div class="quick-actions" role="group" aria-label=${t("v4_cleaning_choices", "Cleaning choices")}>
+        ${card("rooms", true, iconRobot, roomsDisabled,
+          t("v4_clean_rooms", "Clean rooms"),
+          !held && noRooms ? t("v4_no_rooms_reason", "Can't clean rooms until you name them in the Matic app.") : t("v4_rooms_quick_detail", "Pick rooms and clean them now."))}
+        ${this.#planCard(state, held)}
+        ${this.#plansRow(state, held)}
+        ${card("draw", false, iconNewArea, held,
+          t("v4_custom_areas", "Clean custom area"),
+          t("v4_areas_quick_detail", "Draw or choose a custom area"))}
+      </div>
+      ${maps(kind === "map-unavailable")}
     `;
   }
 
-  #workflowBody(state: WorkspaceState, narrow: boolean, status: StatusPresentation) {
-    if (state.workflow === "none") return this.#entry(state, narrow, status);
+  // The plan card opens the default plan's Run view when that plan is on
+  // this floor (home-rooms.md D1), with the picker's lines; otherwise it
+  // opens the picker. The third line is clamped, but the name has all of it.
+  #planCard(state: WorkspaceState, held: boolean) {
+    const t = this.#tr;
+    const plansResource = state.resources.plans;
+    const plans = readyPlans(state);
+    const plan = plans?.plans.find((candidate) => candidate.id === plans.selectedPlan);
+    const planCount = plans?.plans.length ?? 0;
+    const loading = plansResource.status === "loading";
+    const unavailable = plansResource.status === "error";
+    const third = plan ? planRowLine3(t, state.locale, plan) : null;
+    // Only the name is isolated (copy-style <bdi>): the label is formatted
+    // around a marker and split there, so a name that repeats the label's
+    // own words still lands in the <bdi>.
+    const [before = "", after = ""] = plan ? t("v4_run_named_plan", "Run {plan}", { plan: "\u0000" }).split("\u0000") : [];
+    const open = () => {
+      if (held) return;
+      if (plan) this.#intent({ type: "select-plan", planId: plan.id, origin: "home" });
+      else this.#workflow("plans");
+      this.#homeLauncher = "plan";
+    };
+    if (!held) this.#launchers.add("plans");
+    return html`
+      <button
+        class="ms-row ms-row--card"
+        type="button"
+        data-launcher="plan"
+        aria-disabled=${held ? "true" : nothing}
+        aria-describedby=${held ? "home-reason" : nothing}
+        @click=${open}
+      >
+        <span class="ms-row__lead">${icon(iconPlan)}</span>
+        <span class="ms-row__body">
+          ${plan ? html`
+            <strong class="card-title"><span class="card-name">${before}<bdi>${plan.name}</bdi>${after}</span>${plan.enabled ? nothing : html`<span class="ms-chip">${t("v4_paused", "Paused")}</span>`}</strong>
+            <small>${planRowLine2(t, state.locale, plan)}</small>
+            ${third === null ? nothing : "blocked" in third
+              ? html`<span class="card-lines"><span class="line" data-tone="warning">${icon(iconNoticeWarning)}${third.blocked}</span></span>`
+              : html`<span class="card-lines">${third.due.map((line) => html`<span class="line">${icon(iconDue)}${line}</span>`)}</span>`}
+          ` : html`
+            <strong>${loading
+              ? t("v4_plans_loading", "Checking saved plans")
+              : unavailable
+                ? t("v4_plans_unavailable", "Plans unavailable")
+                : planCount
+                  ? t("v4_run_a_plan", "Run a plan")
+                  : t("v4_create_plan", "Create a plan")}</strong>
+            <small>${loading
+              ? t("v4_plans_loading_hint", "Reading plans for this floor")
+              : unavailable
+                ? t("v4_plans_unavailable_hint", "Try again to load your plans.")
+                : planCount
+                  ? planCount === 1 ? t("v4_saved_routine", "1 saved plan") : t("v4_saved_routines", "{count} saved plans", { count: planCount })
+                  : t("v4_no_plans_hint", "Save a plan to repeat a set of rooms.")}</small>
+          `}
+        </span>
+        <span class="ms-row__trail">${icon(iconChevronRight)}</span>
+      </button>
+    `;
+  }
+
+  // While the card opens Run (D1), the picker needs its own way in: a quiet
+  // row under the card (R4 amended by the owner, 2026-10-13). Without a
+  // default plan the card itself opens the picker, so the row is not shown.
+  #plansRow(state: WorkspaceState, held: boolean) {
+    const plans = readyPlans(state);
+    if (!plans?.plans.some((candidate) => candidate.id === plans.selectedPlan)) return nothing;
+    return this.#shelfRow(this.#t("v4_your_plans", "Your plans"), iconPlan, "plans", undefined, held, held);
+  }
+
+  #workflowBody(state: WorkspaceState, narrow: boolean) {
+    if (state.workflow === "none") return this.#entry(state);
     const tools = this.#tools(state.workflow);
     if (tools !== "ready") {
       // A phone's draw sheet rests at peek, with the body below it, so the
@@ -1548,9 +1607,11 @@ export class MaticMapShellV4 extends LitElement {
   // The back chevron, in the heading or, at peek, the grip. Run goes back to
   // the picker, every other workflow to all tasks; Edit has none, since
   // Cancel replaces it (plan.md §3).
+  // Back from Run goes to where the plan was opened from: the picker, or home
+  // for the home plan card (home-rooms.md §5 Cards; plan.md §5 Navigation).
   #back(state: WorkspaceState, grip: boolean) {
-    const plan = state.workflow === "plan";
-    if (state.workflow === "none" || (plan && state.planView === "edit")) return nothing;
+    if (state.workflow === "none" || (state.workflow === "plan" && state.planView === "edit")) return nothing;
+    const plan = state.workflow === "plan" && state.planOrigin !== "home";
     const name = plan ? this.#t("v4_back_to_plans", "Back to plans") : this.#t("v4_back_to_all_tasks", "Back to all tasks");
     return html`
       <button
@@ -1559,7 +1620,7 @@ export class MaticMapShellV4 extends LitElement {
         aria-label=${name}
         title=${grip ? name : nothing}
         data-dialog-launcher="discardDraft"
-        @click=${(event: Event) => this.#workflow(plan ? "plans" : "none", event.currentTarget)}
+        @click=${(event: Event) => this.#leave({ type: "open-workflow", workflow: plan ? "plans" : "none" }, event.currentTarget)}
       >${icon(iconBack)}${grip ? nothing : html`<span class="ms-btn__label">${plan ? this.#t("v4_your_plans", "Your plans") : this.#t("v4_all_tasks", "All tasks")}</span>`}</button>
     `;
   }
@@ -1579,67 +1640,28 @@ export class MaticMapShellV4 extends LitElement {
     `;
   }
 
-  #panel(state: WorkspaceState, narrow: boolean, status: StatusPresentation) {
+  #panel(state: WorkspaceState, narrow: boolean) {
     const { description } = workflowCopy(state, this.localize);
+    // Home's demoted cards are described by this one line (home-rooms.md §4).
     return html`
-      ${description ? html`<p class="panel-description">${description}</p>` : nothing}
-      ${this.#workflowBody(state, narrow, status)}
+      ${description ? html`<p class="panel-description" id=${state.workflow === "none" ? "home-reason" : nothing}>${description}</p>` : nothing}
+      ${this.#workflowBody(state, narrow)}
     `;
   }
 
   #sheetStatus(state: WorkspaceState, status: StatusPresentation): string {
     const workflow = workflowCopy(state, this.localize);
-    let line = workflow.title;
-    if (state.workflow === "rooms" && state.selection.roomIds.length) {
-      line = this.#t("v4_rooms_selected_names", "{count} selected · {rooms}", {
-        count: state.selection.roomIds.length,
-        rooms: this.#rooms(state),
-      });
-    }
+    const line = (state.workflow === "rooms" ? this.#views.value?.roomsGripLine(this.#tr, state) : null) ?? workflow.title;
     // With the body open the h2 already names the workflow, so the grip line
     // carries the robot instead of repeating the title directly above it.
     if (this._sheetDetent !== "peek") return status.detail ? `${status.title} · ${status.detail}` : status.title;
     return status.notable ? `${status.title} · ${line}` : line;
   }
 
-  #helpDialog() {
-    const t = (key: string, fallback: string): string => this.#t(key, fallback);
-    return html`
-      <div class="dialog-backdrop" @click=${(event: Event) => { if (event.target === event.currentTarget) this._helpOpen = false; }}>
-        <section
-          class="dialog help-dialog ms-surface ms-surface--overlay"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="help-title"
-          @keydown=${this.#dialogKeyboard}
-        >
-          <h2 id="help-title">${t("v4_how_to_move", "How to move the map")}</h2>
-          <dl>
-            <dt>${t("v4_touch", "Touch")}</dt>
-            <dd>${t("v4_touch_help", "Drag to explore · pinch to zoom · twist two fingers to rotate")}</dd>
-            <dt>${t("v4_trackpad", "Trackpad")}</dt>
-            <dd>${t("v4_trackpad_help", "Scroll to pan · pinch to zoom · twist to rotate")}</dd>
-            <dt>${t("v4_mouse", "Mouse")}</dt>
-            <dd>${t("v4_mouse_help", "Drag to orbit · Shift, middle, or right drag to pan · wheel to zoom")}</dd>
-            <dt>${t("v4_keyboard", "Keyboard")}</dt>
-            <dd>${t("v4_keyboard_help", "WASD to move · Q/E or arrows to orbit · +/− to zoom · 0 to fit")}</dd>
-          </dl>
-          <div class="dialog-actions">
-            <button
-              class="ms-btn ms-btn--secondary"
-              type="button"
-              data-dialog-initial-focus
-              @click=${() => { this._helpOpen = false; }}
-            >${t("v4_close", "Close")}</button>
-          </div>
-        </section>
-      </div>
-    `;
-  }
-
   protected override render() {
     const state = this.state;
     const narrow = state.narrowHint || this._measuredNarrow;
+    const options = this.#options.value;
     const status = statusCopy(state, this.localize);
     const selectedRobotUnavailable = isSelectedRobotUnavailable(state);
     const primary = selectPrimaryAction({ ...state, narrowHint: narrow });
@@ -1698,7 +1720,7 @@ export class MaticMapShellV4 extends LitElement {
       <div class=${`root ${narrow ? "narrow" : "wide"}`} @keydown=${this.#keyboard}>
         <button class="skip-link ms-btn ms-btn--primary" type="button" @click=${this.#skipToMap}>${this.#t("v4_skip_to_map", "Skip to the map")}</button>
         <button class="skip-link ms-btn ms-btn--primary" type="button" @click=${this.#skipToWorkspace}>${this.#t("v4_skip_to_workspace", "Skip to the panel")}</button>
-        <div class="app" ?inert=${Boolean(dialog) || this._helpOpen}>
+        <div class="app" ?inert=${Boolean(dialog)}>
           <header class="app-bar">
             ${!state.precisionOpen ? html`
               <button
@@ -1752,36 +1774,25 @@ export class MaticMapShellV4 extends LitElement {
                 @click=${this.#toggleWorkspace}
               >${icon(iconWorkspace)}</button>
             ` : nothing}
-            <div class="overflow-wrap">
+            <div class="overflow-wrap" @keydown=${options?.menu.keydown} @focusout=${options?.menu.focusout}>
               <button
                 class="overflow ms-btn ms-btn--icon"
                 type="button"
                 aria-label=${this.#t("v4_map_options", "Map options")}
-                aria-expanded=${String(this._overflowOpen)}
+                aria-haspopup="menu"
+                aria-expanded=${String(options?.menu.open ?? false)}
                 aria-controls="map-options"
-                @click=${() => { this._overflowOpen = !this._overflowOpen; }}
+                @click=${this.#toggleOptions}
               >${icon(iconOverflow)}</button>
-              ${this._overflowOpen ? html`
-                <div id="map-options" class="overflow-menu ms-surface ms-surface--overlay">
-                  <label class="overflow-field ms-field">${this.#t("map_quality_label", "Map detail")}
-                    <select
-                      aria-label=${this.#t("map_quality_label", "Map detail")}
-                      .value=${state.quality}
-                      @change=${(event: Event) => this.#intent({
-                        type: "set-quality",
-                        quality: (event.currentTarget as HTMLSelectElement).value as WorkspaceState["quality"],
-                      })}
-                    >
-                      <option value="auto">${this.#t("map_quality_auto", "Auto detail")}</option>
-                      <option value="efficient">${this.#t("map_quality_efficient", "Efficient")}</option>
-                      <option value="balanced">${this.#t("map_quality_balanced", "Balanced")}</option>
-                      <option value="maximum">${this.#t("map_quality_maximum", "Maximum")}</option>
-                    </select>
-                  </label>
-                  <button class="ms-row ms-row--menu" type="button" @click=${() => this.#overflowAction("support")}>${this.#t("v4_map_diagnostics", "Map diagnostics")}</button>
-                  <button class="ms-row ms-row--menu" type="button" @click=${() => this.#overflowAction("fullscreen")}>${this._browserFullscreen ? this.#t("v4_leave_full_screen", "Leave full screen") : this.#t("v4_full_screen", "Full screen")}</button>
-                </div>
-              ` : nothing}
+              ${options?.menu.open ? options.render({
+                state,
+                narrow,
+                browserFullscreen: this._browserFullscreen,
+                t: (key, fallback) => this.#t(key, fallback),
+                intent: (intent) => this.#intent(intent),
+                diagnostics: this.#openDiagnostics,
+                fullscreen: this.#toggleFullscreen,
+              }) : nothing}
             </div>
           </header>
 
@@ -1790,6 +1801,7 @@ export class MaticMapShellV4 extends LitElement {
               <${mapCanvasTag}
                 class="map-canvas"
                 style=${sheetOffset}
+                @matic-workspace-intent=${this.#mapIntent}
                 .state=${state}
                 .localize=${this.localize}
                 .dates=${this.dates}
@@ -1878,7 +1890,7 @@ export class MaticMapShellV4 extends LitElement {
                   @pointercancel=${this.#bodyUp}
                 >
                   ${this.#panelTop(state)}
-                  <div class="sheet-body" role="region" aria-labelledby="workspace-title">${this.#panel(state, narrow, status)}</div>
+                  <div class="sheet-body" role="region" aria-labelledby="workspace-title">${this.#panel(state, narrow)}</div>
                 </div>
                 ${this.#actionBar(state, footerPrimary, footerSecondary)}
               ` : html`
@@ -1891,7 +1903,7 @@ export class MaticMapShellV4 extends LitElement {
                 </div>
                 <section class="workflow">
                   ${this.#panelTop(state)}
-                  <div class="workflow-body" role="region" aria-labelledby="workspace-title">${this.#panel(state, narrow, status)}</div>
+                  <div class="workflow-body" role="region" aria-labelledby="workspace-title">${this.#panel(state, narrow)}</div>
                   ${this.#actionBar(state, footerPrimary, footerSecondary)}
                 </section>
               `}
@@ -1920,7 +1932,7 @@ export class MaticMapShellV4 extends LitElement {
           data-tone=${toast?.tone ?? nothing}
           style=${sheetOffset}
           ?hidden=${!toast}
-          ?inert=${Boolean(dialog) || this._helpOpen}
+          ?inert=${Boolean(dialog)}
           @pointerenter=${this.#holdToast}
           @focusin=${this.#holdToast}
           @pointerleave=${this.#releaseToast}
@@ -1929,8 +1941,6 @@ export class MaticMapShellV4 extends LitElement {
 
         <div class="sr-only" aria-live="polite" aria-atomic="true">${this._polite}</div>
         <div class="sr-only" role="alert" aria-atomic="true">${this._alert}</div>
-
-        ${this._helpOpen ? this.#helpDialog() : nothing}
 
         ${dialog ? html`
           <div class="dialog-backdrop">

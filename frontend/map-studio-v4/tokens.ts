@@ -45,7 +45,6 @@ export const tokens = css`
 --ms-space-3: 0.75rem;
 --ms-space-4: 1rem;
 --ms-space-5: 1.5rem;
---ms-space-6: 2rem;
 --ms-radius-xs: 0.25rem;
 --ms-radius-sm: 0.5rem;
 --ms-radius-md: 0.75rem;
@@ -59,7 +58,6 @@ export const tokens = css`
 --ms-w-regular: 400;
 --ms-w-medium: 500;
 --ms-w-bold: 700;
---ms-t-2xs: 0.6875rem;
 --ms-t-xs: 0.75rem;
 --ms-t-sm: 0.8125rem;
 --ms-t-md: 0.875rem;
@@ -74,7 +72,6 @@ export const tokens = css`
 --ms-shadow-3: 0 12px 32px rgb(0 0 0 / 22%);
 --ms-fast: 120ms;
 --ms-base: 180ms;
---ms-slow: 260ms;
 --ms-ease: cubic-bezier(0.2, 0, 0, 1);
 }
 @media (prefers-color-scheme: dark) {
@@ -100,7 +97,6 @@ export const tokens = css`
 :host {
 --ms-fast: 0s;
 --ms-base: 0s;
---ms-slow: 0s;
 --ms-ease: linear;
 }
 }
@@ -123,8 +119,6 @@ export const tokens = css`
 --ms-warning: CanvasText;
 --ms-success: CanvasText;
 --ms-shadow-1: none;
---ms-shadow-2: none;
---ms-shadow-3: none;
 }
 }
 `;

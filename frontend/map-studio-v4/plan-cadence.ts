@@ -30,12 +30,11 @@ export const coverageNeedsVacuum = (t: Translate): string =>
   t("v4_cadence_coverage_requires_vacuum", "The vacuum rotation needs a cleaning mode that includes vacuuming, so change the mode or turn the rotation off.");
 
 /** A room schedule's state in one or two sentences, most urgent first. */
-export const cadenceSummary = (
-  t: Translate,
-  policy: RoomCadencePolicy | undefined,
-  progress: PlanRoom["cadenceProgress"] | undefined,
-  reasons: readonly CadenceReason[] = progress?.reasons || [],
-): string => {
+/**
+ * A Rooms row's third line (home-rooms.md R20): the schedule problem that
+ * keeps the row's schedule from applying, or null for due work alone.
+ */
+export const cadenceProblem = (t: Translate, reasons: readonly CadenceReason[]): string | null => {
   if (reasons.includes("coverage_requires_vacuum")) return coverageNeedsVacuum(t);
   if (reasons.includes("identity_changed") || reasons.includes("room_not_on_current_map")) {
     return t("v4_cadence_identity_blocked", "This room's schedule was set up on a different map, so it can't run. Review the room's schedule before cleaning.");
@@ -56,31 +55,7 @@ export const cadenceSummary = (
   if (reasons.includes("invalid_cadence_policy")) {
     return t("v4_cadence_policy_invalid", "The room schedule needs review before it can be applied.");
   }
-  if (!policy || (!policy.mopEveryN && !policy.coverageEveryN)) {
-    return t("v4_cadence_not_enabled", "No recurring room schedule is enabled.");
-  }
-  const parts: string[] = [];
-  const mopDue = progress?.mopDue || progress?.reasons.includes("mop_due");
-  const coverageDue = progress?.coverageDue || progress?.reasons.includes("coverage_due");
-  if (policy.mopEveryN) {
-    parts.push(mopDue
-      ? t("v4_cadence_mop_due", "Vacuum and mop is due on this clean.")
-      : t("v4_cadence_mop_progress", "Mop every {interval} cleans; {completed} counted since the last mop.", {
-        interval: policy.mopEveryN,
-        completed: progress?.mopProgress ?? 0,
-      }));
-  }
-  if (policy.coverageEveryN) {
-    parts.push(coverageDue
-      ? t("v4_cadence_coverage_due", "{coverage} vacuum rotation is due on this clean.", {
-        coverage: coverageLabel(t, policy.periodicCoverageSetting || "standard"),
-      })
-      : t("v4_cadence_coverage_progress", "Vacuum rotation every {interval} cleans; {completed} counted so far.", {
-        interval: policy.coverageEveryN,
-        completed: progress?.coverageProgress ?? 0,
-      }));
-  }
-  return parts.join(" ");
+  return null;
 };
 
 // ---- The schedule model (room-schedule.md §3-§6) ----------------------------
@@ -705,4 +680,66 @@ export const scheduleBlock = (context: ScheduleContext, room: PlanRoom, index: n
       <p class="schedule-note">${t("v4_cadence_description", "Only cleans the robot confirms count toward these schedules, and due work stays due until a clean is confirmed.")}</p>
     </details>
   </section>`;
+};
+
+/**
+ * A room's cleaning mode and vacuum coverage as one whole string
+ * (home-rooms.md §6 `v4_room_setting_*`); mop alone has no coverage.
+ */
+export const settingLabel = (t: Translate, room: Pick<PlanRoom, "cleaningMode" | "coverageSetting">): string => {
+  if (room.cleaningMode === "mop") return t("v4_room_setting_mop", "Mop");
+  if (room.cleaningMode === "vacuum") {
+    return room.coverageSetting === "quick"
+      ? t("v4_room_setting_vacuum_quick", "Vacuum · Quick")
+      : room.coverageSetting === "standard"
+        ? t("v4_room_setting_vacuum_standard", "Vacuum · Optimal")
+        : t("v4_room_setting_vacuum_heavy_duty", "Vacuum · Heavy duty");
+  }
+  return room.coverageSetting === "quick"
+    ? t("v4_room_setting_vacuum_and_mop_quick", "Vacuum + mop · Quick")
+    : room.coverageSetting === "standard"
+      ? t("v4_room_setting_vacuum_and_mop_standard", "Vacuum + mop · Optimal")
+      : t("v4_room_setting_vacuum_and_mop_heavy_duty", "Vacuum + mop · Heavy duty");
+};
+
+type Schedule = (t: Translate, mop: string, cov: string) => string;
+
+/** Edit row line 3 (plan.md §6 `v4_room_schedules_*`), by kind and which counts are one. */
+const SCHEDULES: Readonly<Record<string, Schedule>> = {
+  mop: (t, mop) => t("v4_room_schedules_mop", "Mop every {mop} cleans", { mop }),
+  mop_one: (t) => t("v4_room_schedules_mop_one", "Mop every clean"),
+  quick: (t, _, cov) => t("v4_room_schedules_quick", "Quick vacuum every {cov} cleans", { cov }),
+  quick_one: (t) => t("v4_room_schedules_quick_one", "Quick vacuum every clean"),
+  optimal: (t, _, cov) => t("v4_room_schedules_optimal", "Optimal vacuum every {cov} cleans", { cov }),
+  optimal_one: (t) => t("v4_room_schedules_optimal_one", "Optimal vacuum every clean"),
+  heavy: (t, _, cov) => t("v4_room_schedules_heavy", "Heavy duty vacuum every {cov} cleans", { cov }),
+  heavy_one: (t) => t("v4_room_schedules_heavy_one", "Heavy duty vacuum every clean"),
+  mop_quick: (t, mop, cov) => t("v4_room_schedules_mop_quick", "Mop every {mop} cleans · Quick vacuum every {cov} cleans", { mop, cov }),
+  mop_quick_one_mop: (t, _, cov) => t("v4_room_schedules_mop_quick_one_mop", "Mop every clean · Quick vacuum every {cov} cleans", { cov }),
+  mop_quick_one_cov: (t, mop) => t("v4_room_schedules_mop_quick_one_cov", "Mop every {mop} cleans · Quick vacuum every clean", { mop }),
+  mop_quick_one_both: (t) => t("v4_room_schedules_mop_quick_one_both", "Mop every clean · Quick vacuum every clean"),
+  mop_optimal: (t, mop, cov) => t("v4_room_schedules_mop_optimal", "Mop every {mop} cleans · Optimal vacuum every {cov} cleans", { mop, cov }),
+  mop_optimal_one_mop: (t, _, cov) => t("v4_room_schedules_mop_optimal_one_mop", "Mop every clean · Optimal vacuum every {cov} cleans", { cov }),
+  mop_optimal_one_cov: (t, mop) => t("v4_room_schedules_mop_optimal_one_cov", "Mop every {mop} cleans · Optimal vacuum every clean", { mop }),
+  mop_optimal_one_both: (t) => t("v4_room_schedules_mop_optimal_one_both", "Mop every clean · Optimal vacuum every clean"),
+  mop_heavy: (t, mop, cov) => t("v4_room_schedules_mop_heavy", "Mop every {mop} cleans · Heavy duty vacuum every {cov} cleans", { mop, cov }),
+  mop_heavy_one_mop: (t, _, cov) => t("v4_room_schedules_mop_heavy_one_mop", "Mop every clean · Heavy duty vacuum every {cov} cleans", { cov }),
+  mop_heavy_one_cov: (t, mop) => t("v4_room_schedules_mop_heavy_one_cov", "Mop every {mop} cleans · Heavy duty vacuum every clean", { mop }),
+  mop_heavy_one_both: (t) => t("v4_room_schedules_mop_heavy_one_both", "Mop every clean · Heavy duty vacuum every clean"),
+};
+
+/** A room's schedule as one line, or null while no schedule is on. */
+export const scheduleLine = (t: Translate, locale: string, cadence: RoomCadencePolicy | null | undefined): string | null => {
+  const mop = cadence?.mopEveryN ?? null;
+  const cov = cadence?.coverageEveryN ?? null;
+  if (mop === null && cov === null) return null;
+  const setting = cadence?.periodicCoverageSetting;
+  const level = setting === "quick" ? "quick" : setting === "heavy_duty" ? "heavy" : "optimal";
+  const name = mop === null
+    ? `${level}${cov === 1 ? "_one" : ""}`
+    : cov === null
+      ? `mop${mop === 1 ? "_one" : ""}`
+      : `mop_${level}${mop === 1 && cov === 1 ? "_one_both" : mop === 1 ? "_one_mop" : cov === 1 ? "_one_cov" : ""}`;
+  const line = SCHEDULES[name];
+  return line ? line(t, mop === null ? "" : formatNumber(locale, mop), cov === null ? "" : formatNumber(locale, cov)) : null;
 };

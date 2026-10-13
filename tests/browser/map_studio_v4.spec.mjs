@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 import { deflateSync } from "node:zlib";
 import { build } from "esbuild";
 
-import { installPanelFixture } from "./map_studio_v4_panel_fixture.mjs";
+import { installPanelFixture, openPlanPicker } from "./map_studio_v4_panel_fixture.mjs";
 import { pointer, touchDrag, twoFingerPinch } from "./touch.mjs";
 
 const GALLERY_TAG = "matic-map-studio-gallery-v0-4-0";
@@ -413,7 +413,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     }, fixture.panelTag);
     await page.route("**/chunks/catalog-writes-*.js", (route) => route.abort());
     await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
-    await panel.getByRole("button", { name: /^Run a plan/ }).click();
+    await openPlanPicker(panel);
     await panel.getByRole("button", { name: /^Daily/ }).click();
     await page.evaluate((tag) => {
       document.querySelector(tag).shadowRoot.querySelector("matic-map-shell-v4").dispatchEvent(new CustomEvent("matic-workspace-intent", {
@@ -440,7 +440,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
     await expect.poll(() => page.evaluate((tag) => document.querySelector(tag).getWorkspaceSnapshot().map.available, fixture.panelTag)).toBe(true);
     expect(requested).toEqual([]);
-    await panel.getByRole("button", { name: /^Run a plan/ }).click();
+    await openPlanPicker(panel);
     await expect.poll(() => requested.length).toBe(1);
   });
 
@@ -459,7 +459,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     ]);
     await page.unroute("**/chunks/workflow-panel-*.js");
     const limited = await loadGallery(page, { scenario: "map-limited" });
-    await expect(limited.locator(".host-state")).toContainText("Home Assistant can show this map but can't confirm it well enough to start cleaning.");
+    await expect(limited.locator("#home-reason")).toContainText("Home Assistant can show this map but can't confirm it well enough to start cleaning.");
     expect(await limited.evaluate((element) => {
       const { workflow, notice } = element.getWorkspaceSnapshot();
       return { workflow, notice };
@@ -588,7 +588,7 @@ test.describe("Map Studio v0.4 foundation", () => {
         resources: { ...state.resources, plans: { ...state.resources.plans, value: { ...plans, plans: [{ ...plan, rooms }] } } },
       });
     }, GALLERY_TAG);
-    await gallery.getByRole("button", { name: /^Run a plan/ }).click();
+    await openPlanPicker(gallery);
     await gallery.getByRole("button", { name: /^Daily clean/ }).click();
     await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
     const inspector = gallery.locator(".inspector");
@@ -650,7 +650,7 @@ test.describe("Map Studio v0.4 foundation", () => {
         },
       });
     }, GALLERY_TAG);
-    await gallery.getByRole("button", { name: /^Run a plan/ }).click();
+    await openPlanPicker(gallery);
     await gallery.getByRole("button", { name: /^Daily clean/ }).click();
     await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
     const inspector = gallery.locator(".inspector");
@@ -686,7 +686,7 @@ test.describe("Map Studio v0.4 foundation", () => {
         },
       });
     }, GALLERY_TAG);
-    await gallery.getByRole("button", { name: /^Run a plan/ }).click();
+    await openPlanPicker(gallery);
     await gallery.getByRole("button", { name: /^Daily clean/ }).click();
     // plan.md §3 Run R1: server order, one setting string per row, due lines
     // above, `v4_room_parts` and a named divider at each boundary.
@@ -733,8 +733,12 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(choices).toHaveCount(101);
     await choices.nth(99).check();
     await expect(choices.nth(99)).toBeChecked();
-    await expect(choices.nth(100)).toBeDisabled();
-    await expect(gallery.getByRole("status").filter({ hasText: "Up to 100 rooms fit" })).toBeVisible();
+    // home-rooms.md §4 R5: the limit line sits in the header with no live
+    // role, and the spare row is held by it, not natively disabled.
+    await expect(choices.nth(100)).toHaveAttribute("aria-disabled", "true");
+    await expect(choices.nth(100)).toHaveAccessibleDescription("Up to 100 rooms fit in one clean, so remove one to add another.");
+    await expect(gallery.getByRole("status").filter({ hasText: "Up to 100 rooms fit" })).toHaveCount(0);
+    await expect(gallery.locator("#rooms-limit")).toHaveText("Up to 100 rooms fit in one clean, so remove one to add another.");
     await expect(rooms.locator('input[type="checkbox"]:checked')).toHaveCount(100);
 
     await page.evaluate((tag) => {
@@ -805,7 +809,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       const plans = panel?.getWorkspaceSnapshot().resources.plans;
       return { status: plans?.status, count: plans?.value?.plans[0]?.rooms.length };
     })).toEqual({ status: "ready", count: 102 });
-    await gallery.getByRole("button", { name: /^Run a plan/ }).click();
+    await openPlanPicker(gallery);
     await gallery.getByRole("button", { name: /^Legacy plan/ }).click();
 
     await expect(gallery.getByRole("button", { name: "Run plan Legacy plan", exact: true })).toBeDisabled();
@@ -972,16 +976,19 @@ test.describe("Map Studio v0.4 foundation", () => {
     }, GALLERY_TAG);
     await gallery.getByRole("button", { name: /^Clean rooms/ }).click();
     const roomList = gallery.getByRole("group", { name: "Rooms to clean" });
+    // home-rooms.md §5 Due work: the shared schedule's due work puts the
+    // "Include scheduled work that's due" switch in the settings row, on by
+    // default; off sends the user's settings alone and keeps the switch.
+    await expect(gallery.getByRole("switch")).toHaveCount(0);
     await roomList.getByRole("checkbox").first().check();
-    const useSchedule = gallery.getByRole("checkbox", { name: "Override shared schedule settings" });
-    await expect(useSchedule).not.toBeChecked();
+    await gallery.getByRole("button", { name: /^Cleaning settings/ }).click();
+    const useSchedule = gallery.getByRole("switch", { name: "Include scheduled work that's due" });
+    await expect(useSchedule).toHaveAttribute("aria-checked", "true");
     expect((await snapshot(page)).selection.useRoomSchedule).toBe(true);
-    const sharedStatus = gallery.getByText(/^Kitchen: /u);
-    await expect(sharedStatus).toContainText("Vacuum and mop is due on this clean.");
-    await useSchedule.check();
-    await expect(useSchedule).toBeChecked();
+    await useSchedule.click();
+    await expect(useSchedule).toHaveAttribute("aria-checked", "false");
     expect((await snapshot(page)).selection.useRoomSchedule).toBe(false);
-    await expect(sharedStatus).toContainText("Vacuum and mop is due on this clean.");
+    await expect(useSchedule).toBeVisible();
   });
 
   test("registers the sidebar robot before opening the map without replacing other icon sets", async ({ page }) => {
@@ -1103,10 +1110,11 @@ test.describe("Map Studio v0.4 foundation", () => {
       element.replaceWorkspaceState(withGalleryRoomPreview({ ...state, workflow: "rooms", selection: { ...state.selection,
         roomIds: ["room-a"], roomSettings: [{ roomId: "room-a", cleaningMode: "vacuum", coverageSetting: "standard" }] } }));
     }, GALLERY_TAG);
-    const rows = gallery.getByRole("list", { name: "Effective room order" }).locator("li");
-    await expect(rows.first()).toBeVisible();
-    // home-rooms.md §6 v4_room_setting_*: the whole string, not mode + coverage text.
-    await expect(rows.first().locator(".subtle").first()).toHaveText("Vacuum · Optimal");
+    // home-rooms.md §6 v4_room_setting_*: the whole string, not mode + coverage
+    // text, as the selected row's second line.
+    const kitchen = gallery.getByRole("group", { name: "Rooms to clean" }).getByRole("checkbox", { name: /^Kitchen/ });
+    await expect(kitchen).toBeChecked();
+    await expect(kitchen).toHaveAccessibleName("Kitchen Vacuum · Optimal");
   });
 
   test("a picker with no plans offers one filled Create a plan", async ({ page }) => {
@@ -1287,7 +1295,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     });
     await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
     const panel = page.locator(fixture.panelTag);
-    await panel.getByRole("button", { name: /^Run a plan/ }).click();
+    await openPlanPicker(panel);
     await panel.getByRole("button", { name: /^Daily clean/ }).click();
     const enabled = panel.getByRole("switch", { name: "Plan enabled" });
     await expect(enabled).toHaveAttribute("aria-checked", "true");
@@ -1494,9 +1502,11 @@ test.describe("Map Studio v0.4 foundation", () => {
       const state = element.getWorkspaceSnapshot();
       panel.state = { ...state, manualRoomPreview: { status: "error", value: null, problem: "request-failed" } };
     });
-    const problem = gallery.locator(".problem", { hasText: "room settings" });
-    await expect(problem).toHaveText("Home Assistant couldn't check the room settings.");
-    await expect(gallery.getByRole("button", { name: "Try again", exact: true })).toBeVisible();
+    // home-rooms.md §4 R4: the failed check is one line above the rows with
+    // its Try again button.
+    const problem = gallery.locator(".check-lines .line", { hasText: "room settings" });
+    await expect(problem).toContainText("Home Assistant couldn't check the room settings.");
+    await expect(problem.getByRole("button", { name: "Try again", exact: true })).toBeVisible();
   });
 
   test("a selected point has one name in every language", async ({ page }) => {
@@ -2121,10 +2131,10 @@ test.describe("Map Studio v0.4 foundation", () => {
     const gallery = await loadGallery(page, { scenario: "map-limited" });
     await expect(gallery.locator(".status-copy strong")).toHaveText("Map limited");
     await expect(gallery.locator(".status-copy small")).toHaveText("Cleaning can't start");
-    const body = gallery.locator(".host-state");
-    await expect(body).toContainText("Home Assistant can show this map but can't confirm it well enough to start cleaning.");
-    await expect(gallery.locator(".quick-actions")).toHaveCount(0);
-    const retry = body.getByRole("button", { name: "Try again", exact: true });
+    await expect(gallery.locator("#home-reason")).toContainText("Home Assistant can show this map but can't confirm it well enough to start cleaning.");
+    // The cards stay, demoted (home-rooms.md §4 H8 layout).
+    await expect(gallery.locator('.quick-actions .ms-row[aria-disabled="true"]')).toHaveCount(4);
+    const retry = gallery.locator(".home-actions").getByRole("button", { name: "Try again", exact: true });
     await expect(retry).not.toHaveAttribute("aria-disabled", "true");
     await page.evaluate((tag) => {
       const element = document.querySelector(tag);
@@ -2163,10 +2173,10 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(gallery.locator(".action-bar")).not.toContainText("Set up a robot");
     await page.evaluate((tag) => document.querySelector(tag).setScenario("problem"), GALLERY_TAG);
     await expect(gallery.locator(".status-copy strong")).toHaveText("Needs attention");
-    await expect(gallery.locator(".action-bar")).not.toContainText("Check the robot");
+    // No footer button, so no footer at all (home-rooms.md §3: the bar is absent when idle).
+    await expect(gallery.locator(".action-bar button")).toHaveCount(0);
     await page.evaluate((tag) => document.querySelector(tag).setScenario("unsupported"), GALLERY_TAG);
-    await expect(gallery.locator(".action-bar")).not.toContainText("Map unavailable");
-    await expect(gallery.locator(".action-bar")).not.toContainText("Finding the map");
+    await expect(gallery.locator(".action-bar button")).toHaveCount(0);
     await expect(gallery.locator(".status-copy strong")).toHaveText("Map unavailable");
     await expect(gallery.locator(".status-copy small")).toContainText("Home Assistant can't show the map right now, so cleaning can't start.");
 
@@ -4362,7 +4372,7 @@ test.describe("Map Studio v0.4 foundation", () => {
         window.__mapStudioActions.push(event.detail?.id);
       });
     }, GALLERY_TAG);
-    await gallery.getByRole("button", { name: /^Run a plan/ }).click();
+    await openPlanPicker(gallery);
     await gallery.getByRole("button", { name: /^Daily clean/ }).click();
     await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
     // plan.md §3: Delete is in the heading's More actions, which takes focus back.
@@ -4405,7 +4415,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     const gallery = await loadGallery(page, { scenario: "ready", narrow: true });
     await expect(gallery.locator(".mobile-sheet")).toBeVisible();
 
-    await gallery.getByRole("button", { name: /^Run a plan/ }).click();
+    await openPlanPicker(gallery);
     await gallery.getByRole("button", { name: /^Daily clean/ }).click();
     await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
     // Exactly one panel: two meant the launcher lookup could pick the hidden one.
@@ -4640,7 +4650,9 @@ test.describe("Map Studio v0.4 foundation", () => {
 
   test("keeps workflow navigation and Stop together in the inspector", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "cleaning" });
-    await gallery.getByRole("button", { name: /^Clean rooms/ }).click();
+    // A busy robot demotes the home cards (home-rooms.md §4 H4), so Rooms is
+    // opened directly: the view a clean that started from it is left in.
+    await gallery.evaluate((element) => element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), workflow: "rooms" }));
     const inspector = gallery.locator(".inspector");
     await expect(inspector.getByRole("button", { name: "Back to all tasks" })).toBeVisible();
     await expect(inspector.getByRole("button", { name: "Back to all tasks" })).toHaveText("All tasks");
@@ -4653,7 +4665,7 @@ test.describe("Map Studio v0.4 foundation", () => {
 
   test("uses one ordered room list for plan selection and per-room settings", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "ready" });
-    await gallery.getByRole("button", { name: /^Run a plan/ }).click();
+    await openPlanPicker(gallery);
     await gallery.getByRole("button", { name: /^Daily clean/ }).click();
     await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
     const inspector = gallery.locator(".inspector");
@@ -4898,7 +4910,7 @@ test.describe("Map Studio v0.4 foundation", () => {
           plans: { ...state.resources.plans, value: { ...catalog, plans: [{ ...plan, rooms }] } },
         } });
       }, GALLERY_TAG);
-      await gallery.getByRole("button", { name: /^Run a plan/ }).click();
+      await openPlanPicker(gallery);
       await gallery.getByRole("button", { name: /^Daily clean/ }).click();
       await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
       const rooms = gallery.getByRole("list", { name: "Rooms", exact: true });
@@ -4928,7 +4940,7 @@ test.describe("Map Studio v0.4 foundation", () => {
 
   test("keeps plan choices available after catalog loading", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "ready" });
-    await gallery.getByRole("button", { name: /^Run a plan/ }).click();
+    await openPlanPicker(gallery);
     const choice = gallery.getByRole("button", { name: /^Daily clean/ });
     await expect(choice).toBeVisible();
     await expect(gallery.getByRole("textbox", { name: "Plan name" })).toHaveCount(0);
@@ -5360,7 +5372,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     const gallery = await loadGallery(page, { scenario: "ready" });
 
     await gallery.getByRole("complementary", { name: "Cleaning panel" })
-      .getByRole("button", { name: /^Clean rooms Choose rooms for this run/ }).click();
+      .getByRole("button", { name: /^Clean rooms Pick rooms and clean them now\./ }).click();
     await gallery.getByRole("button", { name: "2D", exact: true }).click();
     const appearance = gallery.getByRole("group", { name: "Map style" });
     await expect(appearance.getByRole("button")).toHaveText(["Photo", "Room colors"]);
@@ -5372,10 +5384,17 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(options).toHaveAttribute("aria-controls", "map-options");
     await options.click();
     await expect(options).toHaveAttribute("aria-expanded", "true");
-    await expect(gallery.getByRole("menu")).toHaveCount(0);
-    await expect(gallery.getByRole("menuitem")).toHaveCount(0);
-    await gallery.getByLabel("Map detail").selectOption("maximum");
+    // Map options is a menu (home-rooms.md §5 Display): the detail choice is
+    // a radio group inside it, and a choice leaves the menu open.
+    const menu = gallery.getByRole("menu", { name: "Map options" });
+    await expect(menu.getByRole("group", { name: "Map detail" })).toBeVisible();
+    await menu.getByRole("menuitemradio", { name: "Maximum" }).click();
     await expect.poll(async () => (await snapshot(page)).quality).toBe("maximum");
+    await expect(menu.getByRole("menuitemradio", { name: "Maximum" })).toHaveAttribute("aria-checked", "true");
+    await expect(menu).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(options).toBeFocused();
 
     await gallery.getByRole("button", { name: "3D", exact: true }).click();
     await gallery.getByRole("button", { name: "Rotate right" }).click();
@@ -5406,16 +5425,18 @@ test.describe("Map Studio v0.4 foundation", () => {
       .toHaveText(["House", "Shed", "Annex · No saved map for this floor yet"]);
     await expect(gallery.getByLabel("Choose floor", { exact: true }).locator('option[value="saved-2"]'))
       .toBeDisabled();
-    // Two featured choices, then a plainly named map-tools shelf. The entry never offers a
+    // Three task cards, then the Maps group (home-rooms.md §3). The entry never offers a
     // phantom "Run plan" before a plan has been chosen.
     const quick = gallery.locator(".quick-actions").getByRole("button");
-    await expect(quick).toHaveCount(2);
-    await expect(quick.nth(0)).toHaveAccessibleName(/^Clean rooms Choose rooms for this run/);
+    await expect(quick).toHaveCount(4);
+    await expect(quick.nth(0)).toHaveAccessibleName(/^Clean rooms Pick rooms and clean them now\./);
     await expect(quick.nth(0)).toHaveClass(/ms-row--featured/);
-    await expect(quick.nth(1)).toHaveAccessibleName(/^Run a plan (1 saved plan|\d+ saved plans)/);
-    await expect(gallery.getByRole("heading", { name: "Map tools", level: 3 })).toBeVisible();
-    await expect(gallery.locator(".shelf").getByRole("button", { name: /^Clean custom area Draw or choose a custom area/ })).toBeVisible();
-    await expect(gallery.locator(".shelf").getByRole("button", { name: /^Map history Saved maps show one floor each\. They can't be edited and never show where the robot is now\./ })).toBeVisible();
+    // The default plan's card (home-rooms.md D1), then the Your plans row (R4 amended).
+    await expect(quick.nth(1)).toHaveAccessibleName(/^Run Daily clean 3 rooms/);
+    await expect(quick.nth(2)).toHaveAccessibleName("Your plans");
+    await expect(quick.nth(3)).toHaveAccessibleName(/^Clean custom area Draw or choose a custom area/);
+    await expect(gallery.getByRole("heading", { name: "Maps", level: 3 })).toBeVisible();
+    await expect(gallery.locator(".maps").getByRole("button", { name: /^Map history Browse earlier floor maps\./ })).toBeVisible();
     await expect(gallery.getByRole("button", { name: /^Run plan/ })).toHaveCount(0);
     // The launcher and the Rooms strip action share "Clean rooms"; each view holds only one.
     await expect(gallery.getByRole("button", { name: /^Clean rooms/ })).toHaveCount(1);
@@ -5425,13 +5446,13 @@ test.describe("Map Studio v0.4 foundation", () => {
     await gallery.getByLabel("Choose floor", { exact: true }).selectOption("current");
     await expect.poll(async () => (await snapshot(page)).selection.floorId).toBe("current");
 
-    await gallery.getByRole("button", { name: /^Clean rooms Choose rooms for this run/ }).click();
+    await gallery.getByRole("button", { name: /^Clean rooms Pick rooms and clean them now\./ }).click();
     await expect(gallery.getByRole("heading", { name: "Choose rooms" })).toBeVisible();
     // Disabled actions stay focusable and explain themselves: aria-disabled
     // plus an aria-describedby reason, which is stronger than `disabled`.
     const cleanRooms = gallery.getByRole("button", { name: "Clean rooms", exact: true });
     await expect(cleanRooms).toHaveCount(1);
-    // A leaked launcher ("Clean rooms Choose rooms for this run") would not match the exact name.
+    // A leaked launcher ("Clean rooms Pick rooms and clean them now.") would not match the exact name.
     await expect(gallery.getByRole("button", { name: /^Clean rooms/ })).toHaveCount(1);
     await expect(cleanRooms).toHaveAttribute("aria-disabled", "true");
     await expect(cleanRooms).toHaveAccessibleDescription(/room/i);
@@ -5705,10 +5726,12 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(gallery.locator("matic-map-canvas-v4 .map-message")).toContainText("Locating");
     await expect(gallery.locator(".root > .sr-only[aria-live=polite]")).toHaveText("Locating");
     // Locating has no footer button (shell.md §2 row 8); the sheet body gives
-    // the reason on the choices it holds back.
+    // the reason once, under the heading, and the held cards point at it
+    // (home-rooms.md §4 H3).
     await expect(gallery.getByRole("button", { name: "Finding the map" })).toHaveCount(0);
+    await expect(gallery.locator("#home-reason")).toHaveText("Waiting for the robot to confirm which floor it is on.");
     await expect(gallery.getByRole("button", { name: /^Clean rooms/ }))
-      .toContainText("Waiting for the robot to confirm which floor it is on.");
+      .toHaveAccessibleDescription("Waiting for the robot to confirm which floor it is on.");
     await expect(mapLive).toContainText("not available");
   });
 
@@ -5718,7 +5741,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     // [data-selected] rows cannot see that, which is how the plan room list
     // shipped looking identical whether a room was in the plan or not.
     const gallery = await loadGallery(page, { scenario: "ready" });
-    await gallery.getByRole("button", { name: /^Run a plan/ }).click();
+    await openPlanPicker(gallery);
     await gallery.getByRole("button", { name: /^Daily clean/ }).click();
     await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
     const inspector = gallery.locator(".inspector");
@@ -5887,7 +5910,10 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect.poll(async () => (await snapshot(page)).workflow).toBe("rooms");
     const inspector = gallery.locator(".inspector");
     await expect(inspector.getByLabel(/^Cleaning mode for /)).toHaveCount(0);
-    await inspector.getByRole("checkbox", { name: "Kitchen" }).check();
+    await inspector.getByRole("checkbox", { name: /^Kitchen/ }).check();
+    // home-rooms.md §4 R3: a selected room's own settings open from its row.
+    await expect(inspector.getByLabel(/^Cleaning mode for /)).toHaveCount(0);
+    await inspector.getByRole("button", { name: "Settings for Kitchen", exact: true }).click();
     await expect(inspector.getByLabel(/^Cleaning mode for /)).toBeVisible();
     await expect(inspector.getByLabel(/^Cleaning mode for /)).toHaveValue("vacuum");
     const mode = inspector.getByLabel(/^Vacuum coverage for /);
@@ -5896,10 +5922,10 @@ test.describe("Map Studio v0.4 foundation", () => {
     await mode.selectOption("heavy_duty");
     const cleaningSystem = inspector.getByLabel(/^Cleaning mode for /);
     await cleaningSystem.selectOption("mop");
-    await expect(mode).toBeDisabled();
+    await expect(mode).toHaveAttribute("aria-disabled", "true");
     await expect(inspector.getByText("Vacuum coverage applies only when vacuuming.", { exact: false })).toBeVisible();
     await cleaningSystem.selectOption("vacuum_and_mop");
-    await expect(mode).toBeEnabled();
+    await expect(mode).not.toHaveAttribute("aria-disabled", "true");
     await expect(mode).toHaveValue("heavy_duty");
   });
 
@@ -6120,48 +6146,48 @@ test.describe("Map Studio v0.4 foundation", () => {
       };
     });
     await gallery.getByRole("button", { name: "Map options" }).click();
-    // The overflow is a plain popover of buttons, not an ARIA menu.
+    // Map options is an ARIA menu (design-system.md §5 Menus); the two
+    // actions are its plain menuitems after the detail radios.
     const menu = gallery.locator("#map-options");
-    await expect(menu).not.toHaveAttribute("role", /menu/);
-    await expect(menu.getByRole("menuitem")).toHaveCount(0);
-    await expect(menu.getByRole("button")).toHaveText(["Map diagnostics", "Full screen"]);
-    await expect(menu.getByRole("button", { name: /classic/i })).toHaveCount(0);
-    await menu.getByRole("button", { name: "Full screen", exact: true }).click();
+    await expect(menu).toHaveAttribute("role", "menu");
+    await expect(menu.getByRole("menuitem")).toHaveText(["Map diagnostics", "Full screen"]);
+    await expect(menu.getByRole("menuitem", { name: /classic/i })).toHaveCount(0);
+    await menu.getByRole("menuitem", { name: "Full screen", exact: true }).click();
     expect(await page.evaluate(() => window.__v4FullscreenRequested)).toBe(true);
 
     await gallery.getByRole("button", { name: "Map options" }).click();
-    await expect(gallery.locator("#map-options").getByRole("button", {
+    await expect(gallery.locator("#map-options").getByRole("menuitem", {
       name: "Leave full screen",
       exact: true,
     })).toBeVisible();
-    await gallery.locator("#map-options").getByRole("button", {
+    await gallery.locator("#map-options").getByRole("menuitem", {
       name: "Leave full screen",
       exact: true,
     }).click();
 
     await gallery.getByRole("button", { name: "Map options" }).click();
-    await expect(gallery.locator("#map-options").getByRole("button", {
+    await expect(gallery.locator("#map-options").getByRole("menuitem", {
       name: "Full screen",
       exact: true,
     })).toBeVisible();
 
     await page.evaluate(() => window.__v4ExposeScopedFullscreen(false));
-    await gallery.locator("#map-options").getByRole("button", {
+    await gallery.locator("#map-options").getByRole("menuitem", {
       name: "Full screen",
       exact: true,
     }).click();
     await gallery.getByRole("button", { name: "Map options" }).click();
-    await expect(gallery.locator("#map-options").getByRole("button", {
+    await expect(gallery.locator("#map-options").getByRole("menuitem", {
       name: "Leave full screen",
       exact: true,
     })).toBeVisible();
-    await gallery.locator("#map-options").getByRole("button", {
+    await gallery.locator("#map-options").getByRole("menuitem", {
       name: "Leave full screen",
       exact: true,
     }).click();
 
     await gallery.getByRole("button", { name: "Map options" }).click();
-    await expect(gallery.locator("#map-options").getByRole("button", {
+    await expect(gallery.locator("#map-options").getByRole("menuitem", {
       name: "Full screen",
       exact: true,
     })).toBeVisible();
@@ -7738,9 +7764,11 @@ for (const width of [320, 390, 820, 1280]) {
     await expect(fit).toBeVisible();
     await expect(camera).toHaveCount(0);
     await expect(gallery.getByRole("toolbar", { name: "Draw area tools" })).toBeVisible();
+    // Locating shows no map, so the floor select leaves the rail with Fit
+    // (home-rooms.md §11 MS-HOME-04).
     await gallery.evaluate((element) => element.setScenario("transition"));
-    await expect(floor).toBeVisible();
-    await expect(floor).toHaveCount(1);
+    await expect(floor).toHaveCount(0);
+    await expect(fit).toHaveCount(0);
   });
 }
 
@@ -7748,7 +7776,7 @@ test("short phone keeps plan footer reachable below the reserved map controls", 
   await page.setViewportSize({ width: 320, height: 568 });
   const gallery = await loadGallery(page);
   await gallery.locator(".stage").evaluate((stage) => { stage.style.minBlockSize = "0"; stage.style.blockSize = "568px"; });
-  await gallery.getByRole("button", { name: /^Run a plan/ }).click();
+  await openPlanPicker(gallery);
   await gallery.getByRole("button", { name: /^Daily clean/ }).click();
   // shell.md §5 Sheet: Run rests at half; Edit's long form opens at full.
   await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
@@ -9710,7 +9738,7 @@ test.describe("plan shell", () => {
     const fixture = await installPanelFixture(page, { initialPlanCatalog: catalog() });
     await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
     const panel = page.locator(fixture.panelTag);
-    await panel.getByRole("button", { name: /^Run a plan/ }).click();
+    await openPlanPicker(panel);
     await panel.getByRole("button", { name: /^Daily/ }).click();
     await panel.getByRole("button", { name: "Edit Daily", exact: true }).click();
     return { panel, fixture };
@@ -10004,7 +10032,10 @@ const axeFindings = (results) => results.map(({ id, nodes }) => `${id}: ${nodes.
 test.describe("Map Studio accessibility baselines", () => {
   for (const scenario of ["ready", "rooms", "plans", "plan-saved-intelligent", "plan-saved-ordered", "plan-edit-ordered", "plan-run-paused", "plan-run-blocked", "plan-new", "plan-dirty",
     "plan-cadence-shared", "plan-cadence-blocked", "plan-schedule-available", "plan-schedule-joining", "plan-schedule-conflict",
-    "draw", "history", "cleaning", "access"]) {
+    "draw", "history", "cleaning", "access",
+    // home-rooms.md §4: home by state and the Rooms states (UX4).
+    "rooms-ready", "rooms-busy", "rooms-failed", "rooms-empty", "room-limit", "home-plan-due", "home-plan-paused",
+    "problem", "map-unavailable", "empty", "robot-offline"]) {
     for (const [width, height] of [[390, 844], [1024, 768]]) {
       const narrow = width < 1024;
       test(`${scenario} at ${width} has no serious axe finding and no name on an unnamed role${narrow ? " @mobile" : ""}`, async ({ page }) => {
@@ -10016,6 +10047,84 @@ test.describe("Map Studio accessibility baselines", () => {
         expect(axeFindings(incomplete.filter(({ id }) => id === "aria-prohibited-attr"))).toEqual([]);
       });
     }
+  }
+
+  // home-rooms.md §5 Display: the Map options menu on a phone.
+  test("Map options open at 390 has no serious axe finding @mobile", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const gallery = await loadGallery(page, { scenario: "rooms-ready", narrow: true });
+    await settleWorkspace(gallery);
+    await gallery.getByRole("button", { name: "Map options" }).click();
+    await expect(gallery.getByRole("menu", { name: "Map options" })).toBeVisible();
+    const { violations, incomplete } = await new AxeBuilder({ page }).analyze();
+    expect(axeFindings(violations.filter(({ impact }) => impact === "serious" || impact === "critical"))).toEqual([]);
+    expect(axeFindings(incomplete.filter(({ id }) => id === "aria-prohibited-attr"))).toEqual([]);
+  });
+
+  // home-rooms.md §5 Settings, Due work: the open disclosures.
+  test("Rooms with the settings row and a room's settings open has no serious axe finding", async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    const gallery = await loadGallery(page, { scenario: "rooms-ready" });
+    await settleWorkspace(gallery);
+    await gallery.getByRole("button", { name: /^Cleaning settings/ }).click();
+    await expect(gallery.getByRole("switch", { name: "Include scheduled work that's due" })).toBeVisible();
+    const kitchen = gallery.getByRole("button", { name: "Settings for Kitchen", exact: true });
+    await kitchen.click();
+    await expect(kitchen).toHaveAttribute("aria-expanded", "true");
+    await expect(gallery.getByLabel("Cleaning mode for Kitchen")).toBeVisible();
+    const { violations, incomplete } = await new AxeBuilder({ page }).analyze();
+    expect(axeFindings(violations.filter(({ impact }) => impact === "serious" || impact === "critical"))).toEqual([]);
+    expect(axeFindings(incomplete.filter(({ id }) => id === "aria-prohibited-attr"))).toEqual([]);
+  });
+
+  // home-rooms.md §8 Forced colors, RTL; MS-HOME-11 dark tints.
+  for (const [label, setup] of [
+    ["dark", (page) => page.emulateMedia({ colorScheme: "dark" })],
+    ["RTL", (page) => page.addInitScript(() => { document.documentElement.dir = "rtl"; })],
+    ["forced colors", (page) => page.emulateMedia({ forcedColors: "active" })],
+  ]) {
+    test(`rooms-ready at 390 in ${label} has no serious axe finding and keeps Settings in its row @mobile`, async ({ page }) => {
+      await setup(page);
+      await page.setViewportSize({ width: 390, height: 844 });
+      const gallery = await loadGallery(page, { scenario: "rooms-ready", narrow: true });
+      await settleWorkspace(gallery);
+      await gallery.getByRole("button", { name: "Expand panel" }).click();
+      const kitchen = gallery.getByRole("button", { name: "Settings for Kitchen", exact: true });
+      await expect(kitchen).toBeVisible();
+      const row = await kitchen.locator("xpath=ancestor::*[contains(@class, 'room-row')]").boundingBox();
+      const button = await kitchen.boundingBox();
+      expect(button.x).toBeGreaterThanOrEqual(row.x - 0.5);
+      expect(button.x + button.width).toBeLessThanOrEqual(row.x + row.width + 0.5);
+      // Under forced colors the platform owns every colour and axe 4.13 has
+      // no forced-colors handling: Linux WebKit's emulated system colours
+      // fail its contrast rule (UX3 R34), so that rule is not a finding
+      // there; the forced-colors styles are asserted instead. Dark and RTL
+      // keep the full rule set.
+      const forced = label === "forced colors";
+      await expect.poll(() => page.evaluate(() => matchMedia("(forced-colors: active)").matches)).toBe(forced);
+      const builder = new AxeBuilder({ page });
+      const { violations, incomplete } = await (forced ? builder.disableRules(["color-contrast"]) : builder).analyze();
+      expect(axeFindings(violations.filter(({ impact }) => impact === "serious" || impact === "critical"))).toEqual([]);
+      expect(axeFindings(incomplete.filter(({ id }) => id === "aria-prohibited-attr"))).toEqual([]);
+      // Forced colors: the Settings button's edge is ButtonBorder and the
+      // primary paints the Highlight pair (WebKit doesn't expose
+      // forced-color-adjust, so the colours themselves are compared).
+      const system = (name) => page.evaluate((color) => {
+        const probe = document.createElement("i");
+        probe.style.cssText = `color: ${color}; forced-color-adjust: none`;
+        document.body.append(probe);
+        const value = getComputedStyle(probe).color;
+        probe.remove();
+        return value;
+      }, name);
+      const primary = gallery.locator(".action-bar .ms-btn--primary");
+      await expect(primary).toBeVisible();
+      expect(await kitchen.evaluate((element) => getComputedStyle(element).borderTopColor) === await system("ButtonBorder")).toBe(forced);
+      expect(await primary.evaluate((element) => {
+        const { color, backgroundColor } = getComputedStyle(element);
+        return [color, backgroundColor];
+      })).toEqual(forced ? [await system("HighlightText"), await system("Highlight")] : expect.not.arrayContaining([await system("Highlight")]));
+    });
   }
 
   test("the toast sits in a region named Notifications, so axe finds no content outside a landmark", async ({ page }) => {
@@ -10084,7 +10193,9 @@ test.describe("Map Studio accessibility baselines", () => {
       const { heading, body } = await openScroller(page, scenario, width, height);
       return scrollerState(which === "body" ? body : heading, which === "top");
     };
-    expect(await scroller("access", 844, 390, "body"), "access body on a landscape phone").toEqual({ overflows: true, focusableChild: false, tabindex: "0", role: "region", named: true });
+    // home-rooms.md §3: a held home has an empty body under its heading, so the
+    // text-only body is the Rooms view's empty description (R9).
+    expect(await scroller("rooms-empty", 844, 390, "body"), "rooms-empty body on a landscape phone").toEqual({ overflows: true, focusableChild: false, tabindex: "0", role: "region", named: true });
     expect(await scroller("plans", 844, 390, "body"), "plans body on a landscape phone").toEqual({ overflows: true, focusableChild: true, tabindex: null, role: "region", named: true });
     expect(await scroller("access", 1440, 900, "body"), "access body on a desktop").toEqual({ overflows: false, focusableChild: false, tabindex: null, role: "region", named: true });
     expect(await scroller("paused", 844, 390, "top"), "paused pinned top on a landscape phone").toEqual({ overflows: true, focusableChild: false, tabindex: "0", role: "group", named: true });
@@ -10092,7 +10203,7 @@ test.describe("Map Studio accessibility baselines", () => {
   });
 
   test("a focused tab-stop scroller shows a 2 px ring inset 2 px and stays a tab stop until it loses focus @mobile", async ({ page }) => {
-    const { gallery, body } = await openScroller(page, "access", 844, 390);
+    const { gallery, body } = await openScroller(page, "rooms-empty", 844, 390);
     await expect(body).toHaveAttribute("tabindex", "0");
     await body.focus();
     expect(await body.evaluate((element) => {
@@ -10354,12 +10465,15 @@ test.describe("Map Studio resolved theme colours", () => {
     const saved = gallery.getByRole("group", { name: "Cleaning order" }).locator('[aria-pressed="true"]');
     await expect.poll(() => style(saved, "borderTopColor"), "pressed order").toBe(indicator);
 
-    // The Room names checkbox sits in the phone sheet's Map display section.
+    // The Room names switch row sits in the phone's Map options menu
+    // (home-rooms.md §5 Display).
     await page.setViewportSize({ width: 390, height: 844 });
     const phone = await loadGallery(page, { scenario: "ready", narrow: true });
     await settleWorkspace(phone);
     await theme(page, HA_LIGHT);
-    await expect.poll(() => style(phone.getByRole("checkbox", { name: "Room names" }), "accentColor"), "Room names").toBe(indicator);
+    await phone.getByRole("button", { name: "Map options", exact: true }).click();
+    const names = phone.getByRole("menuitemcheckbox", { name: "Room names" }).locator(".ms-switch");
+    await expect.poll(() => names.evaluate((element) => getComputedStyle(element, "::before").backgroundColor), "Room names").toBe(indicator);
   });
 
   // One ordering rule: a press always shows over hover, for every variant.

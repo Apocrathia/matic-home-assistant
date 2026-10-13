@@ -1,4 +1,4 @@
-import { LitElement, css, html, nothing } from "lit";
+import { LitElement, adoptStyles, css, html, nothing } from "lit";
 import { controls } from "./controls";
 import { renderDrawTools } from "./draw-tools";
 import { icon, iconFit, iconHelp, iconOrbitLeft, iconOrbitRight, iconRoomNames, iconTiltDown, iconTiltUp } from "./icons";
@@ -13,6 +13,7 @@ import { MAP_CANVAS_TAG } from "./element-tags";
 import { GestureController, isNativeSelectControl } from "./gesture-controller";
 import { RendererController, type RendererDiagnostics } from "./renderer-controller";
 import {
+  canSelectRooms,
   canShowExactPose,
   canShowLiveMap,
   initialWorkspaceState,
@@ -128,6 +129,10 @@ export class MaticMapCanvasV4 extends LitElement {
     :host([narrow]) ::slotted(.floor-switcher) { inline-size: 7rem; }
     :host([narrow]) .fit { min-inline-size: 44px; padding-inline: var(--ms-space-2); }
     :host([narrow]) .fit .ms-btn__label { display: none; }
+    /* Phone: the full detent leaves two rows, so "?" takes the bottom-left;
+       its popover keeps the top-right slot under Fit, above the camera steps. */
+    :host([narrow]) .map-extras { inset-inline-end: auto; inset-inline-start: 0; inset-block-end: var(--map-sheet-offset, 0px); }
+    :host([narrow]) .map-rail { --help-bottom: calc(var(--map-sheet-offset, 0px) + 44px + var(--ms-space-2)); }
 
     .map-tools, .view-switch, .appearance-switch, .camera-steps { display: flex; }
 
@@ -141,6 +146,7 @@ export class MaticMapCanvasV4 extends LitElement {
     }
     .map-dock .draw-tools--row { flex-direction: row; gap: var(--ms-space-1); }
     .map-dock .draw-tools button { padding-inline: var(--ms-space-2); }
+    @media (any-pointer: coarse) { .selection-chip .ms-btn--sm { min-inline-size: var(--ms-control); min-block-size: var(--ms-control); } }
     .selection-chip {
       display: flex;
       align-items: center;
@@ -164,28 +170,6 @@ export class MaticMapCanvasV4 extends LitElement {
     .navigation-help dt { font-weight: 750; }
     .navigation-help dd { margin: 0; color: var(--ms-text-quiet); }
 
-    .zone-overlay { position: absolute; inset: 0; z-index: 4; pointer-events: none; overflow: hidden; }
-    .zone-overlay svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
-    .zone-overlay path { stroke: var(--ms-resolved-indicator, var(--ms-accent)); stroke-width: 2; fill-opacity: .08; }
-    .zone-overlay path.invalid { stroke: var(--error-color, #b3261e); }
-    .zone-point { position: absolute; translate: -50% -50%; width: 44px; height: 44px; border: 0; border-radius: 50%; background: transparent; color: var(--ms-accent); pointer-events: auto; touch-action: none; cursor: grab; font: 700 12px system-ui; isolation: isolate; }
-    .zone-point::before { content: ""; position: absolute; inset: 10px; z-index: -1; border-radius: 50%; background: var(--ms-surface-card); border: 2px solid var(--ms-resolved-indicator, var(--ms-accent)); box-shadow: 0 1px 4px #0008; }
-    .zone-point[data-selected="true"] { color: var(--ms-on-accent); }
-    .zone-point[data-selected="true"]::before { background: var(--ms-accent); border-color: var(--ms-surface-card); }
-    .zone-point:focus-visible { outline: 3px solid var(--ms-resolved-indicator, var(--ms-accent)); outline-offset: 0; }
-    .zone-midpoint { font-size: 18px; }
-    .zone-midpoint::before { inset: 13px; background: var(--ms-surface-card); }
-    .zone-midpoint { color: var(--ms-accent); }
-    .zone-help { position: absolute; inset: auto auto 88px 50%; translate: -50% 0; width: max-content; max-width: calc(100% - 24px); display: grid; justify-items: center; gap: 6px; font-size: 12px; pointer-events: none; }
-    .zone-point-actions, .zone-guidance { display: flex; align-items: center; gap: 4px; max-width: 100%; padding: 4px; border-radius: 14px; pointer-events: auto; }
-    .zone-selection { padding-inline: 8px; color: var(--ms-text-quiet); white-space: nowrap; font-weight: 650; }
-    .zone-point-actions .ms-btn { white-space: nowrap; padding-inline: 10px; border-radius: 10px; font-size: 12px; }
-    .zone-point-actions .ms-btn + .ms-btn { border-inline-start: 1px solid var(--ms-line); }
-    .zone-guidance { padding: 6px 12px; gap: 8px; color: var(--ms-text-quiet); line-height: 1.4; }
-    .zone-guidance .ms-btn { flex-shrink: 0; }
-    .zone-feedback { max-width: 100%; padding: 8px 12px; border-radius: 12px; color: var(--ms-resolved-danger-text, var(--ms-danger)); pointer-events: auto; }
-    .zone-feedback[hidden] { display: none; }
-    .map-root[data-narrow="true"] .zone-help { bottom: 12px; }
     .keyboard-aim { display: none; position: absolute; z-index: 3; inset: 50% auto auto 50%; inline-size: 20px; block-size: 20px; translate: -50% -50%; border: 2px solid white; outline: 2px solid #111; border-radius: 50%; pointer-events: none; }
     .keyboard-aim::after { content: "+"; position: absolute; inset: 50% auto auto 50%; translate: -50% -50%; color: #111; font: bold 20px/1 sans-serif; text-shadow: 0 0 2px white; }
     .map-root:focus-visible .keyboard-aim { display: block; }
@@ -277,6 +261,7 @@ export class MaticMapCanvasV4 extends LitElement {
   localize?: Localize;
   dates?: DateFormat;
   outlineEditor?: OutlineEditor;
+  #zoneStyled = false;
   narrow = false;
   #helpLauncher: HTMLElement | null = null;
   #renderer: RendererController | null = null;
@@ -385,6 +370,12 @@ export class MaticMapCanvasV4 extends LitElement {
 
   protected override willUpdate(changed: PropertyValues<this>): void {
     if (changed.has("outlineEditor")) this.outlineEditor?.attach(this, () => this.#renderer, (intent) => this.#intent(intent));
+    // The editor's own rules (outline-editor.ts) arrive with it and are
+    // adopted before its handles render, so startup does not carry them.
+    if (this.outlineEditor && !this.#zoneStyled) {
+      this.#zoneStyled = true;
+      adoptStyles(this.renderRoot as ShadowRoot, [...MaticMapCanvasV4.styles, this.outlineEditor.styles]);
+    }
   }
 
   protected override updated(changed: PropertyValues<this>): void {
@@ -545,15 +536,19 @@ export class MaticMapCanvasV4 extends LitElement {
     // Draw forces the top view, so the view, appearance and camera groups are
     // noise there; the sheet owns the tools on a phone. Both leave only Fit
     // in the map rail because workspace visibility belongs to the app bar.
+    // Without a scene there is nothing to fit, switch or explain
+    // (home-rooms.md §11 MS-HOME-04), so the rail keeps nothing. A phone's
+    // Room names row is in Map options; its rail keeps the help "?".
     const showView = showScene && !draw;
     const showAppearance = showView && !narrow && state.view === "top";
     const showCamera = showView && state.view === "three";
-    const showTools = !locating;
-    const showExtras = !narrow && !draw;
+    const showTools = showScene && !locating;
+    const showExtras = showScene && !locating && !draw;
+    const showLabels = showExtras && !narrow;
 
     return html`
       <div class="map-rail" data-map-control>
-        <div class="map-context"><slot name="floor"></slot>
+        ${showScene ? html`<div class="map-context"><slot name="floor"></slot>
         ${showView ? html`
           <div class="view-switch ms-surface ms-surface--floating ms-segment" role="group" aria-label=${this.#t("map_view_label", "Map view")}>
             <button
@@ -570,8 +565,7 @@ export class MaticMapCanvasV4 extends LitElement {
             >${this.#t("map_view_top", "2D")}</button>
           </div>
         ` : nothing}
-
-        </div>
+        </div>` : nothing}
         ${showAppearance ? html`
           <div class="appearance-switch ms-surface ms-surface--floating ms-segment" role="group" aria-label=${this.#t("map_style_label", "Map style")}>
             <button
@@ -585,7 +579,7 @@ export class MaticMapCanvasV4 extends LitElement {
               type="button"
               aria-pressed=${String(state.appearance === "rooms")}
               @click=${() => this.#intent({ type: "set-appearance", appearance: "rooms" })}
-            >${this.#t("map_style_room_colours", "Room colors")}</button>
+            >${this.#t("v4_room_colours", "Room colors")}</button>
           </div>
         ` : nothing}
 
@@ -614,8 +608,9 @@ export class MaticMapCanvasV4 extends LitElement {
             ` : nothing}
           </div>
         ` : nothing}
-        ${!locating && showExtras ? html`
+        ${showExtras ? html`
           <div class="map-extras ms-surface ms-surface--floating ms-segment" role="group" aria-label=${this.#t("v4_map_display", "Map display")}>
+              ${showLabels ? html`
               <button
                 class="labels ms-btn"
                 type="button"
@@ -623,6 +618,7 @@ export class MaticMapCanvasV4 extends LitElement {
                 @click=${() => this.#intent({ type: "toggle-labels" })}
                 title=${this.#t("v4_room_names", "Room names")}
               >${icon(iconRoomNames)}<span class="ms-btn__label">${this.#t("v4_room_names", "Room names")}</span></button>
+              ` : nothing}
               <button
                 class="help ms-btn ms-btn--icon"
                 type="button"
@@ -635,7 +631,7 @@ export class MaticMapCanvasV4 extends LitElement {
           </div>
         ` : nothing}
 
-        ${this.#navigationHelp && showScene && showExtras ? html`
+        ${this.#navigationHelp && showExtras ? html`
           <div
             id=${NAVIGATION_HELP_ID}
             class="navigation-help ms-surface ms-surface--floating"
@@ -648,6 +644,8 @@ export class MaticMapCanvasV4 extends LitElement {
               <button class="ms-btn ms-btn--sm" type="button" @click=${() => this.#closeHelp()}>${this.#t("v4_close", "Close")}</button>
             </header>
             <dl>
+              <dt>${this.#t("v4_touch", "Touch")}</dt>
+              <dd>${this.#t("v4_touch_help", "Drag to explore · pinch to zoom · twist two fingers to rotate")}</dd>
               <dt>${this.#t("v4_trackpad", "Trackpad")}</dt>
               <dd>${this.#t("v4_trackpad_help", "Scroll to pan · pinch to zoom · twist to rotate")}</dd>
               <dt>${this.#t("v4_mouse", "Mouse")}</dt>
@@ -679,11 +677,14 @@ export class MaticMapCanvasV4 extends LitElement {
     // chip would only duplicate it.
     const count = state.selection.roomIds.length;
     if (state.workflow === "rooms" && count > 0 && !this.narrow) {
+      // Clear shares the rows' gate (home-rooms.md §5 Selection gate): while
+      // the selection is held the chip keeps the count and the panel's Clear
+      // says why (startup budget, Task 6 ruling).
       return html`
         <div class="map-dock ms-surface ms-surface--floating" data-map-control>
           <div class="selection-chip ms-surface ms-surface--floating" data-map-control>
-            <span>${this.#t("v4_rooms_selected", "{count} selected", { count })}</span>
-            <button class="ms-btn ms-btn--sm" type="button" @click=${() => this.#clearSelection()}>${this.#t("v4_clear", "Clear")}</button>
+            <span>${this.#t("v4_rooms_selected", "{count} selected", { count: new Intl.NumberFormat(state.locale).format(count) })}</span>
+            ${canSelectRooms(state) ? html`<button class="ms-btn ms-btn--sm" type="button" @click=${() => this.#clearSelection()}>${this.#t("v4_clear", "Clear")}</button>` : nothing}
           </div>
         </div>
       `;

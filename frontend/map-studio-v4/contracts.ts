@@ -310,6 +310,8 @@ export interface WorkspaceState {
   readonly planDraft: PlanDraft;
   /** Inside the plan workflow: the saved plan's Run view or the draft's Edit view. */
   readonly planView: PlanView;
+  /** Where the open plan was opened from; Back and Escape from Run return there (plan.md §5 State). */
+  readonly planOrigin: PlanOrigin;
   /** The plan service write Home Assistant is handling while `command` is pending. */
   readonly pendingAction: PendingAction | null;
   /** The Edit row whose settings are open; one at a time. */
@@ -373,12 +375,18 @@ export type WorkspaceIntent =
       readonly coverageSetting?: CoverageSetting;
     }
   | { readonly type: "set-use-room-schedule"; readonly value: boolean }
+  | {
+    /** The whole-clean setting: the default for later rooms, written to every selected room (home-rooms.md §5 Settings). */
+    readonly type: "set-clean-settings";
+    readonly cleaningMode?: CleaningMode;
+    readonly coverageSetting?: CoverageSetting;
+  }
   | { readonly type: "retry-room-preview" }
   | { readonly type: "request-room-cadence-reset"; readonly planId: string; readonly roomId: string; readonly mode: "mop" | "coverage" }
   | { readonly type: "set-floor"; readonly floorId: string }
   | { readonly type: "select-entry"; readonly entryId: string }
   | { readonly type: "set-history"; readonly historyId: string | null }
-  | { readonly type: "select-plan"; readonly planId: string | null }
+  | { readonly type: "select-plan"; readonly planId: string | null; readonly origin?: "home" }
   | { readonly type: "select-area"; readonly areaId: string | null; readonly workflow?: "areaReview" }
   | { readonly type: "set-plan-view"; readonly view: PlanView; readonly roomId?: string | null }
   | { readonly type: "set-plan-enabled"; readonly enabled: boolean }
@@ -389,12 +397,16 @@ export type WorkspaceIntent =
   | { readonly type: "dismiss-top-layer" }
   | { readonly type: "return-live" };
 
-export type PrimaryActionKind = "primary" | "danger" | "neutral";
+export type PrimaryActionKind = "primary" | "danger" | "neutral" | "link";
+
+export type PlanOrigin = "home" | "plans";
 
 export interface PrimaryAction {
   readonly id: string;
   readonly label: string;
   readonly kind: PrimaryActionKind;
+  /** Kind `link` only: the page the action opens; the view renders an anchor and never dispatches it (home-rooms.md D2). */
+  readonly href?: string;
   readonly enabled: boolean;
   readonly reason?: string;
   /** Translation key for `label`; the view resolves `t(labelKey, label)`. */
@@ -522,6 +534,7 @@ const workspaceIntentTypes: Readonly<Record<WorkspaceIntent["type"], true>> = {
   "clear-selection": true,
   "patch-room-settings": true,
   "set-use-room-schedule": true,
+  "set-clean-settings": true,
   "retry-room-preview": true,
   "request-room-cadence-reset": true,
   "set-floor": true,

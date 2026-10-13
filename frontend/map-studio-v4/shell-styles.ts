@@ -64,14 +64,17 @@ export const shellStyles = [tokens, base, controls, css`
     .app-bar > .ms-btn, .app-bar > .overflow-wrap > .ms-btn { color: var(--ms-bar-text); }
     .app-bar > .ms-btn:focus-visible, .app-bar > .overflow-wrap > .ms-btn:focus-visible { outline-color: var(--ms-bar-text); }
 
-    .context-switcher { max-inline-size: 9rem; inline-size: auto; text-overflow: ellipsis; }
-    .floor-switcher { appearance: none; block-size: 44px; padding-inline-end: 1.8rem; background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%); background-position: calc(100% - 15px) 50%, calc(100% - 10px) 50%; background-size: 5px 5px; background-repeat: no-repeat; }
-    .floor-switcher:dir(rtl) { background-position: 10px 50%, 15px 50%; }
+    .context-switcher { max-inline-size: 9rem; inline-size: auto; min-block-size: var(--ms-control); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .floor-switcher, .robot-switcher { appearance: none; block-size: 44px; padding-inline-end: 1.8rem; background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%); background-position: calc(100% - 15px) 50%, calc(100% - 10px) 50%; background-size: 5px 5px; background-repeat: no-repeat; }
+    .floor-switcher:dir(rtl), .robot-switcher:dir(rtl) { background-position: 10px 50%, 15px 50%; }
 
 
+    /* The title keeps its own width (R24): a robot select beside it takes
+       the rest of the bar and ends in an ellipsis. */
     .title {
+      flex: none;
       overflow: hidden;
-      min-inline-size: 0;
+      min-inline-size: min-content;
       margin: 0;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -94,7 +97,10 @@ export const shellStyles = [tokens, base, controls, css`
       padding: var(--ms-space-1);
     }
     .overflow-menu .ms-row { justify-content: flex-start; }
-    .overflow-field { padding: var(--ms-space-2) var(--ms-space-3) var(--ms-space-1); }
+    .overflow-menu [role="menuitemcheckbox"] { justify-content: space-between; gap: var(--ms-space-3); }
+    .overflow-menu [role="group"] { display: grid; gap: var(--ms-space-1); }
+    .overflow-menu [role="group"] + * { border-block-start: 1px solid var(--ms-line); padding-block-start: var(--ms-space-1); }
+    .menu-heading { margin: 0; padding: var(--ms-space-2) var(--ms-space-3) var(--ms-space-1); color: var(--ms-text-quiet); font-size: var(--ms-t-sm); font-weight: var(--ms-w-bold); }
 
     .workspace {
       position: relative;
@@ -111,15 +117,6 @@ export const shellStyles = [tokens, base, controls, css`
 
     .canvas { position: relative; min-inline-size: 0; min-block-size: 0; }
     .map-canvas { block-size: 100%; }
-
-    .precision-popover {
-      position: absolute;
-      z-index: 9;
-      inset-inline-end: var(--ms-space-3);
-      inset-block-end: 5.5rem;
-      inline-size: 0;
-      block-size: 0;
-    }
 
     .inspector {
       --ms-local: var(--ms-surface-card);
@@ -173,7 +170,6 @@ export const shellStyles = [tokens, base, controls, css`
     .panel-heading bdi { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .panel-heading h2:focus { outline: none; }
     .panel-heading h2:focus-visible { outline: 2px solid var(--ms-resolved-indicator, var(--ms-accent)); outline-offset: 4px; border-radius: var(--ms-radius-xs); }
-    .panel-back { flex: none; }
     .panel-description { margin: var(--ms-space-1) 0 var(--ms-space-4); color: var(--ms-text-quiet); font-size: var(--ms-t-sm); line-height: var(--ms-lh-normal); }
 
     /* Notice slot and toast (shell.md §4, design-system.md .ms-notice): the
@@ -223,29 +219,34 @@ export const shellStyles = [tokens, base, controls, css`
     }
     .wide:has(.full-map-hud.above-dock) > .notice-toast { inset-block-end: calc(max(var(--ms-space-3), var(--ms-safe-bottom)) + var(--ms-control-lg) + 4 * var(--ms-space-3) + 3.5rem + var(--ms-space-2)); }
 
-    .quick-actions, .shelf { display: grid; gap: var(--ms-space-2); }
+    /* minmax(0, 1fr): a card's one-line name must not widen the column. */
+    .quick-actions, .shelf { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--ms-space-2); }
     .quick-actions .ms-row__body small { color: var(--ms-text-quiet); }
     /* The featured card is tinted with the accent, which drops the quiet
        text below AA (4.3:1 on the default light theme). Pull it towards
        the body text colour so it clears 4.5:1 on both schemes. */
     .quick-actions .ms-row--featured .ms-row__body small { color: color-mix(in srgb, var(--ms-text-quiet) 70%, var(--ms-text)); }
+    /* A demoted card drops its tint and reads in the disabled colour; it stays
+       in place and focusable, described by the one home reason (home-rooms.md §4). */
+    .quick-actions .ms-row[aria-disabled="true"] { --ms-local: var(--ms-surface-sunken); border-color: var(--ms-line); }
     .quick-actions .ms-row[aria-disabled="true"] .ms-row__lead { color: var(--ms-text-disabled); background: color-mix(in srgb, var(--ms-text) 6%, var(--ms-local)); }
-    .quick-actions .ms-row[aria-disabled="true"] .ms-row__body strong { color: var(--ms-text-disabled); }
-    .shelf-heading { margin: var(--ms-space-5) 0 var(--ms-space-2); color: var(--ms-text-quiet); font-size: var(--ms-t-sm); font-weight: var(--ms-w-bold); }
-    .host-state, .problem { display: grid; gap: var(--ms-space-2); padding: var(--ms-space-4); border: 1px solid var(--ms-line); border-radius: var(--ms-radius-md); }
-    .host-state h3 { margin: 0; font-size: var(--ms-t-md); }
-    .host-state p, .problem p, .loading { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-sm); line-height: var(--ms-lh-normal); }
-    .host-state .ms-btn, .problem .ms-btn { justify-self: start; text-decoration: none; }
-    .map-display { display: grid; gap: var(--ms-space-2); }
-    .map-display .ms-segment { --ms-local: var(--ms-surface-sunken); border: 1px solid var(--ms-line); border-radius: var(--ms-radius-md); background: var(--ms-local); }
-    .map-display .ms-segment .ms-btn { flex: 1; }
-    .ms-checkbox { display: flex; gap: var(--ms-space-2); align-items: center; min-block-size: var(--ms-control); font-size: var(--ms-t-sm); }
-    .ms-checkbox input { inline-size: 1.25rem; block-size: 1.25rem; margin: 0; accent-color: var(--ms-resolved-indicator, var(--ms-accent)); }
+    .quick-actions .ms-row[aria-disabled="true"] :is(strong, small, .card-lines) { color: var(--ms-text-disabled); }
+    .home-actions { display: flex; margin: 0 0 var(--ms-space-4); }
+    /* The plan card's name stays on one line; its due lines clamp to two
+       (home-rooms.md §5 Cards). The button's name still carries all of it. */
+    .quick-actions .card-title { display: flex; gap: var(--ms-space-1) var(--ms-space-2); align-items: center; min-inline-size: 0; }
+    .quick-actions .card-name { overflow: hidden; min-inline-size: 0; text-overflow: ellipsis; white-space: nowrap; }
+    .quick-actions .card-title .ms-chip { flex: none; }
+    .quick-actions .card-lines { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin-block-start: 0.125rem; color: var(--ms-text); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
+    .quick-actions .line { display: block; padding-inline-start: 1.25rem; text-indent: -1.25rem; }
+    .quick-actions .line .ms-icon { display: inline-block; inline-size: 1rem; block-size: 1rem; margin-inline-end: var(--ms-space-1); vertical-align: -0.1875rem; color: var(--ms-resolved-indicator, var(--ms-accent)); }
+    .quick-actions .line[data-tone="warning"] .ms-icon { color: var(--ms-warning); }
+    .problem { display: grid; gap: var(--ms-space-2); padding: var(--ms-space-4); border: 1px solid var(--ms-line); border-radius: var(--ms-radius-md); }
+    .problem p, .loading { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-sm); line-height: var(--ms-lh-normal); }
+    .problem .ms-btn { justify-self: start; text-decoration: none; }
 
     .action-bar { display: grid; gap: var(--ms-space-2); margin-block-start: auto; padding-block-start: var(--ms-space-4); }
-    .action-summary { margin: 0; overflow: hidden; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); text-overflow: ellipsis; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
     .action-reason { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); text-align: center; }
-    .action-jump { text-decoration: underline; }
     .paired { grid-template-columns: 1fr 1fr; align-items: center; }
     .paired .action-reason { grid-column: 1 / -1; order: 1; }
     .ms-btn--primary[aria-disabled="true"] { --ms-local: var(--ms-surface-sunken); background: var(--ms-local); border-color: transparent; }
@@ -299,9 +300,6 @@ export const shellStyles = [tokens, base, controls, css`
 
     .dialog h2 { margin: 0; font-size: var(--ms-t-lg); }
     .dialog p { color: var(--ms-text-quiet); font-size: var(--ms-t-sm); line-height: var(--ms-lh-normal); }
-    .dialog dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--ms-space-2) var(--ms-space-3); margin: var(--ms-space-3) 0 var(--ms-space-4); font-size: var(--ms-t-sm); }
-    .dialog dt { font-weight: var(--ms-w-bold); }
-    .dialog dd { margin: 0; color: var(--ms-text-quiet); }
     .dialog-actions { display: flex; justify-content: flex-end; gap: var(--ms-space-2); }
 
     /* Programmatic focus after a workflow change is for assistive tech; a ring on a heading reads as a control. */
@@ -345,7 +343,6 @@ export const shellStyles = [tokens, base, controls, css`
       user-select: none;
       -webkit-user-select: none;
     }
-    .narrow .sheet-grip:has(.sheet-back) { grid-template-columns: auto minmax(0, 1fr) auto auto; }
     .narrow .sheet-grip:active { cursor: grabbing; }
     /* The step buttons are compact on the grip line but still touch targets:
        full control height (44px) on a phone, not the 36px --sm size. */
@@ -404,18 +401,9 @@ export const shellStyles = [tokens, base, controls, css`
     .narrow .panel-top { max-block-size: 50%; padding-block-start: var(--ms-space-1); overflow: auto; overscroll-behavior: contain; }
     .narrow .sheet-body { flex: 1; min-block-size: 0; padding-block-end: var(--ms-space-1); overflow: auto; overscroll-behavior: contain; }
     .narrow .mobile-sheet .action-bar { flex: none; margin-block-start: 0; padding-block-start: var(--ms-space-2); }
-    .narrow .panel-back { inline-size: var(--ms-control); padding-inline: 0; }
-    .narrow .panel-back .ms-btn__label {
-      position: absolute;
-      overflow: hidden;
-      inline-size: 1px;
-      block-size: 1px;
-      margin: -1px;
-      clip-path: inset(50%);
-      white-space: nowrap;
-    }
     .narrow .title { font-size: var(--ms-t-md); }
     .narrow .context-switcher { max-inline-size: 7rem; }
+    .narrow .robot-switcher { flex: 1 1 auto; min-inline-size: 0; max-inline-size: none; }
     .narrow .full-map-hud { inset-block-end: max(var(--ms-space-3), var(--ms-safe-bottom)); }
     .narrow .workspace.full-map .mobile-sheet { display: none; }
     .narrow .sheet-scrim {
@@ -429,10 +417,10 @@ export const shellStyles = [tokens, base, controls, css`
       cursor: pointer;
     }
     .narrow .sheet-scrim:focus-visible { outline: 3px solid var(--ms-resolved-indicator, var(--ms-accent)); outline-offset: -3px; }
-    .narrow .precision-popover { position: static; inline-size: auto; block-size: auto; }
 
     @media (forced-colors: active) {
-      .dialog, .full-map-hud, .mobile-sheet, .host-state, .problem, .notice { border: 1px solid CanvasText; }
+      .dialog, .full-map-hud, .mobile-sheet, .problem, .notice { border: 1px solid CanvasText; }
+      .quick-actions .ms-row--featured:not([aria-disabled="true"]) { border-color: CanvasText; }
       .sheet-handle { background: CanvasText; }
     }
 

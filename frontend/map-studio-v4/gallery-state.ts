@@ -1,5 +1,8 @@
 import type {
+  CadenceReason,
+  ManualRoomSequencePreview,
   NextRunPreview,
+  NextRunPreviewBlocker,
   PlanRoom,
   PlansCatalog,
   RoomCadencePolicy,
@@ -61,7 +64,14 @@ export type GalleryScenario =
   | "task-in-progress"
   | "map-unavailable"
   | "map-limited"
-  | "room-limit";
+  | "room-limit"
+  | "rooms-ready"
+  | "rooms-busy"
+  | "rooms-failed"
+  | "rooms-empty"
+  | "home-plan-due"
+  | "home-plan-paused"
+  | "home-plan-blocked";
 
 const verified = (): WorkspaceState => ({
   ...initialWorkspaceState(),
@@ -561,6 +571,27 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
       };
     case "map-limited":
       return { ...state, coherence: "degraded" };
+    // The home plan card's third line kinds (home-rooms.md §5 Cards): due
+    // work in two rooms, a paused plan, a blocked run.
+    case "home-plan-due": {
+      const saved = savedDailyPlan();
+      const rooms = saved.rooms.map((room, index): PlanRoom => index === 0
+        ? { ...room, cadenceReasons: ["mop_due"] }
+        : index === 1 ? { ...room, coverageSetting: "heavy_duty", cadenceReasons: ["mop_due", "coverage_due"] } : room);
+      return withPlans(state, catalogWith([planWithRooms(saved, rooms)]));
+    }
+    case "home-plan-paused":
+      return withPlans(state, catalogWith([{
+        ...savedDailyPlan(),
+        enabled: false,
+        nextRunPreview: previewFor([], { blocker: "plan_disabled" }),
+        nextRunEstimateSeconds: null,
+      }]));
+    case "home-plan-blocked":
+      return withPlans(state, catalogWith([planWithRooms(savedDailyPlan(), savedDailyPlan().rooms, {
+        nextRunPreview: previewFor([], { blocker: "cadence_progress_unverified" }),
+        nextRunEstimateSeconds: null,
+      })]));
     case "room-limit": {
       const rooms = galleryRooms(100);
       const roomIds = rooms.map((room) => room.roomId);
@@ -578,35 +609,99 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
         },
       });
     }
+    // Rooms with four rooms selected (home-rooms.md §4 R3): Kitchen's mop is
+    // due, Living room's heavy duty rotation is due, and the clean runs in
+    // two parts.
+    case "rooms-ready":
+    case "rooms-busy":
+    case "rooms-failed": {
+      const roomIds = scenario === "rooms-failed" ? ["room-a", "room-b"] : ["room-a", "room-b", "room-c", "room-d"];
+      const rooms: WorkspaceState = {
+        ...state,
+        workflow: "rooms",
+        activity: scenario === "rooms-busy" ? "cleaning" : state.activity,
+        selection: {
+          ...state.selection,
+          roomIds,
+          roomSettings: roomIds.map((roomId): PlanRoom => ({ roomId, cleaningMode: "vacuum", coverageSetting: "standard" })),
+        },
+      };
+      if (scenario === "rooms-failed") {
+        return { ...rooms, manualRoomPreview: { status: "error", value: null, problem: "request-failed" } };
+      }
+      return withGalleryRoomPreview(rooms, {
+        reasons: { "room-a": ["mop_due"], "room-b": ["coverage_due"] },
+        effective: { "room-a": { cleaningMode: "vacuum_and_mop", coverageSetting: "standard" }, "room-b": { cleaningMode: "vacuum", coverageSetting: "heavy_duty" } },
+        missionBoundaries: [2],
+      });
+    }
+    case "rooms-empty":
+      return { ...withPlans(state, { ...syntheticPlans(), rooms: [], plans: [], selectedPlan: null }), workflow: "rooms" };
   }
 };
 
-export const withGalleryRoomPreview = (state: WorkspaceState): WorkspaceState => {
+export interface GalleryPreviewOverrides {
+  readonly reasons?: Readonly<Record<string, readonly CadenceReason[]>>;
+  readonly effective?: Readonly<Record<string, Pick<PlanRoom, "cleaningMode" | "coverageSetting">>>;
+  readonly missionBoundaries?: readonly number[];
+  readonly blocker?: NextRunPreviewBlocker | null;
+}
+
+// The overrides a preview was built with, keyed by its token, so the preview
+// keeps the backend's exact shape (effects compares previews by value) and
+// survives the gallery's structuredClone. A preview without overrides keeps the
+// plain gallery token.
+const GALLERY_PREVIEW_TOKEN = "e".repeat(64);
+const overridesByToken = new Map<string, GalleryPreviewOverrides>();
+const hasOverrides = (overrides: GalleryPreviewOverrides): boolean => Object.values(overrides).some((value) => value !== undefined);
+const tokenFor = (overrides: GalleryPreviewOverrides): string => {
+  if (!hasOverrides(overrides)) return GALLERY_PREVIEW_TOKEN;
+  const token = "e".repeat(56) + overridesByToken.size.toString(16).padStart(8, "0");
+  overridesByToken.set(token, overrides);
+  return token;
+};
+
+/**
+ * The gallery's stand-in for the backend's room preview. The overrides (due
+ * reasons, effective settings, parts and a blocker) are remembered by the
+ * preview's token, so the gallery's re-application after every intent keeps
+ * them, and later overrides merge over them; a loading or failed preview a
+ * scenario or test set deliberately is left alone.
+ */
+export const withGalleryRoomPreview = (state: WorkspaceState, overrides?: GalleryPreviewOverrides): WorkspaceState => {
   if (state.workflow !== "rooms") {
     return { ...state, manualRoomPreview: { status: "idle", value: null, problem: null } };
   }
+  if (!overrides && (state.manualRoomPreview.status === "loading" || state.manualRoomPreview.status === "error")) return state;
   const key = manualRoomPreviewKey(state);
   if (!key || !state.selection.entryId) return { ...state, manualRoomPreview: { status: "idle", value: null, problem: null } };
   const entry = state.resources.entry;
   const rooms = state.resources.plans.value?.rooms ?? [];
-  const preview = {
+  // New overrides merge over the ones the preview carries, so a test can add
+  // a blocker to a scenario's due work.
+  const carriedToken = state.manualRoomPreview.value?.preview.previewToken ?? GALLERY_PREVIEW_TOKEN;
+  const carried = overridesByToken.get(carriedToken) ?? {};
+  const applied: GalleryPreviewOverrides = overrides ? { ...carried, ...overrides } : carried;
+  const preview: ManualRoomSequencePreview = {
     entryId: state.selection.entryId,
     floorToken: "f".repeat(64),
-    previewToken: "e".repeat(64),
+    // A re-application without new overrides keeps its token.
+    previewToken: overrides ? tokenFor(applied) : carriedToken,
     rooms: state.selection.roomIds.flatMap((roomId) => {
       const settings = state.selection.roomSettings.find((room) => room.roomId === roomId);
       if (!settings) return [];
+      const effective = state.selection.useRoomSchedule ? applied.effective?.[roomId] : undefined;
       return [{
         roomId,
         name: rooms.find((room) => room.roomId === roomId)?.name ?? roomId,
-        cleaningMode: settings.cleaningMode,
-        coverageSetting: settings.coverageSetting,
-        cadenceReasons: [],
+        cleaningMode: effective?.cleaningMode ?? settings.cleaningMode,
+        coverageSetting: effective?.coverageSetting ?? settings.coverageSetting,
+        cadenceReasons: applied.reasons?.[roomId] ?? [],
       }];
     }),
-    missionBoundaries: [],
-    blocker: null,
-  } as const;
+    missionBoundaries: applied.missionBoundaries ?? [],
+    blocker: applied.blocker ?? null,
+  };
   return {
     ...state,
     manualRoomPreview: {
@@ -668,6 +763,13 @@ export const GALLERY_SCENARIOS: readonly GalleryScenario[] = [
   "map-unavailable",
   "map-limited",
   "room-limit",
+  "rooms-ready",
+  "rooms-busy",
+  "rooms-failed",
+  "rooms-empty",
+  "home-plan-due",
+  "home-plan-paused",
+  "home-plan-blocked",
 ];
 
 /** Every dialog the shell can show; the UX audit captures each one. */

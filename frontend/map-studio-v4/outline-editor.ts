@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { css, html, nothing } from "lit";
 import type { AreaOutline, AreaPoint } from "./area-outline";
 import type { AreaCircle } from "./backend-contracts";
 import type { CoordinateEditCapture, WorkspaceIntent, WorkspaceState } from "./contracts";
@@ -56,7 +56,35 @@ export const outlineCircles = (
  * history and persistence remain in the existing controllers. The shell builds
  * the editor; the canvas showing it attaches before it renders or forwards a
  * point. */
+// The handles, their actions, the guidance and the feedback line render in
+// the map canvas, which adopts these rules when the editor arrives.
+export const zoneStyles = css`
+    .zone-overlay { position: absolute; inset: 0; z-index: 4; pointer-events: none; overflow: hidden; }
+    .zone-overlay svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+    .zone-overlay path { stroke: var(--ms-resolved-indicator, var(--ms-accent)); stroke-width: 2; fill-opacity: .08; }
+    .zone-overlay path.invalid { stroke: var(--error-color, #b3261e); }
+    .zone-point { position: absolute; translate: -50% -50%; width: 44px; height: 44px; border: 0; border-radius: 50%; background: transparent; color: var(--ms-accent); pointer-events: auto; touch-action: none; cursor: grab; font: 700 12px system-ui; isolation: isolate; }
+    .zone-point::before { content: ""; position: absolute; inset: 10px; z-index: -1; border-radius: 50%; background: var(--ms-surface-card); border: 2px solid var(--ms-resolved-indicator, var(--ms-accent)); box-shadow: 0 1px 4px #0008; }
+    .zone-point[data-selected="true"] { color: var(--ms-on-accent); }
+    .zone-point[data-selected="true"]::before { background: var(--ms-accent); border-color: var(--ms-surface-card); }
+    .zone-point:focus-visible { outline: 3px solid var(--ms-resolved-indicator, var(--ms-accent)); outline-offset: 0; }
+    .zone-midpoint { font-size: 18px; }
+    .zone-midpoint::before { inset: 13px; background: var(--ms-surface-card); }
+    .zone-midpoint { color: var(--ms-accent); }
+    .zone-help { position: absolute; inset: auto auto 88px 50%; translate: -50% 0; width: max-content; max-width: calc(100% - 24px); display: grid; justify-items: center; gap: 6px; font-size: 12px; pointer-events: none; }
+    .zone-point-actions, .zone-guidance { display: flex; align-items: center; gap: 4px; max-width: 100%; padding: 4px; border-radius: 14px; pointer-events: auto; }
+    .zone-selection { padding-inline: 8px; color: var(--ms-text-quiet); white-space: nowrap; font-weight: 650; }
+    .zone-point-actions .ms-btn { white-space: nowrap; padding-inline: 10px; border-radius: 10px; font-size: 12px; }
+    .zone-point-actions .ms-btn + .ms-btn { border-inline-start: 1px solid var(--ms-line); }
+    .zone-guidance { padding: 6px 12px; gap: 8px; color: var(--ms-text-quiet); line-height: 1.4; }
+    .zone-guidance .ms-btn { flex-shrink: 0; }
+    .zone-feedback { max-width: 100%; padding: 8px 12px; border-radius: 12px; color: var(--ms-resolved-danger-text, var(--ms-danger)); pointer-events: auto; }
+    .zone-feedback[hidden] { display: none; }
+    .map-root[data-narrow="true"] .zone-help { bottom: 12px; }
+`;
+
 export class OutlineEditor {
+  readonly styles = zoneStyles;
   readonly #geometry: OutlineGeometry;
   #canvas!: MaticMapCanvasV4;
   #renderer!: () => RendererController | null;

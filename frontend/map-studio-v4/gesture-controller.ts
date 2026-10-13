@@ -359,8 +359,10 @@ export class GestureController {
       && this.#mode !== "pinch"
       && !this.#navigationUntilRelease
       && Math.hypot(pointer.x - pointer.startX, pointer.y - pointer.startY) < 7
-      && ["rooms", "plan"].includes(this.#callbacks.state().workflow)
-      && canEditCoordinates(this.#callbacks.state())) {
+      // Rooms lets the reducer refuse, so a held tap can be announced (R7);
+      // plan keeps its gate.
+      && (this.#callbacks.state().workflow === "rooms"
+        || (this.#callbacks.state().workflow === "plan" && canEditCoordinates(this.#callbacks.state())))) {
       const roomId = this.#renderer.roomAt(pointer.x, pointer.y);
       if (roomId) this.#callbacks.onRoom(roomId);
     }

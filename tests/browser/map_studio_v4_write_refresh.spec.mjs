@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { installPanelFixture } from "./map_studio_v4_panel_fixture.mjs";
+import { installPanelFixture, openPlanPicker } from "./map_studio_v4_panel_fixture.mjs";
 
 const catalog = {
   rooms: [{ room_id: "kitchen", name: "Kitchen" }], selected_plan: "daily",
@@ -41,7 +41,7 @@ async function mount(page, initialPlanCatalog = catalog) {
     document.body.append(panel);
   });
   const panel = page.locator(fixture.panelTag);
-  await panel.getByRole("button", { name: /^Run a plan/ }).click();
+  await openPlanPicker(panel);
   await panel.getByRole("button", { name: /^Daily/ }).click();
   return panel;
 }
@@ -89,7 +89,7 @@ for (const operation of ["save", "delete", "reset", "switch"]) {
     } else {
       await expect(panel.getByRole("heading", { level: 2, name: "Your plans" })).toBeVisible();
       await panel.getByRole("button", { name: "Back to all tasks", exact: true }).click();
-      await panel.getByRole("button", { name: /^Run a plan/ }).click();
+      await openPlanPicker(panel);
     }
     await expect(panel.getByRole("heading", { level: 2, name: "Your plans" })).toBeVisible();
     await expect.poll(() => page.evaluate(() => window.__panelFixture.planReads)).toBeGreaterThan(reads);
@@ -178,7 +178,7 @@ test("a switch on a plan deleted elsewhere goes back to Your plans and sends not
     document.body.append(panel);
   });
   const panel = page.locator(fixture.panelTag);
-  await panel.getByRole("button", { name: /^Run a plan/ }).click();
+  await openPlanPicker(panel);
   await panel.getByRole("button", { name: /^Daily/ }).click();
   await page.evaluate(() => { window.__planGone.armed = true; });
   await panel.getByRole("switch", { name: "Plan enabled", exact: true }).click();
