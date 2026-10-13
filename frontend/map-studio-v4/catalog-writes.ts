@@ -44,12 +44,21 @@ export interface CatalogWriteContext {
   settled(saved: boolean): void;
 }
 
+// A save sends the draft it captured when asked for. The editor stays open
+// while this module loads, so by the time it runs the user may have edited,
+// discarded or left that draft; sending it then would save what they no
+// longer have. Deletes and the Run switch send no draft and keep their rules.
+const draftIsLive = (captured: WorkspaceState, live: WorkspaceState): boolean => live.workflow === captured.workflow
+  && live.planDraft === captured.planDraft && live.areaDraft === captured.areaDraft
+  && live.draw.circles === captured.draw.circles && live.draw.outline === captured.draw.outline;
+
 export const saveArea = async (context: CatalogWriteContext): Promise<void> => {
   const { state, signal, store, backend, effects } = context;
   const { notice, canEditCoordinates, isAbort } = context.helpers;
   const entry = state.resources.entry;
   const draft = state.areaDraft;
   if (!entry || !canEditCoordinates(state) || !draft.name.trim() || !state.draw.circles.length) return;
+  if (!draftIsLive(state, store.value)) return;
   const current = (): boolean => !context.disposed() && !signal.aborted;
   store.patch({ command: "pending", notice: notice("info", "v4_notice_area_saving", "Saving area…") });
   try {
@@ -120,6 +129,7 @@ export const savePlan = async (context: CatalogWriteContext): Promise<void> => {
   const draft = state.planDraft;
   const plans = state.resources.plans.value;
   if (!plans || !draft.name.trim() || !draft.rooms.length || !canEditCoordinates(state)) return;
+  if (!draftIsLive(state, store.value)) return;
   let savedId = draft.id;
   // Home Assistant makes a new plan the default only when none exists.
   const request = planSaveRequest(draft, plans.selectedPlan === draft.id);

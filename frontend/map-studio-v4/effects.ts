@@ -2286,8 +2286,7 @@ export class EffectController {
   // A write starts when it is asked for: it keeps the state of that moment and
   // takes its mutation resource then, so a floor, entry or user change while
   // the module loads cancels it as one would cancel its request. Before it is
-  // sent it must still be admitted, as when the old code sent it at once, and
-  // its workflow and drafts must still be the live ones. If
+  // sent it must still be admitted, as when the old code sent it at once. If
   // the module failed, the write shows its own failure notice and `command`
   // stays as it was. `settled` hears once whether this write was saved; a
   // write refused, cancelled or failed is not.
@@ -2314,10 +2313,6 @@ export class EffectController {
       const writes = await this.#catalogWritesModule();
       const live = this.#store.value;
       if (controller.signal.aborted || !canEditCoordinates(live) || live.command === "pending") return;
-      // The editor stays open while the module loads, so the draft this write
-      // captured may have been edited, discarded or left; sending it then
-      // would save what the user no longer has.
-      if (live.workflow !== state.workflow || live.planDraft !== state.planDraft || live.areaDraft !== state.areaDraft) return;
       if (!writes) {
         this.#store.patch({ notice: failure });
         return;
