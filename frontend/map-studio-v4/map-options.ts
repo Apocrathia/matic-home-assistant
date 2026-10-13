@@ -17,8 +17,8 @@ export type MapOptionsContext = {
 /**
  * The ⋮ Map options menu (home-rooms.md §5 Display; design-system.md §5
  * Menus): the phone's Map display rows, the map detail choice and the two
- * actions. The shell loads it on the first press or at idle, since the menu
- * is off the startup path. A display or detail row keeps the menu open so
+ * actions. The shell loads it on the first press, since the menu is off the
+ * startup path. A display or detail row keeps the menu open so
  * the change shows on the map behind it; an action row closes it.
  */
 export class MapOptions {

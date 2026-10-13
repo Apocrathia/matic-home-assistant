@@ -234,7 +234,9 @@ test.describe("no robot (home-rooms.md §4 H10, D2)", () => {
 
 const panelOf = (gallery) => gallery.getByRole("complementary", { name: "Cleaning panel" });
 const homeReason = (gallery) => gallery.locator("#home-reason");
-const cards = (gallery) => gallery.getByRole("group", { name: "Cleaning choices" }).getByRole("button");
+// The three task cards; the "Your plans" row sits among them (R4 amended).
+const cards = (gallery) => gallery.getByRole("group", { name: "Cleaning choices" }).locator("button.ms-row--card");
+const plansRow = (gallery) => gallery.getByRole("group", { name: "Cleaning choices" }).getByRole("button", { name: "Your plans", exact: true });
 const mapsRows = (gallery) => gallery.locator(".maps .ms-row");
 const LOCATING = "Waiting for the robot to confirm which floor it is on.";
 const BUSY = "You can start a new clean when it's done.";
@@ -246,7 +248,9 @@ test.describe("home by state", () => {
       await expect(gallery.getByRole("heading", { name: "Choose what to clean", level: 2 })).toBeVisible();
       await expect(panelOf(gallery).locator(".panel-description")).toHaveCount(0);
       const group = gallery.getByRole("group", { name: "Cleaning choices" });
-      await expect(group.getByRole("button")).toHaveCount(3);
+      // Three cards and, under the plan card, the Your plans row (R4 amended).
+      await expect(group.getByRole("button")).toHaveCount(4);
+      await expect(cards(gallery)).toHaveCount(3);
       await expect(cards(gallery).nth(0)).toHaveAccessibleName(/^Clean rooms Pick rooms and clean them now\./);
       await expect(cards(gallery).nth(0)).toHaveClass(/ms-row--featured/);
       await expect(cards(gallery).nth(1)).toHaveAccessibleName(/^Run (a plan|Daily clean)/);
@@ -512,6 +516,51 @@ test.describe("the plan card", () => {
     await expect.poll(() => focusedText(page)).toMatch(/^button Run Daily clean/);
   });
 
+  for (const narrow of [true, false]) {
+    test(`a Your plans row under the card opens the picker and takes focus back (R4 amended, narrow: ${narrow})${narrow ? " @mobile" : ""}`, async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "ready", narrow });
+      const row = plansRow(gallery);
+      await expect(row).toBeVisible();
+      await expect(row).toHaveAccessibleName("Your plans");
+      await expect(row).not.toHaveClass(/ms-row--card/);
+      // Directly under the plan card, before the custom-area card.
+      expect(await planCard(gallery).evaluate((card) => card.nextElementSibling?.textContent.replace(/\s+/g, " ").trim())).toBe("Your plans");
+      await expect(cards(gallery)).toHaveCount(3);
+      await row.click();
+      expect((await snapshot(page)).workflow).toBe("plans");
+      await expect(gallery.getByRole("heading", { level: 2, name: "Your plans" })).toBeFocused();
+      // A plan opened from the picker still returns to the picker, and the picker to home.
+      await gallery.getByRole("button", { name: /^Daily clean/ }).click();
+      expect((await snapshot(page)).planOrigin).toBe("plans");
+      await gallery.getByRole("button", { name: "Back to plans" }).click();
+      await expect(gallery.getByRole("heading", { level: 2, name: "Your plans" })).toBeVisible();
+      await gallery.getByRole("button", { name: "Back to all tasks" }).click();
+      expect((await snapshot(page)).workflow).toBe("none");
+      await expect.poll(() => focusedText(page)).toBe("button Your plans");
+      await page.keyboard.press("Enter");
+      await expect(gallery.getByRole("heading", { level: 2, name: "Your plans" })).toBeFocused();
+      await page.keyboard.press("Escape");
+      expect((await snapshot(page)).workflow).toBe("none");
+      await expect.poll(() => focusedText(page)).toBe("button Your plans");
+    });
+  }
+
+  test("the Your plans row is held with the cards and absent when the card itself opens the picker", async ({ page }) => {
+    const busy = await loadGallery(page, { scenario: "cleaning" });
+    await expect(plansRow(busy)).toHaveAttribute("aria-disabled", "true");
+    await expect(plansRow(busy)).toHaveAccessibleDescription(BUSY);
+    await plansRow(busy).dispatchEvent("click");
+    expect((await snapshot(page)).workflow).toBe("none");
+    const picker = await loadGallery(page, { scenario: "ready" });
+    await picker.evaluate((element) => {
+      const state = element.getWorkspaceSnapshot();
+      const plans = state.resources.plans;
+      element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...plans, value: { ...plans.value, selectedPlan: null } } } });
+    });
+    await expect(planCard(picker)).toHaveAccessibleName(/^Run a plan/);
+    await expect(plansRow(picker)).toHaveCount(0);
+  });
+
   test("the picker still returns to its row (plan.md §5)", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "plans" });
     await openPlanPicker(gallery);
@@ -534,6 +583,9 @@ test.describe("the plan card", () => {
       await expect(planCard(gallery)).toHaveAccessibleName(/^Run a plan 1 saved plan$/);
       await planCard(gallery).click();
       expect((await snapshot(page)).workflow).toBe("plans");
+      // Back from the picker lands on the card (R18 / MS-KEY-01).
+      await gallery.getByRole("button", { name: "Back to all tasks" }).click();
+      await expect.poll(() => focusedText(page)).toMatch(/^button Run a plan/);
     }
   });
 
@@ -626,19 +678,26 @@ test.describe("the plan card", () => {
     await expect.poll(() => focusedText(page)).toMatch(/^button Open map diagnostics/);
   });
 
-  test("all three cards fit the half sheet at 390 and the third card starts on screen at 320 (§7) @mobile", async ({ page }) => {
+  // With the Your plans row under the plan card (R4 amended), the half sheet
+  // at 390 shows two cards and the row whole and the third card's top edge
+  // (the §7 320 rule); at 320, where titles wrap, the row's top edge stays
+  // visible and the third card is reached by scrolling (ruling in the ledger).
+  test("two cards and the Your plans row fit the half sheet at 390 with the third card's top edge; at 320 the row's top edge (§7) @mobile", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "home-plan-due", narrow: true });
     const body = await panelOf(gallery).locator(".sheet-body").boundingBox();
-    for (const index of [0, 1, 2]) {
-      const box = await cards(gallery).nth(index).boundingBox();
-      expect(box.y, `card ${index} top`).toBeGreaterThanOrEqual(body.y);
-      expect(box.y + box.height, `card ${index} bottom`).toBeLessThanOrEqual(body.y + body.height + 0.5);
+    for (const [label, locator] of [["card 0", cards(gallery).nth(0)], ["card 1", cards(gallery).nth(1)], ["row", plansRow(gallery)]]) {
+      const box = await locator.boundingBox();
+      expect(box.y, `${label} top`).toBeGreaterThanOrEqual(body.y);
+      expect(box.y + box.height, `${label} bottom`).toBeLessThanOrEqual(body.y + body.height + 0.5);
     }
+    const last = await cards(gallery).nth(2).boundingBox();
+    expect(last.y).toBeGreaterThanOrEqual(body.y);
+    expect(last.y).toBeLessThan(body.y + body.height);
     const small = await loadGallery(page, { scenario: "home-plan-due", viewport: { width: 320, height: 844 } });
     const smallBody = await panelOf(small).locator(".sheet-body").boundingBox();
-    const third = await cards(small).nth(2).boundingBox();
-    expect(third.y).toBeGreaterThanOrEqual(smallBody.y);
-    expect(third.y).toBeLessThan(smallBody.y + smallBody.height);
+    const row = await plansRow(small).boundingBox();
+    expect(row.y).toBeGreaterThanOrEqual(smallBody.y);
+    expect(row.y).toBeLessThan(smallBody.y + smallBody.height);
   });
 });
 
@@ -964,6 +1023,28 @@ for (const narrow of [true, false]) {
       await forceSelect(coverage, "quick");
       await expect.poll(async () => (await snapshot(page)).selection.roomSettings.find((room) => room.roomId === "room-a").coverageSetting).toBe(before);
       await expect(coverage).toHaveValue(before);
+    });
+
+    test("Escape peels the menu, then the disclosure, then Rooms (Review Focus 4)", async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "ready", narrow });
+      await cards(gallery).nth(0).click();
+      await roomsGroup(gallery).getByText("Kitchen", { exact: true }).click();
+      const kitchen = gallery.getByRole("button", { name: "Settings for Kitchen" });
+      await kitchen.click();
+      await expect(kitchen).toHaveAttribute("aria-expanded", "true");
+      await gallery.getByRole("button", { name: "Map options", exact: true }).click();
+      await expect(gallery.getByRole("menu", { name: "Map options" })).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(gallery.getByRole("menu", { name: "Map options" })).toHaveCount(0);
+      await expect.poll(() => focusedText(page)).toBe("button Map options");
+      await expect(kitchen).toHaveAttribute("aria-expanded", "true");
+      await page.keyboard.press("Escape");
+      await expect(kitchen).toHaveAttribute("aria-expanded", "false");
+      await expect(kitchen).toBeFocused();
+      expect((await snapshot(page)).workflow).toBe("rooms");
+      await page.keyboard.press("Escape");
+      await expect.poll(async () => (await snapshot(page)).workflow).toBe("none");
+      await expect.poll(() => focusedText(page)).toMatch(/^button Clean rooms/);
     });
 
     test("Escape closes an open disclosure first and leaves Rooms second (§5 Keyboard)", async ({ page }) => {

@@ -874,10 +874,10 @@ export class MaticMapShellV4 extends LitElement {
   }
 
   // Opening a workflow any other way than from a home launcher clears the
-  // launcher, so Back lands on the heading (home-rooms.md R18). Back itself
-  // comes through here with "none" and must keep it.
+  // launcher, so Back lands on the heading (home-rooms.md R18). Back does
+  // not come through here.
   #workflow(workflow: Workflow, launcher?: EventTarget | null): void {
-    if (workflow !== "none") this.#homeLauncher = null;
+    this.#homeLauncher = null;
     this.#leave({ type: "open-workflow", workflow }, launcher);
   }
 
@@ -1369,13 +1369,14 @@ export class MaticMapShellV4 extends LitElement {
     else this.#focusPanel();
   }
 
-  #shelfRow(label: string, glyph: string, workflow: Workflow, detail?: string, disabled = false) {
+  #shelfRow(label: string, glyph: string, workflow: Workflow, detail?: string, disabled = false, described = disabled, classes = "ms-row") {
     return html`
       <button
-        class="ms-row"
+        class=${classes}
         type="button"
         data-launcher=${workflow}
         aria-disabled=${disabled ? "true" : nothing}
+        aria-describedby=${described ? "home-reason" : nothing}
         @click=${this.#launch(workflow, disabled)}
       >
         <span class="ms-row__lead">${icon(glyph)}</span>
@@ -1462,20 +1463,10 @@ export class MaticMapShellV4 extends LitElement {
     const plans = plansResource.value;
     const noRooms = plans !== null && plans.rooms.length === 0;
     const roomsDisabled = held || noRooms;
-    const card = (launcher: Workflow, featured: boolean, glyph: string, disabled: boolean, title: unknown, detail: unknown) => html`
-      <button
-        class=${featured ? "ms-row ms-row--card ms-row--featured" : "ms-row ms-row--card"}
-        type="button"
-        data-launcher=${launcher}
-        aria-disabled=${disabled ? "true" : nothing}
-        aria-describedby=${held ? "home-reason" : nothing}
-        @click=${this.#launch(launcher, disabled)}
-      >
-        <span class="ms-row__lead">${icon(glyph)}</span>
-        <span class="ms-row__body"><strong>${title}</strong><small>${detail}</small></span>
-        <span class="ms-row__trail">${icon(iconChevronRight)}</span>
-      </button>
-    `;
+    // A card disabled on its own (no named rooms) carries its reason in its
+    // detail; a held one is described by the home reason.
+    const card = (launcher: Workflow, featured: boolean, glyph: string, disabled: boolean, title: string, detail: string) =>
+      this.#shelfRow(title, glyph, launcher, detail, disabled, held, featured ? "ms-row ms-row--card ms-row--featured" : "ms-row ms-row--card");
     return html`
       ${kind === "map-unavailable" || kind === "map-limited" ? html`
         <div class="home-actions">
@@ -1492,6 +1483,7 @@ export class MaticMapShellV4 extends LitElement {
           t("v4_clean_rooms", "Clean rooms"),
           !held && noRooms ? t("v4_no_rooms_reason", "Can't clean rooms until you name them in the Matic app.") : t("v4_rooms_quick_detail", "Pick rooms and clean them now."))}
         ${this.#planCard(state, held)}
+        ${this.#plansRow(state, held)}
         ${card("draw", false, iconNewArea, held,
           t("v4_custom_areas", "Clean custom area"),
           t("v4_areas_quick_detail", "Draw or choose a custom area"))}
@@ -1518,9 +1510,9 @@ export class MaticMapShellV4 extends LitElement {
     const [before = "", after = ""] = plan ? t("v4_run_named_plan", "Run {plan}", { plan: "\u0000" }).split("\u0000") : [];
     const open = () => {
       if (held) return;
-      this.#homeLauncher = "plan";
       if (plan) this.#intent({ type: "select-plan", planId: plan.id, origin: "home" });
       else this.#workflow("plans");
+      this.#homeLauncher = "plan";
     };
     if (!held) this.#launchers.add("plans");
     return html`
@@ -1562,6 +1554,15 @@ export class MaticMapShellV4 extends LitElement {
     `;
   }
 
+  // While the card opens Run (D1), the picker needs its own way in: a quiet
+  // row under the card (R4 amended by the owner, 2026-10-13). Without a
+  // default plan the card itself opens the picker, so the row is not shown.
+  #plansRow(state: WorkspaceState, held: boolean) {
+    const plans = state.resources.plans.value;
+    if (!plans?.plans.some((candidate) => candidate.id === plans.selectedPlan)) return nothing;
+    return this.#shelfRow(this.#t("v4_your_plans", "Your plans"), iconPlan, "plans", undefined, held);
+  }
+
   #workflowBody(state: WorkspaceState, narrow: boolean) {
     if (state.workflow === "none") return this.#entry(state);
     const tools = this.#tools(state.workflow);
@@ -1600,7 +1601,7 @@ export class MaticMapShellV4 extends LitElement {
         aria-label=${name}
         title=${grip ? name : nothing}
         data-dialog-launcher="discardDraft"
-        @click=${(event: Event) => this.#workflow(plan ? "plans" : "none", event.currentTarget)}
+        @click=${(event: Event) => this.#leave({ type: "open-workflow", workflow: plan ? "plans" : "none" }, event.currentTarget)}
       >${icon(iconBack)}${grip ? nothing : html`<span class="ms-btn__label">${plan ? this.#t("v4_your_plans", "Your plans") : this.#t("v4_all_tasks", "All tasks")}</span>`}</button>
     `;
   }

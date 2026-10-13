@@ -3,7 +3,7 @@ import type { PropertyValues } from "lit";
 import { controls } from "./controls";
 import { icon, iconChevronDown, iconChevronRight, iconChevronUp, iconDue, iconNoticeWarning } from "./icons";
 import { base, tokens } from "./tokens";
-import type { CadenceReason, CleaningMode, CoverageSetting, NextRunPreviewRoom, PlanRoom } from "./backend-contracts";
+import type { CadenceReason, CleaningMode, CoverageSetting, NextRunPreviewRoom } from "./backend-contracts";
 import {
   MAX_ROOM_SEQUENCE_SIZE,
   type Localize,
@@ -137,6 +137,8 @@ export class MaticRoomsViewV4 extends LitElement {
 .ms-check { display: flex; gap: var(--ms-space-3); align-items: center; min-inline-size: 0; min-block-size: var(--ms-control); padding: var(--ms-space-2) var(--ms-space-3); cursor: pointer; }
 .ms-check input { flex: none; inline-size: 1.25rem; block-size: 1.25rem; margin: 0; accent-color: var(--ms-resolved-indicator, var(--ms-accent)); cursor: pointer; }
 .ms-check input[aria-disabled="true"] { cursor: not-allowed; }
+/* A held row reads in the disabled colour, as a demoted card does. */
+.ms-check:has(input[aria-disabled="true"]) :is(bdi, small) { color: var(--ms-text-disabled); }
 .row-lines { display: grid; flex: 1; gap: 0.125rem; min-inline-size: 0; }
 .row-lines bdi { overflow: hidden; font-weight: var(--ms-w-bold); text-overflow: ellipsis; white-space: nowrap; }
 .row-lines small { color: color-mix(in srgb, var(--ms-text) 78%, var(--ms-local)); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
@@ -170,11 +172,27 @@ export class MaticRoomsViewV4 extends LitElement {
     if (this._open && this._open !== "settings" && !this.state.selection.roomIds.includes(this._open)) this._open = null;
   }
 
+  override connectedCallback(): void {
+    super.connectedCallback();
+    window.addEventListener("keydown", this.#keydown, true);
+  }
+
+  override disconnectedCallback(): void {
+    window.removeEventListener("keydown", this.#keydown, true);
+    super.disconnectedCallback();
+  }
+
   // Escape closes the open disclosure and returns to its button before the
-  // shell sees it (shell.md §5 Escape order); a native select keeps Escape.
+  // shell sees it (shell.md §5 Escape order): from inside the view, or from
+  // the shell's closed Map options button, where Escape 1 left focus after
+  // closing the menu (Review Focus 4). A native select keeps Escape.
   readonly #keydown = (event: KeyboardEvent): void => {
     if (event.key !== "Escape" || this._open === null || isNativeSelectControl(event)) return;
     if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+    const path = event.composedPath();
+    const target = path[0];
+    const menuButton = target instanceof HTMLElement && target.getAttribute("aria-haspopup") === "menu" && target.getAttribute("aria-expanded") !== "true";
+    if (!path.includes(this) && !menuButton) return;
     event.preventDefault();
     const selector = this._open === "settings" ? '[data-disclosure="settings"]' : `[data-room-disclosure="${CSS.escape(this._open)}"]`;
     this._open = null;
@@ -393,7 +411,7 @@ export class MaticRoomsViewV4 extends LitElement {
         ? t("v4_no_rooms_plans", "This floor has no rooms yet. Name rooms in the Matic app to see them here.")
         : t("v4_choose_rooms_detail", "Choose rooms on the map or in the list.");
     return html`
-      <div class="stack" @keydown=${this.#keydown}>
+      <div class="stack">
         <p class="description" id="rooms-description">${description}</p>
         ${locked && !busy ? html`<span class="sr-only" id="rooms-held">${t("v4_reason_clean_rooms_verification", "Waiting for the map to be ready.")}</span>` : nothing}
         ${empty ? nothing : html`
@@ -422,6 +440,5 @@ export class MaticRoomsViewV4 extends LitElement {
   }
 }
 
-export type { PlanRoom };
 
 if (!customElements.get(ROOMS_VIEW_TAG)) customElements.define(ROOMS_VIEW_TAG, MaticRoomsViewV4);

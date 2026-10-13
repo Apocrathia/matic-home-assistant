@@ -240,8 +240,7 @@ export const shellStyles = [tokens, base, controls, css`
        in place and focusable, described by the one home reason (home-rooms.md §4). */
     .quick-actions .ms-row[aria-disabled="true"] { --ms-local: var(--ms-surface-sunken); border-color: var(--ms-line); }
     .quick-actions .ms-row[aria-disabled="true"] .ms-row__lead { color: var(--ms-text-disabled); background: color-mix(in srgb, var(--ms-text) 6%, var(--ms-local)); }
-    .quick-actions .ms-row[aria-disabled="true"] .ms-row__body strong,
-    .quick-actions .ms-row[aria-disabled="true"] .ms-row__body small { color: var(--ms-text-disabled); }
+    .quick-actions .ms-row[aria-disabled="true"] :is(strong, small, .card-lines) { color: var(--ms-text-disabled); }
     .home-actions { display: flex; margin: 0 0 var(--ms-space-4); }
     /* The plan card's name stays on one line; its due lines clamp to two
        (home-rooms.md §5 Cards). The button's name still carries all of it. */
@@ -252,7 +251,6 @@ export const shellStyles = [tokens, base, controls, css`
     .quick-actions .line { display: block; padding-inline-start: 1.25rem; text-indent: -1.25rem; }
     .quick-actions .line .ms-icon { display: inline-block; inline-size: 1rem; block-size: 1rem; margin-inline-end: var(--ms-space-1); vertical-align: -0.1875rem; color: var(--ms-resolved-indicator, var(--ms-accent)); }
     .quick-actions .line[data-tone="warning"] .ms-icon { color: var(--ms-warning); }
-    .quick-actions .ms-row[aria-disabled="true"] .card-lines { color: var(--ms-text-disabled); }
     .problem { display: grid; gap: var(--ms-space-2); padding: var(--ms-space-4); border: 1px solid var(--ms-line); border-radius: var(--ms-radius-md); }
     .problem p, .loading { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-sm); line-height: var(--ms-lh-normal); }
     .problem .ms-btn { justify-self: start; text-decoration: none; }

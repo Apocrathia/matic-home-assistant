@@ -8,7 +8,7 @@ should stop. Open **Matic Map** in the Home Assistant sidebar to get started.
 ## Saved plans
 
 Choose **Create a plan**. On the home screen, **Run {plan}** opens your
-selected plan, and **Run a plan** lists every plan. Each plan saves:
+selected plan, and **Your plans** under it lists every plan. Each plan saves:
 
 - Included rooms and their order.
 - Cleaning mode and vacuum coverage for each room.

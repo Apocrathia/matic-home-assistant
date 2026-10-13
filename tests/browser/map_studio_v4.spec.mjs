@@ -2133,7 +2133,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(gallery.locator(".status-copy small")).toHaveText("Cleaning can't start");
     await expect(gallery.locator("#home-reason")).toContainText("Home Assistant can show this map but can't confirm it well enough to start cleaning.");
     // The cards stay, demoted (home-rooms.md §4 H8 layout).
-    await expect(gallery.locator('.quick-actions .ms-row[aria-disabled="true"]')).toHaveCount(3);
+    await expect(gallery.locator('.quick-actions .ms-row[aria-disabled="true"]')).toHaveCount(4);
     const retry = gallery.locator(".home-actions").getByRole("button", { name: "Try again", exact: true });
     await expect(retry).not.toHaveAttribute("aria-disabled", "true");
     await page.evaluate((tag) => {
@@ -5428,12 +5428,13 @@ test.describe("Map Studio v0.4 foundation", () => {
     // Three task cards, then the Maps group (home-rooms.md §3). The entry never offers a
     // phantom "Run plan" before a plan has been chosen.
     const quick = gallery.locator(".quick-actions").getByRole("button");
-    await expect(quick).toHaveCount(3);
+    await expect(quick).toHaveCount(4);
     await expect(quick.nth(0)).toHaveAccessibleName(/^Clean rooms Pick rooms and clean them now\./);
     await expect(quick.nth(0)).toHaveClass(/ms-row--featured/);
-    // The default plan's card (home-rooms.md D1).
+    // The default plan's card (home-rooms.md D1), then the Your plans row (R4 amended).
     await expect(quick.nth(1)).toHaveAccessibleName(/^Run Daily clean 3 rooms/);
-    await expect(quick.nth(2)).toHaveAccessibleName(/^Clean custom area Draw or choose a custom area/);
+    await expect(quick.nth(2)).toHaveAccessibleName("Your plans");
+    await expect(quick.nth(3)).toHaveAccessibleName(/^Clean custom area Draw or choose a custom area/);
     await expect(gallery.getByRole("heading", { name: "Maps", level: 3 })).toBeVisible();
     await expect(gallery.locator(".maps").getByRole("button", { name: /^Map history Browse earlier floor maps\./ })).toBeVisible();
     await expect(gallery.getByRole("button", { name: /^Run plan/ })).toHaveCount(0);
