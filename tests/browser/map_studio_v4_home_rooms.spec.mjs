@@ -1237,6 +1237,66 @@ test.describe("the Rooms view: RTL and forced colors", () => {
     await expect(row).toHaveCSS("background-color", highlight);
     await expect(roomBox(gallery, "Kitchen")).toBeVisible();
   });
+
+  // Walkthrough item 4. Chromium's emulation resolves Highlight to a
+  // translucent fill and HighlightText to white, and `forced-color-adjust:
+  // auto` paints a Canvas backplate behind text, so a Highlight/HighlightText
+  // button must opt out of the backplate or its label sits white on white.
+  // The share of light pixels inside the label's box tells the two apart: a
+  // backplate fills it; glyphs on the Highlight fill do not.
+  test("forced colors keep the primary and Stop labels readable and every button's text off its fill", async ({ page, browserName }) => {
+    test.skip(browserName !== "chromium", "forced-colours emulation is Chromium's");
+    await page.emulateMedia({ forcedColors: "active" });
+    const lightShare = async (locator) => {
+      const box = await locator.evaluate((element) => {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        const { x, y, width, height } = range.getBoundingClientRect();
+        return { x: Math.floor(x), y: Math.floor(y), width: Math.ceil(width), height: Math.ceil(height) };
+      });
+      const png = await page.screenshot({ clip: box });
+      return page.evaluate(async (data) => {
+        const image = new Image();
+        image.src = `data:image/png;base64,${data}`;
+        await image.decode();
+        const canvas = document.createElement("canvas");
+        canvas.width = image.width;
+        canvas.height = image.height;
+        const context = canvas.getContext("2d");
+        context.drawImage(image, 0, 0);
+        const pixels = context.getImageData(0, 0, image.width, image.height).data;
+        let light = 0;
+        for (let index = 0; index < pixels.length; index += 4) {
+          if (pixels[index] + pixels[index + 1] + pixels[index + 2] > 600) light += 1;
+        }
+        return light / (pixels.length / 4);
+      }, png.toString("base64"));
+    };
+    for (const [scenario, name, viewport] of [
+      ["rooms-ready", "Clean 4 rooms", { width: 1024, height: 768 }],
+      ["cleaning", "Stop cleaning", { width: 390, height: 844 }],
+    ]) {
+      const gallery = await loadGallery(page, { scenario, narrow: viewport.width < 600, viewport });
+      const button = gallery.locator(".action-bar").getByRole("button", { name, exact: true });
+      await expect(button).toBeVisible();
+      await expect(button).toHaveCSS("forced-color-adjust", "none");
+      expect(await lightShare(button)).toBeLessThan(0.6);
+      const clashes = await gallery.evaluate((root) => {
+        const found = [];
+        const walk = (node) => {
+          for (const element of node.querySelectorAll(".ms-btn, .ms-chip")) {
+            const { color, backgroundColor } = getComputedStyle(element);
+            if (color === backgroundColor) found.push(`${element.className}: ${color}`);
+            if (element.shadowRoot) walk(element.shadowRoot);
+          }
+          for (const element of node.querySelectorAll("*")) if (element.shadowRoot) walk(element.shadowRoot);
+        };
+        walk(root.shadowRoot ?? root);
+        return found;
+      });
+      expect(clashes).toEqual([]);
+    }
+  });
 });
 
 // Task 6: the map and list stay in step, map taps are announced, the summary

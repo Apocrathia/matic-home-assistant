@@ -123,8 +123,6 @@ export const tokens = css`
 --ms-warning: CanvasText;
 --ms-success: CanvasText;
 --ms-shadow-1: none;
---ms-shadow-2: none;
---ms-shadow-3: none;
 }
 }
 `;
