@@ -1438,6 +1438,22 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(dialog, "an area that is not selected changes no selection").not.toContainText("custom area");
   });
 
+  test("area review holds its controls while a command runs, so Delete can't seem to run", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "area-review-rebind" });
+    const remove = gallery.getByRole("button", { name: "Delete area" });
+    const name = gallery.getByRole("textbox", { name: "Area name" });
+    await expect(remove).toBeEnabled();
+    await expect(name).toBeEnabled();
+    await gallery.evaluate((element) => element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), command: "pending" }));
+    await expect(remove).toBeDisabled();
+    await expect(name).toBeDisabled();
+    await remove.click({ force: true });
+    await expect(gallery.getByRole("dialog")).toHaveCount(0);
+    expect(await gallery.evaluate((element) => element.getWorkspaceSnapshot().dialog)).toBeNull();
+    await gallery.evaluate((element) => element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), command: "idle" }));
+    await expect(remove).toBeEnabled();
+  });
+
   test("Delete shows and its dialog stands only while the catalog holds the saved item", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "area-review-rebind" });
     const unresolved = (patch) => gallery.evaluate((element, { patch: kind }) => {
@@ -9776,6 +9792,18 @@ test.describe("plan shell", () => {
     await expect(remove).toHaveAccessibleDescription("Can't delete this plan until you save or cancel your changes.");
     await remove.click({ force: true });
     await expect(gallery.getByRole("dialog")).toHaveCount(0);
+    // A delete asked for while a command is pending would be refused after
+    // its dialog closed, so Delete waits and says why.
+    for (const [held, reason] of [
+      [{ command: "pending", pendingAction: "save-plan" }, "Waiting for Home Assistant to save the plan."],
+      [{ command: "pending", pendingAction: null }, "Waiting for the robot to finish what it's doing."],
+    ]) {
+      await patch(page, { planDraft: { dirty: false }, ...held });
+      await expect(remove, reason).toHaveAccessibleDescription(reason);
+      await expect(remove).toHaveAttribute("aria-disabled", "true");
+      await remove.click({ force: true });
+      await expect(gallery.getByRole("dialog")).toHaveCount(0);
+    }
     await scenario(gallery, "plan-new");
     await expect(gallery.getByRole("heading", { level: 2 })).toHaveText("New plan");
     await expect(more).toHaveCount(0);

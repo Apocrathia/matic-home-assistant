@@ -92,8 +92,18 @@ export class MaticPlanToolsV4 extends LitElement {
     super.disconnectedCallback();
   }
 
+  // Delete waits for an unsaved edit and for any command still pending: a
+  // write asked for then would be refused while the dialog closed as if it
+  // had been sent.
+  #deleteReason(): string | null {
+    const { command, pendingAction, planDraft } = this.state;
+    if (pendingAction === "save-plan") return this.#t("v4_reason_plan_saving", "Waiting for Home Assistant to save the plan.");
+    if (planDraft.dirty) return this.#t("v4_delete_plan_unsaved", "Can't delete this plan until you save or cancel your changes.");
+    return command === "pending" ? this.#t("v4_reason_robot_operation_waiting", "Waiting for the robot to finish what it's doing.") : null;
+  }
+
   #delete(event: Event): void {
-    if (this.state.planDraft.dirty) return;
+    if (this.#deleteReason()) return;
     const launcher = (event.currentTarget as HTMLElement).closest(".more")?.querySelector("button");
     this._open = false;
     this.#intent({ type: "open-dialog", dialog: "confirmDeletePlan" }, launcher ?? this);
@@ -121,7 +131,7 @@ export class MaticPlanToolsV4 extends LitElement {
     }
     // Its one action is Delete, so it shows only while the catalog holds the plan.
     if (!deleteSubject(this.state, "confirmDeletePlan")) return nothing;
-    const dirty = planDraft.dirty;
+    const held = this.#deleteReason();
     return html`
       <div class="more" @keydown=${this.#keydown} @focusout=${this.#focusout}>
         <button
@@ -139,11 +149,11 @@ export class MaticPlanToolsV4 extends LitElement {
               class="ms-row ms-row--menu"
               type="button"
               role="menuitem"
-              aria-disabled=${dirty ? "true" : nothing}
-              aria-describedby=${dirty ? "delete-reason" : nothing}
+              aria-disabled=${held ? "true" : nothing}
+              aria-describedby=${held ? "delete-reason" : nothing}
               @click=${this.#delete}
             >${this.#t("plan_delete", "Delete")}</button></div>
-            ${dirty ? html`<p class="reason" id="delete-reason">${this.#t("v4_delete_plan_unsaved", "Can't delete this plan until you save or cancel your changes.")}</p>` : nothing}
+            ${held ? html`<p class="reason" id="delete-reason">${held}</p>` : nothing}
           </div>
         ` : nothing}
       </div>

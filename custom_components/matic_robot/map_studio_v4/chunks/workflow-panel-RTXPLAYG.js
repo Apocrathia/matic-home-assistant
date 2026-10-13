@@ -160,7 +160,7 @@ import{D as Ie,G as Ne,P,a as Q,b as G,d as se,e as O,f as B,g as I}from"./chunk
         <span class="ms-row__lead">${k(Se)}</span>
         <span class="ms-row__body"><strong>${a}</strong></span>
       </button></li>
-    </ul>`}#g(){let e=this.state;return e.pendingAction==="save-plan"?this.#e("v4_reason_plan_saving","Waiting for Home Assistant to save the plan."):e.pendingAction==="run-plan"?this.#e("v4_reason_run_plan_checking","Waiting for Home Assistant to check the next run."):F(e)?this.#e("v4_reason_plan_switch_busy","Can't change this until the robot finishes."):!e.host.connected||!e.host.robotConnected?this.#e("v4_reason_plan_switch_offline","Waiting for Home Assistant to reach the robot again."):be(e)?null:this.#e("v4_reason_save_plan_map","Waiting for the map to be ready.")}#o(){let e=this.state.planDraft.enabled,a=this.#g();return i`
+    </ul>`}#d(){let e=this.state;return e.pendingAction==="save-plan"?this.#e("v4_reason_plan_saving","Waiting for Home Assistant to save the plan."):e.pendingAction==="run-plan"?this.#e("v4_reason_run_plan_checking","Waiting for Home Assistant to check the next run."):F(e)?this.#e("v4_reason_plan_switch_busy","Can't change this until the robot finishes."):!e.host.connected||!e.host.robotConnected?this.#e("v4_reason_plan_switch_offline","Waiting for Home Assistant to reach the robot again."):be(e)?null:this.#e("v4_reason_save_plan_map","Waiting for the map to be ready.")}#o(){let e=this.state.planDraft.enabled,a=this.#d();return i`
       <div class="switch-row">
         <span class="switch-copy">
           <span id="enabled-label">${this.#e("v4_plan_can_run","Plan enabled")}</span>
@@ -178,7 +178,7 @@ import{D as Ie,G as Ne,P,a as Q,b as G,d as se,e as O,f as B,g as I}from"./chunk
         ></button>
       </div>
       ${a?i`<p class="reason" id="enabled-reason">${a}</p>`:c}
-    `}#d(e,a,t,o={}){return i`<li class="run-row" ?data-break=${o.part!==void 0}>
+    `}#m(e,a,t,o={}){return i`<li class="run-row" ?data-break=${o.part!==void 0}>
       ${o.part===void 0?c:i`<span class="sr-only">${this.#e("v4_part_break","Part {number} starts here; the robot may stop at the dock first",{number:this.#s(o.part)})}</span>`}
       ${t===null?c:i`<span class="pos-badge" aria-hidden="true">${this.#s(t)}</span>`}
       <span class="row-lines">
@@ -186,7 +186,7 @@ import{D as Ie,G as Ne,P,a as Q,b as G,d as se,e as O,f as B,g as I}from"./chunk
         <small>${a}</small>
         ${o.blocked?i`<span class="ms-chip chip-attention">${this.#e("v4_needs_attention","Needs attention")}</span>`:c}
       </span>
-    </li>`}#c(){let e=this.state,a=e.planDraft,t=e.resources.plans.value,o=t?.plans.find(h=>h.id===a.id);if(!t||!o)return c;let r=o.nextRunPreview,d=r?.blocker??null,l=!a.enabled,p=!l&&!!(r&&!d&&/^[0-9a-f]{64}$/u.test(r.previewToken??"")),m=o.runBehavior==="ordered",v=p&&r?r.rooms:[],g=!l&&d?$e(e,o)?.jump.roomId??null:null,_=l||p||g||e.pendingAction==="save-plan"?null:d&&ye[d]||fe,u=p?v.length:o.rooms.length,b=p?o.nextRunEstimateSeconds:null,f=b===null?"":this.#s(Math.max(1,Math.round(b/60))),$=b===null?u===1?this.#e("v4_plan_summary_rooms_one","1 room"):this.#e("v4_plan_summary_rooms","{count} rooms",{count:this.#s(u)}):u===1?this.#e("v4_plan_summary_rooms_estimate_one","1 room \xB7 about {minutes} min",{minutes:f}):this.#e("v4_plan_summary_rooms_estimate","{count} rooms \xB7 about {minutes} min",{count:this.#s(u),minutes:f}),A=p&&r?r.missionBoundaries:[],U=p?v.map((h,K)=>{let ue=A.indexOf(K);return this.#d(h.name,W(this.#e,h),m?K+1:null,ue<0?{}:{part:ue+2})}):_e(o).rooms.map(h=>this.#d(t.rooms.find(K=>K.roomId===h.roomId)?.name??h.roomId,W(this.#e,h),null,{blocked:h.roomId===g})),y=a.finishCurrentRoom?this.#e("v4_plan_summary_finish","When you press Stop, the robot finishes the current room if it's at least {percent}% done.",{percent:this.#s(a.finishCurrentRoomThreshold)}):a.returnToBase?this.#e("v4_plan_summary_return","Returns to the dock when finished"):null;return i`
+    </li>`}#c(){let e=this.state,a=e.planDraft,t=e.resources.plans.value,o=t?.plans.find(h=>h.id===a.id);if(!t||!o)return c;let r=o.nextRunPreview,d=r?.blocker??null,l=!a.enabled,p=!l&&!!(r&&!d&&/^[0-9a-f]{64}$/u.test(r.previewToken??"")),m=o.runBehavior==="ordered",v=p&&r?r.rooms:[],g=!l&&d?$e(e,o)?.jump.roomId??null:null,_=l||p||g||e.pendingAction==="save-plan"?null:d&&ye[d]||fe,u=p?v.length:o.rooms.length,b=p?o.nextRunEstimateSeconds:null,f=b===null?"":this.#s(Math.max(1,Math.round(b/60))),$=b===null?u===1?this.#e("v4_plan_summary_rooms_one","1 room"):this.#e("v4_plan_summary_rooms","{count} rooms",{count:this.#s(u)}):u===1?this.#e("v4_plan_summary_rooms_estimate_one","1 room \xB7 about {minutes} min",{minutes:f}):this.#e("v4_plan_summary_rooms_estimate","{count} rooms \xB7 about {minutes} min",{count:this.#s(u),minutes:f}),A=p&&r?r.missionBoundaries:[],U=p?v.map((h,K)=>{let ue=A.indexOf(K);return this.#m(h.name,W(this.#e,h),m?K+1:null,ue<0?{}:{part:ue+2})}):_e(o).rooms.map(h=>this.#m(t.rooms.find(K=>K.roomId===h.roomId)?.name??h.roomId,W(this.#e,h),null,{blocked:h.roomId===g})),y=a.finishCurrentRoom?this.#e("v4_plan_summary_finish","When you press Stop, the robot finishes the current room if it's at least {percent}% done.",{percent:this.#s(a.finishCurrentRoomThreshold)}):a.returnToBase?this.#e("v4_plan_summary_return","Returns to the dock when finished"):null;return i`
       <p class="summary">${$}</p>
       ${this.#i(re(this.#e,e.locale,v))}
       <h3 class="heading">${l?this.#e("v4_plan_rooms_heading","Rooms in this plan"):e.resources.entry?.activePlan?this.#e("v4_next_run_after_active","After this run"):this.#e("v4_next_run_preview","Next run")}</h3>
@@ -197,7 +197,7 @@ import{D as Ie,G as Ne,P,a as Q,b as G,d as se,e as O,f as B,g as I}from"./chunk
       ${p&&m?i`<ol class="run-list" role="list">${U}</ol>`:i`<ul class="run-list" role="list">${U}</ul>`}
       ${this.#o()}
       ${y?i`<p class="quiet">${y}</p>`:c}
-    `}willUpdate(e){e.has("state")&&(this.state.workflow!=="plan"||this.state.planView!=="edit")&&(this._moved="")}updated(e){!this.#a||!e.has("state")||(this.renderRoot.querySelector(`[data-move="${CSS.escape(this.#a)}"]`)?.focus(),this.#a=null)}#m(){return this.state.pendingAction==="save-plan"?"edit-held":null}#r(e){this.#m()||this.#t({type:"patch-plan-draft",patch:e})}#p(e,a){this.#r({rooms:this.state.planDraft.rooms.map((t,o)=>o===e?{...t,...a}:t)})}#_(e,a,t,o){let r=[...this.state.planDraft.rooms],d=e+a;if(this.#m()||d<0||d>=r.length)return;let[l]=r.splice(e,1);l&&(r.splice(d,0,l),this.#a=o,this._moved=this.#e("v4_room_moved","{room} moved to position {position}",{room:t,position:this.#s(d+1)}),this.#t({type:"patch-plan-draft",patch:{rooms:r}}))}#u(e){return{disabled:e?"true":c,described:e??c}}#v(e,a,t,o,r,d){let l=`${e.roomId}:${o<0?"up":"down"}`,p=o<0?this.#e("move_room_up","Move {room} earlier",{room:t}):this.#e("move_room_down","Move {room} later",{room:t}),m=o<0?this.#e("v4_room_already_first","{room} is already first",{room:t}):this.#e("v4_room_already_last","{room} is already last",{room:t}),v=r?`${l}-end`:d;return i`<button
+    `}willUpdate(e){e.has("state")&&(this.state.workflow!=="plan"||this.state.planView!=="edit")&&(this._moved="")}updated(e){!this.#a||!e.has("state")||(this.renderRoot.querySelector(`[data-move="${CSS.escape(this.#a)}"]`)?.focus(),this.#a=null)}#p(){return this.state.pendingAction==="save-plan"?"edit-held":null}#r(e){this.#p()||this.#t({type:"patch-plan-draft",patch:e})}#v(e,a){this.#r({rooms:this.state.planDraft.rooms.map((t,o)=>o===e?{...t,...a}:t)})}#b(e,a,t,o){let r=[...this.state.planDraft.rooms],d=e+a;if(this.#p()||d<0||d>=r.length)return;let[l]=r.splice(e,1);l&&(r.splice(d,0,l),this.#a=o,this._moved=this.#e("v4_room_moved","{room} moved to position {position}",{room:t,position:this.#s(d+1)}),this.#t({type:"patch-plan-draft",patch:{rooms:r}}))}#h(e){return{disabled:e?"true":c,described:e??c}}#g(e,a,t,o,r,d){let l=`${e.roomId}:${o<0?"up":"down"}`,p=o<0?this.#e("move_room_up","Move {room} earlier",{room:t}):this.#e("move_room_down","Move {room} later",{room:t}),m=o<0?this.#e("v4_room_already_first","{room} is already first",{room:t}):this.#e("v4_room_already_last","{room} is already last",{room:t}),v=r?`${l}-end`:d;return i`<button
         class="ms-btn ms-btn--icon"
         type="button"
         data-move=${l}
@@ -205,9 +205,9 @@ import{D as Ie,G as Ne,P,a as Q,b as G,d as se,e as O,f as B,g as I}from"./chunk
         title=${r?m:p}
         aria-disabled=${r||d?"true":c}
         aria-describedby=${v??c}
-        @click=${()=>{r||this.#_(a,o,t,l)}}
+        @click=${()=>{r||this.#b(a,o,t,l)}}
       >${k(o<0?Re:Ce)}</button>
-      ${r?i`<span class="sr-only" id=${`${l}-end`}>${m}</span>`:c}`}#b(e,a,t,o,r,d,l){let p=this.state.planDraft,m=t!==null&&this.state.expandedRoom===e,v=p.rooms.length-1,g=this.#u(l),_=t===null&&d,u=t?ze(this.#e,this.state.locale,t.cadence):null,b=t?.cadenceReasons?.some(f=>Ye.includes(f));return i`<li class="ms-row edit-row" data-selected=${t?"true":c}>
+      ${r?i`<span class="sr-only" id=${`${l}-end`}>${m}</span>`:c}`}#f(e,a,t,o,r,d,l){let p=this.state.planDraft,m=t!==null&&this.state.expandedRoom===e,v=p.rooms.length-1,g=this.#h(l),_=t===null&&d,u=t?ze(this.#e,this.state.locale,t.cadence):null,b=t?.cadenceReasons?.some(f=>Ye.includes(f));return i`<li class="ms-row edit-row" data-selected=${t?"true":c}>
       <label class="edit-check"><input
         type="checkbox"
         .checked=${t!==null}
@@ -237,8 +237,8 @@ import{D as Ie,G as Ne,P,a as Q,b as G,d as se,e as O,f as B,g as I}from"./chunk
           ${k(oe)}
         </button>`:i`<span class="edit-name"><bdi>${a}</bdi></span>`}
       ${t&&r?i`<span class="edit-moves">
-        ${this.#v(t,o,a,-1,o===0,l)}
-        ${this.#v(t,o,a,1,o===v,l)}
+        ${this.#g(t,o,a,-1,o===0,l)}
+        ${this.#g(t,o,a,1,o===v,l)}
       </span>`:i`<span></span>`}
       ${m&&t?i`<div class="row-expanded">
         <div class="split">
@@ -248,7 +248,7 @@ import{D as Ie,G as Ne,P,a as Q,b as G,d as se,e as O,f as B,g as I}from"./chunk
               aria-disabled=${g.disabled}
               aria-describedby=${g.described}
               .value=${t.cleaningMode}
-              @change=${f=>{let $=f.currentTarget;l?$.value=t.cleaningMode:this.#p(o,{cleaningMode:$.value})}}
+              @change=${f=>{let $=f.currentTarget;l?$.value=t.cleaningMode:this.#v(o,{cleaningMode:$.value})}}
             >${j.map(f=>i`<option value=${f} ?selected=${f===t.cleaningMode} ?disabled=${!!(t.cadence?.mopEveryN&&f!=="vacuum")}>${Y(this.#e,f)}</option>`)}</select>
           </label>
           <label class="field ms-field">${this.#e("vacuum_coverage","Vacuum coverage")}
@@ -258,14 +258,14 @@ import{D as Ie,G as Ne,P,a as Q,b as G,d as se,e as O,f as B,g as I}from"./chunk
               aria-describedby=${g.described}
               ?disabled=${t.cleaningMode==="mop"}
               .value=${t.coverageSetting}
-              @change=${f=>{let $=f.currentTarget;l?$.value=t.coverageSetting:this.#p(o,{coverageSetting:$.value})}}
+              @change=${f=>{let $=f.currentTarget;l?$.value=t.coverageSetting:this.#v(o,{coverageSetting:$.value})}}
             >${q.map(f=>i`<option value=${f} ?selected=${f===t.coverageSetting}>${H(this.#e,f)}</option>`)}</select>
           </label>
         </div>
         ${t.cleaningMode==="vacuum"?c:i`<p class="subtle">${this.#e("v4_mop_coverage_hint","Vacuum coverage applies only when vacuuming. Use the robot's Double-pass mopping setting for an extra mop pass.")}</p>`}
         ${De({t:this.#e,state:this.state,intent:f=>this.#t(f),held:l},t,o,a)}
       </div>`:c}
-    </li>`}#h(e,a,t,o,r,d){let l=[t?`${e}-hint`:"",r??""].filter(Boolean).join(" ");return i`<div class="switch-row">
+    </li>`}#_(e,a,t,o,r,d){let l=[t?`${e}-hint`:"",r??""].filter(Boolean).join(" ");return i`<div class="switch-row">
       <span class="switch-copy">
         <span id=${`${e}-label`}>${a}</span>
         ${t?i`<small id=${`${e}-hint`}>${t}</small>`:c}
@@ -280,7 +280,7 @@ import{D as Ie,G as Ne,P,a as Q,b as G,d as se,e as O,f as B,g as I}from"./chunk
         aria-disabled=${r?"true":c}
         @click=${()=>{r||d(!o)}}
       ></button>
-    </div>`}#f(){let e=this.state,a=e.planDraft,t=e.resources.plans.value;if(!t)return c;let o=this.#m(),r=this.#u(o),d=a.runBehavior==="ordered",l=a.rooms.length>=100,p=u=>t.rooms.find(b=>b.roomId===u)?.name??u,m=[...a.rooms.map((u,b)=>({roomId:u.roomId,room:u,index:b})),...t.rooms.filter(u=>!a.rooms.some(b=>b.roomId===u.roomId)).map(u=>({roomId:u.roomId,room:null,index:-1}))],v=a.finishCurrentRoomThreshold,g=this.#s(v),_=(u,b)=>i`<button
+    </div>`}#u(){let e=this.state,a=e.planDraft,t=e.resources.plans.value;if(!t)return c;let o=this.#p(),r=this.#h(o),d=a.runBehavior==="ordered",l=a.rooms.length>=100,p=u=>t.rooms.find(b=>b.roomId===u)?.name??u,m=[...a.rooms.map((u,b)=>({roomId:u.roomId,room:u,index:b})),...t.rooms.filter(u=>!a.rooms.some(b=>b.roomId===u.roomId)).map(u=>({roomId:u.roomId,room:null,index:-1}))],v=a.finishCurrentRoomThreshold,g=this.#s(v),_=(u,b)=>i`<button
       class="ms-btn"
       type="button"
       aria-pressed=${String(a.runBehavior===u)}
@@ -314,13 +314,13 @@ import{D as Ie,G as Ne,P,a as Q,b as G,d as se,e as O,f as B,g as I}from"./chunk
       </div>
       ${l?i`<p class="reason" id="room-limit">${this.#e("v4_plan_room_limit","Can't add more rooms until you remove one; a plan holds up to {limit}.",{limit:this.#s(100)})}</p>`:c}
       <ul class="plain" role="list" aria-labelledby="edit-rooms">
-        ${Ue(m,u=>u.roomId,u=>this.#b(u.roomId,p(u.roomId),u.room,u.index,d,l,o))}
+        ${Ue(m,u=>u.roomId,u=>this.#f(u.roomId,p(u.roomId),u.room,u.index,d,l,o))}
       </ul>
       <span class="sr-only" role="status">${this._moved}</span>
       <details class="run-end">
         <summary>${this.#e("v4_run_end_options","When a run ends")}</summary>
-        ${this.#h("return-dock",this.#e("v4_plan_return_to_dock","Return to the dock when finished"),null,a.returnToBase,o,u=>this.#r({returnToBase:u}))}
-        ${this.#h("finish-room",this.#e("v4_plan_finish_room","Finish the current room when you press Stop"),this.#e("v4_plan_finish_room_hint","Only if the room is at least {percent}% done; otherwise the robot stops right away.",{percent:g}),a.finishCurrentRoom,o,u=>this.#r({finishCurrentRoom:u}))}
+        ${this.#_("return-dock",this.#e("v4_plan_return_to_dock","Return to the dock when finished"),null,a.returnToBase,o,u=>this.#r({returnToBase:u}))}
+        ${this.#_("finish-room",this.#e("v4_plan_finish_room","Finish the current room when you press Stop"),this.#e("v4_plan_finish_room_hint","Only if the room is at least {percent}% done; otherwise the robot stops right away.",{percent:g}),a.finishCurrentRoom,o,u=>this.#r({finishCurrentRoom:u}))}
         ${a.finishCurrentRoom?i`<div class="threshold">
           <span id="finish-threshold-label">${this.#e("v4_plan_finish_threshold","Finish if at least {percent}% done",{percent:g})}</span>
           <input
@@ -337,7 +337,7 @@ import{D as Ie,G as Ne,P,a as Q,b as G,d as se,e as O,f as B,g as I}from"./chunk
           >
         </div>`:c}
       </details>
-    </div>`}render(){let{workflow:e,planView:a}=this.state;return e==="plans"?this.#l():e!=="plan"?c:a==="run"?this.#c():this.#f()}};customElements.get(I)||customElements.define(I,ce);var de=class extends S{constructor(){super(...arguments);this.state=x();this.compact=!1;this.inline=!1}static{this.properties={state:{attribute:!1},localize:{attribute:!1},compact:{type:Boolean,reflect:!0},inline:{type:Boolean,reflect:!0}}}static{this.styles=[R,C,T,E`
+    </div>`}render(){let{workflow:e,planView:a}=this.state;return e==="plans"?this.#l():e!=="plan"?c:a==="run"?this.#c():this.#u()}};customElements.get(I)||customElements.define(I,ce);var de=class extends S{constructor(){super(...arguments);this.state=x();this.compact=!1;this.inline=!1}static{this.properties={state:{attribute:!1},localize:{attribute:!1},compact:{type:Boolean,reflect:!0},inline:{type:Boolean,reflect:!0}}}static{this.styles=[R,C,T,E`
 :host { display: block; color: var(--ms-text); }
 .controls { display: grid; gap: var(--ms-space-3); padding: var(--ms-space-3); }
 .stepper { display: grid; grid-template-columns: var(--ms-control) minmax(0, 1fr) var(--ms-control); gap: var(--ms-space-1); align-items: stretch; }
@@ -410,7 +410,7 @@ inline-size: min(18rem, calc(100vw - 1.5rem));
 .menu { position: absolute; z-index: 18; inset-block-start: calc(100% + var(--ms-space-1)); inset-inline-end: 0; display: grid; min-inline-size: 14rem; padding: var(--ms-space-1); }
 .menu .ms-row { justify-content: flex-start; inline-size: 100%; }
 .menu .reason { padding: var(--ms-space-1) var(--ms-space-3); text-align: start; }
-`]}#a(e,a,t){return w(this.localize,e,a,t)}#e(e,a=this){a.dispatchEvent(new CustomEvent(P,{detail:e,bubbles:!0,composed:!0}))}willUpdate(e){e.has("state")&&this.state.planView!=="edit"&&(this._open=!1)}updated(e){e.has("_open")&&this._open&&this.renderRoot.querySelector("[role=menuitem]")?.focus()}#t(){this._open=!1,this.renderRoot.querySelector(".more > button")?.focus()}#s(e){e.key!=="Escape"||!this._open||(e.preventDefault(),this.#t())}#i(e){let a=e.relatedTarget;a&&!e.currentTarget.contains(a)&&(this._open=!1)}#n;connectedCallback(){super.connectedCallback(),window.addEventListener("pointerdown",this.#n,!0)}disconnectedCallback(){window.removeEventListener("pointerdown",this.#n,!0),super.disconnectedCallback()}#l(e){if(this.state.planDraft.dirty)return;let a=e.currentTarget.closest(".more")?.querySelector("button");this._open=!1,this.#e({type:"open-dialog",dialog:"confirmDeletePlan"},a??this)}render(){let{planView:e,planDraft:a,pendingAction:t}=this.state;if(e==="run"){let r=t==="save-plan"?this.#a("v4_reason_plan_saving","Waiting for Home Assistant to save the plan."):t==="run-plan"?this.#a("v4_reason_run_plan_checking","Waiting for Home Assistant to check the next run."):null;return i`
+`]}#a(e,a,t){return w(this.localize,e,a,t)}#e(e,a=this){a.dispatchEvent(new CustomEvent(P,{detail:e,bubbles:!0,composed:!0}))}willUpdate(e){e.has("state")&&this.state.planView!=="edit"&&(this._open=!1)}updated(e){e.has("_open")&&this._open&&this.renderRoot.querySelector("[role=menuitem]")?.focus()}#t(){this._open=!1,this.renderRoot.querySelector(".more > button")?.focus()}#s(e){e.key!=="Escape"||!this._open||(e.preventDefault(),this.#t())}#i(e){let a=e.relatedTarget;a&&!e.currentTarget.contains(a)&&(this._open=!1)}#n;connectedCallback(){super.connectedCallback(),window.addEventListener("pointerdown",this.#n,!0)}disconnectedCallback(){window.removeEventListener("pointerdown",this.#n,!0),super.disconnectedCallback()}#l(){let{command:e,pendingAction:a,planDraft:t}=this.state;return a==="save-plan"?this.#a("v4_reason_plan_saving","Waiting for Home Assistant to save the plan."):t.dirty?this.#a("v4_delete_plan_unsaved","Can't delete this plan until you save or cancel your changes."):e==="pending"?this.#a("v4_reason_robot_operation_waiting","Waiting for the robot to finish what it's doing."):null}#d(e){if(this.#l())return;let a=e.currentTarget.closest(".more")?.querySelector("button");this._open=!1,this.#e({type:"open-dialog",dialog:"confirmDeletePlan"},a??this)}render(){let{planView:e,planDraft:a,pendingAction:t}=this.state;if(e==="run"){let r=t==="save-plan"?this.#a("v4_reason_plan_saving","Waiting for Home Assistant to save the plan."):t==="run-plan"?this.#a("v4_reason_run_plan_checking","Waiting for Home Assistant to check the next run."):null;return i`
         <button
           class="ms-btn ms-btn--secondary"
           type="button"
@@ -420,7 +420,7 @@ inline-size: min(18rem, calc(100vw - 1.5rem));
           @click=${()=>{r||this.#e({type:"set-plan-view",view:"edit"})}}
         >${this.#a("v4_edit","Edit")}</button>
         ${r?i`<p class="reason" id="edit-reason">${r}</p>`:c}
-      `}if(!D(this.state,"confirmDeletePlan"))return c;let o=a.dirty;return i`
+      `}if(!D(this.state,"confirmDeletePlan"))return c;let o=this.#l();return i`
       <div class="more" @keydown=${this.#s} @focusout=${this.#i}>
         <button
           class="ms-btn ms-btn--icon"
@@ -439,9 +439,9 @@ inline-size: min(18rem, calc(100vw - 1.5rem));
               role="menuitem"
               aria-disabled=${o?"true":c}
               aria-describedby=${o?"delete-reason":c}
-              @click=${this.#l}
+              @click=${this.#d}
             >${this.#a("plan_delete","Delete")}</button></div>
-            ${o?i`<p class="reason" id="delete-reason">${this.#a("v4_delete_plan_unsaved","Can't delete this plan until you save or cancel your changes.")}</p>`:c}
+            ${o?i`<p class="reason" id="delete-reason">${o}</p>`:c}
           </div>
         `:c}
       </div>
@@ -466,6 +466,7 @@ inline-size: min(18rem, calc(100vw - 1.5rem));
     ${n?c:i`<p class="action-summary">${e("v4_plan_save_after_work","You can save when the robot finishes.")}</p>`}
   `},st=(s,n,e)=>{let a=e.querySelector(O)?.shadowRoot?.querySelector(I)?.shadowRoot;if(n.workflow==="plan"&&n.planView==="edit"&&n.expandedRoom)return a?.querySelector(`[data-room-disclosure="${CSS.escape(n.expandedRoom)}"]`);if(n.workflow==="plan"&&s.planView==="edit")return e.querySelector(B)?.shadowRoot?.querySelector("button");let t=s.selection.planId;return n.workflow==="plans"&&t?a?.querySelector(`[data-plan-row="${CSS.escape(t)}"]`):null},ot=(s,n,e,a)=>{let t=st(s,n,e);return a(t)?(t.scrollIntoView({block:"nearest"}),t.focus({preventScroll:!0}),!0):!1};var nt=(s,n,e)=>{let a=(m,v,g)=>w(e,m,v,g),t=D(n),o=n.cadenceResetRequest,r=n.resources.plans.value,d=o&&r?.rooms.find(m=>m.roomId===o.roomId)?.name||o?.roomId||"room",l=o?r?.plans.find(m=>m.id===o.planId)?.rooms.find(m=>m.roomId===o.roomId)?.cadence?.scope==="shared":!1,p=o?.mode??"mop";switch(s){case"confirmDeletePlan":return t&&{title:a("v4_delete_plan","Delete plan?"),detail:a("v4_delete_plan_detail",`Automations that run "{name}" will stop working, and the robot won't move.`,{name:t.name}),...t.successor===void 0?{}:{consequence:t.successor===null?a("v4_delete_plan_none","You'll have no default plan."):a("v4_delete_plan_default","{new_default} becomes your default plan.",{new_default:t.successor})},cancelLabel:a("v4_cancel","Cancel"),confirmLabel:a("plan_delete","Delete"),action:"delete-plan"};case"confirmDeleteArea":return t&&{title:a("v4_delete_area","Delete area?"),detail:a("v4_delete_area_detail",`Automations that clean "{name}" will stop working, and the robot won't move.`,{name:t.name}),...t.successor===void 0?{}:{consequence:t.successor===null?a("v4_delete_area_none","No custom area will be selected."):a("v4_delete_area_selected","{area} becomes the selected custom area.",{area:t.successor})},cancelLabel:a("v4_cancel","Cancel"),confirmLabel:a("area_delete","Delete"),action:"delete-area"};case"confirmResetCadence":return{title:p==="mop"?a("v4_reset_mop_cadence_title","Reset mopping progress?"):a("v4_reset_coverage_cadence_title","Reset vacuum rotation progress?"),detail:l?a("v4_reset_shared_cadence_detail","The count for {room} starts again in every plan that shares its schedule, and work brought forward to the next clean goes back to its schedule. Other work and cleaning history don't change.",{room:d}):a("v4_reset_private_cadence_detail","The count for {room} starts again in this plan only, and work brought forward to the next clean goes back to its schedule. Other work and cleaning history don't change.",{room:d}),cancelLabel:a("v4_cancel","Cancel"),confirmLabel:a("v4_reset","Reset"),action:"reset-room-cadence"}}},rt=(s,n,e)=>{let a=s;if(!ve(a.detail))return;if(he(n,a.detail)){s.stopPropagation(),e(a.detail);return}if(a.detail?.type!=="open-dialog")return;let t=a.composedPath().find(o=>o instanceof HTMLElement&&o.hasAttribute("data-dialog-launcher"));return t instanceof HTMLElement?t:void 0},it=(s,n,e,a)=>{let t=s.cadenceResetRequest;e({type:"dismiss-top-layer"}),n!=="reset-room-cadence"?a(n):t&&a({id:n,planId:t.planId,roomId:t.roomId,mode:t.mode})};var Qe=Q(I),z=s=>s.currentTarget.value,lt=s=>s.currentTarget.checked,pe=class extends S{constructor(){super(...arguments);this.state=x();this._historyPreviewPosition=null;this.#a=new Ie(this,()=>import("./diagnostics-panel-3BOK7ODZ.js"));this.#e="";this.#n=(e,a,t)=>this.#t(e,a,t)}static{this.properties={state:{attribute:!1},localize:{attribute:!1},dates:{attribute:!1},_historyPreviewPosition:{state:!0}}}static{this.styles=[R,C,T,E`
 :host { display: block; min-inline-size: 0; container-type: inline-size; }
+.workflow-fields { border: 0; margin: 0; padding: 0; min-inline-size: 0; }
 button, select, input[type="checkbox"] { cursor: pointer; }
 .stack { display: grid; gap: var(--ms-space-3); }
 .subtle { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
@@ -504,14 +505,14 @@ line-height: var(--ms-lh-snug);
 .timeline { display: grid; gap: var(--ms-space-2); }
 .timeline input[type="range"] { inline-size: 100%; min-block-size: var(--ms-control); }
 @media (max-width: 25rem) { .split { grid-template-columns: 1fr; } }
-`]}#a;#e;willUpdate(e){if(!e.has("state"))return;let{workflow:a,selection:t}=this.state,o=`${a}:${t.floorId}:${t.historyId??"live"}`;o!==this.#e&&(this.#e=o,this._historyPreviewPosition=null)}disconnectedCallback(){super.disconnectedCallback()}#t(e,a,t){return w(this.localize,e,a,t)}#s(e){return Y(this.#n,e)}#i(e){return H(this.#n,e)}#n;#l(e){return e==="vacuum"?c:i`<p class="subtle">${this.#t("v4_mop_coverage_hint","Vacuum coverage applies only when vacuuming. Use the robot's Double-pass mopping setting for an extra mop pass.")}</p>`}#g(e){return e==="mop_due"?this.#t("v4_cadence_mop_due_reason","Vacuum and mop are due"):e==="coverage_due"?this.#t("v4_cadence_coverage_due_reason","Vacuum rotation is due"):e==="mop_progress_unverified"?this.#t("v4_cadence_mop_progress_unverified","Can't run this schedule until you reset its mopping progress, which Home Assistant can't confirm."):e==="coverage_progress_unverified"?this.#t("v4_cadence_coverage_progress_unverified","Can't run this schedule until you reset its vacuum rotation progress, which Home Assistant can't confirm."):this.#t("v4_cadence_due_unknown_reason","Schedule setting due")}#o(e){this.dispatchEvent(new CustomEvent(P,{detail:e,bubbles:!0,composed:!0}))}#d(e){switch(e){case"rooms":case"plans":case"plan":return{loading:this.#t("v4_loading_rooms_plans","Loading rooms and plans\u2026"),unavailable:this.#t("v4_rooms_plans_unavailable","Home Assistant couldn't load rooms and plans."),empty:this.#t("v4_no_rooms_plans","This floor has no rooms yet. Name rooms in the Matic app to see them here.")};case"draw":case"areaReview":return{loading:this.#t("v4_loading_areas","Loading saved areas\u2026"),unavailable:this.#t("v4_areas_unavailable","Saved areas are unavailable right now."),empty:this.#t("v4_no_saved_areas","No saved areas yet. Draw one on the map.")};case"history":return{loading:this.#t("v4_loading_history","Loading map history\u2026"),unavailable:this.#t("v4_history_unavailable","Map history is unavailable right now."),empty:this.#t("v4_no_map_history","No saved map snapshots yet.")}}}#c({status:e,value:a},t,o){let r=this.#d(o);return a===null&&(e==="idle"||e==="loading")?i`<div class="loading" role="status">${r.loading}</div>`:e==="error"?i`
+`]}#a;#e;willUpdate(e){if(!e.has("state"))return;let{workflow:a,selection:t}=this.state,o=`${a}:${t.floorId}:${t.historyId??"live"}`;o!==this.#e&&(this.#e=o,this._historyPreviewPosition=null)}disconnectedCallback(){super.disconnectedCallback()}#t(e,a,t){return w(this.localize,e,a,t)}#s(e){return Y(this.#n,e)}#i(e){return H(this.#n,e)}#n;#l(e){return e==="vacuum"?c:i`<p class="subtle">${this.#t("v4_mop_coverage_hint","Vacuum coverage applies only when vacuuming. Use the robot's Double-pass mopping setting for an extra mop pass.")}</p>`}#d(e){return e==="mop_due"?this.#t("v4_cadence_mop_due_reason","Vacuum and mop are due"):e==="coverage_due"?this.#t("v4_cadence_coverage_due_reason","Vacuum rotation is due"):e==="mop_progress_unverified"?this.#t("v4_cadence_mop_progress_unverified","Can't run this schedule until you reset its mopping progress, which Home Assistant can't confirm."):e==="coverage_progress_unverified"?this.#t("v4_cadence_coverage_progress_unverified","Can't run this schedule until you reset its vacuum rotation progress, which Home Assistant can't confirm."):this.#t("v4_cadence_due_unknown_reason","Schedule setting due")}#o(e){this.dispatchEvent(new CustomEvent(P,{detail:e,bubbles:!0,composed:!0}))}#m(e){switch(e){case"rooms":case"plans":case"plan":return{loading:this.#t("v4_loading_rooms_plans","Loading rooms and plans\u2026"),unavailable:this.#t("v4_rooms_plans_unavailable","Home Assistant couldn't load rooms and plans."),empty:this.#t("v4_no_rooms_plans","This floor has no rooms yet. Name rooms in the Matic app to see them here.")};case"draw":case"areaReview":return{loading:this.#t("v4_loading_areas","Loading saved areas\u2026"),unavailable:this.#t("v4_areas_unavailable","Saved areas are unavailable right now."),empty:this.#t("v4_no_saved_areas","No saved areas yet. Draw one on the map.")};case"history":return{loading:this.#t("v4_loading_history","Loading map history\u2026"),unavailable:this.#t("v4_history_unavailable","Map history is unavailable right now."),empty:this.#t("v4_no_map_history","No saved map snapshots yet.")}}}#c({status:e,value:a},t,o){let r=this.#m(o);return a===null&&(e==="idle"||e==="loading")?i`<div class="loading" role="status">${r.loading}</div>`:e==="error"?i`
         <div class="stack">
           <div class="problem" role="alert">${r.unavailable}</div>
           <div class="toolbar">
             <button class="ms-btn ms-btn--secondary" type="button" @click=${()=>this.#o({type:"open-workflow",workflow:o})}>${this.#t("v4_retry","Try again")}</button>
           </div>
         </div>
-      `:e==="empty"?i`<div class="empty">${r.empty}</div>`:t}#m(){let e=this.state.resources.plans,a=ge(this.state),t=a!==null,o=this.state.selection.roomIds.length>=100,r=!we(this.state),d=F(this.state);return this.#c(e,i`
+      `:e==="empty"?i`<div class="empty">${r.empty}</div>`:t}#p(){let e=this.state.resources.plans,a=ge(this.state),t=a!==null,o=this.state.selection.roomIds.length>=100,r=!we(this.state),d=F(this.state);return this.#c(e,i`
       <div class="stack">
         <h3 class="group-heading" id="rooms-heading">${this.#t("v4_rooms_to_clean","Rooms to clean")}</h3>
         ${d?i`<p class="subtle" id="rooms-busy">${this.#t("v4_rooms_busy","Can't change rooms until the robot finishes or stops.")}</p>`:c}
@@ -531,7 +532,7 @@ line-height: var(--ms-lh-snug);
                   <strong>${l.name}</strong>
                   ${p?i`<small>${this.#t("v4_room_ready","Ready")}</small>`:c}
                 </label>
-                ${p?this.#p(l.roomId,this.state.selection.roomSettings.find(m=>m.roomId===l.roomId)||{roomId:l.roomId,cleaningMode:"vacuum",coverageSetting:"standard"}):c}
+                ${p?this.#v(l.roomId,this.state.selection.roomSettings.find(m=>m.roomId===l.roomId)||{roomId:l.roomId,cleaningMode:"vacuum",coverageSetting:"standard"}):c}
               </div>
             `})}
         </div>
@@ -562,12 +563,12 @@ line-height: var(--ms-lh-snug);
                 ${a.has(o)?i`<strong>${this.#t("v4_room_mission_boundary","New part (the robot may stop at the dock first)")}</strong>`:c}
                 <strong>${t.name}</strong>
                 <span class="subtle">${W(this.#n,t)}</span>
-                ${t.cadenceReasons.length?i`<span class="subtle">${t.cadenceReasons.map(r=>this.#g(r)).join("; ")}</span>`:c}
+                ${t.cadenceReasons.length?i`<span class="subtle">${t.cadenceReasons.map(r=>this.#d(r)).join("; ")}</span>`:c}
               </li>
             `)}
           </ol>`:c}
       </section>
-    `}#p(e,a){let t=this.state.resources.plans.value?.rooms.find(o=>o.roomId===e)?.name||this.#t("v4_room","Room");return i`
+    `}#v(e,a){let t=this.state.resources.plans.value?.rooms.find(o=>o.roomId===e)?.name||this.#t("v4_room","Room");return i`
       <div class="split room-settings">
         <label class="field ms-field">${this.#t("v4_cleaning_system","Cleaning mode")}
           <select
@@ -586,10 +587,10 @@ line-height: var(--ms-lh-snug);
         </label>
       </div>
       ${this.#l(a.cleaningMode)}
-    `}#_(){let e=this.state.workflow==="plans"?"plans":"plan";return this.#c(this.state.resources.plans,G`<${Qe}
+    `}#b(){let e=this.state.workflow==="plans"?"plans":"plan";return this.#c(this.state.resources.plans,G`<${Qe}
       .state=${this.state}
       .localize=${this.localize}
-    ></${Qe}>`,e)}#u(){let e=this.state.resources.areas;return i`
+    ></${Qe}>`,e)}#h(){let e=this.state.resources.areas;return i`
       <div class="stack">
         <p class="subtle">${this.state.draw.tool==="outline"?this.#t("v4_zone_coverage","Place points around the area. Shading shows where the robot cleans inside the outline; narrow edges may stay uncovered."):this.#t("v4_draw_floor_hint","Paint only on the mapped floor. Zooming and panning never change the area.")}</p>
         ${this.state.draw.tool!=="outline"?i`<p class="subtle">${this.#t("v4_keyboard_draw_help","Keyboard: focus the map, use arrow keys to aim, then Enter to paint or erase at the crosshair. D selects Paint; E selects Erase.")}</p>`:c}
@@ -608,11 +609,11 @@ line-height: var(--ms-lh-snug);
           </div>
         `,"draw")}
       </div>
-    `}#v(){let e=this.state.areaDraft,a=this.state.resources.areas,t=e.canRebind||e.status==="review",o=!t&&(e.status==="stale"||e.status==="unknown");return i`
+    `}#g(){let e=this.state.areaDraft,a=this.state.resources.areas,t=e.canRebind||e.status==="review",o=!t&&(e.status==="stale"||e.status==="unknown");return i`
       <div class="stack">
         ${a.status==="error"?i`
           <div class="stack">
-            <div class="problem" role="alert">${this.#d("areaReview").unavailable}</div>
+            <div class="problem" role="alert">${this.#m("areaReview").unavailable}</div>
             <div class="toolbar"><button class="ms-btn ms-btn--secondary" type="button" @click=${()=>this.#o({type:"open-workflow",workflow:"areaReview"})}>${this.#t("v4_retry","Try again")}</button></div>
           </div>
         `:c}
@@ -643,7 +644,7 @@ line-height: var(--ms-lh-snug);
           `:c}
         </div>
       </div>
-    `}#b(){let e=this.state.resources.history,a=e.value,t=a?.floors.find(m=>m.id===this.state.selection.floorId)||a?.floors.find(m=>m.active)||a?.floors[0],o=t?.snapshots||[],r=this.state.selection.historyId?Math.max(0,o.findIndex(m=>m.id===this.state.selection.historyId)):o.length,d=t?.active?this.#t("map_timeline_live_action","Live"):this.#t("v4_return_current_floor","Return to current floor"),l=this._historyPreviewPosition??r,p=o[l];return this.#c(e,i`
+    `}#f(){let e=this.state.resources.history,a=e.value,t=a?.floors.find(m=>m.id===this.state.selection.floorId)||a?.floors.find(m=>m.active)||a?.floors[0],o=t?.snapshots||[],r=this.state.selection.historyId?Math.max(0,o.findIndex(m=>m.id===this.state.selection.historyId)):o.length,d=t?.active?this.#t("map_timeline_live_action","Live"):this.#t("v4_return_current_floor","Return to current floor"),l=this._historyPreviewPosition??r,p=o[l];return this.#c(e,i`
       <div class="stack">
         ${(a?.floors.length||0)>1?i`
           <div class="group">
@@ -688,11 +689,11 @@ line-height: var(--ms-lh-snug);
         </div>
         <p class="subtle">${this.#t("v4_history_privacy","Saved maps show one floor each and never show where the robot is now.")}</p>
       </div>
-    `,"history")}#h(){return this.#a.request(),this.#a.status!=="ready"?Ne(this.#a.status,this.localize,this.retry):i`<matic-map-diagnostics-v4
+    `,"history")}#_(){return this.#a.request(),this.#a.status!=="ready"?Ne(this.#a.status,this.localize,this.retry):i`<matic-map-diagnostics-v4
       .state=${this.state}
       .localize=${this.localize}
       .disabled=${this.state.command!=="idle"&&this.state.command!=="failed"}
-    ></matic-map-diagnostics-v4>`}render(){switch(this.state.workflow){case"rooms":return this.#m();case"plans":case"plan":return this.#_();case"draw":return this.#u();case"areaReview":return this.#v();case"history":return this.#b();case"support":return this.#h();case"none":return c}}};customElements.get(O)||customElements.define(O,pe);export{pe as MaticMapWorkflowV4,tt as actionReason,it as confirmDialog,nt as dialogCopy,rt as dialogLauncher,ot as focusPlanTarget,at as planCancel,Je as planTitle,et as planTools};
+    ></matic-map-diagnostics-v4>`}#u(e){return i`<fieldset class="workflow-fields" ?disabled=${this.state.command!=="idle"&&this.state.command!=="failed"}>${e}</fieldset>`}render(){switch(this.state.workflow){case"rooms":return this.#p();case"plans":case"plan":return this.#b();case"draw":return this.#u(this.#h());case"areaReview":return this.#u(this.#g());case"history":return this.#u(this.#f());case"support":return this.#_();case"none":return c}}};customElements.get(O)||customElements.define(O,pe);export{pe as MaticMapWorkflowV4,tt as actionReason,it as confirmDialog,nt as dialogCopy,rt as dialogLauncher,ot as focusPlanTarget,at as planCancel,Je as planTitle,et as planTools};
 /*! Bundled license information:
 
 lit-html/directive.js:

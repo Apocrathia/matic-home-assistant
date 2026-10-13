@@ -48,6 +48,7 @@ export class MaticMapWorkflowV4 extends LitElement {
 
   static override styles = [tokens, base, controls, css`
 :host { display: block; min-inline-size: 0; container-type: inline-size; }
+.workflow-fields { border: 0; margin: 0; padding: 0; min-inline-size: 0; }
 button, select, input[type="checkbox"] { cursor: pointer; }
 .stack { display: grid; gap: var(--ms-space-3); }
 .subtle { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
@@ -481,14 +482,22 @@ line-height: var(--ms-lh-snug);
     ></matic-map-diagnostics-v4>`;
   }
 
+  // Draw, area review and history keep the hold they had before plan Edit
+  // and Rooms gained their own: every control waits while a command runs
+  // until map-surfaces.md gives each its reason. A Delete confirmed then would
+  // be refused while its dialog closed as if it had been sent.
+  #held(content: unknown) {
+    return html`<fieldset class="workflow-fields" ?disabled=${this.state.command !== "idle" && this.state.command !== "failed"}>${content}</fieldset>`;
+  }
+
   protected override render() {
     switch (this.state.workflow) {
       case "rooms": return this.#rooms();
       case "plans":
       case "plan": return this.#planViews();
-      case "draw": return this.#draw();
-      case "areaReview": return this.#areaReview();
-      case "history": return this.#history();
+      case "draw": return this.#held(this.#draw());
+      case "areaReview": return this.#held(this.#areaReview());
+      case "history": return this.#held(this.#history());
       case "support": return this.#support();
       case "none": return nothing;
     }
