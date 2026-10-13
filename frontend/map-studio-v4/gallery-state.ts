@@ -40,6 +40,7 @@ export type GalleryScenario =
   | "plan-run-paused"
   | "plan-run-blocked"
   | "plan-run-parts"
+  | "plan-edit-ordered"
   | "plan-new"
   | "plan-dirty"
   | "plan-cadence-shared"
@@ -372,6 +373,8 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
         nextRunPreview: previewFor(rooms, { missionBoundaries: [1] }),
       }), "run");
     }
+    case "plan-edit-ordered":
+      return openPlan(state, { ...savedDailyPlan(), runBehavior: "ordered" }, "edit");
     case "plan-new":
       return {
         ...withPlans(state, catalogWith([savedDailyPlan()])),
@@ -603,6 +606,7 @@ export const GALLERY_SCENARIOS: readonly GalleryScenario[] = [
   "plan-run-paused",
   "plan-run-blocked",
   "plan-run-parts",
+  "plan-edit-ordered",
   "plan-new",
   "plan-dirty",
   "plan-cadence-shared",

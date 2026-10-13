@@ -157,10 +157,19 @@ try {
           const buffer = element.getWorkspaceSnapshot().resources.scene.value.buffer;
           return [...new Uint8Array(await crypto.subtle.digest("SHA-256", buffer))].map(byte => byte.toString(16).padStart(2, "0")).join("");
         });
+        // Both revisions share the four public transitions from Home to a
+        // saved plan detail and back. The baseline opens Edit; UX2 opens Run.
+        const planButton = variant === "baseline" ? /Daily clean.*Edit plan/ : /Daily clean/;
         const planJourney = async () => {
-          for (const name of [/^Run a plan/, /Daily clean.*Edit plan/, "Back to plans", "Back to all tasks"]) {
+          const homeLauncher = variant === "candidate" ? /^(Run a plan|Plans)/ : /^Run a plan/;
+          for (const [name, label] of [
+            [homeLauncher, "plan:open-picker"],
+            [planButton, "plan:open-detail"],
+            ["Back to plans", "plan:back-to-picker"],
+            ["Back to all tasks", "plan:back-to-home"],
+          ]) {
             await gallery.getByRole("button", { name, exact: typeof name === "string" }).click();
-            await settle(page, `plan:${String(name)}`);
+            await settle(page, label);
           }
         };
         await planJourney(); // Warm the lazy workflow before the common journey.
@@ -250,13 +259,14 @@ try {
       logicalCpus: cpus().length, tracing: Boolean(traceDirectory),
       viewport: "1280x900", dpr: 1, headless, network: "loopback, unthrottled", cpuThrottle: 1,
       cache: "new browser context per sample; no-store assets", order: "AB BA AB",
-      journey: "60 2D/3D toggles, 5 plan-preview/edit/back loops, 10 room-list/back loops; lazy workflow warmed first" },
+      journey: "60 2D/3D toggles, 5 four-action plan-to-home loops (home → picker → detail → picker → home), 10 room-list/back loops; lazy workflow warmed first; baseline detail is Edit, UX2 detail is Run" },
     limits: ["Synthetic lab proxy; not field INP or mobile/robot acceptance", "Scene hash must match between builds",
       "Event Timing threshold 16 ms; unreported interactions imputed at 16 ms; browser quantization retained",
       "Tracing adds diagnostic overhead; trace-enabled timings do not qualify the untraced performance gate",
       "Gzip bytes are offline size estimates; the loopback server sends uncompressed JavaScript",
       "Candidate review-only assets are reported separately; shared compiled production chunks serve the synthetic journey",
       "Candidate includes actual registered HA extra modules; historical baseline is panel-only and has no host-wide byte total",
+      "The shared four-action plan route is equivalent, but its detail screen differs by design: baseline opens Edit and UX2 opens Run",
       "Heap is one observation after each journey, not a leak bound; no GPU FPS or transport latency measurement"],
     summary, samples }, null, 2));
 } finally {

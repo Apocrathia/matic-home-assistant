@@ -32,12 +32,16 @@ when completion is verified. [How rotation works](cleaning.md#intelligent-rotati
 
 ## Maps and controls alongside your other devices
 
-Map Studio brings live 2D/3D maps, room selection, plan editing, named custom
+Map Studio brings live 2D/3D maps, room selection, plan Run and Edit views, named custom
 areas, and saved map history into Home Assistant. Dashboard cameras and entities
 let you build your own view. Settings include water flow, double-pass mopping,
 child lock, pet-waste avoidance, and the Cues voice assistant.
 
 [Map and area guide](cleaning.md) · [Entity reference](entities.md)
+
+Open a plan in **Run** to review its next run, pause it with **Plan enabled**, or
+choose **Run plan**. Choose **Edit** to change it; **Cancel** discards changes,
+**Save** keeps them, and **More actions > Delete** removes the plan.
 
 ## Saved areas and Home Assistant routines
 

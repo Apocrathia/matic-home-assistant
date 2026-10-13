@@ -15,10 +15,13 @@ Each plan saves:
 - Intelligent rotation or saved-order execution.
 - Return-to-dock and finish-current-room preferences.
 
-Open a plan and choose **Edit** to change it. Tick the rooms to include, open a
+The **Run** view previews the next clean. Use **Plan enabled** to pause or
+resume it; choose **Run plan** to start. Open **Edit** to change the plan. Tick the rooms to include, open a
 room for its settings and schedule, and, in **Saved order**, use its arrows to
 move it. Each room keeps its mode and coverage within one ordered mission,
 including mixed settings.
+Choose **Cancel** to leave without saving, **Save** for changes, or **Done**
+when an unchanged plan is open. **More actions > Delete** removes the plan.
 The robot handles battery and water servicing as needed.
 [Mixed room missions](mixed-room-missions.md).
 

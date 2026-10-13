@@ -148,8 +148,8 @@ line-height: var(--ms-lh-snug);
     }));
   }
 
-  #resourceCopy(): { readonly loading: string; readonly unavailable: string; readonly empty: string } {
-    switch (this.state.workflow) {
+  #resourceCopy(workflow: "rooms" | "plans" | "plan" | "draw" | "areaReview" | "history"): { readonly loading: string; readonly unavailable: string; readonly empty: string } {
+    switch (workflow) {
       case "rooms":
       case "plans":
       case "plan":
@@ -171,24 +171,17 @@ line-height: var(--ms-lh-snug);
           unavailable: this.#t("v4_history_unavailable", "Map history is unavailable right now."),
           empty: this.#t("v4_no_map_history", "No saved map snapshots yet."),
         };
-      default:
-        return {
-          loading: this.#t("map_loading", "Loading…"),
-          unavailable: this.#t("v4_workspace_unavailable", "The cleaning panel isn't available right now."),
-          empty: this.#t("v4_nothing_saved", "Nothing saved yet."),
-        };
     }
   }
 
   // A reload keeps showing what is already loaded; only an empty load waits.
-  #resource({ status, value, problem }: ResourceState<unknown>, body: unknown) {
-    const copy = this.#resourceCopy();
+  #resource({ status, value }: ResourceState<unknown>, body: unknown, workflow: "rooms" | "plans" | "plan" | "draw" | "areaReview" | "history") {
+    const copy = this.#resourceCopy(workflow);
     if (value === null && (status === "idle" || status === "loading")) return html`<div class="loading" role="status">${copy.loading}</div>`;
     if (status === "error") {
-      const workflow = this.state.workflow;
       return html`
         <div class="stack">
-          <div class="problem" role="alert">${copy.unavailable} ${problem === "request-failed" ? this.#t("v4_try_again", "Try again shortly.") : this.#t("v4_return_live_retry", "Return to the live map and retry.")}</div>
+          <div class="problem" role="alert">${copy.unavailable}</div>
           <div class="toolbar">
             <button class="ms-btn ms-btn--secondary" type="button" @click=${() => this.#intent({ type: "open-workflow", workflow })}>${this.#t("v4_retry", "Try again")}</button>
           </div>
@@ -265,7 +258,7 @@ line-height: var(--ms-lh-snug);
           : nothing}
         ${previewCurrent ? this.#manualRoomPreview(admitted.preview) : nothing}
       </div>
-    `);
+    `, "rooms");
   }
 
   #manualRoomPreview(preview: NonNullable<WorkspaceState["manualRoomPreview"]["value"]>["preview"]) {
@@ -331,10 +324,11 @@ line-height: var(--ms-lh-snug);
   }
 
   #planViews() {
+    const workflow = this.state.workflow === "plans" ? "plans" : "plan";
     return this.#resource(this.state.resources.plans, staticHtml`<${planViewsTag}
       .state=${this.state}
       .localize=${this.localize}
-    ></${planViewsTag}>`);
+    ></${planViewsTag}>`, workflow);
   }
 
   #draw() {
@@ -358,17 +352,24 @@ line-height: var(--ms-lh-snug);
             `)}
             </div>
           </div>
-        `)}
+        `, "draw")}
       </div>
     `;
   }
 
   #areaReview() {
     const draft = this.state.areaDraft;
+    const areas = this.state.resources.areas;
     const needsReview = draft.canRebind || draft.status === "review";
     const stale = !needsReview && (draft.status === "stale" || draft.status === "unknown");
     return html`
       <div class="stack">
+        ${areas.status === "error" ? html`
+          <div class="stack">
+            <div class="problem" role="alert">${this.#resourceCopy("areaReview").unavailable}</div>
+            <div class="toolbar"><button class="ms-btn ms-btn--secondary" type="button" @click=${() => this.#intent({ type: "open-workflow", workflow: "areaReview" })}>${this.#t("v4_retry", "Try again")}</button></div>
+          </div>
+        ` : nothing}
         ${needsReview ? html`<div class="notice" data-tone="warning" role="status">${this.#t("area_review_required", "The map changed since you saved this area, so save it again or redraw it.")}</div>` : nothing}
         ${stale ? html`<div class="problem" role="alert">${this.#t("area_redraw_required", "Home Assistant can't use this area as it was saved, so redraw it.")}</div>` : nothing}
         <label class="field ms-field">${this.#t("area_name", "Area name")}
@@ -467,7 +468,7 @@ line-height: var(--ms-lh-snug);
         </div>
         <p class="subtle">${this.#t("v4_history_privacy", "Saved maps show one floor each and never show where the robot is now.")}</p>
       </div>
-    `);
+    `, "history");
   }
 
   #support() {

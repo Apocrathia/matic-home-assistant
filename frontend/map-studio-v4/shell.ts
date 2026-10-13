@@ -384,6 +384,7 @@ export class MaticMapShellV4 extends LitElement {
   #helpLauncher: HTMLElement | null = null;
   // What Discard goes on to: the intent that asked, or Try again's reload.
   #pendingNavigation: WorkspaceIntent | "reload" | null = null;
+  #dialogSaveRequested = false;
   // The workflows the entry screen's enabled rows offered at its last render
   // (#launch), plus Map diagnostics, which Map options offers on any screen.
   #launchers = new Set<string>();
@@ -672,7 +673,13 @@ export class MaticMapShellV4 extends LitElement {
       // shell.md §5: a save started from Discard changes? has settled. Saved,
       // the dialog closes and the navigation that asked goes on without
       // discarding; not saved, it closes and the user stays with the draft.
-      if (previous?.dialog === "discardDraft" && previous.command === "pending" && this.state.command !== "pending") {
+      const dialogSaveSettled = previous?.dialog === "discardDraft"
+        && this.#dialogSaveRequested
+        && this.state.command !== "pending"
+        && this.state.notice !== previous.notice
+        && (this.state.notice?.tone === "success" || this.state.notice?.tone === "error");
+      if (dialogSaveSettled) {
+        this.#dialogSaveRequested = false;
         const pending = this.#pendingNavigation;
         this.#pendingNavigation = null;
         if (this.state.dialog) this.#dismissDialog();
@@ -680,10 +687,21 @@ export class MaticMapShellV4 extends LitElement {
           if (pending === "reload") reloadInto(this.state.workflow);
           // The draft this shell holds may still read dirty for a render, so
           // the intent skips the confirmation the saved draft no longer needs.
-          else if (pending && pending.type !== "dismiss-top-layer") this.#emit(pending);
+          else if (pending) this.#emit(pending);
         }
       }
       if (!previous?.dialog && this.state.dialog) {
+        if (this.state.dialog === "discardDraft" && !this.#pendingNavigation && previous) {
+          // Browser Back opens this dialog in the history controller, outside
+          // #intent. Capture the view Back was leaving before a save changes it.
+          if (previous.workflow === "plan") {
+            this.#pendingNavigation = previous.planDraft.id !== null && previous.planView === "edit"
+              ? { type: "set-plan-view", view: "run" }
+              : { type: "open-workflow", workflow: "plans" };
+          } else {
+            this.#pendingNavigation = { type: "dismiss-top-layer" };
+          }
+        }
         const active = deepActiveElement(this.shadowRoot || document);
         if (active?.hasAttribute("data-dialog-launcher")) this.#dialogLauncher = active;
         void this.updateComplete.then(() => {
@@ -697,6 +715,7 @@ export class MaticMapShellV4 extends LitElement {
           // and restore the native selector so it cannot show a floor that
           // the store did not select.
           this.#pendingNavigation = null;
+          this.#dialogSaveRequested = false;
           this.#restoreSelectors();
         }
         // Safari does not focus a button on a pointing-device click. Use the
@@ -1444,7 +1463,7 @@ export class MaticMapShellV4 extends LitElement {
               type="button"
               aria-pressed=${String(state.appearance === "rooms")}
               @click=${() => this.#intent({ type: "set-appearance", appearance: "rooms" })}
-            >${t("v4_room_colours", "Room colors")}</button>
+            >${t("map_style_room_colours", "Room colors")}</button>
           </div>
           <label class="ms-checkbox">
             <input type="checkbox" .checked=${state.labelsVisible} @change=${() => this.#intent({ type: "toggle-labels" })}>
@@ -1885,7 +1904,7 @@ export class MaticMapShellV4 extends LitElement {
               <div id="dialog-detail">
                 <p>${dialog.detail}</p>
                 ${dialog.consequence ? html`<p>${dialog.consequence}</p>` : nothing}
-                ${busy ? html`<p>${this.#t("v4_notice_saving", "Saving…")}</p>` : nothing}
+                ${busy ? html`<p id="dialog-saving" role="status">${this.#t("v4_notice_saving", "Saving…")}</p>` : nothing}
               </div>
               <div class="dialog-actions">
                 <button
@@ -1893,18 +1912,26 @@ export class MaticMapShellV4 extends LitElement {
                   type="button"
                   data-dialog-initial-focus
                   aria-disabled=${busy ? "true" : nothing}
+                  aria-describedby=${busy ? "dialog-saving" : nothing}
                   @click=${discard ? this.#keepDraft : this.#dismissDialog}
                 >${dialog.cancelLabel}</button>
                 ${save ? html`<button
                   class="ms-btn ms-btn--secondary"
                   type="button"
                   aria-disabled=${busy ? "true" : nothing}
-                  @click=${() => { if (!busy) this.#dispatchAction(save); }}
+                  aria-describedby=${busy ? "dialog-saving" : nothing}
+                  @click=${() => {
+                    if (busy) return;
+                    this.#dialogSaveRequested = true;
+                    this.#intent({ type: "set-notice", notice: null });
+                    this.#dispatchAction(save);
+                  }}
                 >${this.#t("v4_save", "Save")}</button>` : nothing}
                 <button
                   class="discard ms-btn ms-btn--primary ms-btn--danger"
                   type="button"
                   aria-disabled=${busy ? "true" : nothing}
+                  aria-describedby=${busy ? "dialog-saving" : nothing}
                   @click=${() => { if (!busy) this.#confirmDialog(dialog); }}
                 >${dialog.confirmLabel}</button>
               </div>

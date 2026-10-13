@@ -9938,7 +9938,7 @@ async function openEmptyPicker(gallery) {
 const axeFindings = (results) => results.map(({ id, nodes }) => `${id}: ${nodes.map(({ target }) => target.flat().join(" >> ")).join(" | ")}`);
 
 test.describe("Map Studio accessibility baselines", () => {
-  for (const scenario of ["ready", "rooms", "plans", "plan-saved-intelligent", "draw", "history", "cleaning", "access"]) {
+  for (const scenario of ["ready", "rooms", "plans", "plan-saved-ordered", "plan-run-paused", "plan-run-blocked", "plan-new", "plan-dirty", "draw", "history", "cleaning", "access"]) {
     for (const [width, height] of [[390, 844], [1024, 768]]) {
       const narrow = width < 1024;
       test(`${scenario} at ${width} has no serious axe finding and no name on an unnamed role${narrow ? " @mobile" : ""}`, async ({ page }) => {
@@ -10000,10 +10000,13 @@ test.describe("Map Studio accessibility baselines", () => {
   const scrollerState = (element, top) => element.evaluate((node, pinned) => {
     const target = pinned ? node.closest(".panel-top") : node;
     const tabbable = "a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])";
-    const nested = [...target.querySelectorAll("*")].some((child) => child.shadowRoot?.querySelector(tabbable));
+    // Workflow bodies can contain another custom element (for example the
+    // plan picker). Inspect the whole composed subtree, not just one host.
+    const containsTabbable = (root) => Boolean(root.querySelector(tabbable))
+      || [...root.querySelectorAll("*")].some((child) => child.shadowRoot && containsTabbable(child.shadowRoot));
     return {
       overflows: target.scrollHeight > target.clientHeight,
-      focusableChild: Boolean(target.querySelector(tabbable)) || nested,
+      focusableChild: containsTabbable(target),
       tabindex: target.getAttribute("tabindex"),
       role: target.getAttribute("role"),
       named: target.getAttribute("aria-labelledby") === "workspace-title",
