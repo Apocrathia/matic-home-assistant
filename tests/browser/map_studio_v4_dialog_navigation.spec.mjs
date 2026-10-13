@@ -169,6 +169,25 @@ test.describe("UX2 discard dialog navigation", () => {
     });
   }
 
+  test("a Save waiting for the writes is not sent after the draft is discarded", async ({ page }) => {
+    const release = await holdCatalogWrites(page);
+    const { panel } = await setup(page);
+    await panel.getByRole("textbox", { name: "Plan name" }).fill("Discarded edit");
+    await panel.getByRole("button", { name: "Save", exact: true }).click();
+    await panel.getByRole("button", { name: "Cancel", exact: true }).click();
+    const dialog = panel.getByRole("dialog", { name: "Discard changes?" });
+    await dialog.getByRole("button", { name: "Discard", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(() => panel.evaluate((element) => element.getWorkspaceSnapshot().planDraft.name)).toBe("Daily");
+    release();
+    // Give the released chunk time to load and any write to reach the backend.
+    await expect.poll(() => page.evaluate(() => performance.getEntriesByType("resource")
+      .some((entry) => /catalog-writes-/.test(entry.name)))).toBe(true);
+    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 250)));
+    expect(await page.evaluate(() => window.__panelFixture.serviceCalls.length), "a discarded draft is never saved").toBe(0);
+    await expect.poll(() => panel.evaluate((element) => element.getWorkspaceSnapshot().planDraft.name)).toBe("Daily");
+  });
+
   test("dialog Save leaves an existing notice alone until the save starts", async ({ page }) => {
     const release = await holdCatalogWrites(page);
     const { panel, fixture } = await setup(page);
