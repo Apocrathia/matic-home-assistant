@@ -169,7 +169,8 @@ def test_the_stepper_ships_with_the_plan_views() -> None:
 def test_workflow_dialog_launch_and_confirm_ship_with_their_copy() -> None:
     """Delete and reset dialogs open only from the views, which confirm them too."""
     modules = shipped_modules()
-    # dialogReturnTarget: a schedule Reset returns focus to its room (room-schedule.md §5).
+    # dialogReturnTarget: a schedule Reset returns focus to its room
+    # (room-schedule.md §5).
     for marker in ("cadenceResetRequest", "isWorkspaceIntent", "data-room-disclosure"):
         assert marker not in modules["shell.ts"]
         assert marker in modules["dialog-copy.ts"]
