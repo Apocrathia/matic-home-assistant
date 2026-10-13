@@ -309,6 +309,11 @@ test.describe("room schedule model", () => {
         e(p({ mopEveryN: 3 }), room(p({ mopEveryN: 2 }))),
         e(p({ mopEveryN: 3 }), room(p({ mopEveryN: 3 }))),
         e(undefined, undefined),
+        // Codex P2 (#253): a paused private schedule keeps its counters, so re-enabling resumes them.
+        e(p({ mopEveryN: 3 }), room(p(), g({ mopProgress: 2 }))),
+        e(p({ mopEveryN: 3 }), room(p(), g({ coverageProgress: 2 }))),
+        e(p({ mopEveryN: 3, coverageEveryN: 2, periodicCoverageSetting: "quick" }), room(p(), g({ coverageProgress: 2 }))),
+        e(p({ mopEveryN: 3 }), room(p(), g())),
       ];`);
     expect(result).toEqual([
       "Saving creates a schedule shared by every plan that uses this room, starting from zero.",
@@ -316,6 +321,10 @@ test.describe("room schedule model", () => {
       "Changing how often keeps the progress, and turning a schedule off pauses it.",
       null,
       null,
+      "Changing how often keeps the progress, and turning a schedule off pauses it.",
+      "Saving starts progress for this plan only, from zero.",
+      "Changing how often keeps the progress, and turning a schedule off pauses it.",
+      "Saving starts progress for this plan only, from zero.",
     ]);
   });
 
@@ -715,6 +724,24 @@ test.describe("next clean, Advanced and joining", () => {
     await summary.click();
     for (const radio of await schedule.getByRole("radio").all()) expect((await radio.locator("..").boundingBox()).height).toBeGreaterThanOrEqual(44);
     await expect(schedule.getByText("Only cleans the robot confirms count toward these schedules, and due work stays due until a clean is confirmed.")).toBeVisible();
+  });
+
+  // Codex P2 (#253): a level chosen while Off is view state for this draft only.
+  test("a level chosen while Off is forgotten with the draft", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-cadence-shared" });
+    await gallery.getByRole("button", { name: "Settings for Living room", exact: true }).click();
+    const schedule = gallery.getByRole("group", { name: "Room schedule for Living room" });
+    const level = schedule.getByRole("combobox", { name: "Vacuum level for Living room" });
+    await level.selectOption("quick");
+    await expect(schedule.getByRole("spinbutton", { name: "Quick vacuum", exact: true })).toBeVisible();
+    expect((await snapshot(page)).planDraft.dirty).toBe(false);
+    await gallery.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(gallery.getByRole("button", { name: "Edit Daily clean", exact: true })).toBeVisible();
+    await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
+    await gallery.getByRole("button", { name: "Settings for Living room", exact: true }).click();
+    await expect(level).toHaveValue("heavy_duty");
+    await schedule.getByRole("button", { name: "Increase Heavy duty vacuum", exact: true }).click();
+    expect((await snapshot(page)).planDraft.rooms[1].cadence.periodicCoverageSetting).toBe("heavy_duty");
   });
 
   test("leaving a shared schedule says other plans keep it", async ({ page }) => {

@@ -212,6 +212,8 @@ interface Facts {
   readonly progress: RoomCadenceProgress | undefined;
   readonly reasons: readonly CadenceReason[];
   readonly savedPolicy: RoomCadencePolicy | undefined;
+  /** The saved room's own counters, kept while a private schedule is off (plans.py cadence_progress). */
+  readonly savedProgress: RoomCadenceProgress | undefined;
   /** This room's cleaning mode can use the shared schedule (cadence.py:45-46, 66-70). */
   readonly sharedFits: boolean;
 }
@@ -231,6 +233,7 @@ const facts = ({ room, saved, catalogRoom }: ScheduleInput): Facts => {
     progress: joinPending ? catalogRoom?.sharedCadenceProgress : room.cadenceProgress,
     reasons: joinPending ? catalogRoom?.sharedCadenceReasons ?? [] : room.cadenceReasons ?? [],
     savedPolicy: saved?.cadence,
+    savedProgress: saved?.cadenceProgress,
     sharedFits: !shared
       || ((shared.mopEveryN === null || room.cleaningMode === "vacuum") && (shared.coverageEveryN === null || room.cleaningMode !== "mop")),
   };
@@ -311,7 +314,11 @@ const explanation = (t: Translate, f: Facts, name: string): string | null => {
   if (!participating && policy.scope === "shared" && scheduled) {
     return t("v4_cadence_new_shared_effect", "Saving creates a schedule shared by every plan that uses this room, starting from zero.");
   }
-  if (policy.scope === "plan" && scheduled && !hasSchedule(f.savedPolicy)) {
+  // A paused private schedule keeps its counters, so a row turned back on
+  // resumes them (cadence.py:93-99); only a row with none starts from zero.
+  const resumes = (["mop", "coverage"] as const).some((kind) =>
+    policy[FIELDS[kind].every] !== null && (f.savedProgress?.[FIELDS[kind].count] ?? 0) > 0);
+  if (policy.scope === "plan" && scheduled && !hasSchedule(f.savedPolicy) && !resumes) {
     return t("v4_cadence_new_private_effect", "Saving starts progress for this plan only, from zero.");
   }
   if (f.savedPolicy && (policy.mopEveryN !== f.savedPolicy.mopEveryN || policy.coverageEveryN !== f.savedPolicy.coverageEveryN)) {

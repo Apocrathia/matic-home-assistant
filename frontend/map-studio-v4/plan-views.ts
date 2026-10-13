@@ -355,6 +355,9 @@ export class MaticPlanViewsV4 extends LitElement {
     // The menu belongs to the open room; it closes with it, and while a save holds Edit.
     const previous = changed.get("state") as WorkspaceState | undefined;
     if (previous && (previous.expandedRoom !== this.state.expandedRoom || this.state.planView !== "edit" || this.state.dialog || this.#held())) this.#roomMenu.open = false;
+    // A level chosen while Off belongs to this draft: it is forgotten when
+    // Edit is left (Cancel, Done), another plan opens, or the workflow changes.
+    if (previous && (previous.planDraft.id !== this.state.planDraft.id || previous.workflow !== this.state.workflow || this.state.planView !== "edit")) this.#offLevels.clear();
   }
 
   // A keyed move re-inserts the row, which drops focus, so the arrow takes it
