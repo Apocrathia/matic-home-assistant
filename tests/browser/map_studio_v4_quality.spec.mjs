@@ -262,7 +262,7 @@ for (const colorScheme of ["light", "dark"]) {
       await page.goto("/map-studio-v4-review");
       if (surface === "primary") {
         await page.getByRole("button", { name: "Run a plan 1 saved plan", exact: true }).click();
-        await page.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
+        await page.getByRole("button", { name: /^Daily clean/ }).click();
       }
       else await page.getByRole("button", { name: "transition", exact: true }).click();
       const element = page.locator(surface === "primary" ? ".action-bar .ms-btn--primary" : ".map-message");
@@ -934,7 +934,7 @@ for (const width of [320, 390, 820, 1280]) {
       await expect(gallery.getByRole("textbox", { name: "Plan name" })).toHaveCount(0);
       await expect(gallery.getByRole("button", { name: /^Run plan/ })).toHaveCount(0);
       const create = gallery.getByRole("button", { name: "Create a plan", exact: true });
-      const choice = gallery.getByRole("button", { name: /Evening routine.*Paused.*Edit plan/ });
+      const choice = gallery.getByRole("button", { name: /^Evening routine.*Paused/ });
       const appearance = await choice.evaluate((element) => {
         const context = document.createElement("canvas").getContext("2d");
         const luminance = color => {
@@ -981,7 +981,7 @@ test("Escape from the plan editor returns to the picker", async ({ page }) => {
   await page.goto("/map-studio-v4-audit");
   const gallery = page.locator("matic-map-studio-gallery-v0-4-0");
   await gallery.getByRole("button", { name: /^Run a plan/ }).click();
-  await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
+  await gallery.getByRole("button", { name: /^Daily clean/ }).click();
   await page.keyboard.press("Escape");
   await expect(gallery.getByRole("heading", { name: "Your plans", exact: true })).toBeVisible();
 });
@@ -992,7 +992,7 @@ test("discarding plan edits through Escape returns to the plan, then the picker"
   await page.goto("/map-studio-v4-audit");
   const gallery = page.locator("matic-map-studio-gallery-v0-4-0");
   await gallery.getByRole("button", { name: /^Run a plan/ }).click();
-  await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
+  await gallery.getByRole("button", { name: /^Daily clean/ }).click();
   await gallery.getByRole("textbox", { name: "Plan name" }).fill("Unsaved change");
   await page.keyboard.press("Escape");
   // shell.md §5: one title for every draft.

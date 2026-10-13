@@ -1410,7 +1410,7 @@ export class MaticMapShellV4 extends LitElement {
                     ? t("v4_plans_unavailable_hint", "Try again to load your plans.")
                     : planCount
                       ? planCount === 1 ? t("v4_saved_routine", "1 saved plan") : t("v4_saved_routines", "{count} saved plans", { count: planCount })
-                      : t("v4_no_plans_hint", "Save a plan to repeat a set of rooms"))}</small>
+                      : t("v4_no_plans_hint", "Save a plan to repeat a set of rooms."))}</small>
               </span>
               <span class="ms-row__trail">${icon(iconChevronRight)}</span>
             </button>

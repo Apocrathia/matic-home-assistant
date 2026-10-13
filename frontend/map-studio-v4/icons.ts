@@ -9,6 +9,7 @@ import {
   mdiArrowUp,
   mdiBatteryCharging50,
   mdiBrush,
+  mdiCalendarCheck,
   mdiCheck,
   mdiChevronDown,
   mdiChevronRight,
@@ -81,6 +82,8 @@ export const iconPaused = mdiPause;
 export const iconCharging = mdiBatteryCharging50;
 export const iconOffline = mdiMapMarkerOff;
 export const iconClose = mdiClose;
+// Due work (design-system.md §5: the due glyph).
+export const iconDue = mdiCalendarCheck;
 // Notice tones (design-system.md .ms-notice): info reuses iconDiagnostics.
 export const iconNoticeSuccess = mdiCheck;
 export const iconNoticeWarning = mdiAlert;

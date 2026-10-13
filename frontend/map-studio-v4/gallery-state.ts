@@ -309,14 +309,18 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
         ],
       };
     case "plans": {
-      const daily = savedDailyPlan();
+      // The picker's line 3 kinds (plan.md §3): due work, a blocked run, a paused plan.
+      const saved = savedDailyPlan();
+      const daily = planWithRooms(saved, saved.rooms.map((room, index): PlanRoom => index === 0
+        ? { ...room, cadenceReasons: ["mop_due", "coverage_due"] }
+        : room));
       const weekend = planWithRooms(
         { ...daily, id: "weekend", name: "Weekend refresh" },
         [
           { roomId: "room-b", cleaningMode: "vacuum_and_mop", coverageSetting: "heavy_duty" },
           { roomId: "room-d", cleaningMode: "vacuum", coverageSetting: "standard" },
         ],
-        { runBehavior: "ordered" },
+        { runBehavior: "ordered", nextRunPreview: previewFor([], { blocker: "cadence_progress_unverified" }) },
       );
       const guest = planWithRooms(
         { ...daily, id: "guest", name: "Guest prep", enabled: false },

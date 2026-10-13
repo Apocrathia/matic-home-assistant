@@ -1,8 +1,9 @@
 import { LitElement, css, html, nothing } from "lit";
 import type { PropertyValues } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import { html as staticHtml, unsafeStatic } from "lit/static-html.js";
 import { controls } from "./controls";
-import { icon, iconMoveDown, iconMoveUp, iconPlus } from "./icons";
+import { icon, iconMoveDown, iconMoveUp } from "./icons";
 import { base, tokens } from "./tokens";
 
 import type {
@@ -20,11 +21,14 @@ import {
   type WorkspaceIntent,
   type WorkspaceState,
 } from "./contracts";
-import { WORKFLOW_TAG } from "./element-tags";
+import { PLAN_VIEWS_TAG, WORKFLOW_TAG } from "./element-tags";
 import { WORKSPACE_INTENT_EVENT } from "./map-canvas";
 import { admittedManualRoomPreview, deleteSubject, initialWorkspaceState } from "./state";
 import { formatDateTime, translate } from "./localize";
 import { LazyChunk, chunkStatus } from "./lazy-chunk";
+import { settingLabel } from "./plan-copy";
+// The plan picker, Run and Edit.
+import "./plan-views";
 // Draw's precision controls load with the other workflow tools; the shell
 // renders them only in the draw workflow.
 import "./precision-controls";
@@ -38,6 +42,8 @@ export { confirmDialog, dialogCopy, dialogLauncher } from "./dialog-copy";
 
 const modes: readonly CleaningMode[] = ["vacuum", "mop", "vacuum_and_mop"];
 const coverage: readonly CoverageSetting[] = ["quick", "standard", "heavy_duty"];
+
+const planViewsTag = unsafeStatic(PLAN_VIEWS_TAG);
 
 const eventValue = (event: Event): string => (event.currentTarget as HTMLInputElement).value;
 const eventChecked = (event: Event): boolean => (event.currentTarget as HTMLInputElement).checked;
@@ -150,11 +156,8 @@ line-height: var(--ms-lh-snug);
     return this.#t("heavy_duty", "Heavy duty");
   }
 
-  #settingsLabel(room: Pick<PlanRoom, "cleaningMode" | "coverageSetting">): string {
-    const mode = this.#modeLabel(room.cleaningMode);
-    if (room.cleaningMode === "mop") return mode;
-    return `${mode} · ${this.#t("v4_vacuum_coverage_summary", "{coverage} vacuum coverage", { coverage: this.#coverageLabel(room.coverageSetting) })}`;
-  }
+  readonly #tr = (key: string, fallback: string, placeholders?: Readonly<Record<string, string | number>>): string =>
+    this.#t(key, fallback, placeholders);
 
   #mopCoverageHint(mode: CleaningMode) {
     return mode === "vacuum" ? nothing : html`<p class="subtle">${this.#t("v4_mop_coverage_hint", "Vacuum coverage applies only when vacuuming. Use the robot's Double-pass mopping setting for an extra mop pass.")}</p>`;
@@ -317,7 +320,7 @@ line-height: var(--ms-lh-snug);
               <li class="ms-row ms-row--stack">
                 ${boundaries.has(index) ? html`<strong>${this.#t("v4_room_mission_boundary", "New part (the robot may stop at the dock first)")}</strong>` : nothing}
                 <strong>${room.name}</strong>
-                <span class="subtle">${this.#settingsLabel(room)}</span>
+                <span class="subtle">${settingLabel(this.#tr, room)}</span>
                 ${room.cadenceReasons.length
                   ? html`<span class="subtle">${room.cadenceReasons.map((reason) => this.#cadenceReason(reason)).join("; ")}</span>`
                   : nothing}
@@ -590,25 +593,11 @@ line-height: var(--ms-lh-snug);
     this.#intent({ type: "patch-plan-draft", patch: { rooms } });
   }
 
-  #planPicker() {
-    const resource = this.state.resources.plans;
-    return this.#resource(resource, html`
-      <div class="stack">
-        <button class="ms-btn ms-btn--primary" type="button" @click=${() => this.#intent({ type: "select-plan", planId: null })}>
-          ${icon(iconPlus)}<span>${this.#t("v4_create_plan", "Create a plan")}</span>
-        </button>
-        ${(resource.value?.plans || []).map((plan) => html`
-          <button class="ms-row ms-row--card" type="button" @click=${() => this.#intent({ type: "select-plan", planId: plan.id })}>
-            <span class="ms-row__body"><strong>${plan.name}${plan.enabled ? nothing : html` <span class="ms-chip">${this.#t("v4_paused", "Paused")}</span>`}</strong>
-              <small>${plan.rooms.length === 1
-                ? this.#t("v4_plan_room_count_one", "1 room")
-                : this.#t("v4_plan_room_count", "{count} rooms", { count: plan.rooms.length })}</small>
-            </span>
-            <span class="ms-row__trail">${this.#t("v4_edit_plan", "Edit plan")}</span>
-          </button>
-        `)}
-      </div>
-    `);
+  #planViews() {
+    return this.#resource(this.state.resources.plans, staticHtml`<${planViewsTag}
+      .state=${this.state}
+      .localize=${this.localize}
+    ></${planViewsTag}>`);
   }
 
   #plans() {
@@ -732,7 +721,7 @@ line-height: var(--ms-lh-snug);
                       return html`<li class="ms-row ms-row--stack">
                         <span class="subtle">${this.#t("v4_next_run_mission", "Part {number}", { number: mission })}</span>
                         <strong>${roomIndex + 1}. ${previewRoom.name}</strong>
-                        <span>${this.#settingsLabel(previewRoom)}</span>
+                        <span>${settingLabel(this.#tr, previewRoom)}</span>
                         ${previewRoom.cadenceReasons.length ? html`<small>${previewRoom.cadenceReasons.map((reason) => this.#cadenceReason(reason)).join(" · ")}</small>` : nothing}
                       </li>`;
                     })}
@@ -931,7 +920,7 @@ line-height: var(--ms-lh-snug);
   #body() {
     switch (this.state.workflow) {
       case "rooms": return this.#rooms();
-      case "plans": return this.#planPicker();
+      case "plans": return this.#planViews();
       case "plan": return this.#plans();
       case "draw": return this.#draw();
       case "areaReview": return this.#areaReview();

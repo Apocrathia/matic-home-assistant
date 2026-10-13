@@ -5,7 +5,7 @@ import { controls } from "./controls";
 import { icon, iconOverflow } from "./icons";
 import { base, tokens } from "./tokens";
 import type { Localize, NoButtonAction, PrimaryAction, WorkspaceIntent, WorkspaceState } from "./contracts";
-import { PLAN_TOOLS_TAG, WORKFLOW_TAG } from "./element-tags";
+import { PLAN_TOOLS_TAG, PLAN_VIEWS_TAG, WORKFLOW_TAG } from "./element-tags";
 import { WORKSPACE_INTENT_EVENT } from "./map-canvas";
 import { initialWorkspaceState } from "./state";
 import { translate } from "./localize";
@@ -227,7 +227,7 @@ export const planCancel = (
  * launcher that is gone, leaves the shell to take the heading.
  */
 const planFocusTarget = (previous: WorkspaceState, state: WorkspaceState, root: ParentNode): HTMLElement | null | undefined => {
-  const views = root.querySelector(WORKFLOW_TAG)?.shadowRoot;
+  const views = root.querySelector(WORKFLOW_TAG)?.shadowRoot?.querySelector(PLAN_VIEWS_TAG)?.shadowRoot;
   // Run's rows are never open, so an open row on entering Edit is Review's.
   if (state.workflow === "plan" && state.planView === "edit" && state.expandedRoom) {
     return views?.querySelector(`[data-room-disclosure="${CSS.escape(state.expandedRoom)}"]`);

@@ -414,7 +414,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await page.route("**/chunks/catalog-writes-*.js", (route) => route.abort());
     await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
     await panel.getByRole("button", { name: /^Run a plan/ }).click();
-    await panel.getByRole("button", { name: /Daily.*Edit plan/ }).click();
+    await panel.getByRole("button", { name: /^Daily/ }).click();
     await page.evaluate((tag) => {
       document.querySelector(tag).shadowRoot.querySelector("matic-map-shell-v4").dispatchEvent(new CustomEvent("matic-workspace-intent", {
         detail: { type: "set-plan-view", view: "edit" }, bubbles: true, composed: true,
@@ -589,7 +589,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       });
     }, GALLERY_TAG);
     await gallery.getByRole("button", { name: /^Run a plan/ }).click();
-    await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
+    await gallery.getByRole("button", { name: /^Daily clean/ }).click();
     const inspector = gallery.locator(".inspector");
     const schedule = inspector.locator("details").first();
     await schedule.locator("summary").click();
@@ -646,7 +646,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       });
     }, GALLERY_TAG);
     await gallery.getByRole("button", { name: /^Run a plan/ }).click();
-    await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
+    await gallery.getByRole("button", { name: /^Daily clean/ }).click();
     const inspector = gallery.locator(".inspector");
     await inspector.locator("details").first().locator("summary").click();
     await expect(inspector).toContainText("Can't run this schedule until you reset its mopping progress, which Home Assistant can't confirm.");
@@ -680,7 +680,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       });
     }, GALLERY_TAG);
     await gallery.getByRole("button", { name: /^Run a plan/ }).click();
-    await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
+    await gallery.getByRole("button", { name: /^Daily clean/ }).click();
     const preview = gallery.locator("section[aria-labelledby='next-run-preview-heading']");
     await expect(preview.getByRole("list", { name: "Next-run room order and effective settings" })).toHaveText(/1\. Living room.*Vacuum \+ mop · Heavy duty.*Vacuum and mop are due.*Part 2.*2\. Kitchen.*Vacuum · Quick.*Vacuum rotation is due/s);
     // plan.md §6 (v4_action_run_plan_named): Run plan is named with the plan.
@@ -785,7 +785,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       return { status: plans?.status, count: plans?.value?.plans[0]?.rooms.length };
     })).toEqual({ status: "ready", count: 102 });
     await gallery.getByRole("button", { name: /^Run a plan/ }).click();
-    await gallery.getByRole("button", { name: /Legacy plan.*Edit plan/ }).click();
+    await gallery.getByRole("button", { name: /^Legacy plan/ }).click();
 
     await expect(gallery.getByRole("button", { name: "Run plan Legacy plan", exact: true })).toBeDisabled();
     // A saved plan opens in Run (plan.md §5 State); its rooms change in Edit.
@@ -850,7 +850,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     );
 
     await gallery.getByRole("button", { name: "Back to plans", exact: true }).click();
-    await gallery.getByRole("button", { name: /Legacy plan.*Edit plan/ }).click();
+    await gallery.getByRole("button", { name: /^Legacy plan/ }).click();
     await expect(gallery.getByRole("group", { name: "Rooms in this plan" })
       .locator(".plan-room-label input[type=checkbox]:checked")).toHaveCount(100);
     await expect.poll(() => page.evaluate((tag) => {
@@ -1002,14 +1002,68 @@ test.describe("Map Studio v0.4 foundation", () => {
     });
   }
 
-  test("a paused plan shows a Paused chip beside its name and only its room count below", async ({ page }) => {
+  // plan.md §3 Picker: the default plan first, then catalog order; line 2 the
+  // count and order; line 3 the due work or "Needs attention"; a paused plan
+  // shows only its chip; Create a plan is the last, secondary row.
+  test("the picker shows each plan's order, default and due work, and Create a plan last", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "plans" });
+    await gallery.evaluate((element) => {
+      const state = element.getWorkspaceSnapshot();
+      const value = state.resources.plans.value;
+      element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...state.resources.plans,
+        value: { ...value, plans: [value.plans[1], value.plans[2], value.plans[0]] } } } });
+    });
+    const rows = gallery.locator("[data-plan-row]");
+    await expect(rows).toHaveCount(3);
+    expect(await rows.evaluateAll((items) => items.map((item) => item.dataset.planRow))).toEqual(["daily", "weekend", "guest"]);
+    const daily = gallery.getByRole("button", { name: /^Daily clean/ });
+    await expect(daily.locator("strong bdi")).toHaveText("Daily clean");
+    await expect(daily.locator("strong .ms-chip")).toHaveText("Default");
+    await expect(daily.locator("strong .ms-chip")).toHaveAttribute("title", "Home Assistant's plan button and plan select run this plan.");
+    await expect(daily).toHaveAccessibleDescription("Home Assistant's plan button and plan select run this plan.");
+    await expect(daily.locator("small")).toHaveText("3 rooms · Longest-waiting rooms first");
+    await expect(daily.locator(".line")).toHaveText(["Mop due in Kitchen", "Optimal vacuum due in Kitchen"]);
+    const weekend = gallery.getByRole("button", { name: /^Weekend refresh/ });
+    await expect(weekend.locator(".ms-chip")).toHaveCount(0);
+    await expect(weekend.locator("small")).toHaveText("2 rooms · Top to bottom, as listed");
+    await expect(weekend.locator(".line")).toHaveText("Needs attention before it can run");
+    await expect(weekend).toHaveAccessibleDescription("");
     const paused = gallery.getByRole("button", { name: /^Guest prep/ });
     await expect(paused.locator("strong .ms-chip")).toHaveText("Paused");
-    await expect(paused.locator("small")).toHaveText("1 room");
-    const running = gallery.getByRole("button", { name: /^Weekend refresh/ });
-    await expect(running.locator(".ms-chip")).toHaveCount(0);
-    await expect(running.locator("small")).toHaveText("2 rooms");
+    await expect(paused.locator("small")).toHaveText("1 room · Longest-waiting rooms first");
+    await expect(paused.locator(".line")).toHaveCount(0);
+    const items = gallery.locator("matic-map-plan-views-v4 li");
+    await expect(items.last().getByRole("button")).toHaveText("Create a plan");
+    await expect(items.last().getByRole("button")).not.toHaveClass(/ms-btn--primary/);
+  });
+
+  test("a picker with no plans offers one filled Create a plan", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plans" });
+    await gallery.evaluate((element) => {
+      const state = element.getWorkspaceSnapshot();
+      element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...state.resources.plans,
+        value: { ...state.resources.plans.value, plans: [], selectedPlan: null } } } });
+    });
+    await expect(gallery.getByRole("heading", { level: 3, name: "No plans yet" })).toBeVisible();
+    await expect(gallery.getByText("Save a plan to repeat a set of rooms.", { exact: true })).toBeVisible();
+    await expect(gallery.locator("[data-plan-row]")).toHaveCount(0);
+    const create = gallery.getByRole("button", { name: "Create a plan", exact: true });
+    await expect(create).toHaveClass(/ms-btn--primary/);
+    await create.click();
+    expect(await gallery.evaluate((element) => element.getWorkspaceSnapshot())).toMatchObject({ workflow: "plan", planView: "edit" });
+  });
+
+  // plan.md §5 Navigation and focus: a row opens Run and focuses its heading;
+  // Back returns to the picker with focus on that row (MS-KEY-01).
+  test("a picker row opens Run, and Back returns focus to that row", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plans" });
+    await gallery.getByRole("button", { name: /^Weekend refresh/ }).click();
+    expect(await gallery.evaluate((element) => element.getWorkspaceSnapshot())).toMatchObject({
+      workflow: "plan", planView: "run", selection: { planId: "weekend" },
+    });
+    await expect(gallery.getByRole("heading", { level: 2, name: "Weekend refresh" })).toBeFocused();
+    await gallery.getByRole("button", { name: "Back to plans", exact: true }).click();
+    await expect(gallery.getByRole("button", { name: /^Weekend refresh/ })).toBeFocused();
   });
 
   test("delete dialogs use a generic title, the bare verb and the saved name", async ({ page }) => {
@@ -3987,7 +4041,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       });
     }, GALLERY_TAG);
     await gallery.getByRole("button", { name: /^Run a plan/ }).click();
-    await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
+    await gallery.getByRole("button", { name: /^Daily clean/ }).click();
     const deletePlan = gallery.getByRole("button", { name: "Delete plan" });
     await expect(deletePlan).toBeVisible();
     await deletePlan.click();
@@ -4026,7 +4080,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(gallery.locator(".mobile-sheet")).toBeVisible();
 
     await gallery.getByRole("button", { name: /^Run a plan/ }).click();
-    await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
+    await gallery.getByRole("button", { name: /^Daily clean/ }).click();
     // Exactly one panel: two meant the launcher lookup could pick the hidden one.
     await expect(gallery.locator("matic-map-workflow-v4")).toHaveCount(1);
     const deletePlan = gallery.getByRole("button", { name: "Delete plan" });
@@ -4272,7 +4326,7 @@ test.describe("Map Studio v0.4 foundation", () => {
   test("uses one ordered room list for plan selection and per-room settings", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "ready" });
     await gallery.getByRole("button", { name: /^Run a plan/ }).click();
-    await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
+    await gallery.getByRole("button", { name: /^Daily clean/ }).click();
     const inspector = gallery.locator(".inspector");
     // Groups are named by a visible h3 (aria-labelledby), not a bare
     // aria-label, so the outline is readable by sighted users as well.
@@ -4330,7 +4384,7 @@ test.describe("Map Studio v0.4 foundation", () => {
         } });
       }, GALLERY_TAG);
       await gallery.getByRole("button", { name: /^Run a plan/ }).click();
-      await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
+      await gallery.getByRole("button", { name: /^Daily clean/ }).click();
       const cadence = gallery.getByLabel("Rooms in this plan").locator("details").first();
       await cadence.locator("summary").click();
       await expect(cadence.getByText("A vacuum rotation counts only after the robot confirms the vacuum coverage and that the clean finished. If it can't confirm, the rotation stays due for the next clean.")).toBeVisible();
@@ -4360,7 +4414,7 @@ test.describe("Map Studio v0.4 foundation", () => {
   test("keeps plan choices available after catalog loading", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "ready" });
     await gallery.getByRole("button", { name: /^Run a plan/ }).click();
-    const choice = gallery.getByRole("button", { name: /Daily clean.*Edit plan/ });
+    const choice = gallery.getByRole("button", { name: /^Daily clean/ });
     await expect(choice).toBeVisible();
     await expect(gallery.getByRole("textbox", { name: "Plan name" })).toHaveCount(0);
 
@@ -5150,7 +5204,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     // shipped looking identical whether a room was in the plan or not.
     const gallery = await loadGallery(page, { scenario: "ready" });
     await gallery.getByRole("button", { name: /^Run a plan/ }).click();
-    await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
+    await gallery.getByRole("button", { name: /^Daily clean/ }).click();
     const inspector = gallery.locator(".inspector");
     const rows = inspector.locator(".plan-room");
     await expect(rows.first()).toBeVisible();
@@ -7175,7 +7229,7 @@ test("short phone keeps plan footer reachable below the reserved map controls", 
   const gallery = await loadGallery(page);
   await gallery.locator(".stage").evaluate((stage) => { stage.style.minBlockSize = "0"; stage.style.blockSize = "568px"; });
   await gallery.getByRole("button", { name: /^Run a plan/ }).click();
-  await gallery.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
+  await gallery.getByRole("button", { name: /^Daily clean/ }).click();
   // shell.md §5 Sheet: Run rests at half; Edit's long form opens at full.
   await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
   await settleSheet(gallery);
@@ -9093,7 +9147,7 @@ test.describe("plan shell", () => {
     await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
     const panel = page.locator(fixture.panelTag);
     await panel.getByRole("button", { name: /^Run a plan/ }).click();
-    await panel.getByRole("button", { name: /Daily.*Edit plan/ }).click();
+    await panel.getByRole("button", { name: /^Daily/ }).click();
     await panel.getByRole("button", { name: "Edit Daily", exact: true }).click();
     return { panel, fixture };
   };
@@ -9347,6 +9401,18 @@ async function settleWorkspace(gallery) {
   });
 }
 
+// plan.md §3: Create a plan is the picker's filled button only when it lists no plans.
+async function openEmptyPicker(gallery) {
+  await gallery.evaluate((element) => element.setScenario("plans"));
+  await settleWorkspace(gallery);
+  await gallery.evaluate((element) => {
+    const state = element.getWorkspaceSnapshot();
+    element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...state.resources.plans,
+      value: { ...state.resources.plans.value, plans: [], selectedPlan: null } } } });
+  });
+  await settleWorkspace(gallery);
+}
+
 const axeFindings = (results) => results.map(({ id, nodes }) => `${id}: ${nodes.map(({ target }) => target.flat().join(" >> ")).join(" | ")}`);
 
 test.describe("Map Studio accessibility baselines", () => {
@@ -9492,8 +9558,7 @@ test.describe("Map Studio accessibility baselines", () => {
     const stop = gallery.getByRole("button", { name: "Stop cleaning" });
     await expect.poll(() => pair(stop), "Stop: white on #db4437 is 4.29:1").toEqual({ label: "rgb(255, 255, 255)", fill: "rgb(208, 65, 52)", ratio: 4.68 });
 
-    await gallery.evaluate((element) => element.setScenario("plans"));
-    await settleWorkspace(gallery);
+    await openEmptyPicker(gallery);
     const create = gallery.getByRole("button", { name: "Create a plan" });
     await expect.poll(() => pair(create), "primary: white on #009ac7 is 3.26:1").toEqual({ label: "rgb(255, 255, 255)", fill: "rgb(0, 123, 159)", ratio: 4.85 });
     await theme({ "--primary-color": "#0b5394" });
@@ -9618,8 +9683,7 @@ test.describe("Map Studio resolved theme colours", () => {
       return { label, hover, active };
     };
     expect(await states(gallery.getByRole("button", { name: "Stop cleaning" }))).toEqual({ label: "rgb(255, 255, 255)", hover: 5.97, active: 7.43 });
-    await gallery.evaluate((element) => element.setScenario("plans"));
-    await settleWorkspace(gallery);
+    await openEmptyPicker(gallery);
     expect(await states(gallery.getByRole("button", { name: "Create a plan" }))).toEqual({ label: "rgb(255, 255, 255)", hover: 6.14, active: 7.61 });
   });
 
@@ -9628,7 +9692,7 @@ test.describe("Map Studio resolved theme colours", () => {
   test("a theme colour the resolver cannot measure leaves HA's own colour in place @mobile", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     const gallery = await loadGallery(page, { scenario: "plans", narrow: true });
-    await settleWorkspace(gallery);
+    await openEmptyPicker(gallery);
     const shell = gallery.locator("matic-map-shell-v4");
     const create = gallery.getByRole("button", { name: "Create a plan" });
     const state = async () => ({

@@ -83,7 +83,7 @@ const exerciseCadenceRoundtrip = async ({ page }) => {
   })).toEqual({ status: "ready", problem: null });
   await expectNoSeriousAccessibilityViolations(page, "ready workspace");
   await panel.getByRole("button", { name: /^Run a plan/ }).click();
-  const editPlan = panel.getByRole("button", { name: /Daily clean.*Edit plan/ });
+  const editPlan = panel.getByRole("button", { name: /^Daily clean/ });
   await expect(editPlan).toBeVisible();
   await editPlan.click();
 
@@ -152,8 +152,8 @@ const exerciseCadenceRoundtrip = async ({ page }) => {
   await expect(coverageInterval).toHaveValue("5");
 
   await panel.getByRole("button", { name: "Back to plans" }).click();
-  await expect(panel.getByRole("button", { name: /Daily clean.*Edit plan/ })).toBeVisible();
-  await panel.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
+  await expect(panel.getByRole("button", { name: /^Daily clean/ })).toBeVisible();
+  await panel.getByRole("button", { name: /^Daily clean/ }).click();
   const reopenedSchedule = panel.getByLabel("Rooms in this plan").locator("details").first();
   await reopenedSchedule.locator("summary").click();
   await expect(reopenedSchedule.getByLabel("Count cleans for Kitchen")).toHaveValue("shared");
@@ -236,7 +236,7 @@ test("mop-only legacy vacuum rules stay visible and can leave shared participati
   await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
   const panel = page.locator(fixture.panelTag);
   await panel.getByRole("button", { name: /^Run a plan/ }).click();
-  await panel.getByRole("button", { name: /Daily clean.*Edit plan/ }).click();
+  await panel.getByRole("button", { name: /^Daily clean/ }).click();
   // shell.md §5 Sheet: Run opens at half, where the blocked bar's reason
   // covers the first room; the schedule is read at full height.
   await panel.getByRole("button", { name: "Expand panel", exact: true }).click();
