@@ -906,7 +906,7 @@ const motionBlockReason = (state: WorkspaceState): Reason => {
 };
 
 const PLAN_PAUSED: Reason = { reason: "Can't run this plan until you turn it on.", reasonKey: "v4_reason_run_plan_paused" };
-const PLAN_PREVIEW: Reason = {
+export const PLAN_PREVIEW: Reason = {
   reason: "Can't run this plan until you retry its next-run preview.",
   reasonKey: "v4_reason_run_plan_preview",
 };
@@ -915,7 +915,7 @@ const PLAN_IDENTITY: Reason = {
   reasonKey: "v4_preview_identity_unavailable",
 };
 /** Run plan's reason for a preview blocker that names no room (plan.md R4); others retry the preview. */
-const PLAN_BLOCKERS: Partial<Record<NextRunPreviewBlocker, Reason>> = {
+export const PLAN_BLOCKERS: Partial<Record<NextRunPreviewBlocker, Reason>> = {
   cadence_identity_unavailable: PLAN_IDENTITY,
   cadence_identity_changed: PLAN_IDENTITY,
   plan_has_no_rooms: { reason: "Can't run this plan until it has at least one room.", reasonKey: "v4_preview_no_rooms" },
@@ -960,7 +960,7 @@ const roomBlockReason = (reasons: readonly CadenceReason[], room: string) => {
  * The first room in saved order whose schedule blocks the run, with its reason
  * and a link to it; null when none blocks or that room has no catalog name.
  */
-const roomBlocker = (state: WorkspaceState, plan: SavedPlan) => {
+export const roomBlocker = (state: WorkspaceState, plan: SavedPlan) => {
   const blocking = draftForPlan(plan).rooms.find(({ cadenceReasons = [] }) => roomBlockReason(cadenceReasons, ""));
   const room = blocking && state.resources.plans.value?.rooms.find((candidate) => candidate.roomId === blocking.roomId)?.name;
   return blocking && room

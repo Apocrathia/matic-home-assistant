@@ -551,8 +551,11 @@ for (const kind of ["plan", "area"]) {
       store.patch({ map: initial.map, coherence: "current" });
       const load = () => plan ? effects.loadPlans({ force: true }) : effects.loadAreas();
       await load();
-      if (plan) effects.selectPlan("daily");
-      else {
+      if (plan) {
+        effects.selectPlan("daily");
+        // Delete lives in Edit (plan.md §3).
+        store.dispatch({ type: "set-plan-view", view: "edit" });
+      } else {
         effects.selectArea("entryway");
         store.patch({ workflow: "areaReview" });
       }
@@ -649,6 +652,7 @@ for (const way of ["Escape", "Cancel", "outside"]) {
       store.patch({ map: initial.map, coherence: "current" });
       await effects.loadPlans({ force: true });
       effects.selectPlan("daily");
+      store.dispatch({ type: "set-plan-view", view: "edit" });
       const shell = document.createElement(SHELL_TAG);
       shell.state = store.value;
       store.subscribe((state) => { shell.state = state; });
@@ -685,8 +689,8 @@ for (const way of ["Escape", "Cancel", "outside"]) {
     if (way === "outside") {
       await expect(page.getByRole("button", { name: "Outside the studio" }), "focus the user moved elsewhere stays there").toBeFocused();
     } else {
-      // plan.md §3: Run's heading is the plan's name.
-      await expect(page.getByRole("heading", { name: "Daily clean", level: 2 }), "focus lands on the panel heading").toBeFocused();
+      // plan.md §3: Delete is in Edit, headed "Edit plan".
+      await expect(page.getByRole("heading", { name: "Edit plan", level: 2 }), "focus lands on the panel heading").toBeFocused();
     }
     await page.evaluate(() => { window.__ux0Fix10.effects.dispose(); window.__ux0Fix10.shell.remove(); });
   });
@@ -698,7 +702,7 @@ test("a catalog a suspended page sets back to idle keeps showing its value and D
     const { createGalleryState, SHELL_TAG, WORKFLOW_TAG } = await import("/quality-modules.js");
     const initial = createGalleryState("plan-saved-intelligent");
     const shell = document.createElement(SHELL_TAG);
-    shell.state = { ...initial, resources: { ...initial.resources, plans: { ...initial.resources.plans, status: "idle" } } };
+    shell.state = { ...initial, planView: "edit", resources: { ...initial.resources, plans: { ...initial.resources.plans, status: "idle" } } };
     document.body.append(shell);
     let view = null;
     for (let frame = 0; frame < 200 && !view; frame += 1) {
@@ -967,7 +971,7 @@ for (const width of [320, 390, 820, 1280]) {
       await choice.click();
       // plan.md §3: a saved plan opens in Run, headed by its name.
       await expect(gallery.getByRole("heading", { name: "Evening routine", level: 2 })).toBeVisible();
-      await expect(gallery.getByRole("textbox", { name: "Plan name" })).toHaveValue("Evening routine");
+      await expect(gallery.getByRole("switch", { name: "Plan enabled" })).toHaveAttribute("aria-checked", "false");
       await gallery.getByRole("button", { name: "Back to plans", exact: true }).click();
       await create.click();
       await expect(gallery.getByRole("textbox", { name: "Plan name" })).toHaveValue("");
@@ -993,13 +997,15 @@ test("discarding plan edits through Escape returns to the plan, then the picker"
   const gallery = page.locator("matic-map-studio-gallery-v0-4-0");
   await gallery.getByRole("button", { name: /^Run a plan/ }).click();
   await gallery.getByRole("button", { name: /^Daily clean/ }).click();
+  await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
   await gallery.getByRole("textbox", { name: "Plan name" }).fill("Unsaved change");
   await page.keyboard.press("Escape");
   // shell.md §5: one title for every draft.
   const dialog = gallery.getByRole("dialog", { name: "Discard changes?" });
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "Discard", exact: true }).click();
-  await expect(gallery.getByRole("textbox", { name: "Plan name" })).toHaveValue("Daily clean");
+  await expect(gallery.getByRole("heading", { name: "Daily clean", level: 2 })).toBeVisible();
+  await expect(gallery.getByRole("textbox", { name: "Plan name" })).toHaveCount(0);
   expect(await gallery.evaluate((element) => {
     const { workflow, planView, planDraft } = element.getWorkspaceSnapshot();
     return { workflow, planView, dirty: planDraft.dirty };

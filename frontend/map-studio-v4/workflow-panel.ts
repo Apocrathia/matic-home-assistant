@@ -86,10 +86,6 @@ line-height: var(--ms-lh-snug);
 .room-choice { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--ms-space-2); min-block-size: var(--ms-control-sm); }
 .room-choice input { inline-size: 1.2rem; block-size: 1.2rem; }
 .room-settings { padding-block-start: 0.125rem; padding-inline-start: 1.8rem; }
-.plan-meta { align-items: stretch; }
-.plan-active { min-inline-size: 0; }
-.plan-active .ms-row__body strong { font-size: var(--ms-t-sm); white-space: nowrap; }
-.plan-active .ms-row__body small { max-inline-size: 32ch; }
 .plan-options { --ms-local: var(--ms-surface-sunken); display: grid; gap: var(--ms-space-3); padding: var(--ms-space-4); border: 1px solid var(--ms-line); border-radius: var(--ms-radius-md); background: var(--ms-local); }
 .plan-room .room-choice { grid-template-columns: minmax(0, 1fr) auto; }
 .plan-room-label { display: flex; align-items: center; gap: var(--ms-space-2); min-block-size: var(--ms-control); }
@@ -114,7 +110,6 @@ line-height: var(--ms-lh-snug);
 .timeline { display: grid; gap: var(--ms-space-2); }
 .timeline input[type="range"] { inline-size: 100%; min-block-size: var(--ms-control); }
 @media (max-width: 25rem) { .split { grid-template-columns: 1fr; } }
-@container (max-width: 38rem) { .plan-meta { grid-template-columns: 1fr; } }
 `];
 
   state: WorkspaceState = initialWorkspaceState();
@@ -171,15 +166,8 @@ line-height: var(--ms-lh-snug);
     return this.#t("v4_cadence_due_unknown_reason", "Schedule setting due");
   }
 
-  #previewBlocker(blocker: string): string {
-    if (blocker === "coverage_requires_vacuum") return this.#t("v4_cadence_coverage_requires_vacuum", "The vacuum rotation needs a cleaning mode that includes vacuuming, so change the mode or turn the rotation off.");
-    if (blocker === "plan_disabled") return this.#t("v4_preview_plan_disabled", "This plan is paused. Enable it to preview and run.");
-    if (blocker === "shared_schedule_unavailable") return this.#t("v4_preview_shared_unavailable", "The shared room schedule doesn't match this map. Review the schedule's settings.");
-    if (blocker === "cadence_progress_unverified") return this.#t("v4_preview_cadence_progress_unverified", "Can't run this plan until you reset the room schedule progress Home Assistant can't confirm.");
-    if (blocker === "cadence_identity_changed" || blocker === "cadence_identity_unavailable") return this.#t("v4_preview_identity_unavailable", "Can't run this plan until Home Assistant can match its rooms to the current map.");
-    if (blocker === "plan_has_no_rooms") return this.#t("v4_preview_no_rooms", "Can't run this plan until it has at least one room.");
-    if (blocker === "plan_room_limit") return this.#t("v4_preview_room_limit", "Can't run this plan until it has 100 rooms or fewer.");
-    return this.#t("v4_preview_invalid", "Can't run this plan until you open Edit and save it again.");
+  #coverageNeedsVacuum(): string {
+    return this.#t("v4_cadence_coverage_requires_vacuum", "The vacuum rotation needs a cleaning mode that includes vacuuming, so change the mode or turn the rotation off.");
   }
 
   #intent(intent: WorkspaceIntent): void {
@@ -381,7 +369,7 @@ line-height: var(--ms-lh-snug);
     reasons: readonly CadenceReason[] = progress?.reasons || [],
   ): string {
     if (reasons.includes("coverage_requires_vacuum")) {
-      return this.#previewBlocker("coverage_requires_vacuum");
+      return this.#coverageNeedsVacuum();
     }
     if (reasons.includes("identity_changed") || reasons.includes("room_not_on_current_map")) {
       return this.#t("v4_cadence_identity_blocked", "This room's schedule was set up on a different map, so it can't run. Review the room's schedule before cleaning.");
@@ -525,7 +513,7 @@ line-height: var(--ms-lh-snug);
         </div>
         <p class="subtle" role="status">${scopeExplanation}</p>
         ${room.cleaningMode === "mop" ? html`
-          <p class="subtle">${policy.coverageEveryN ? this.#previewBlocker("coverage_requires_vacuum") : this.#t("v4_cadence_coverage_available_modes", "Can't add a vacuum rotation until this room's cleaning mode includes vacuuming.")}</p>
+          <p class="subtle">${policy.coverageEveryN ? this.#coverageNeedsVacuum() : this.#t("v4_cadence_coverage_available_modes", "Can't add a vacuum rotation until this room's cleaning mode includes vacuuming.")}</p>
           ${policy.coverageEveryN ? html`<button type="button" class="ms-btn ms-btn--secondary"
             @click=${() => this.#patchPlanCadence(index, { scope: "plan", coverageEveryN: null, periodicCoverageSetting: null, doCoverageNext: false })}
           >${this.#t("v4_cadence_clear_room_coverage", "Turn off")}</button>` : nothing}
@@ -619,8 +607,6 @@ line-height: var(--ms-lh-snug);
     const roomRows = [...selectedRows, ...availableRows];
     const atRoomLimit = draft.rooms.length >= MAX_ROOM_SEQUENCE_SIZE;
     const mixedSettings = new Set(draft.rooms.map((room) => `${room.cleaningMode}:${room.coverageSetting}`)).size > 1;
-    const savedPlan = draft.id ? catalog?.plans.find((plan) => plan.id === draft.id) : undefined;
-    const nextRunPreview = savedPlan?.nextRunPreview;
     return this.#resource(resource, html`
       <div class="stack">
         <label class="field ms-field">${this.#t("plan_name", "Plan name")}
@@ -631,37 +617,18 @@ line-height: var(--ms-lh-snug);
             @input=${(event: Event) => this.#intent({ type: "patch-plan-draft", patch: { name: eventValue(event) } })}
           >
         </label>
-        <div class="split plan-meta">
-          <label class="field ms-field">${this.#t("plan_run_behavior", "Cleaning order")}
-            <select
-              .value=${draft.runBehavior}
-              @change=${(event: Event) => this.#intent({
-                type: "patch-plan-draft",
-                patch: { runBehavior: eventValue(event) === "ordered" ? "ordered" : "intelligent" },
-              })}
-            >
-              <option value="intelligent">${this.#t("plan_intelligent", "Intelligent rotation")}</option>
-              <option value="ordered">${this.#t("plan_ordered", "Saved order")}</option>
-            </select>
-          </label>
-          <div class="ms-row plan-active" data-active=${String(draft.enabled)}>
-            <div class="ms-row__body">
-              <strong id="plan-active-title">${this.#t("v4_plan_can_run", "Plan enabled")}</strong>
-              <small id="plan-active-desc">${draft.enabled
-                ? this.#t("v4_plan_can_run_on", "When it's on, this plan can run from here, from automations and from Home Assistant actions.")
-                : this.#t("v4_plan_can_run_off", "Paused. Turn this on to make the plan available.")}</small>
-            </div>
-            <button
-              class="ms-switch"
-              type="button"
-              role="switch"
-              aria-checked=${String(draft.enabled)}
-              aria-labelledby="plan-active-title"
-              aria-describedby="plan-active-desc"
-              @click=${() => this.#intent({ type: "patch-plan-draft", patch: { enabled: !draft.enabled } })}
-            ></button>
-          </div>
-        </div>
+        <label class="field ms-field">${this.#t("plan_run_behavior", "Cleaning order")}
+          <select
+            .value=${draft.runBehavior}
+            @change=${(event: Event) => this.#intent({
+              type: "patch-plan-draft",
+              patch: { runBehavior: eventValue(event) === "ordered" ? "ordered" : "intelligent" },
+            })}
+          >
+            <option value="intelligent">${this.#t("plan_intelligent", "Intelligent rotation")}</option>
+            <option value="ordered">${this.#t("plan_ordered", "Saved order")}</option>
+          </select>
+        </label>
         <h3 class="group-heading" id="plan-rooms-heading">${this.#t("v4_plan_rooms_heading", "Rooms in this plan")}</h3>
         ${mixedSettings ? html`
           <p class="subtle plan-transition-hint">${this.#t("v4_plan_mixed_settings", "Rooms with different cleaning settings may be cleaned in separate parts, and the robot may briefly touch the dock between parts.")}
@@ -706,28 +673,6 @@ line-height: var(--ms-lh-snug);
           })}
         </div>
         ${atRoomLimit ? html`<p class="subtle" role="status">${this.#t("v4_room_limit_reached", "Up to {limit} rooms fit, so remove one to add another.", { limit: MAX_ROOM_SEQUENCE_SIZE })}</p>` : nothing}
-        <section class="stack" aria-labelledby="next-run-preview-heading">
-          <h3 class="group-heading" id="next-run-preview-heading">${this.#t("v4_next_run_preview", "Next run")}</h3>
-          <p class="subtle">${this.#t("v4_next_run_preview_hint", "Preview for the next run. An active run keeps its original settings; this preview is checked again before cleaning starts.")}</p>
-          ${!draft.id ? html`<p class="subtle">${this.#t("v4_next_run_preview_save_first", "Save this plan to calculate its exact room order and effective settings.")}</p>`
-            : !nextRunPreview ? html`<p class="problem" role="status">${this.#t("v4_next_run_preview_unavailable", "The next-run preview isn't available. Reload your plans, then try again.")}</p>`
-              : nextRunPreview.blocker ? html`<p class="problem" role="alert">${this.#previewBlocker(nextRunPreview.blocker)}</p>`
-                : !/^[0-9a-f]{64}$/u.test(nextRunPreview.previewToken ?? "") ? html`<p class="problem" role="status">${this.#t("v4_next_run_preview_unavailable", "The next-run preview isn't available. Reload your plans, then try again.")}</p>`
-              : html`
-                  ${draft.dirty ? html`<p class="notice" role="status">${this.#t("v4_next_run_preview_stale", "This preview shows the saved plan. Save your edits to calculate the updated order and settings before starting.")}</p>` : nothing}
-                  <ol class="list" aria-label=${this.#t("v4_next_run_preview_order", "Next-run room order and effective settings")}>
-                    ${nextRunPreview.rooms.map((previewRoom, roomIndex) => {
-                      const mission = 1 + nextRunPreview.missionBoundaries.filter((boundary) => boundary <= roomIndex).length;
-                      return html`<li class="ms-row ms-row--stack">
-                        <span class="subtle">${this.#t("v4_next_run_mission", "Part {number}", { number: mission })}</span>
-                        <strong>${roomIndex + 1}. ${previewRoom.name}</strong>
-                        <span>${settingLabel(this.#tr, previewRoom)}</span>
-                        ${previewRoom.cadenceReasons.length ? html`<small>${previewRoom.cadenceReasons.map((reason) => this.#cadenceReason(reason)).join(" · ")}</small>` : nothing}
-                      </li>`;
-                    })}
-                  </ol>
-                `}
-        </section>
         <h3 class="group-heading" id="completion-heading">${this.#t("v4_completion_options", "When a run ends")}</h3>
         <div class="plan-options" role="group" aria-labelledby="completion-heading">
           <label class="plan-option">
@@ -921,7 +866,7 @@ line-height: var(--ms-lh-snug);
     switch (this.state.workflow) {
       case "rooms": return this.#rooms();
       case "plans": return this.#planViews();
-      case "plan": return this.#plans();
+      case "plan": return this.state.planView === "run" ? this.#planViews() : this.#plans();
       case "draw": return this.#draw();
       case "areaReview": return this.#areaReview();
       case "history": return this.#history();

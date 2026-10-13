@@ -891,8 +891,12 @@ test("rows the spec marks No button render no footer button and carry no copy", 
 // design-system.md: text never uses a raw tone colour; the tone is the rule
 // and the tint.
 test("workflow problems and warnings keep their text in the primary text colour", async ({ page }) => {
-  for (const [scenario, selector] of [["plan-cadence-blocked", ".problem"], ["area-review-rebind", '.notice[data-tone="warning"]']]) {
+  for (const [scenario, selector] of [["plan-legacy-oversized", ".problem"], ["area-review-rebind", '.notice[data-tone="warning"]']]) {
     const gallery = await loadGallery(page, { scenario });
+    // Run's R4 problem line (plan.md §3); the scenario opens in Edit.
+    if (scenario === "plan-legacy-oversized") {
+      await gallery.evaluate((element) => element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), planView: "run" }));
+    }
     const box = gallery.locator(selector).first();
     await expect(box, scenario).toBeVisible();
     const colours = await box.evaluate((element) => {
@@ -954,7 +958,8 @@ test("slot, toast and canvas chip carry no live role", async ({ page }) => {
 test("the heading and notice slot stay put while the plan editor body scrolls", async ({ page }) => {
   for (const [width, height, narrow] of [[1024, 768, false], [390, 844, true]]) {
     await page.setViewportSize({ width, height });
-    const gallery = await loadGallery(page, { scenario: "plan-saved-intelligent", narrow });
+    // A saved plan's Edit view (plan.md §3), long enough to scroll.
+    const gallery = await loadGallery(page, { scenario: "plan-cadence-shared", narrow });
     await setGalleryNotice(page, sampleNotice("warning", `Pinned at ${width}`));
     await expect(gallery.locator("[data-notice-slot]")).toBeVisible();
     const moved = await gallery.getByRole("heading", { level: 2 }).evaluate(async (heading) => {

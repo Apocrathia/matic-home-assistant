@@ -37,6 +37,9 @@ export type GalleryScenario =
   | "plans"
   | "plan-saved-intelligent"
   | "plan-saved-ordered"
+  | "plan-run-paused"
+  | "plan-run-blocked"
+  | "plan-run-parts"
   | "plan-new"
   | "plan-dirty"
   | "plan-cadence-shared"
@@ -342,6 +345,32 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
       });
       return openPlan(state, planWithRooms(daily, ordered, { runBehavior: "ordered" }), "run");
     }
+    case "plan-run-paused":
+      return openPlan(state, {
+        ...savedDailyPlan(),
+        enabled: false,
+        nextRunPreview: previewFor([], { blocker: "plan_disabled" }),
+        nextRunEstimateSeconds: null,
+      }, "run");
+    case "plan-run-blocked": {
+      const rooms = savedDailyPlan().rooms.map((room, index): PlanRoom => index === 1
+        ? { ...room, cadenceReasons: ["mop_progress_unverified"] }
+        : room);
+      return openPlan(state, planWithRooms(savedDailyPlan(), rooms, {
+        nextRunPreview: previewFor([], { blocker: "cadence_progress_unverified" }),
+        nextRunEstimateSeconds: null,
+      }), "run");
+    }
+    case "plan-run-parts": {
+      // Saved order with a mode change after the first room (plan.md R1 parts).
+      const rooms = savedDailyPlan().rooms.map((room, index): PlanRoom => index === 0
+        ? { ...room, cleaningMode: "vacuum_and_mop", cadenceReasons: ["mop_due"] }
+        : room);
+      return openPlan(state, planWithRooms(savedDailyPlan(), rooms, {
+        runBehavior: "ordered",
+        nextRunPreview: previewFor(rooms, { missionBoundaries: [1] }),
+      }), "run");
+    }
     case "plan-new":
       return {
         ...withPlans(state, catalogWith([savedDailyPlan()])),
@@ -570,6 +599,9 @@ export const GALLERY_SCENARIOS: readonly GalleryScenario[] = [
   "plans",
   "plan-saved-intelligent",
   "plan-saved-ordered",
+  "plan-run-paused",
+  "plan-run-blocked",
+  "plan-run-parts",
   "plan-new",
   "plan-dirty",
   "plan-cadence-shared",
