@@ -131,8 +131,10 @@ export const savePlan = async (context: CatalogWriteContext): Promise<void> => {
   if (saved) {
     // A save may finish after Back/discard or after another editor opens.
     // Refresh the catalog in every case, but reconcile only the same draft.
+    // Rooms the save took out are gone from the plan: their parked settings
+    // must not come back if the refresh fails and the room is ticked again.
     const savedDraft = store.value.workflow === "plan"
-      && store.value.planDraft === draft ? { ...draft, id: savedId, dirty: false } : null;
+      && store.value.planDraft === draft ? { ...draft, id: savedId, dirty: false, parkedRooms: [] } : null;
     if (savedDraft) {
       store.patch({
         planDraft: savedDraft,
