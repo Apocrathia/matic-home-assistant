@@ -76,6 +76,7 @@ const NOTICES = {
   planSaveFailed: notice("error", "v4_notice_plan_save_failed", "Home Assistant can't confirm the plan was saved, so check your plans, then try again."),
   planDeleteFailed: notice("error", "v4_notice_plan_delete_failed", "The plan wasn't deleted; try again."),
   planPreviewMissing: notice("warning", "v4_notice_plan_preview_missing", "The next-run preview isn't ready; reload your plans, then try again."),
+  planRemoved: notice("warning", "v4_notice_plan_removed", "This plan was removed elsewhere, so nothing was changed."),
   planPreviewRefreshFailed: notice("warning", "v4_notice_plan_preview_refresh_failed", "The next-run preview didn't refresh; check the plan, then try again."),
   planPreviewNone: notice("warning", "v4_notice_plan_preview_none", "This plan has no next-run preview; review its rooms and schedules."),
   planPreviewChanged: notice("info", "v4_notice_plan_preview_changed", "The next run changed; check it before you run the plan."),
@@ -2087,6 +2088,22 @@ export class EffectController {
       // A fresh read can update an unchanged saved editor. Pending writes and
       // preflight retain their draft identity; unsaved and dirty drafts remain
       // private until their own save acknowledgement.
+      // A clean saved plan that a read no longer holds was deleted elsewhere.
+      // There is nothing to show or keep, so the plan workflow leaves for Your
+      // plans as a delete here would, even under a pending switch or
+      // preflight: both see the workflow change and stop without sending.
+      if (state.workflow === "plan" && state.planDraft.id && !state.planDraft.dirty
+        && !plans.plans.some((candidate) => candidate.id === state.planDraft.id)) {
+        this.#store.patch({
+          resources: { ...this.#store.value.resources, plans: resource("ready", plans) },
+          workflow: "plans",
+          precisionOpen: false,
+          selection: { ...this.#store.value.selection, planId: null },
+          planDraft: initialWorkspaceState().planDraft,
+          notice: NOTICES.planRemoved,
+        });
+        return plans;
+      }
       if (state.planDraft.dirty || (state.workflow === "plan"
         && (!state.planDraft.id || state.command === "pending"))) {
         this.#store.patch({ resources: { ...this.#store.value.resources, plans: resource("ready", plans) } });
@@ -2109,9 +2126,6 @@ export class EffectController {
           parkedRooms: [],
           dirty: false,
         },
-        // A plan deleted elsewhere leaves a blank new plan, which only Edit
-        // shows; outside the plan workflow the store resets the view.
-        ...(plan ? {} : { planView: "edit" as const, expandedRoom: null }),
       });
       return plans;
     } catch (error) {

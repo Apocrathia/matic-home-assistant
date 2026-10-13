@@ -8793,7 +8793,7 @@ test.describe("plan view state", () => {
     })).toEqual({ workflow: "plans", planView: "run", planId: null, id: null, dirty: false });
   });
 
-  test("a reload without the open saved plan leaves a blank plan in Edit, never in Run", async ({ page }) => {
+  test("a reload without the open saved plan leaves for Your plans and says it was removed", async ({ page }) => {
     await loadEffectHarness(page);
     const result = await page.evaluate(async () => {
       const { EffectController, WorkspaceStore, createGalleryState, layerDepth } = await import("/plan-recovery-test.js");
@@ -8806,7 +8806,7 @@ test.describe("plan view state", () => {
         history: async () => initial.resources.history.value,
         plans: async () => {
           const value = structuredClone(initial.resources.plans.value);
-          return catalog.deleted ? { ...value, plans: value.plans.filter((plan) => plan.id !== "daily") } : value;
+          return catalog.deleted ? { ...value, plans: value.plans.filter((plan) => plan.id !== "daily" && plan.id !== catalog.deleted) } : value;
         },
         areas: async () => initial.resources.areas.value,
         dispose() {},
@@ -8820,13 +8820,23 @@ test.describe("plan view state", () => {
         const opened = { planView: store.value.planView, id: store.value.planDraft.id };
         catalog.deleted = true;
         await effects.loadPlans({ force: true });
-        const state = store.value;
-        return { opened, workflow: state.workflow, planView: state.planView, expandedRoom: state.expandedRoom,
-          id: state.planDraft.id, depth: layerDepth(state) };
+        const run = store.value;
+        effects.selectPlan("weekend");
+        store.patch({ notice: null });
+        store.dispatch({ type: "set-plan-view", view: "edit" });
+        const editing = { planView: store.value.planView, id: store.value.planDraft.id };
+        catalog.deleted = "weekend";
+        await effects.loadPlans({ force: true });
+        const edit = store.value;
+        const read = (state) => ({ workflow: state.workflow, planView: state.planView, expandedRoom: state.expandedRoom,
+          planId: state.selection.planId, id: state.planDraft.id, notice: state.notice?.key, depth: layerDepth(state) });
+        return { opened, run: read(run), editing, edit: read(edit) };
       } finally { effects.dispose(); }
     });
-    expect(result).toEqual({ opened: { planView: "run", id: "daily" }, workflow: "plan", planView: "edit",
-      expandedRoom: null, id: null, depth: 2 });
+    const left = { workflow: "plans", planView: "run", expandedRoom: null, planId: null, id: null,
+      notice: "v4_notice_plan_removed", depth: 1 };
+    expect(result).toEqual({ opened: { planView: "run", id: "daily" }, run: left,
+      editing: { planView: "edit", id: "weekend" }, edit: left });
   });
 
   test("dismissing steps Edit to Run, then Run or a new plan to the picker", async ({ page }) => {
@@ -9309,20 +9319,21 @@ test.describe("plan effects", () => {
     });
   }
 
-  test("the switch leaves for Your plans when the pre-send reload lost the plan", async ({ page }) => {
+  for (const write of ["switch", "preflight"]) test(`the ${write} leaves for Your plans when its fresh read lost the plan`, async ({ page }) => {
     await loadPlanEffects(page);
-    const result = await page.evaluate(async () => {
+    const result = await page.evaluate(async (write) => {
       const run = await window.planEffects("plan-saved-intelligent");
       const { store, effects } = run;
       const catalog = structuredClone(store.value.resources.plans.value);
       run.plans = async () => ({ ...catalog, plans: [] });
-      await effects.setPlanEnabled(false);
+      if (write === "switch") await effects.setPlanEnabled(false);
+      else await effects.executeAction("run-plan");
       effects.dispose();
       const state = store.value;
       return { calls: run.calls.length, workflow: state.workflow, planView: state.planView, planId: state.selection.planId,
         draft: { id: state.planDraft.id, dirty: state.planDraft.dirty }, command: state.command,
         pendingAction: state.pendingAction, notice: state.notice?.key, tone: state.notice?.tone, status: state.resources.plans.status };
-    });
+    }, write);
     expect(result).toEqual({ calls: 0, workflow: "plans", planView: "run", planId: null, draft: { id: null, dirty: false },
       command: "idle", pendingAction: null, notice: "v4_notice_plan_removed", tone: "warning", status: "ready" });
   });

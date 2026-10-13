@@ -229,20 +229,10 @@ export const setPlanEnabled = async (context: CatalogWriteContext, enabled: bool
   store.patch({ command: "pending", pendingAction: "save-plan", notice: null });
   const catalog = await effects.loadPlans({ force: true, inPlace: true });
   const plan = catalog?.plans.find((candidate) => candidate.id === id);
-  // Deleted elsewhere: there is nothing to switch, and Run has no plan to
-  // show, so leave it for Your plans as a delete here would.
-  if (catalog && !plan && writer.current()) {
-    const latest = store.value;
-    store.patch({
-      command: "idle",
-      notice: notice("warning", "v4_notice_plan_removed", "This plan was removed elsewhere, so nothing was changed."),
-      ...(latest.planDraft === switched ? {
-        workflow: "plans" as const,
-        precisionOpen: false,
-        selection: { ...latest.selection, planId: null },
-        planDraft: context.helpers.initialWorkspaceState().planDraft,
-      } : {}),
-    });
+  // Deleted elsewhere: there is nothing to switch, and the read has already
+  // left Run for Your plans and said so (effects.ts loadPlans).
+  if (catalog && !plan) {
+    if (writer.current() && store.value.command === "pending") store.patch({ command: "idle" });
     return;
   }
   const sent = catalog && plan
