@@ -167,13 +167,16 @@ export class GestureController {
     }
     const state = this.#callbacks.state();
     const drawing = state.workflow === "draw" && state.map.available && !state.floor.readOnly;
+    // D1 (map-surfaces.md §10): a drag moves the map on every input; a
+    // Shift-, middle- or right-drag rotates in 3D and moves in 2D, where
+    // there is nothing to rotate. Space-drag moves while drawing.
+    const modifier = event.shiftKey || event.button === 1 || event.button === 2;
     const navigation = this.#navigationUntilRelease
       || this.#spacePressed
-      || event.button === 1
-      || event.button === 2
+      || modifier
       || state.draw.tool === "pan";
     if (navigation) {
-      this.#mode = "pan";
+      this.#mode = modifier && state.view === "three" ? "orbit" : "pan";
       this.#dragCamera = this.#renderer.camera;
     } else if (drawing && state.draw.tool === "outline"
       && (this.#coordinateCapture = captureCoordinateEdit(state, "outline"))) {
@@ -199,7 +202,7 @@ export class GestureController {
         this.#applyBrush(event.clientX, event.clientY);
       }
     } else {
-      this.#mode = state.view === "three" && !event.shiftKey ? "orbit" : "pan";
+      this.#mode = "pan";
       this.#dragCamera = this.#renderer.camera;
     }
     if (this.#mode === "pan" || this.#mode === "orbit") this.#host.classList.add("navigating");

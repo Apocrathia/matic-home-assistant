@@ -5,7 +5,7 @@ import { icon, iconFit, iconHelp, iconOrbitLeft, iconOrbitRight, iconRoomNames, 
 import { RovingFocusController } from "./roving-focus";
 import { readCanvasPalette, watchTheme } from "./theme-probe";
 import { base, tokens } from "./tokens";
-import type { PropertyValues } from "lit";
+import type { PropertyValues, TemplateResult } from "lit";
 
 import type { DateFormat, Localize, NoticePlaceholders, WorkspaceIntent, WorkspaceState } from "./contracts";
 import type { OutlineEditor } from "./outline-editor";
@@ -23,6 +23,8 @@ import { translate } from "./localize";
 
 export const WORKSPACE_INTENT_EVENT = "matic-workspace-intent";
 export const WORKSPACE_ACTION_EVENT = "matic-workspace-action";
+/** The "?" press, and Escape while help shows: the shell owns the popover. */
+export const MAP_HELP_EVENT = "matic-map-help";
 
 const NAVIGATION_HELP_ID = "navigation-help";
 
@@ -60,9 +62,15 @@ export class MaticMapCanvasV4 extends LitElement {
     // Draw's point editor, loaded and built by the shell (shell.ts #outline).
     outlineEditor: { attribute: false },
     // Reflected so the stylesheet can anchor the rail with :host([narrow]).
-    // On a phone the sheet owns the drawing tools, appearance switch, room
-    // names and help; the map keeps only view and fit.
+    // On a phone the sheet owns the drawing tools, appearance switch and
+    // room names; the map keeps view, fit and help.
     narrow: { type: Boolean, reflect: true },
+    // The help popover (map-help.ts), rendered by the shell into the rail
+    // so the "?" and its aria-controls share this root; null while closed.
+    help: { attribute: false },
+    // Draw's screen-reader recipes (map-help.ts drawRecipes), with the help
+    // rows in the views chunk Draw loads anyway.
+    recipes: { attribute: false },
   };
 
   static override styles = [tokens, base, controls, css`
@@ -146,7 +154,7 @@ export class MaticMapCanvasV4 extends LitElement {
     }
     .map-dock .draw-tools--row { flex-direction: row; gap: var(--ms-space-1); }
     .map-dock .draw-tools button { padding-inline: var(--ms-space-2); }
-    @media (any-pointer: coarse) { .selection-chip .ms-btn--sm { min-inline-size: var(--ms-control); min-block-size: var(--ms-control); } }
+    @media (any-pointer: coarse) { .selection-chip .ms-btn--sm, .navigation-help .ms-btn--sm { min-inline-size: var(--ms-control); min-block-size: var(--ms-control); } }
     .selection-chip {
       display: flex;
       align-items: center;
@@ -263,11 +271,11 @@ export class MaticMapCanvasV4 extends LitElement {
   outlineEditor?: OutlineEditor;
   #zoneStyled = false;
   narrow = false;
-  #helpLauncher: HTMLElement | null = null;
+  help: TemplateResult | typeof nothing | null = null;
+  recipes: TemplateResult | null = null;
+  #helpShown = false;
   #renderer: RendererController | null = null;
   #gestures: GestureController | null = null;
-  #navigationHelp = false;
-  #focusHelpOnUpdate = false;
   #unwatchTheme: (() => void) | null = null;
   #paletteFrame: number | null = null;
   #paletteTimer: number | null = null;
@@ -379,10 +387,10 @@ export class MaticMapCanvasV4 extends LitElement {
   }
 
   protected override updated(changed: PropertyValues<this>): void {
-    if (this.#focusHelpOnUpdate) {
-      this.#focusHelpOnUpdate = false;
-      this.renderRoot.querySelector<HTMLElement>(".navigation-help button")?.focus();
-    }
+    // Help focuses its Close as it appears; the shell returns focus on close.
+    const help = this.renderRoot.querySelector<HTMLElement>(".navigation-help button");
+    if (help && !this.#helpShown) help.focus();
+    this.#helpShown = Boolean(help);
     if (!changed.has("state")) return;
     this.#gestures?.observeState(this.state);
     this.outlineEditor?.observeState(this.state);
@@ -436,18 +444,7 @@ export class MaticMapCanvasV4 extends LitElement {
   }
 
   #toggleHelp(event: Event): void {
-    this.#helpLauncher = event.currentTarget as HTMLElement;
-    this.#navigationHelp = !this.#navigationHelp;
-    this.#focusHelpOnUpdate = this.#navigationHelp;
-    this.requestUpdate();
-  }
-
-  #closeHelp(): void {
-    if (!this.#navigationHelp) return;
-    this.#navigationHelp = false;
-    this.requestUpdate();
-    const launcher = this.#helpLauncher;
-    if (launcher?.isConnected) launcher.focus();
+    (event.currentTarget as HTMLElement).dispatchEvent(new CustomEvent(MAP_HELP_EVENT, { bubbles: true, composed: true }));
   }
 
   #clearSelection(): void {
@@ -463,8 +460,8 @@ export class MaticMapCanvasV4 extends LitElement {
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     if (event.key === "Escape") {
       event.preventDefault();
-      if (this.#navigationHelp) {
-        this.#closeHelp();
+      if (this.help !== null) {
+        this.#toggleHelp(event);
         return;
       }
       this.#intent({ type: "dismiss-top-layer" });
@@ -534,17 +531,17 @@ export class MaticMapCanvasV4 extends LitElement {
     const draw = state.workflow === "draw";
     const helpTitle = this.#t("v4_how_to_move", "How to move the map");
     // Draw forces the top view, so the view, appearance and camera groups are
-    // noise there; the sheet owns the tools on a phone. Both leave only Fit
-    // in the map rail because workspace visibility belongs to the app bar.
-    // Without a scene there is nothing to fit, switch or explain
+    // noise there; the sheet owns the tools on a phone. Both leave Fit and
+    // help in the map rail because workspace visibility belongs to the app
+    // bar. Without a scene there is nothing to fit, switch or explain
     // (home-rooms.md §11 MS-HOME-04), so the rail keeps nothing. A phone's
     // Room names row is in Map options; its rail keeps the help "?".
     const showView = showScene && !draw;
     const showAppearance = showView && !narrow && state.view === "top";
     const showCamera = showView && state.view === "three";
     const showTools = showScene && !locating;
-    const showExtras = showScene && !locating && !draw;
-    const showLabels = showExtras && !narrow;
+    const showExtras = showScene && !locating;
+    const showLabels = showExtras && !narrow && !draw;
 
     return html`
       <div class="map-rail" data-map-control>
@@ -623,7 +620,7 @@ export class MaticMapCanvasV4 extends LitElement {
                 class="help ms-btn ms-btn--icon"
                 type="button"
                 aria-label=${helpTitle}
-                aria-expanded=${String(this.#navigationHelp)}
+                aria-expanded=${String(this.help !== null)}
                 aria-controls=${NAVIGATION_HELP_ID}
                 @click=${this.#toggleHelp}
                 title=${helpTitle}
@@ -631,30 +628,7 @@ export class MaticMapCanvasV4 extends LitElement {
           </div>
         ` : nothing}
 
-        ${this.#navigationHelp && showExtras ? html`
-          <div
-            id=${NAVIGATION_HELP_ID}
-            class="navigation-help ms-surface ms-surface--floating"
-            role="dialog"
-            aria-modal="false"
-            aria-label=${helpTitle}
-          >
-            <header>
-              <h2>${helpTitle}</h2>
-              <button class="ms-btn ms-btn--sm" type="button" @click=${() => this.#closeHelp()}>${this.#t("v4_close", "Close")}</button>
-            </header>
-            <dl>
-              <dt>${this.#t("v4_touch", "Touch")}</dt>
-              <dd>${this.#t("v4_touch_help", "Drag to explore · pinch to zoom · twist two fingers to rotate")}</dd>
-              <dt>${this.#t("v4_trackpad", "Trackpad")}</dt>
-              <dd>${this.#t("v4_trackpad_help", "Scroll to pan · pinch to zoom · twist to rotate")}</dd>
-              <dt>${this.#t("v4_mouse", "Mouse")}</dt>
-              <dd>${this.#t("v4_mouse_help", "Drag to orbit · Shift, middle, or right drag to pan · wheel to zoom")}</dd>
-              <dt>${this.#t("v4_keyboard", "Keyboard")}</dt>
-              <dd>${this.#t("v4_keyboard_help", "WASD to move · Q/E or arrows to orbit · +/− to zoom · 0 to fit")}</dd>
-            </dl>
-          </div>
-        ` : nothing}
+        ${showExtras ? this.help ?? nothing : nothing}
       </div>
     `;
   }
@@ -729,8 +703,7 @@ export class MaticMapCanvasV4 extends LitElement {
         </div>
 
         ${showDraw ? html`
-          <p id="zone-keyboard-help" class="sr-only">${this.#t("v4_zone_keyboard_help", "Focus the map, aim with arrow keys, and press Enter to place points. The edges join automatically after three points. Keep adding points or Tab to a point; arrows move it, Delete removes it, and Escape cancels a drag.")}</p>
-          <p id="keyboard-draw-help" class="sr-only">${this.#t("v4_keyboard_draw_help", "Keyboard: focus the map, use arrow keys to aim, then Enter to paint or erase at the crosshair. D selects Paint; E selects Erase.")}</p>
+          ${this.recipes ?? nothing}
           <div class="map-scale" role="img" aria-label=${this.#t("v4_map_scale", "Scale {distance}", { distance: scale.label })}>
             <span class="scale-line" style=${`--scale-width:${scale.pixels}px`}></span>
             <span>${scale.label}</span>

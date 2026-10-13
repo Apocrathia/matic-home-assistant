@@ -881,8 +881,9 @@ test.describe("Map options and the rail (home-rooms.md §5 Display, §11 MS-HOME
     await expect(gallery.locator("matic-map-canvas-v4").getByRole("button", { name: "Room names" })).toHaveCount(0);
     await help.click();
     const popover = gallery.getByRole("dialog", { name: "How to move the map" });
-    await expect(popover.locator("dt")).toHaveText(["Touch", "Trackpad", "Mouse", "Keyboard"]);
-    await expect(popover).toContainText("Drag to explore · pinch to zoom · twist two fingers to rotate");
+    // A coarse pointer reads the Touch row alone (map-surfaces.md §5 Help).
+    await expect(popover.locator("dt")).toHaveText(["Touch"]);
+    await expect(popover).toContainText("Drag to move the map · pinch to zoom · twist two fingers to rotate");
     await expect(popover.getByRole("button", { name: "Close" })).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(popover).toHaveCount(0);

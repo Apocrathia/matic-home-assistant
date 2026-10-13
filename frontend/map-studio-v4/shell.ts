@@ -391,6 +391,7 @@ export class MaticMapShellV4 extends LitElement {
     _measuredNarrow: { state: true },
     _sheetOffset: { state: true },
     _browserFullscreen: { state: true },
+    _helpOpen: { state: true },
     _sheetDetent: { state: true },
     _polite: { state: true },
     _alert: { state: true },
@@ -418,6 +419,13 @@ export class MaticMapShellV4 extends LitElement {
   protected _measuredNarrow = false;
   protected _sheetOffset = 0;
   protected _browserFullscreen = false;
+  // The help popover (map-help.ts, in the views chunk) is the shell's: it
+  // opens from the rail "?" and closes from Close, Escape (after the menu,
+  // shell.md §5) or a change of workflow or Full map. The canvas renders it
+  // beside its "?".
+  protected _helpOpen = false;
+  #helpLauncher: HTMLElement | null = null;
+  #helpCoarse = false;
   protected _sheetDetent: SheetDetent = "half";
   // The two live regions (shell.md §4 rule 6). Each holds only its newest
   // message: the polite one for detent, status title and non-error notices,
@@ -717,6 +725,9 @@ export class MaticMapShellV4 extends LitElement {
       const previous = changed.get("state") as WorkspaceState | undefined;
       if (previous?.precisionOpen && !this.state.precisionOpen) {
         this.#brushLauncher()?.focus();
+      }
+      if (this._helpOpen && previous && (previous.workflow !== this.state.workflow || previous.fullMap !== this.state.fullMap)) {
+        this.#closeHelp(false);
       }
       if (previous?.fullMap && !this.state.fullMap) {
         const launcher = this.#workspaceLauncher;
@@ -1216,6 +1227,26 @@ export class MaticMapShellV4 extends LitElement {
     this.#workflow("support");
   };
 
+  // The rail "?" toggles; Escape in the canvas while help shows closes.
+  readonly #mapHelp = (event: Event): void => {
+    if (this._helpOpen) this.#closeHelp(true);
+    else this.#openHelp(event.composedPath()[0] as HTMLElement);
+  };
+
+  // A press before the views chunk is ready shows its status in the rail
+  // and opens once it settles; a failed load has the chunk's Try again.
+  #openHelp(launcher: HTMLElement | null): void {
+    this.#helpLauncher = launcher;
+    this.#helpCoarse = window.matchMedia("(any-pointer: coarse)").matches;
+    this.#views.request();
+    this._helpOpen = true;
+  }
+
+  #closeHelp(restoreFocus: boolean): void {
+    this._helpOpen = false;
+    if (restoreFocus) this.#helpLauncher?.focus();
+  }
+
   readonly #toggleFullscreen = (): void => {
     const app = this.renderRoot.querySelector<HTMLElement>(".app");
     if (this.#fullscreenElement()) void document.exitFullscreen();
@@ -1280,6 +1311,10 @@ export class MaticMapShellV4 extends LitElement {
     event.preventDefault();
     if (this.#options.value?.menu.open) {
       this.#options.value.menu.close(true);
+      return;
+    }
+    if (this._helpOpen) {
+      this.#closeHelp(true);
       return;
     }
     if (this.state.dialog === "discardDraft") {
@@ -1711,6 +1746,9 @@ export class MaticMapShellV4 extends LitElement {
     const save = discard && (primary.id === "save-plan" || primary.id === "save-area") && (primary.enabled || busy) ? primary.id : null;
     const sheetOffset = narrow && !state.fullMap ? `--map-sheet-offset:${this._sheetOffset}px` : "--map-sheet-offset:0px";
     const showDrawTools = narrow && state.workflow === "draw";
+    const help = !this._helpOpen ? null : this.#views.value
+      ? this.#views.value.renderMapHelp({ state, coarse: this.#helpCoarse, t: (key, fallback) => this.#t(key, fallback), close: () => this.#closeHelp(true) })
+      : chunkStatus(this.#views.status, this.localize, this.#retry);
     const precisionOpen = state.precisionOpen && state.workflow === "draw";
     // Success and error always toast; info and warning only while the slot is
     // off-screen (sheet at peek, or Full map).
@@ -1802,11 +1840,14 @@ export class MaticMapShellV4 extends LitElement {
                 class="map-canvas"
                 style=${sheetOffset}
                 @matic-workspace-intent=${this.#mapIntent}
+                @matic-map-help=${this.#mapHelp}
                 .state=${state}
                 .localize=${this.localize}
                 .dates=${this.dates}
                 .outlineEditor=${this.#outline.value}
                 .narrow=${narrow}
+                .help=${help}
+                .recipes=${state.workflow === "draw" ? this.#views.value?.drawRecipes(this.#tr) ?? null : null}
               >${this.#floorSwitcher(state)}
                 ${narrow && !state.fullMap && this._sheetDetent === "full" ? html`
                   <button

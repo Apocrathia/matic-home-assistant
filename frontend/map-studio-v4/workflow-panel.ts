@@ -33,6 +33,7 @@ export { actionReason, focusPlanTarget, planCancel, planTitle, planTools } from 
 // confirm here.
 export { confirmDialog, dialogCopy, dialogLauncher, dialogReturnTarget } from "./dialog-copy";
 export { MapOptions } from "./map-options";
+export { drawRecipes, renderMapHelp } from "./map-help";
 export { roomTapAnnouncement, roomsGripLine, roomsSummary } from "./rooms-view";
 export { shellWorkflowStyles } from "./workflow-styles";
 export { formControls } from "./form-controls";
@@ -199,7 +200,6 @@ line-height: var(--ms-lh-snug);
     return html`
       <div class="stack">
         <p class="subtle">${this.state.draw.tool === "outline" ? this.#t("v4_zone_coverage", "Place points around the area. Shading shows where the robot cleans inside the outline; narrow edges may stay uncovered.") : this.#t("v4_draw_floor_hint", "Paint only on the mapped floor. Zooming and panning never change the area.")}</p>
-        ${this.state.draw.tool !== "outline" ? html`<p class="subtle">${this.#t("v4_keyboard_draw_help", "Keyboard: focus the map, use arrow keys to aim, then Enter to paint or erase at the crosshair. D selects Paint; E selects Erase.")}</p>` : nothing}
         ${this.#resource(areas, html`
           <div class="group">
             <h3 class="group-heading" id="areas-heading">${this.#t("area_workspace_title", "Custom areas")}</h3>

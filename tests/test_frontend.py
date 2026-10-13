@@ -314,3 +314,12 @@ def test_rooms_view_ships_in_the_lazy_workflow_chunk() -> None:
     for marker in ("Different per room", "Include scheduled work"):
         assert marker not in startup
         assert marker in workflow
+
+
+def test_map_help_ships_in_the_lazy_workflow_chunk() -> None:
+    """Help opens from a loaded workflow, so its rows load with the views (UX5 R2)."""
+    startup = _startup_source()
+    workflow = _STUDIO_V4_WORKFLOW_CHUNK_PATHS[0].read_text(encoding="utf-8")
+    for marker in ("twist two fingers", "Space-drag to move"):
+        assert marker not in startup
+        assert marker in workflow

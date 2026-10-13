@@ -4575,7 +4575,8 @@ test.describe("Map Studio v0.4 foundation", () => {
     expect(afterPitch.pitch).not.toBeCloseTo(afterPinch.pitch, 4);
   });
 
-  test("supports mouse orbit, modifier pan, double-click zoom, and keyboard flight", async ({ page }) => {
+  // D1 (map-surfaces.md §10): a plain drag moves the map; Shift-drag rotates.
+  test("supports a plain-drag move, a Shift-drag orbit, double-click zoom, and keyboard flight", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "ready" });
     await gallery.getByRole("button", { name: "3D", exact: true }).click();
     const map = gallery.locator(".map-root");
@@ -4589,9 +4590,9 @@ test.describe("Map Studio v0.4 foundation", () => {
     await page.mouse.move(centerX + 90, centerY + 45, { steps: 5 });
     await page.mouse.up();
     await expect.poll(async () => Boolean((await snapshot(page)).cameras.three)).toBe(true);
-    const afterOrbit = (await snapshot(page)).cameras.three;
-    expect(afterOrbit.yaw).not.toBeCloseTo(-Math.PI / 4, 3);
-    expect(afterOrbit.pitch).not.toBeCloseTo(0.82, 3);
+    const afterPan = (await snapshot(page)).cameras.three;
+    expect(afterPan.yaw).toBeCloseTo(-Math.PI / 4, 3);
+    expect(afterPan.pitch).toBeCloseTo(0.82, 3);
 
     await page.keyboard.down("Shift");
     await page.mouse.move(centerX, centerY);
@@ -4599,14 +4600,15 @@ test.describe("Map Studio v0.4 foundation", () => {
     await page.mouse.move(centerX + 70, centerY - 35, { steps: 4 });
     await page.mouse.up();
     await page.keyboard.up("Shift");
-    const afterPan = (await snapshot(page)).cameras.three;
+    const afterOrbit = (await snapshot(page)).cameras.three;
+    expect(afterOrbit.yaw).not.toBeCloseTo(afterPan.yaw, 3);
+    expect(afterOrbit.pitch).not.toBeCloseTo(afterPan.pitch, 3);
     expect(Math.hypot(
-      afterPan.targetX - afterOrbit.targetX,
-      afterPan.targetZ - afterOrbit.targetZ,
-    )).toBeGreaterThan(0.01);
-    expect(afterPan.yaw).toBeCloseTo(afterOrbit.yaw, 3);
+      afterOrbit.targetX - afterPan.targetX,
+      afterOrbit.targetZ - afterPan.targetZ,
+    )).toBeLessThan(0.001);
 
-    const zoomBeforeDoubleClick = afterPan.zoom;
+    const zoomBeforeDoubleClick = afterOrbit.zoom;
     await page.mouse.dblclick(centerX, centerY);
     await expect.poll(async () => (await snapshot(page)).cameras.three.zoom)
       .toBeGreaterThan(zoomBeforeDoubleClick);
@@ -4636,8 +4638,8 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(help).toHaveAttribute("aria-expanded", "true");
     const panel = gallery.getByRole("dialog", { name: "How to move the map" });
     await expect(panel).toHaveAttribute("aria-modal", "false");
-    await expect(panel).toContainText("Scroll to pan · pinch to zoom · twist to rotate");
-    await expect(panel).toContainText("Shift, middle, or right drag to pan");
+    await expect(panel).toContainText("Scroll to move the map · pinch to zoom · twist to rotate");
+    await expect(panel).toContainText("right-drag or Shift-drag to rotate");
     await expect(panel).toContainText("WASD to move · Q/E or arrows to orbit");
     await expect(gallery.getByRole("complementary")).toHaveCount(1);
     const close = panel.getByRole("button", { name: "Close" });
