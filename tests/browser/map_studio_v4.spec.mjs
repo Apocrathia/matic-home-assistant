@@ -594,8 +594,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     const inspector = gallery.locator(".inspector");
     // plan.md §3: a room's schedule is inside its settings.
     await inspector.getByRole("button", { name: "Settings for Kitchen", exact: true }).click();
-    const schedule = inspector.locator("details").first();
-    await schedule.locator("summary").click();
+    await expect(inspector.getByRole("group", { name: "Room schedule for Kitchen" })).toBeVisible();
     await expect(inspector.getByRole("button", { name: "Reset vacuum rotation progress for Kitchen" })).toBeVisible();
     const reset = inspector.getByRole("button", { name: "Reset mopping progress for Kitchen" });
     await reset.click();
@@ -653,7 +652,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
     const inspector = gallery.locator(".inspector");
     await inspector.getByRole("button", { name: "Settings for Kitchen", exact: true }).click();
-    await inspector.locator("details").first().locator("summary").click();
+    await expect(inspector.getByRole("group", { name: "Room schedule for Kitchen" })).toBeVisible();
     await expect(inspector).toContainText("Can't run this schedule until you reset its mopping progress, which Home Assistant can't confirm.");
     await expect(inspector).toContainText("Can't run this schedule until you reset its vacuum rotation progress, which Home Assistant can't confirm.");
     await expect(inspector.getByRole("button", { name: "Reset mopping progress for Kitchen" })).toBeVisible();
@@ -4672,12 +4671,12 @@ test.describe("Map Studio v0.4 foundation", () => {
     await kitchen.click();
     await expect(kitchen).toHaveAttribute("aria-expanded", "true");
     await expect(list.getByLabel(/^Cleaning mode for /)).toHaveCount(1);
-    const cadenceSettings = list.locator("details");
+    // room-schedule.md §3: the open room shows its Schedule group, headed, not a disclosure.
+    const cadenceSettings = list.getByRole("group", { name: "Room schedule for Kitchen" });
     await expect(cadenceSettings).toHaveCount(1);
-    await expect(cadenceSettings.locator("summary")).toHaveText("Room schedule for Kitchen");
-    await cadenceSettings.locator("summary").click();
-    await expect(cadenceSettings.getByLabel(/How often to mop .*, every 1 to 100 cleans/)).toHaveAttribute("min", "1");
-    await expect(cadenceSettings.getByLabel(/How often to add a vacuum rotation in .*, every 1 to 100 cleans/)).toHaveAttribute("max", "100");
+    await expect(cadenceSettings.getByRole("heading", { level: 3, name: "Schedule" })).toBeVisible();
+    await expect(cadenceSettings.getByRole("spinbutton", { name: /^Mop/ })).toHaveAttribute("min", "1");
+    await expect(cadenceSettings.getByRole("spinbutton", { name: /vacuum/ })).toHaveAttribute("max", "100");
     const second = list.getByRole("button", { name: /^Settings for / }).nth(1);
     await second.click();
     await expect(second).toHaveAttribute("aria-expanded", "true");
@@ -4901,28 +4900,25 @@ test.describe("Map Studio v0.4 foundation", () => {
       await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
       const rooms = gallery.getByRole("list", { name: "Rooms", exact: true });
       await rooms.getByRole("button", { name: "Settings for Kitchen", exact: true }).click();
-      const cadence = rooms.locator("details").first();
-      await cadence.locator("summary").click();
-      await expect(cadence.getByText("A vacuum rotation counts only after the robot confirms the vacuum coverage and that the clean finished. If it can't confirm, the rotation stays due for the next clean.")).toBeVisible();
-      const scope = cadence.getByLabel("Count cleans for Kitchen");
-      const mopInterval = cadence.getByLabel("How often to mop Kitchen, every 1 to 100 cleans");
-      const coverageInterval = cadence.getByLabel("How often to add a vacuum rotation in Kitchen, every 1 to 100 cleans");
-      const coverage = cadence.getByLabel("Vacuum rotation level for Kitchen");
-      const layout = await cadence.locator(".cadence-fields").evaluate((settings) => {
+      const cadence = rooms.getByRole("group", { name: "Room schedule for Kitchen" });
+      const mopInterval = cadence.getByRole("spinbutton", { name: "Mop every 100 cleans" });
+      const coverageInterval = cadence.getByRole("spinbutton", { name: "Heavy duty vacuum every 2 cleans" });
+      const coverage = cadence.getByLabel("Vacuum level for Kitchen");
+      await expect(mopInterval).toHaveValue("100");
+      await expect(coverageInterval).toHaveValue("2");
+      await expect(coverage).toHaveValue("heavy_duty");
+      // Every control sits inside the room card, at least 44 px, with no sideways scroll.
+      const layout = await cadence.evaluate((settings) => {
         const bounds = settings.getBoundingClientRect();
-        const fields = [...settings.querySelectorAll("input[type=number], select")].map((control) => {
+        const fields = [...settings.querySelectorAll(".ms-stepper button, .ms-stepper input, .sched-row select")].map((control) => {
           const rect = control.getBoundingClientRect();
-          return { width: rect.width, left: rect.left, right: rect.right };
+          return { width: rect.width, height: rect.height, left: rect.left, right: rect.right };
         });
-        return { width: bounds.width, clientWidth: settings.clientWidth, scrollWidth: settings.scrollWidth,
+        return { clientWidth: settings.clientWidth, scrollWidth: settings.scrollWidth,
           fields: fields.map((field) => ({ ...field, inside: field.left >= bounds.left - 1 && field.right <= bounds.right + 1 })) };
       });
-      expect(await mopInterval.inputValue()).toBe("100");
-      expect(await coverageInterval.inputValue()).toBe("2");
-      expect(await scope.inputValue()).toBe("shared");
-      expect(await coverage.inputValue()).toBe("heavy_duty");
-      expect(layout.fields).toHaveLength(4);
-      expect(layout.fields.every((field) => field.width >= 180 && field.inside), JSON.stringify({ ...viewport, layout })).toBe(true);
+      expect(layout.fields).toHaveLength(7);
+      expect(layout.fields.every((field) => field.width >= 44 && field.height >= 44 && field.inside), JSON.stringify({ ...viewport, layout })).toBe(true);
       expect(layout.scrollWidth, JSON.stringify({ ...viewport, layout })).toBeLessThanOrEqual(layout.clientWidth + 1);
     }
   });

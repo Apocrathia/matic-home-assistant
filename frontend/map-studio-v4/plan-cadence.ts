@@ -11,6 +11,10 @@ import type {
 import type { WorkspaceIntent, WorkspaceState } from "./contracts";
 import { formatNumber, type Translate } from "./plan-copy";
 import { roomBlockReason } from "./state";
+import { icon, iconNoticeWarning } from "./icons";
+import { stepper } from "./stepper";
+
+export { INTERVAL_MAX, INTERVAL_MIN, snapInterval, stepInterval } from "./stepper";
 
 export const MODES: readonly CleaningMode[] = ["vacuum", "mop", "vacuum_and_mop"];
 export const COVERAGES: readonly CoverageSetting[] = ["quick", "standard", "heavy_duty"];
@@ -23,15 +27,6 @@ export const coverageLabel = (t: Translate, value: CoverageSetting): string =>
 
 export const coverageNeedsVacuum = (t: Translate): string =>
   t("v4_cadence_coverage_requires_vacuum", "The vacuum rotation needs a cleaning mode that includes vacuuming, so change the mode or turn the rotation off.");
-
-const cadenceFor = (room: PlanRoom): RoomCadencePolicy => room.cadence || {
-  scope: "plan",
-  mopEveryN: null,
-  coverageEveryN: null,
-  periodicCoverageSetting: null,
-  doMopNext: false,
-  doCoverageNext: false,
-};
 
 /** A room schedule's state in one or two sentences, most urgent first. */
 export const cadenceSummary = (
@@ -90,9 +85,6 @@ export const cadenceSummary = (
 // ---- The schedule model (room-schedule.md §3-§6) ----------------------------
 
 export type ScheduleKind = "mop" | "coverage";
-export const INTERVAL_MIN = 1;
-export const INTERVAL_MAX = 100;
-
 /** A room with no schedule yet counts across all plans (room-schedule.md §5 Scope). */
 const OFF: RoomCadencePolicy = {
   scope: "shared",
@@ -105,21 +97,6 @@ const OFF: RoomCadencePolicy = {
 
 export const hasSchedule = (policy: RoomCadencePolicy | null | undefined): boolean =>
   Boolean(policy && (policy.mopEveryN !== null || policy.coverageEveryN !== null));
-
-/** What a committed field becomes: bad input keeps the value, empty is Off, numbers snap into 1 to 100. */
-export const snapInterval = (raw: string, badInput: boolean, current: number | null): number | null => {
-  if (badInput) return current;
-  const text = raw.trim();
-  if (text === "") return null;
-  const value = Number(text);
-  return Number.isFinite(value) ? Math.min(INTERVAL_MAX, Math.max(INTERVAL_MIN, Math.round(value))) : current;
-};
-
-/** "−" at 1 turns the row Off, "+" at Off gives 1, and the ends stay put. */
-export const stepInterval = (current: number | null, delta: -1 | 1): number | null =>
-  current === null
-    ? delta > 0 ? INTERVAL_MIN : null
-    : current + delta < INTERVAL_MIN ? null : Math.min(INTERVAL_MAX, current + delta);
 
 export interface ScheduleInput {
   /** The draft room. */
@@ -439,47 +416,19 @@ export const resetBlock = (t: Translate, state: WorkspaceState): string | null =
       : null;
 
 /** What the schedule block needs from the Edit view that shows it. */
-export interface CadenceContext {
+export interface ScheduleContext {
   readonly t: Translate;
   readonly state: WorkspaceState;
   readonly intent: (intent: WorkspaceIntent) => void;
   /** The shared reason's id while every Edit control is held (plan.md §4 E5), else null. */
   readonly held: string | null;
+  /** The rotation level chosen while it is Off, for this room (view state). */
+  readonly offLevel: CoverageSetting | null;
+  readonly setOffLevel: (level: CoverageSetting) => void;
 }
 
-const patchCadence = (context: CadenceContext, index: number, patch: Partial<RoomCadencePolicy>): void => {
-  const room = context.state.planDraft.rooms[index];
-  if (!room || context.held) return;
-  const rooms = context.state.planDraft.rooms.map((candidate, at) =>
-    at === index ? { ...candidate, cadence: { ...cadenceFor(candidate), ...patch } } : candidate);
-  context.intent({ type: "patch-plan-draft", patch: { rooms } });
-};
-
-const patchInterval = (context: CadenceContext, event: Event, index: number, field: "mopEveryN" | "coverageEveryN"): void => {
-  const input = event.currentTarget as HTMLInputElement;
-  const room = context.state.planDraft.rooms[index];
-  if (!room) return;
-  if (context.held) {
-    input.value = cadenceFor(room)[field]?.toString() || "";
-    return;
-  }
-  const raw = input.value;
-  if (raw === "") {
-    patchCadence(context, index, field === "mopEveryN" ? { mopEveryN: null, doMopNext: false } : { coverageEveryN: null, doCoverageNext: false });
-    return;
-  }
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 1 || value > 100) {
-    input.reportValidity();
-    return;
-  }
-  patchCadence(context, index, field === "coverageEveryN"
-    ? { coverageEveryN: value, periodicCoverageSetting: room.cadence?.periodicCoverageSetting || room.coverageSetting }
-    : { mopEveryN: value });
-};
-
 /** A held select or checkbox shows the draft's value again and changes nothing. */
-const keep = (context: CadenceContext, event: Event, value: string | boolean): boolean => {
+const keep = (context: ScheduleContext, event: Event, value: string | boolean): boolean => {
   if (!context.held) return false;
   const input = event.currentTarget as HTMLInputElement;
   if (typeof value === "boolean") input.checked = value;
@@ -487,100 +436,128 @@ const keep = (context: CadenceContext, event: Event, value: string | boolean): b
   return true;
 };
 
-/** The room schedule block in an open Edit row (UX3 replaces it; room-schedule.md). */
-export const cadenceControls = (context: CadenceContext, room: PlanRoom, index: number, label: string) => {
+/** The room schedule's inputs from the draft, the saved plan and the catalog. */
+export const scheduleInput = (state: WorkspaceState, room: PlanRoom, name: string, offLevel: CoverageSetting | null): ScheduleInput => {
+  const catalog = state.resources.plans.value;
+  const draftId = state.planDraft.id;
+  return {
+    room,
+    saved: draftId ? catalog?.plans.find((plan) => plan.id === draftId)?.rooms.find((candidate) => candidate.roomId === room.roomId) : undefined,
+    catalogRoom: catalog?.rooms.find((candidate) => candidate.roomId === room.roomId),
+    name,
+    offLevel,
+  };
+};
+
+/** The Schedule block in an open Edit row (room-schedule.md §3). */
+export const scheduleBlock = (context: ScheduleContext, room: PlanRoom, index: number, name: string) => {
   const { t, state, held } = context;
   const draft = state.planDraft;
-  const policy = cadenceFor(room);
-  const progress = room.cadenceProgress;
-  const savedRoom = draft.id
-    ? state.resources.plans.value?.plans.find((plan) => plan.id === draft.id)?.rooms.find((candidate) => candidate.roomId === room.roomId)
-    : undefined;
-  const previousScope = savedRoom?.cadence?.scope ?? null;
-  const sharedRoom = state.resources.plans.value?.rooms.find((candidate) => candidate.roomId === room.roomId);
-  const hasSharedSchedule = Boolean(sharedRoom?.sharedCadence || sharedRoom?.sharedCadenceProgress);
-  const hasCadence = Boolean(policy.mopEveryN || policy.coverageEveryN);
-  const hasMopProgress = Boolean(progress?.mopProgress || policy.doMopNext || room.cadenceReasons?.includes("mop_progress_unverified"));
-  const hasCoverageProgress = Boolean(progress?.coverageProgress || policy.doCoverageNext
-    || room.cadenceReasons?.includes("coverage_progress_unverified"));
-  const resetDisabled = draft.dirty || state.command !== "idle" || state.managedLock
-    || (state.activity !== "idle" && state.activity !== "docked")
-    || state.dataMode !== "live";
-  const join = t("v4_cadence_shared_join_effect", "Saving shares this room's progress with every plan that uses it, picking up any progress already counted.");
-  const scopeExplanation = previousScope !== null && previousScope !== policy.scope
-    ? policy.scope === "shared"
-      ? join
-      : t("v4_cadence_shared_leave_effect", "Saving starts new progress for this plan only, and other plans keep the shared schedule.")
-    : previousScope === null && hasCadence
-      ? policy.scope === "shared"
-        ? hasSharedSchedule ? join : t("v4_cadence_new_shared_effect", "Saving creates a schedule shared by every plan that uses this room, starting from zero.")
-        : t("v4_cadence_new_private_effect", "Saving starts progress for this plan only, from zero.")
-      : t("v4_cadence_existing_effect", "Changing how often keeps the progress, and turning a schedule off pauses it.");
+  const input = scheduleInput(state, room, name, context.offLevel);
+  const model = scheduleModel(t, state.locale, input);
+  const { policy } = model;
+  const patch = (cadence: RoomCadencePolicy | null): void => {
+    if (!cadence || held) return;
+    const rooms = draft.rooms.map((candidate, at) => at === index ? { ...candidate, cadence } : candidate);
+    context.intent({ type: "patch-plan-draft", patch: { rooms } });
+  };
   const gate = { disabled: held ? "true" : nothing, described: held ?? nothing };
-  return html`
-    <details class="plan-option cadence-config">
-      <summary aria-disabled=${gate.disabled} aria-describedby=${gate.described}>${t("v4_room_cadence_named", "Room schedule for {room}", { room: label })}</summary>
-      <p class="subtle">${t("v4_cadence_description", "Only cleans the robot confirms count toward these schedules, and due work stays due until a clean is confirmed.")}</p>
-      <div class="cadence-fields">
-        <label class="field ms-field">${t("v4_cadence_scope", "Count cleans")}
-          <select aria-label=${t("v4_cadence_scope_named", "Count cleans for {room}", { room: label })} aria-disabled=${gate.disabled} aria-describedby=${gate.described} .value=${policy.scope}
-            @change=${(event: Event) => { if (!keep(context, event, policy.scope)) patchCadence(context, index, { scope: (event.currentTarget as HTMLSelectElement).value as RoomCadencePolicy["scope"] }); }}>
-            <option value="plan" ?selected=${policy.scope === "plan"}>${t("v4_cadence_this_plan", "In this plan only")}</option>
-            <option value="shared" ?selected=${policy.scope === "shared"}>${t("v4_cadence_shared", "Across all plans (recommended)")}</option>
-          </select>
-        </label>
-        <label class="field ms-field">${policy.mopEveryN === null ? t("v4_cadence_mop_off", "Mop") : policy.mopEveryN === 1 ? t("v4_cadence_mop_interval_one", "Mop every clean") : t("v4_cadence_mop_interval", "Mop every {count} cleans", { count: policy.mopEveryN })}
-          <input type="number" min="1" max="100" step="1" inputmode="numeric" aria-label=${t("v4_cadence_mop_interval_named", "How often to mop {room}, every 1 to 100 cleans", { room: label })} aria-disabled=${gate.disabled} aria-describedby=${gate.described} ?readonly=${Boolean(held)} .value=${policy.mopEveryN?.toString() || ""} ?disabled=${room.cleaningMode !== "vacuum"} @change=${(event: Event) => patchInterval(context, event, index, "mopEveryN")}>
-        </label>
-        <label class="field ms-field">${t("v4_cadence_coverage_interval", "Vacuum rotation every N cleans")}
-          <input type="number" min="1" max="100" step="1" inputmode="numeric" aria-label=${t("v4_cadence_coverage_interval_named", "How often to add a vacuum rotation in {room}, every 1 to 100 cleans", { room: label })} aria-disabled=${gate.disabled} aria-describedby=${gate.described} ?readonly=${Boolean(held)} ?disabled=${room.cleaningMode === "mop"} .value=${policy.coverageEveryN?.toString() || ""} @change=${(event: Event) => patchInterval(context, event, index, "coverageEveryN")}>
-        </label>
-        ${policy.coverageEveryN ? html`
-          <label class="field ms-field">${t("v4_cadence_periodic_coverage", "Vacuum rotation level")}
-            <select aria-label=${t("v4_cadence_periodic_coverage_named", "Vacuum rotation level for {room}", { room: label })} aria-disabled=${gate.disabled} aria-describedby=${gate.described} ?disabled=${room.cleaningMode === "mop"} .value=${policy.periodicCoverageSetting || "standard"}
-              @change=${(event: Event) => { if (!keep(context, event, policy.periodicCoverageSetting || "standard")) patchCadence(context, index, { periodicCoverageSetting: (event.currentTarget as HTMLSelectElement).value as CoverageSetting }); }}
-            >${COVERAGES.map((option) => html`<option value=${option} ?selected=${option === policy.periodicCoverageSetting}>${coverageLabel(t, option)}</option>`)}</select>
-          </label>
-        ` : nothing}
+  const ids = (...list: (string | null)[]): string | null => list.filter(Boolean).join(" ") || null;
+  const line = (id: string, row: ScheduleRow) => row.reason
+    ? html`<small class="sched-status sched-reason" id=${id}>${icon(iconNoticeWarning)}<span>${row.reason}</span></small>`
+    : row.status ? html`<small class="sched-status" id=${id}>${row.status}</small>` : nothing;
+  const row = (kind: ScheduleKind, data: ScheduleRow, level: unknown) => {
+    const id = `sched-${kind}`;
+    const lineId = data.reason || data.status ? `${id}-status` : null;
+    return html`<div class="sched-row">
+      <span class="sched-label" id=${`${id}-label`}>${data.label}</span>
+      <div class="sched-controls">
+        ${level}
+        ${stepper({
+          id,
+          labelId: `${id}-label`,
+          label: data.label,
+          value: data.every,
+          describedBy: ids(lineId, held),
+          heldBy: held ?? (data.blocked ? lineId : null),
+          readonly: model.joinPending,
+          t,
+          commit: (every) => patch(withInterval(input, kind, every)),
+        })}
       </div>
-      <p class="subtle" role="status">${scopeExplanation}</p>
-      ${room.cleaningMode === "mop" ? html`
-        <p class="subtle">${policy.coverageEveryN ? coverageNeedsVacuum(t) : t("v4_cadence_coverage_available_modes", "Can't add a vacuum rotation until this room's cleaning mode includes vacuuming.")}</p>
-        ${policy.coverageEveryN ? html`<button type="button" class="ms-btn ms-btn--secondary" aria-disabled=${gate.disabled} aria-describedby=${gate.described}
-          @click=${() => patchCadence(context, index, { scope: "plan", coverageEveryN: null, periodicCoverageSetting: null, doCoverageNext: false })}
-        >${t("v4_cadence_clear_room_coverage", "Turn off")}</button>` : nothing}
-      ` : nothing}
-      ${room.cleaningMode !== "vacuum" ? html`<p class="subtle">${t("v4_cadence_mop_requires_vacuum", "Can't add a mop schedule until this room's cleaning mode is Vacuum.")}</p>` : nothing}
-      ${policy.mopEveryN && room.cleaningMode === "vacuum" ? html`<p class="subtle">${t("v4_cadence_clear_mop_to_change_normal", "Can't change the cleaning mode until the mop schedule is off.")}</p>` : nothing}
-      <div class="plan-options" role="group" aria-label=${t("v4_cadence_next_actions_named", "Next clean options for {room}", { room: label })}>
-        <label class="plan-option"><input type="checkbox" aria-label=${t("v4_cadence_do_mop_next_named", "Do vacuum and mop on the next clean for {room}", { room: label })} aria-disabled=${gate.disabled} aria-describedby=${gate.described} .checked=${policy.doMopNext} ?disabled=${!policy.mopEveryN}
-          @change=${(event: Event) => { if (!keep(context, event, policy.doMopNext)) patchCadence(context, index, { doMopNext: (event.currentTarget as HTMLInputElement).checked }); }}><span class="plan-option-copy"><strong>${t("v4_cadence_do_mop_next", "Do vacuum and mop on the next clean")}</strong></span></label>
-        <label class="plan-option"><input type="checkbox" aria-label=${t("v4_cadence_do_coverage_next_named", "Add a vacuum rotation on the next clean for {room}", { room: label })} aria-disabled=${gate.disabled} aria-describedby=${gate.described} .checked=${policy.doCoverageNext} ?disabled=${!policy.coverageEveryN || room.cleaningMode === "mop"}
-          @change=${(event: Event) => { if (!keep(context, event, policy.doCoverageNext)) patchCadence(context, index, { doCoverageNext: (event.currentTarget as HTMLInputElement).checked }); }}><span class="plan-option-copy"><strong>${t("v4_cadence_do_coverage_next", "Add a vacuum rotation on the next clean")}</strong></span></label>
+      ${line(`${id}-status`, data)}
+    </div>`;
+  };
+  const levelHeld = held ?? (model.coverage.blocked ? "sched-coverage-status" : null);
+  const level = model.joinPending ? nothing : html`<select
+    class="ms-select sched-level"
+    aria-label=${t("v4_cadence_level_named", "Vacuum level for {room}", { room: name })}
+    aria-disabled=${levelHeld ? "true" : nothing}
+    aria-describedby=${levelHeld ?? nothing}
+    .value=${model.level}
+    @change=${(event: Event) => {
+      const select = event.currentTarget as HTMLSelectElement;
+      if (levelHeld) {
+        select.value = model.level;
+        return;
+      }
+      const chosen = select.value as CoverageSetting;
+      const next = withLevel(input, chosen);
+      if (next) patch(next);
+      else context.setOffLevel(chosen);
+    }}
+  >${COVERAGES.map((option) => html`<option value=${option} ?selected=${option === model.level}>${coverageLabel(t, option)}</option>`)}</select>`;
+  const resetDisabled = Boolean(resetBlock(t, state));
+  return html`<section class="schedule" role="group" aria-label=${t("v4_room_cadence_named", "Room schedule for {room}", { room: name })}>
+    <div class="schedule-head"><h3>${t("v4_room_schedule", "Schedule")}</h3></div>
+    ${model.roomReason ? html`<p class="sched-status sched-reason">${icon(iconNoticeWarning)}<span>${model.roomReason}</span></p>` : nothing}
+    ${row("mop", model.mop, nothing)}
+    ${row("coverage", model.coverage, level)}
+    ${model.legacyCoverage ? html`<button
+      type="button"
+      class="ms-btn ms-btn--secondary sched-off"
+      aria-label=${t("v4_cadence_turn_off_named", "Turn off the vacuum rotation in {room}", { room: name })}
+      aria-disabled=${gate.disabled}
+      aria-describedby=${gate.described}
+      @click=${() => patch(withoutLegacyCoverage(policy))}
+    >${t("v4_cadence_clear_room_coverage", "Turn off")}</button>` : nothing}
+    <div class="cadence-fields">
+      <label class="field ms-field">${t("v4_cadence_scope", "Count cleans")}
+        <select aria-label=${t("v4_cadence_scope_named", "Count cleans for {room}", { room: name })} aria-disabled=${gate.disabled} aria-describedby=${gate.described} .value=${policy.scope}
+          @change=${(event: Event) => { if (!keep(context, event, policy.scope)) patch(withScope(input, (event.currentTarget as HTMLSelectElement).value as RoomCadencePolicy["scope"])); }}>
+          <option value="plan" ?selected=${policy.scope === "plan"}>${t("v4_cadence_this_plan", "In this plan only")}</option>
+          <option value="shared" ?selected=${policy.scope === "shared"}>${t("v4_cadence_shared", "Across all plans (recommended)")}</option>
+        </select>
+      </label>
+    </div>
+    ${model.explanation ? html`<p class="schedule-note">${model.explanation}</p>` : nothing}
+    <div class="plan-options" role="group" aria-label=${t("v4_cadence_next_actions_named", "Next clean options for {room}", { room: name })}>
+      <label class="plan-option"><input type="checkbox" aria-label=${t("v4_cadence_do_mop_next_named", "Do vacuum and mop on the next clean for {room}", { room: name })} aria-disabled=${gate.disabled} aria-describedby=${gate.described} .checked=${policy.doMopNext} ?disabled=${!policy.mopEveryN}
+        @change=${(event: Event) => { if (!keep(context, event, policy.doMopNext)) patch({ ...policy, doMopNext: (event.currentTarget as HTMLInputElement).checked }); }}><span class="plan-option-copy"><strong>${t("v4_cadence_do_mop_next", "Do vacuum and mop on the next clean")}</strong></span></label>
+      <label class="plan-option"><input type="checkbox" aria-label=${t("v4_cadence_do_coverage_next_named", "Add a vacuum rotation on the next clean for {room}", { room: name })} aria-disabled=${gate.disabled} aria-describedby=${gate.described} .checked=${policy.doCoverageNext} ?disabled=${!policy.coverageEveryN || room.cleaningMode === "mop"}
+        @change=${(event: Event) => { if (!keep(context, event, policy.doCoverageNext)) patch({ ...policy, doCoverageNext: (event.currentTarget as HTMLInputElement).checked }); }}><span class="plan-option-copy"><strong>${t("v4_cadence_do_coverage_next", "Add a vacuum rotation on the next clean")}</strong></span></label>
+    </div>
+    <p class="schedule-note">${t("v4_cadence_description", "Only cleans the robot confirms count toward these schedules, and due work stays due until a clean is confirmed.")}</p>
+    ${draft.id && (model.resettable.mop || model.resettable.coverage) ? html`
+      <div class="toolbar">
+        ${model.resettable.mop ? html`<button
+          class="danger ms-btn ms-btn--secondary ms-btn--danger"
+          type="button"
+          aria-label=${t("v4_reset_mop_cadence_button_named", "Reset mopping progress for {room}", { room: name })}
+          data-dialog-launcher="confirmResetCadence"
+          ?disabled=${resetDisabled}
+          @click=${() => context.intent({ type: "request-room-cadence-reset", planId: draft.id as string, roomId: room.roomId, mode: "mop" })}
+        >${t("v4_reset_mop_cadence_button", "Reset mopping")}</button>` : nothing}
+        ${model.resettable.coverage ? html`<button
+          class="danger ms-btn ms-btn--secondary ms-btn--danger"
+          type="button"
+          aria-label=${t("v4_reset_coverage_cadence_button_named", "Reset vacuum rotation progress for {room}", { room: name })}
+          data-dialog-launcher="confirmResetCadence"
+          ?disabled=${resetDisabled}
+          @click=${() => context.intent({ type: "request-room-cadence-reset", planId: draft.id as string, roomId: room.roomId, mode: "coverage" })}
+        >${t("v4_reset_coverage_cadence_button", "Reset vacuum rotation")}</button>` : nothing}
       </div>
-      ${policy.coverageEveryN ? html`<p class="subtle">${t("v4_cadence_coverage_verification_hint", "A vacuum rotation counts only after the robot confirms the vacuum coverage and that the clean finished. If it can't confirm, the rotation stays due for the next clean.")}</p>` : nothing}
-      <p class="subtle" aria-live="polite">${cadenceSummary(t, policy, progress, room.cadenceReasons)}</p>
-      ${draft.id && (policy.mopEveryN || policy.coverageEveryN || hasMopProgress || hasCoverageProgress) ? html`
-        <div class="toolbar">
-          ${policy.mopEveryN || hasMopProgress ? html`<button
-            class="danger ms-btn ms-btn--secondary ms-btn--danger"
-            type="button"
-            aria-label=${t("v4_reset_mop_cadence_button_named", "Reset mopping progress for {room}", { room: label })}
-            data-dialog-launcher="confirmResetCadence"
-            ?disabled=${resetDisabled}
-            @click=${() => context.intent({ type: "request-room-cadence-reset", planId: draft.id as string, roomId: room.roomId, mode: "mop" })}
-          >${t("v4_reset_mop_cadence_button", "Reset mopping")}</button>` : nothing}
-          ${policy.coverageEveryN || hasCoverageProgress ? html`<button
-            class="danger ms-btn ms-btn--secondary ms-btn--danger"
-            type="button"
-            aria-label=${t("v4_reset_coverage_cadence_button_named", "Reset vacuum rotation progress for {room}", { room: label })}
-            data-dialog-launcher="confirmResetCadence"
-            ?disabled=${resetDisabled}
-            @click=${() => context.intent({ type: "request-room-cadence-reset", planId: draft.id as string, roomId: room.roomId, mode: "coverage" })}
-          >${t("v4_reset_coverage_cadence_button", "Reset vacuum rotation")}</button>` : nothing}
-        </div>
-        <p class="subtle">${t("v4_reset_cadence_hint", "Reset is available for a saved plan while the robot is idle. Cleaning history is kept separately.")}</p>
-      ` : nothing}
-    </details>
-  `;
+      <p class="schedule-note">${t("v4_reset_cadence_hint", "Reset is available for a saved plan while the robot is idle. Cleaning history is kept separately.")}</p>
+    ` : nothing}
+  </section>`;
 };

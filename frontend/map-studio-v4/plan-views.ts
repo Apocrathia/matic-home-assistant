@@ -6,7 +6,8 @@ import { icon, iconChevronRight, iconDue, iconMoveDown, iconMoveUp, iconNoticeWa
 import { base, tokens } from "./tokens";
 import type { CadenceReason, CleaningMode, CoverageSetting, PlanRoom, SavedPlan } from "./backend-contracts";
 import { MAX_ROOM_SEQUENCE_SIZE, type Localize, type WorkspaceIntent, type WorkspaceState } from "./contracts";
-import { COVERAGES, MODES, cadenceControls, coverageLabel, modeLabel } from "./plan-cadence";
+import { COVERAGES, MODES, coverageLabel, modeLabel, scheduleBlock } from "./plan-cadence";
+import { stepperStyles } from "./stepper";
 import { PLAN_VIEWS_TAG } from "./element-tags";
 import { WORKSPACE_INTENT_EVENT } from "./map-canvas";
 import {
@@ -32,7 +33,7 @@ const BLOCKING: readonly CadenceReason[] = [
  * load with the workflow views, since only the plan workflows show them.
  */
 export class MaticPlanViewsV4 extends LitElement {
-  static override styles = [tokens, base, controls, css`
+  static override styles = [tokens, base, controls, stepperStyles, css`
 :host { display: block; }
 .plain { display: grid; gap: var(--ms-space-2); margin: 0; padding: 0; list-style: none; }
 .plan-row .ms-row__body { display: grid; gap: 0.125rem; }
@@ -93,7 +94,6 @@ export class MaticPlanViewsV4 extends LitElement {
 .run-end > summary { min-block-size: var(--ms-control); align-content: center; font-weight: var(--ms-w-bold); cursor: pointer; }
 .threshold { display: grid; gap: var(--ms-space-1); font-size: var(--ms-t-md); }
 .threshold input { inline-size: 100%; min-block-size: var(--ms-control-sm); accent-color: var(--ms-resolved-indicator, var(--ms-accent)); }
-/* The schedule block, moved unchanged from the old form (UX3 replaces it). */
 .subtle { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
 .split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--ms-space-2); }
 .toolbar { display: flex; flex-wrap: wrap; gap: var(--ms-space-2); }
@@ -102,10 +102,26 @@ export class MaticPlanViewsV4 extends LitElement {
 .plan-option input[type="checkbox"] { inline-size: 1.2rem; block-size: 1.2rem; margin: 0.1rem 0 0; accent-color: var(--ms-resolved-indicator, var(--ms-accent)); }
 .plan-option-copy { display: grid; gap: var(--ms-space-1); min-inline-size: 0; }
 .plan-option-copy strong { font-size: var(--ms-t-sm); line-height: var(--ms-lh-snug); }
-.cadence-config { grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr); display: grid; gap: var(--ms-space-2); }
-.cadence-config > summary { cursor: pointer; min-block-size: var(--ms-control-sm); font-weight: var(--ms-w-bold); }
 .cadence-fields { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--ms-space-2); min-inline-size: 0; }
 .cadence-fields > .ms-field { min-inline-size: 0; }
+/* The Schedule block (room-schedule.md §3, ported from mockups/plan.ts): the
+   room card is its only border; groups are separated by space and a heading. */
+.schedule { display: grid; gap: var(--ms-space-3); min-inline-size: 0; margin-block-start: var(--ms-space-2); }
+.schedule-head { display: flex; align-items: center; gap: var(--ms-space-2); }
+.schedule-head h3 { flex: 1; margin: 0; font-size: var(--ms-t-md); font-weight: var(--ms-w-bold); }
+/* Each row is a label line, a control line and a status line. */
+.sched-row { display: grid; gap: var(--ms-space-1); justify-items: start; min-inline-size: 0; }
+.sched-label { font-size: var(--ms-t-md); font-weight: var(--ms-w-medium); }
+/* Row 2's level select (9 rem) leads and the stepper (170 px) follows on the
+   same line when the content is at least 326 px wide, else it wraps below. */
+.sched-controls { display: flex; flex-wrap: wrap; gap: var(--ms-space-3); align-items: center; }
+.sched-level { flex: none; inline-size: 9rem; block-size: var(--ms-control); font-size: var(--ms-t-md); }
+.sched-status { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
+/* Reasons keep the text colour; the glyph carries the tone (design-system.md §5). */
+.sched-reason { display: flex; gap: var(--ms-space-1); align-items: flex-start; color: var(--ms-text); }
+.sched-reason .ms-icon { flex: none; inline-size: 1rem; block-size: 1rem; color: var(--ms-warning); }
+.sched-off { justify-self: start; }
+.schedule-note { margin: 0; color: var(--ms-text); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
 @media (max-width: 25rem) { .split { grid-template-columns: 1fr; } }
 `];
 
@@ -119,6 +135,8 @@ export class MaticPlanViewsV4 extends LitElement {
   protected _moved = "";
   /** The arrow a move was made with, focused again once the rows have moved. */
   #refocus: string | null = null;
+  /** A vacuum rotation level chosen while the rotation is Off, by room: never a draft change. */
+  readonly #offLevels = new Map<string, CoverageSetting>();
 
   state: WorkspaceState = initialWorkspaceState();
   localize?: Localize;
@@ -389,6 +407,8 @@ export class MaticPlanViewsV4 extends LitElement {
     const limited = room === null && atLimit;
     const schedule = room ? scheduleLine(this.#t, this.state.locale, room.cadence) : null;
     const blocked = room?.cadenceReasons?.some((reason) => BLOCKING.includes(reason));
+    // While the mop schedule is on, the mode stays Vacuum (room-schedule.md §4 S10).
+    const modeLocked = Boolean(room?.cadence?.mopEveryN);
     return html`<li class="ms-row edit-row" data-selected=${room ? "true" : nothing}>
       <label class="edit-check"><input
         type="checkbox"
@@ -428,14 +448,14 @@ export class MaticPlanViewsV4 extends LitElement {
             <select
               aria-label=${this.#t("v4_room_cleaning_system_named", "Cleaning mode for {room}", { room: name })}
               aria-disabled=${gate.disabled}
-              aria-describedby=${gate.described}
+              aria-describedby=${[held, modeLocked ? "mode-reason" : null].filter(Boolean).join(" ") || nothing}
               .value=${room.cleaningMode}
               @change=${(event: Event) => {
                 const select = event.currentTarget as HTMLSelectElement;
                 if (held) select.value = room.cleaningMode;
                 else this.#patchRoom(index, { cleaningMode: select.value as CleaningMode });
               }}
-            >${MODES.map((mode) => html`<option value=${mode} ?selected=${mode === room.cleaningMode} ?disabled=${Boolean(room.cadence?.mopEveryN && mode !== "vacuum")}>${modeLabel(this.#t, mode)}</option>`)}</select>
+            >${MODES.map((mode) => html`<option value=${mode} ?selected=${mode === room.cleaningMode} ?disabled=${modeLocked && mode !== "vacuum"}>${modeLabel(this.#t, mode)}</option>`)}</select>
           </label>
           <label class="field ms-field">${this.#t("vacuum_coverage", "Vacuum coverage")}
             <select
@@ -452,8 +472,19 @@ export class MaticPlanViewsV4 extends LitElement {
             >${COVERAGES.map((option) => html`<option value=${option} ?selected=${option === room.coverageSetting}>${coverageLabel(this.#t, option)}</option>`)}</select>
           </label>
         </div>
+        ${modeLocked ? html`<p class="sched-status sched-reason" id="mode-reason">${icon(iconNoticeWarning)}<span>${this.#t("v4_cadence_clear_mop_to_change_normal", "Can't change the cleaning mode until the mop schedule is off.")}</span></p>` : nothing}
         ${room.cleaningMode === "vacuum" ? nothing : html`<p class="subtle">${this.#t("v4_mop_coverage_hint", "Vacuum coverage applies only when vacuuming. Use the robot's Double-pass mopping setting for an extra mop pass.")}</p>`}
-        ${cadenceControls({ t: this.#t, state: this.state, intent: (intent) => this.#intent(intent), held }, room, index, name)}
+        ${scheduleBlock({
+          t: this.#t,
+          state: this.state,
+          intent: (intent) => this.#intent(intent),
+          held,
+          offLevel: this.#offLevels.get(roomId) ?? null,
+          setOffLevel: (level) => {
+            this.#offLevels.set(roomId, level);
+            this.requestUpdate();
+          },
+        }, room, index, name)}
       </div>` : nothing}
     </li>`;
   }

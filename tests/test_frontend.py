@@ -159,6 +159,13 @@ def test_plan_focus_after_leaving_a_view_ships_in_the_lazy_workflow_chunk() -> N
     assert 'scrollIntoView({block:"nearest"})' in workflow
 
 
+def test_the_stepper_ships_with_the_plan_views() -> None:
+    """design-system.md §4 size gate: only room schedules use ``ms-stepper``."""
+    workflow = _STUDIO_V4_WORKFLOW_CHUNK_PATHS[0].read_text(encoding="utf-8")
+    assert ".ms-stepper" not in _startup_source()
+    assert ".ms-stepper" in workflow
+
+
 def test_workflow_dialog_launch_and_confirm_ship_with_their_copy() -> None:
     """Delete and reset dialogs open only from the views, which confirm them too."""
     modules = shipped_modules()
