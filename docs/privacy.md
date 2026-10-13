@@ -10,7 +10,7 @@ analytics, or maintainer cloud service.
 
 | Data | Where it lives |
 | --- | --- |
-| Local credential, endpoint, and certificate identity | Home Assistant config entry |
+| Local credential, endpoint, certificate identity, and the robot's Bluetooth address | Home Assistant config entry |
 | Plans, room preferences, results, and custom-area geometry | Private integration storage |
 | Current photographic map and saved map history | Private integration storage; history is capped at 12 scenes and 48 MiB |
 | Firmware endpoint summaries | Private storage, up to 52 snapshots; sizes, hashes, and field shapes without payload values |
@@ -49,7 +49,8 @@ The integration offers no recording, clip-sharing, or clip-deletion controls.
 
 ## Diagnostics
 
-**Download diagnostics** creates a report only when requested. It contains
+**Download diagnostics** (Settings > Devices & services > Matic (Unofficial) >
+⋮ on the robot's entry) creates a report only when requested. It contains
 software/protocol versions, state and error codes, counters, and endpoint/map
 health, plus the bounded [command and state observation trail](activity-diagnostics.md).
 Observations contain no command payloads or exception messages.

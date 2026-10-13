@@ -6,17 +6,18 @@ import asyncio
 import logging
 import re
 import socket
+import ssl
 from collections.abc import Mapping
 from ipaddress import ip_address
-from time import monotonic
 from typing import Any
 
-import voluptuous as vol
+import probatio
 from homeassistant import config_entries
 from homeassistant.components.zeroconf import async_get_async_instance
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.data_entry_flow import FlowResultType, section
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers import selector
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 from zeroconf import IPVersion, ServiceStateChange
@@ -25,10 +26,13 @@ from zeroconf.asyncio import AsyncServiceBrowser, AsyncServiceInfo
 from .bluetooth_pairing import (
     BluetoothBondRecoveryRequiredError,
     BluetoothBondResetFailedError,
+    BluetoothCandidateAmbiguousError,
+    BluetoothCredentialGrant,
     BluetoothPairingIncompleteError,
     BluetoothPairingResetError,
     BluetoothPairingUnavailableError,
     BluetoothPasskeyExchange,
+    async_has_local_bluetooth_adapter,
     async_request_bluetooth_credential,
 )
 from .client.api import MaticHermesClient
@@ -42,8 +46,9 @@ from .client.exceptions import (
     MaticError,
     PairingModeRequiredError,
 )
-from .client.tls import async_fetch_peer_certificate, validate_certificate
+from .client.tls import PeerIdentity, async_fetch_peer_certificate, validate_certificate
 from .const import (
+    CONF_BLUETOOTH_ADDRESS,
     CONF_CERTIFICATE_FINGERPRINT,
     CONF_HERMES_CREDENTIAL,
     CONF_HOSTNAME,
@@ -52,11 +57,13 @@ from .const import (
     DOMAIN,
     SERVICE_TYPE,
 )
+from .entity import hostname_suffix
 from .options_flow import MaticRobotOptionsFlow
 
 PAIRING_RETRY_SECONDS = 2
 PAIRING_TIMEOUT_SECONDS = 300
 PAIRING_ATTEMPTS = PAIRING_TIMEOUT_SECONDS // PAIRING_RETRY_SECONDS
+CANNOT_CONNECT_ATTEMPTS = 3
 MANUAL_DISCOVERY_SECONDS = 3
 DISCOVERY_PROBE_TIMEOUT_SECONDS = 5
 DISCOVERY_RESOLVE_TIMEOUT_SECONDS = 2
@@ -67,7 +74,76 @@ DISCOVERY_RESOLVE_CONCURRENCY = 8
 _LOGGER = logging.getLogger(__name__)
 
 CONF_PASSKEY = "passkey"
-CONF_PAIRING_MODE_ENABLED = "pairing_mode_enabled"
+CONF_ROBOT_ADDRESS = "robot_address"
+CONF_RECOVER_IDENTITY = "recover_identity"
+BLUETOOTH_HELP_URL = (
+    "https://github.com/ProspectOre/matic-home-assistant/"
+    "blob/main/docs/hermes-pairing.md#home-assistant-container"
+)
+_PAIRING_ERRORS = (
+    BluetoothPairingIncompleteError,
+    BluetoothPairingResetError,
+    BluetoothPairingUnavailableError,
+    PairingModeRequiredError,
+)
+# Errors that reveal the robot's address may be wrong open the address section.
+_RECOVERY_ADDRESS_ERRORS = frozenset({"recover_cannot_connect", "different_robot"})
+
+
+class DifferentRobotError(MaticError):
+    """A Matic-CA robot with another serial answered at the recovery address."""
+
+
+def fallback_robot_name(hostname: str) -> str:
+    """Name an unnamed robot the same way in every dialog and on its device."""
+    return f"Matic (Unofficial) {hostname_suffix(hostname)}"
+
+
+def _robot_label(discovery_info: ZeroconfServiceInfo) -> str:
+    """Return the advertised robot name, or the hostname-based fallback."""
+    advertised = decode_bot_information(
+        discovery_info.properties.get("bot_information", "")
+    )
+    if advertised is not None and advertised.name:
+        return advertised.name
+    return fallback_robot_name(discovery_info.hostname)
+
+
+async def _async_fetch_recovery_certificate(host: str, port: int) -> bytes:
+    """Fetch a certificate for identity recovery, naming a failed Matic-CA check.
+
+    The shared fetch reports every OSError as unreachable. Only recovery tells
+    the user that a reachable endpoint failed the Matic CA, so the runtime and
+    every other flow keep the shared behaviour unchanged.
+    """
+    try:
+        return await async_fetch_peer_certificate(host, port)
+    except CannotConnectError as err:
+        if isinstance(err.__cause__, ssl.SSLCertVerificationError):
+            raise InvalidRobotCertificateError(
+                "endpoint certificate is not issued by the Matic CA"
+            ) from err
+        raise
+
+
+async def _async_recovery_identity(
+    host: str, port: int, entry_data: Mapping[str, Any]
+) -> PeerIdentity:
+    """Return the endpoint identity bound to the entry's stored serial and hostname.
+
+    No fingerprint is compared: its mismatch is the reason for recovery. The
+    serial is compared here, before any expectation, so a different robot is
+    named as such; the second validation can then fail only on the hostname.
+    """
+    certificate = await _async_fetch_recovery_certificate(host, port)
+    presented = validate_certificate(certificate)
+    if presented.serial_number != entry_data[CONF_SERIAL_NUMBER]:
+        raise DifferentRobotError("a robot with another serial number answered")
+    return validate_certificate(
+        certificate,
+        expected_hostname=entry_data[CONF_HOSTNAME],
+        expected_serial=entry_data[CONF_SERIAL_NUMBER],
+    )
 
 
 async def _async_discover_robots(
@@ -255,11 +331,43 @@ async def _async_select_discovery_host(
     return _preferred_discovery_host(discovery_info)
 
 
+def _bluetooth_address_data(grant: BluetoothCredentialGrant) -> dict[str, str]:
+    """Return the entry update recording the robot that issued a credential."""
+    return {} if grant.address is None else {CONF_BLUETOOTH_ADDRESS: grant.address}
+
+
+async def _async_verify_recovered_robot(
+    host: str,
+    port: int,
+    entry_data: Mapping[str, Any],
+    credential: HermesCredential,
+) -> str:
+    """Return the new pin once the new credential authenticates the stored serial.
+
+    The client is pinned to the certificate fetched here, so its authenticated
+    Handshake runs on that exact endpoint; a bare unauthenticated read never
+    re-pins.
+    """
+    identity = await _async_recovery_identity(host, port, entry_data)
+    async with MaticHermesClient(
+        host,
+        port,
+        hostname=entry_data[CONF_HOSTNAME],
+        serial_number=entry_data[CONF_SERIAL_NUMBER],
+        certificate_fingerprint=identity.fingerprint,
+        credential=credential,
+    ) as client:
+        info = await client.async_get_info()
+    if info.serial_number != entry_data[CONF_SERIAL_NUMBER]:
+        raise InvalidRobotCertificateError("robot serial number changed")
+    return identity.fingerprint
+
+
 class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Configure a certificate-pinned local Matic robot."""
 
     VERSION = 1
-    MINOR_VERSION = 2
+    MINOR_VERSION = 3
 
     @staticmethod
     def async_get_options_flow(
@@ -274,6 +382,9 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._discovered_serial: str | None = None
         self._discovery_info: ZeroconfServiceInfo | None = None
         self._manual_discoveries: dict[str, ZeroconfServiceInfo] = {}
+        self._discovery_task: asyncio.Task[list[ZeroconfServiceInfo]] | None = None
+        self._discovery_ui_progress = False
+        self._recovery_address: tuple[str, int] | None = None
         self._pairing_data: dict[str, Any] | None = None
         self._pairing_user_id = new_hermes_user_id()
         self._reset_bond_paths: set[str] = set()
@@ -304,17 +415,11 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         step_id: str,
         errors: dict[str, str] | None = None,
     ) -> config_entries.ConfigFlowResult:
-        """Require confirmation that Matic's pairing window is open."""
+        """Show the pairing steps; submitting the empty form confirms them."""
         return self.async_show_form(
             step_id=step_id,
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        CONF_PAIRING_MODE_ENABLED, default=False
-                    ): selector.BooleanSelector()
-                }
-            ),
             errors=errors,
+            description_placeholders={"help_url": BLUETOOTH_HELP_URL},
         )
 
     def _show_passkey_form(
@@ -324,11 +429,13 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Ask for the six-digit code displayed by the active Matic bond."""
         return self.async_show_form(
             step_id="pairing_code",
-            data_schema=vol.Schema(
+            data_schema=probatio.Schema(
                 {
-                    vol.Required(CONF_PASSKEY): selector.TextSelector(
+                    # A text field keeps leading zeros; TEL opens a keypad.
+                    probatio.Required(CONF_PASSKEY): selector.TextSelector(
                         selector.TextSelectorConfig(
-                            type=selector.TextSelectorType.TEXT,
+                            type=selector.TextSelectorType.TEL,
+                            autocomplete="one-time-code",
                         )
                     )
                 }
@@ -350,7 +457,7 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_PORT: discovery_info.port,
             CONF_HOSTNAME: hostname,
         }
-        self.context["title_placeholders"] = {"name": discovery_info.name}
+        self.context["title_placeholders"] = {"name": _robot_label(discovery_info)}
         if self._discovered_serial:
             await self.async_set_unique_id(self._discovered_serial)
             self._abort_if_unique_id_configured(
@@ -362,15 +469,30 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
-        """Discover a robot automatically when the integration is added."""
-        discoveries = await _async_discover_robots(self.hass)
+        """Discover robots on the network while the dialog shows progress."""
+        if self._discovery_task is None:
+            self._discovery_task = self.hass.async_create_task(
+                _async_discover_robots(self.hass), "matic_robot_discovery"
+            )
+        if not (self._discovery_ui_progress and self._discovery_task.done()):
+            self._discovery_ui_progress = True
+            return self.async_show_progress(
+                step_id="user",
+                progress_action="discovering",
+                progress_task=self._discovery_task,
+            )
+        discoveries = self._discovery_task.result()
+        self._discovery_task = None
+        self._discovery_ui_progress = False
         if not discoveries:
-            return await self.async_step_discovery_failed()
-        if len(discoveries) == 1:
-            return await self.async_step_zeroconf(discoveries[0])
-
-        self._manual_discoveries = {info.name: info for info in discoveries}
-        return await self.async_step_select_robot()
+            return self.async_show_progress_done(next_step_id="discovery_failed")
+        configured = self._async_current_ids(include_ignore=False)
+        self._manual_discoveries = {
+            info.name: info
+            for info in discoveries
+            if _discovery_certificate_identity(info)[1] not in configured
+        }
+        return self.async_show_progress_done(next_step_id="select_robot")
 
     async def async_step_discovery_failed(
         self, user_input: dict[str, Any] | None = None
@@ -390,24 +512,30 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_select_robot(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
-        """Let a multi-robot home choose which discovered robot to add."""
+        """Let a multi-robot home choose which unconfigured robot to add."""
         if user_input is not None:
             discovery = self._manual_discoveries.get(user_input["robot"])
             if discovery is None:
                 return self.async_abort(reason="pairing_session_expired")
             return await self.async_step_zeroconf(discovery)
         if not self._manual_discoveries:
-            return self.async_abort(reason="pairing_session_expired")
+            return self.async_abort(reason="already_configured")
+        if len(self._manual_discoveries) == 1:
+            (discovery,) = self._manual_discoveries.values()
+            return await self.async_step_zeroconf(discovery)
         return self.async_show_form(
             step_id="select_robot",
-            data_schema=vol.Schema(
+            data_schema=probatio.Schema(
                 {
-                    vol.Required("robot"): selector.SelectSelector(
+                    probatio.Required("robot"): selector.SelectSelector(
                         selector.SelectSelectorConfig(
                             options=[
                                 selector.SelectOptionDict(
                                     value=info.name,
-                                    label=info.hostname.rstrip("."),
+                                    label=(
+                                        f"{_robot_label(info)} "
+                                        f"({info.hostname.rstrip('.')})"
+                                    ),
                                 )
                                 for info in self._manual_discoveries.values()
                             ],
@@ -421,18 +549,37 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_manual(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
-        """Connect to a robot that local discovery did not find."""
+        """Check a robot address that local discovery did not find, then pair."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            result = await self._async_create_or_error(user_input, "manual")
-            if result["type"] != "form" or result["step_id"] != "manual":
-                return result
-            errors = result.get("errors") or {}
+            host = user_input[CONF_HOST]
+            port = user_input[CONF_PORT]
+            try:
+                identity = validate_certificate(
+                    await async_fetch_peer_certificate(host, port)
+                )
+            except CannotConnectError:
+                errors["base"] = "cannot_connect"
+            except InvalidRobotCertificateError:
+                errors["base"] = "invalid_certificate"
+            else:
+                self._discovered_serial = identity.serial_number
+                await self.async_set_unique_id(identity.serial_number)
+                self._abort_if_unique_id_configured()
+                self._pairing_data = {
+                    CONF_HOST: host,
+                    CONF_PORT: port,
+                    CONF_HOSTNAME: identity.hostname,
+                }
+                self.context["title_placeholders"] = {
+                    "name": fallback_robot_name(identity.hostname)
+                }
+                return self._show_pairing_form("pair")
 
-        schema = vol.Schema(
+        schema = probatio.Schema(
             {
-                vol.Required(CONF_HOST): str,
-                vol.Optional(CONF_PORT, default=DEFAULT_PORT): int,
+                probatio.Required(CONF_HOST): str,
+                probatio.Optional(CONF_PORT, default=DEFAULT_PORT): int,
             }
         )
         return self.async_show_form(step_id="manual", data_schema=schema, errors=errors)
@@ -467,11 +614,10 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._pairing_diagnostic = None
         self._pairing_retry_note = None
         self._pairing_update = asyncio.Event()
-        runner = (
-            self._async_reauth
-            if runner_name == "matic_robot_reauth"
-            else self._async_wait_for_pairing
-        )
+        runner = {
+            "matic_robot_reauth": self._async_reauth,
+            "matic_robot_recover_identity": self._async_recover_identity,
+        }.get(runner_name, self._async_wait_for_pairing)
         self._pairing_task = self.hass.async_create_task(runner(), runner_name)
 
     def _async_pairing_progress(self, step_id: str) -> config_entries.ConfigFlowResult:
@@ -524,9 +670,9 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="pairing_session_expired")
 
         if self._pairing_task is None:
-            if not user_input or not user_input.get(CONF_PAIRING_MODE_ENABLED):
+            if not async_has_local_bluetooth_adapter(self.hass):
                 return self._show_pairing_form(
-                    "pair", {"base": "pairing_mode_confirmation_required"}
+                    "pair", {"base": "bluetooth_unavailable"}
                 )
             self._async_start_pairing("matic_robot_wait_for_pairing")
         return self._async_pairing_progress("pair")
@@ -535,9 +681,9 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Offer only candidates that rejected a write on a reused bond."""
         return self.async_show_form(
             step_id="reset_bond",
-            data_schema=vol.Schema(
+            data_schema=probatio.Schema(
                 {
-                    vol.Required("bluetooth_device"): vol.In(
+                    probatio.Required("bluetooth_device"): probatio.In(
                         self._bond_recovery_candidates
                     )
                 }
@@ -596,9 +742,18 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
         """Return the automatically verified pairing result."""
-        if self._pairing_task is None or self._pairing_result is None:
+        if self._pairing_task is None:
             return self.async_abort(reason="pairing_session_expired")
         try:
+            if self._pairing_result is None:
+                # Every runner records a result unless it failed unexpectedly;
+                # retrieve that failure so it is logged, not silently dropped.
+                task = self._pairing_task
+                if task.done() and not task.cancelled() and task.exception():
+                    _LOGGER.error(
+                        "Matic pairing stopped unexpectedly", exc_info=task.exception()
+                    )
+                return self.async_abort(reason="pairing_session_expired")
             self._pairing_task.result()
             return self._pairing_result
         finally:
@@ -634,10 +789,9 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self._show_pairing_form("reauth_confirm")
 
         if self._pairing_task is None:
-            if not user_input or not user_input.get(CONF_PAIRING_MODE_ENABLED):
+            if not async_has_local_bluetooth_adapter(self.hass):
                 return self._show_pairing_form(
-                    "reauth_confirm",
-                    {"base": "pairing_mode_confirmation_required"},
+                    "reauth_confirm", {"base": "bluetooth_unavailable"}
                 )
             self._async_start_pairing("matic_robot_reauth")
         return self._async_pairing_progress("reauth_confirm")
@@ -652,9 +806,19 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             "pairing_code_rejected" if exchange.submitted else "pairing_code_expired"
         )
 
-    async def _async_reauth_credential(self) -> HermesCredential:
+    def _other_bluetooth_addresses(self, entry_id: str | None) -> frozenset[str]:
+        """Return the Bluetooth addresses recorded by other configured robots."""
+        return frozenset(
+            entry.data[CONF_BLUETOOTH_ADDRESS]
+            for entry in self._async_current_entries(include_ignore=False)
+            if entry.entry_id != entry_id and CONF_BLUETOOTH_ADDRESS in entry.data
+        )
+
+    async def _async_reauth_credential(
+        self, entry: config_entries.ConfigEntry
+    ) -> BluetoothCredentialGrant:
         """Request a replacement credential, renewing expired codes in place."""
-        started_at = monotonic()
+        excluded_addresses = self._other_bluetooth_addresses(entry.entry_id)
         last_error: MaticError = PairingModeRequiredError(
             "no reauthorization attempt completed"
         )
@@ -669,6 +833,8 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             self._passkey_exchange,
                             stage_callback=self._async_set_pairing_stage,
                             replace_existing_bond=True,
+                            bond_address=entry.data.get(CONF_BLUETOOTH_ADDRESS),
+                            excluded_addresses=excluded_addresses,
                         )
                     except BluetoothPairingResetError as err:
                         last_error = BluetoothPairingIncompleteError(str(err))
@@ -685,10 +851,6 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             and self._passkey_exchange.requested
                         ):
                             raise
-                    elapsed = monotonic() - started_at
-                    self.async_update_progress(
-                        min(elapsed / PAIRING_TIMEOUT_SECONDS, 0.99)
-                    )
                     await asyncio.sleep(PAIRING_RETRY_SECONDS)
         except TimeoutError:
             pass
@@ -702,12 +864,17 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else self._get_reauth_entry()
         )
         try:
-            credential = await self._async_reauth_credential()
+            grant = await self._async_reauth_credential(entry)
             await self._async_verify_existing_robot(
                 entry.data[CONF_HOST],
                 entry.data[CONF_PORT],
                 entry.data,
-                credential,
+                grant.credential,
+            )
+        except BluetoothCandidateAmbiguousError as err:
+            self._pairing_diagnostic = str(err)
+            self._pairing_result = self._show_pairing_form(
+                "reauth_confirm", {"base": "multiple_robots_nearby"}
             )
         except BluetoothPairingIncompleteError as err:
             self._pairing_diagnostic = str(err)
@@ -718,7 +885,7 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         except PairingModeRequiredError as err:
             self._pairing_diagnostic = str(err)
             self._pairing_result = self._show_pairing_form(
-                "reauth_confirm", {"base": "pairing_mode_off"}
+                "reauth_confirm", {"base": "robot_not_found"}
             )
         except BluetoothPairingUnavailableError as err:
             self._pairing_diagnostic = str(err)
@@ -734,26 +901,46 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._pairing_result = self._show_pairing_form(
                 "reauth_confirm", {"base": "cannot_connect"}
             )
-        except CertificateMismatchError, InvalidRobotCertificateError:
+        except CertificateMismatchError:
+            self._pairing_result = self._show_pairing_form(
+                "reauth_confirm", {"base": "certificate_changed"}
+            )
+        except InvalidRobotCertificateError:
             self._pairing_result = self._show_pairing_form(
                 "reauth_confirm", {"base": "invalid_certificate"}
+            )
+        except MaticError as err:
+            _LOGGER.warning(
+                "Matic reauthentication could not verify the robot: %s", err
+            )
+            self._pairing_result = self._show_pairing_form(
+                "reauth_confirm", {"base": "cannot_connect"}
             )
         else:
             await self.async_set_unique_id(entry.unique_id)
             self._abort_if_unique_id_mismatch()
             self._pairing_result = self.async_update_reload_and_abort(
                 entry,
-                data_updates={CONF_HERMES_CREDENTIAL: credential.to_storage()},
+                data_updates={
+                    CONF_HERMES_CREDENTIAL: grant.credential.to_storage(),
+                    **_bluetooth_address_data(grant),
+                },
                 reason="reauth_successful",
             )
 
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
-        """Choose a connection-management operation."""
+        """Choose a connection-management operation.
+
+        The identity Repair starts this flow with ``{"recover_identity": True}``
+        to open recovery directly.
+        """
+        if user_input is not None and user_input.get(CONF_RECOVER_IDENTITY) is True:
+            return await self.async_step_recover_identity()
         return self.async_show_menu(
             step_id="reconfigure",
-            menu_options=["update_address", "replace_local_access"],
+            menu_options=["update_address", "replace_local_access", "recover_identity"],
         )
 
     async def async_step_update_address(
@@ -779,7 +966,9 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "invalid_credential"
             except CannotConnectError:
                 errors["base"] = "cannot_connect"
-            except CertificateMismatchError, InvalidRobotCertificateError:
+            except CertificateMismatchError:
+                errors["base"] = "certificate_changed"
+            except InvalidRobotCertificateError:
                 errors["base"] = "invalid_certificate"
             else:
                 await self.async_set_unique_id(entry.unique_id)
@@ -795,13 +984,13 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="update_address",
-            data_schema=vol.Schema(
+            data_schema=probatio.Schema(
                 {
-                    vol.Required(
+                    probatio.Required(
                         CONF_HOST,
                         default=(user_input or entry.data)[CONF_HOST],
                     ): str,
-                    vol.Required(
+                    probatio.Required(
                         CONF_PORT,
                         default=(user_input or entry.data)[CONF_PORT],
                     ): int,
@@ -815,6 +1004,142 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> config_entries.ConfigFlowResult:
         """Replace the saved credential through an explicit Bluetooth pairing."""
         return await self.async_step_reauth_confirm(user_input)
+
+    def _show_recovery_form(
+        self, errors: dict[str, str] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Show recovery pairing, with the robot address one click away."""
+        entry = self._get_reconfigure_entry()
+        host, port = self._recovery_address or (
+            entry.data[CONF_HOST],
+            entry.data[CONF_PORT],
+        )
+        address_suspect = (errors or {}).get("base") in _RECOVERY_ADDRESS_ERRORS
+        return self.async_show_form(
+            step_id="recover_identity",
+            data_schema=probatio.Schema(
+                {
+                    probatio.Required(CONF_ROBOT_ADDRESS): section(
+                        probatio.Schema(
+                            {
+                                probatio.Required(CONF_HOST, default=host): str,
+                                probatio.Required(CONF_PORT, default=port): int,
+                            }
+                        ),
+                        {"collapsed": not address_suspect},
+                    )
+                }
+            ),
+            errors=errors,
+            description_placeholders={
+                "name": entry.title,
+                "help_url": BLUETOOTH_HELP_URL,
+            },
+        )
+
+    async def async_step_recover_identity(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Pair a reset robot again; nothing is saved until every check passes."""
+        if self._pairing_task is not None:
+            return self._async_pairing_progress("recover_identity")
+        if user_input is None:
+            # Recovery registers BlueZ's default agent; a dialog opened while
+            # another one for this robot is open (Repair and Reconfigure, or
+            # reauth) would race it, so the later one is refused.
+            if self._async_in_progress(
+                include_uninitialized=True,
+                match_context={"entry_id": self.context["entry_id"]},
+            ):
+                return self.async_abort(reason="recovery_in_progress")
+            return self._show_recovery_form()
+        entry = self._get_reconfigure_entry()
+        address = user_input[CONF_ROBOT_ADDRESS]
+        self._recovery_address = (address[CONF_HOST], address[CONF_PORT])
+        # Pre-flight before any code is requested: the endpoint must present a
+        # Matic-CA certificate for the stored serial and hostname.
+        try:
+            await _async_recovery_identity(*self._recovery_address, entry.data)
+        except DifferentRobotError:
+            error = "different_robot"
+        except CannotConnectError:
+            error = "recover_cannot_connect"
+        except InvalidRobotCertificateError:
+            error = "invalid_certificate"
+        else:
+            if not async_has_local_bluetooth_adapter(self.hass):
+                return self._show_recovery_form({"base": "bluetooth_unavailable"})
+            self._async_start_pairing("matic_robot_recover_identity")
+            return self._async_pairing_progress("recover_identity")
+        return self._show_recovery_form({"base": error})
+
+    async def _async_recover_identity(self) -> None:
+        """Re-pin a reset robot after a fresh passkey bond and authenticated check.
+
+        Every failure leaves the old pin, credential and Repair untouched; the
+        entry is written once, after the new credential authenticates against
+        the stored serial on the newly pinned certificate.
+        """
+        entry = self._get_reconfigure_entry()
+        assert self._recovery_address is not None
+        host, port = self._recovery_address
+        try:
+            grant = await self._async_reauth_credential(entry)
+            if not grant.fresh_passkey_bond:
+                self._pairing_result = self.async_abort(reason="pairing_not_confirmed")
+                return
+            fingerprint = await _async_verify_recovered_robot(
+                host, port, entry.data, grant.credential
+            )
+        except BluetoothCandidateAmbiguousError as err:
+            self._pairing_diagnostic = str(err)
+            error = "multiple_robots_nearby"
+        except BluetoothPairingIncompleteError as err:
+            self._pairing_diagnostic = str(err)
+            error = self._pairing_retry_note or "pairing_incomplete"
+        except PairingModeRequiredError as err:
+            self._pairing_diagnostic = str(err)
+            error = "robot_not_found"
+        except BluetoothPairingUnavailableError as err:
+            self._pairing_diagnostic = str(err)
+            _LOGGER.warning("Matic Bluetooth identity recovery stopped: %s", err)
+            error = "bluetooth_unavailable"
+        except AuthenticationRequiredError:
+            error = "recover_credential_rejected"
+        except DifferentRobotError:
+            error = "different_robot"
+        except CannotConnectError:
+            error = "recover_cannot_connect"
+        except CertificateMismatchError, InvalidRobotCertificateError:
+            error = "invalid_certificate"
+        except MaticError as err:
+            # For example an endpoint that does not implement Handshake: the
+            # robot at this address could not be verified, so nothing changes.
+            _LOGGER.warning(
+                "Matic identity recovery could not verify the robot: %s", err
+            )
+            error = "recover_cannot_connect"
+        else:
+            result = self.async_update_reload_and_abort(
+                entry,
+                data_updates={
+                    CONF_HOST: host,
+                    CONF_PORT: port,
+                    CONF_CERTIFICATE_FINGERPRINT: fingerprint,
+                    CONF_HERMES_CREDENTIAL: grant.credential.to_storage(),
+                    **_bluetooth_address_data(grant),
+                },
+                reason="identity_recovered",
+            )
+            result["description_placeholders"] = {"name": entry.title}
+            # Core deletes a Repair only when its fix flow creates an entry, and
+            # the reloaded coordinator never raised this one: delete it here.
+            ir.async_delete_issue(
+                self.hass, DOMAIN, f"robot_identity_changed_{entry.entry_id}"
+            )
+            self._pairing_result = result
+            return
+        self._pairing_result = self._show_recovery_form({"base": error})
 
     async def _async_verify_existing_robot(
         self,
@@ -851,8 +1176,8 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         an explanatory note until the window closes.
         """
         assert self._pairing_data is not None
-        started_at = monotonic()
         last_error: str | None = None
+        cannot_connect_count = 0
         try:
             async with asyncio.timeout(PAIRING_TIMEOUT_SECONDS):
                 for _attempt in range(PAIRING_ATTEMPTS):
@@ -861,16 +1186,14 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         self._pairing_data[
                             CONF_HOST
                         ] = await _async_select_discovery_host(self._discovery_info)
-                    result = await self._async_create_or_error(
-                        self._pairing_data, "pair"
-                    )
+                    result = await self._async_create_or_error(self._pairing_data)
                     if result["type"] is not FlowResultType.FORM:
                         self._pairing_result = result
                         return
                     if result.get("step_id") == "reset_bond":
                         self._pairing_result = result
                         return
-                    error = (result.get("errors") or {}).get("base")
+                    error = (result.get("errors") or {})["base"]
                     if error == "bond_reset_failed":
                         self._pairing_result = result
                         return
@@ -885,19 +1208,22 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             {"base": self._pairing_retry_note or "pairing_incomplete"},
                         )
                         return
+                    if error == "cannot_connect":
+                        cannot_connect_count += 1
+                    if error == "bluetooth_unavailable" or (
+                        cannot_connect_count >= CANNOT_CONNECT_ATTEMPTS
+                    ):
+                        self._pairing_result = self._show_pairing_form(
+                            "pair", {"base": error}
+                        )
+                        return
                     if error not in {
                         "cannot_connect",
                         "pairing_incomplete",
-                        "pairing_mode_off",
+                        "robot_not_found",
                     }:
-                        self._pairing_result = self.async_abort(
-                            reason=error or "cannot_connect"
-                        )
+                        self._pairing_result = self.async_abort(reason=error)
                         return
-                    elapsed = monotonic() - started_at
-                    self.async_update_progress(
-                        min(elapsed / PAIRING_TIMEOUT_SECONDS, 0.99)
-                    )
                     await asyncio.sleep(PAIRING_RETRY_SECONDS)
         except TimeoutError:
             pass
@@ -926,11 +1252,13 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             await asyncio.gather(update_task, return_exceptions=True)
 
     async def _async_create_or_error(
-        self, data: dict[str, Any], step_id: str
+        self, data: dict[str, Any]
     ) -> config_entries.ConfigFlowResult:
+        """Verify the robot, pair over Bluetooth when needed, and create the entry."""
         host = data[CONF_HOST]
         port = data[CONF_PORT]
         credential_value = data.get(CONF_HERMES_CREDENTIAL)
+        bluetooth_address = data.get(CONF_BLUETOOTH_ADDRESS)
         try:
             credential = (
                 HermesCredential.from_storage(credential_value)
@@ -939,7 +1267,7 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
         except ValueError:
             return self.async_show_form(
-                step_id=step_id, errors={"base": "invalid_credential"}
+                step_id="pair", errors={"base": "invalid_credential"}
             )
         try:
             _LOGGER.debug("Validating the discovered Hermes endpoint")
@@ -965,18 +1293,9 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 )
                 needs_bluetooth_credential = info.requires_auth and credential is None
             if needs_bluetooth_credential:
-                _LOGGER.debug("Requesting a robot-issued Bluetooth credential")
-                credential = await async_request_bluetooth_credential(
-                    self.hass,
-                    self._pairing_user_id,
-                    self._passkey_exchange,
-                    stage_callback=self._async_set_pairing_stage,
-                    reset_bond_paths=self._reset_bond_paths
-                    if step_id == "pair"
-                    else None,
-                    reset_bond_path=self._reset_bond_path,
-                )
-                _LOGGER.debug("Received a robot-issued Bluetooth credential")
+                grant = await self._async_request_credential()
+                credential = grant.credential
+                bluetooth_address = grant.address
             if credential is not None:
                 async with MaticHermesClient(
                     host,
@@ -990,133 +1309,54 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         except AuthenticationRequiredError:
             if credential is not None:
                 return self.async_show_form(
-                    step_id=step_id, errors={"base": "invalid_credential"}
+                    step_id="pair", errors={"base": "invalid_credential"}
                 )
-            if step_id == "pair":
-                try:
-                    credential = await async_request_bluetooth_credential(
-                        self.hass,
-                        self._pairing_user_id,
-                        self._passkey_exchange,
-                        stage_callback=self._async_set_pairing_stage,
-                        reset_bond_paths=self._reset_bond_paths,
-                        reset_bond_path=self._reset_bond_path,
-                    )
-                except BluetoothBondResetFailedError as err:
-                    self._pairing_diagnostic = str(err)
-                    return self._show_pairing_form(
-                        "pair", {"base": "bond_reset_failed"}
-                    )
-                except BluetoothPairingUnavailableError as err:
-                    self._pairing_diagnostic = str(err)
-                    _LOGGER.warning("Matic Bluetooth pairing stopped: %s", err)
-                    self._pairing_data = {
-                        CONF_HOST: host,
-                        CONF_PORT: port,
-                        CONF_HOSTNAME: identity.hostname,
-                    }
-                    return self.async_show_form(
-                        step_id="pair", errors={"base": "bluetooth_unavailable"}
-                    )
-                except BluetoothBondRecoveryRequiredError as err:
-                    self._pairing_diagnostic = str(err)
-                    self._bond_recovery_candidates = err.candidates
-                    return self._show_bond_recovery()
-                except (
-                    BluetoothPairingIncompleteError,
-                    BluetoothPairingResetError,
-                ) as err:
-                    self._pairing_diagnostic = str(err)
-                    self._pairing_data = {
-                        CONF_HOST: host,
-                        CONF_PORT: port,
-                        CONF_HOSTNAME: identity.hostname,
-                    }
-                    return self.async_show_form(
-                        step_id="pair", errors={"base": "pairing_incomplete"}
-                    )
-                except PairingModeRequiredError as err:
-                    self._pairing_diagnostic = str(err)
-                    self._pairing_data = {
-                        CONF_HOST: host,
-                        CONF_PORT: port,
-                        CONF_HOSTNAME: identity.hostname,
-                    }
-                    return self.async_show_form(
-                        step_id="pair", errors={"base": "pairing_mode_off"}
-                    )
-                retry_data = dict(data)
-                retry_data[CONF_HERMES_CREDENTIAL] = credential.to_storage()
-                return await self._async_create_or_error(retry_data, step_id)
-            self._pairing_data = {
-                CONF_HOST: host,
-                CONF_PORT: port,
-                CONF_HOSTNAME: identity.hostname,
+            try:
+                grant = await self._async_request_credential()
+            except MaticError as err:
+                return self._pairing_error_result(err, host, port, identity)
+            retry_data = {
+                **data,
+                CONF_HERMES_CREDENTIAL: grant.credential.to_storage(),
+                **_bluetooth_address_data(grant),
             }
-            return self._show_pairing_form("pair")
-        except BluetoothBondResetFailedError as err:
-            self._pairing_diagnostic = str(err)
-            return self._show_pairing_form("pair", {"base": "bond_reset_failed"})
-        except BluetoothPairingUnavailableError as err:
-            self._pairing_diagnostic = str(err)
-            _LOGGER.warning("Matic Bluetooth pairing stopped: %s", err)
-            self._pairing_data = {
-                CONF_HOST: host,
-                CONF_PORT: port,
-                CONF_HOSTNAME: identity.hostname,
-            }
-            return self._show_pairing_form("pair", {"base": "bluetooth_unavailable"})
-        except BluetoothBondRecoveryRequiredError as err:
-            self._pairing_diagnostic = str(err)
-            self._bond_recovery_candidates = err.candidates
-            return self._show_bond_recovery()
-        except (BluetoothPairingIncompleteError, BluetoothPairingResetError) as err:
-            self._pairing_diagnostic = str(err)
-            self._pairing_data = {
-                CONF_HOST: host,
-                CONF_PORT: port,
-                CONF_HOSTNAME: identity.hostname,
-            }
-            return self._show_pairing_form(
-                "pair",
-                {"base": "pairing_incomplete"} if step_id == "pair" else None,
-            )
-        except PairingModeRequiredError as err:
-            self._pairing_diagnostic = str(err)
-            self._pairing_data = {
-                CONF_HOST: host,
-                CONF_PORT: port,
-                CONF_HOSTNAME: identity.hostname,
-            }
-            return self._show_pairing_form(
-                "pair",
-                {"base": "pairing_mode_off"} if step_id == "pair" else None,
-            )
+            return await self._async_create_or_error(retry_data)
         except CannotConnectError:
             return self.async_show_form(
-                step_id=step_id, errors={"base": "cannot_connect"}
+                step_id="pair", errors={"base": "cannot_connect"}
             )
         except CertificateMismatchError, InvalidRobotCertificateError:
             return self.async_show_form(
-                step_id=step_id, errors={"base": "invalid_certificate"}
+                step_id="pair", errors={"base": "invalid_certificate"}
+            )
+        except _PAIRING_ERRORS as err:
+            return self._pairing_error_result(err, host, port, identity)
+        except MaticError as err:
+            _LOGGER.warning("Matic setup could not verify the robot: %s", err)
+            return self.async_show_form(
+                step_id="pair", errors={"base": "cannot_connect"}
             )
 
         if info.serial_number != identity.serial_number or info.hostname.rstrip(
             "."
         ) != identity.hostname.rstrip("."):
             return self.async_show_form(
-                step_id=step_id, errors={"base": "invalid_certificate"}
+                step_id="pair", errors={"base": "invalid_certificate"}
             )
 
         if self._discovered_serial and info.serial_number != self._discovered_serial:
             return self.async_show_form(
-                step_id=step_id, errors={"base": "invalid_certificate"}
+                step_id="pair", errors={"base": "invalid_certificate"}
             )
         if not self._discovered_serial:
             await self.async_set_unique_id(info.serial_number)
         configured_updates = {CONF_HOST: host, CONF_PORT: port}
         if credential is not None:
             configured_updates[CONF_HERMES_CREDENTIAL] = credential.to_storage()
+        if bluetooth_address is not None:
+            # Saved only after the credential this robot issued authenticated
+            # above, so the address is bound to this robot's serial number.
+            configured_updates[CONF_BLUETOOTH_ADDRESS] = bluetooth_address
         self._abort_if_unique_id_configured(updates=configured_updates)
         entry_data = {
             CONF_HOST: host,
@@ -1127,7 +1367,48 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         }
         if credential is not None:
             entry_data[CONF_HERMES_CREDENTIAL] = credential.to_storage()
+        if bluetooth_address is not None:
+            entry_data[CONF_BLUETOOTH_ADDRESS] = bluetooth_address
         return self.async_create_entry(
-            title=info.name or "Matic",
+            title=info.name or fallback_robot_name(info.hostname),
             data=entry_data,
         )
+
+    async def _async_request_credential(self) -> BluetoothCredentialGrant:
+        """Request a robot-issued credential for first setup over Bluetooth."""
+        _LOGGER.debug("Requesting a robot-issued Bluetooth credential")
+        grant = await async_request_bluetooth_credential(
+            self.hass,
+            self._pairing_user_id,
+            self._passkey_exchange,
+            stage_callback=self._async_set_pairing_stage,
+            excluded_addresses=self._other_bluetooth_addresses(None),
+            reset_bond_paths=self._reset_bond_paths,
+            reset_bond_path=self._reset_bond_path,
+        )
+        _LOGGER.debug("Received a robot-issued Bluetooth credential")
+        return grant
+
+    def _pairing_error_result(
+        self, err: MaticError, host: str, port: int, identity: PeerIdentity
+    ) -> config_entries.ConfigFlowResult:
+        """Map a Bluetooth pairing failure to its recovery form."""
+        self._pairing_diagnostic = str(err)
+        if isinstance(err, BluetoothBondRecoveryRequiredError):
+            self._bond_recovery_candidates = err.candidates
+            return self._show_bond_recovery()
+        if isinstance(err, BluetoothBondResetFailedError):
+            return self._show_pairing_form("pair", {"base": "bond_reset_failed"})
+        if isinstance(err, BluetoothPairingUnavailableError):
+            _LOGGER.warning("Matic Bluetooth pairing stopped: %s", err)
+            error = "bluetooth_unavailable"
+        elif isinstance(err, PairingModeRequiredError):
+            error = "robot_not_found"
+        else:
+            error = "pairing_incomplete"
+        self._pairing_data = {
+            CONF_HOST: host,
+            CONF_PORT: port,
+            CONF_HOSTNAME: identity.hostname,
+        }
+        return self._show_pairing_form("pair", {"base": error})

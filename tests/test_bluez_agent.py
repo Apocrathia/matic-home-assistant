@@ -59,7 +59,9 @@ def test_agent_declares_authenticated_pairing_capability() -> None:
 
 
 async def test_agent_confirms_only_the_selected_matic() -> None:
-    exchange = SimpleNamespace(async_request_passkey=AsyncMock(return_value=123456))
+    exchange = SimpleNamespace(
+        async_request_passkey=AsyncMock(return_value=123456), note_answered=MagicMock()
+    )
     agent = MaticPairingAgent(TEST_ADDRESS, exchange)
     expected_device = "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF"
 
@@ -71,8 +73,10 @@ async def test_agent_confirms_only_the_selected_matic() -> None:
         request_confirmation(agent, expected_device, 123456)
     with pytest.raises(DBusError, match="Bluetooth PIN"):
         request_pin(agent, expected_device)
+    exchange.note_answered.assert_not_called()
     assert await request_passkey(agent, expected_device) == 123456
     exchange.async_request_passkey.assert_awaited_once_with()
+    exchange.note_answered.assert_called_once_with()
 
     with pytest.raises(DBusError, match="selected Matic"):
         await request_passkey(agent, "/org/bluez/hci0/dev_11_22_33_44_55_66")
@@ -100,6 +104,7 @@ async def test_agent_returns_typed_dbus_error_when_pairing_is_cancelled() -> Non
 
     with pytest.raises(DBusError, match="passkey request ended"):
         await request
+    assert not exchange.candidate_answered
 
 
 async def test_agent_release_leaves_the_passkey_prompt_usable() -> None:
@@ -174,10 +179,10 @@ async def test_pairing_session_reuses_an_existing_pairing() -> None:
     assert message.interface == "org.freedesktop.DBus.Properties"
     assert message.member == "Get"
     assert message.body == ["org.bluez.Device1", "Paired"]
-    assert session.reused_existing_bond
+    assert session.reused_existing_bond is True
     bus.call.side_effect = [_paired(False), _method_return()]
     await session.async_pair(device_path)
-    assert not session.reused_existing_bond
+    assert session.reused_existing_bond is False
 
 
 async def test_pairing_session_removes_existing_pairing_for_reauth() -> None:
@@ -191,6 +196,9 @@ async def test_pairing_session_removes_existing_pairing_for_reauth() -> None:
         match="pairing was cleared",
     ):
         await session.async_pair(device_path, replace_existing=True)
+
+    # A cleared bond proves nothing about a new one.
+    assert session.reused_existing_bond is None
 
     message = bus.call.await_args_list[1].args[0]
     assert message.path == "/org/bluez/hci0"
@@ -223,9 +231,11 @@ async def test_pairing_session_accepts_a_bond_completed_during_pairing() -> None
     ]
     session = BlueZPairingSession(bus)
 
+    assert session.reused_existing_bond is None
     await session.async_pair("/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF")
 
     assert bus.call.await_count == 3
+    assert session.reused_existing_bond is False
 
 
 async def test_pairing_session_rejects_unverified_already_exists() -> None:
@@ -256,6 +266,7 @@ async def test_pairing_session_waits_for_a_robot_initiated_bond(monkeypatch) -> 
     await session.async_pair("/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF")
 
     assert bus.call.await_count == 4
+    assert session.reused_existing_bond is False
 
 
 async def test_pairing_agent_registers_and_unregisters_a_default_agent(
