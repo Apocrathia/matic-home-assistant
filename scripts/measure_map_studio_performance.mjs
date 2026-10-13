@@ -161,22 +161,26 @@ try {
           return [...new Uint8Array(await crypto.subtle.digest("SHA-256", buffer))].map(byte => byte.toString(16).padStart(2, "0")).join("");
         });
         // Both revisions measure the same four transitions: Home to the
-        // picker, into the saved plan's editor, out of it, and back Home. The
-        // baseline's picker row opens its editor and Back to plans leaves it.
-        // UX2 reaches Edit through Run and Cancel returns there, so its
-        // picker-to-Run and Run-to-picker steps are taken but not measured.
+        // picker, into the saved plan's editor, out of it, and back Home.
+        // The journey follows what the picker offers, so two revisions with
+        // the same UI take the same steps: a UX1 picker row opens its editor
+        // and Back to plans leaves it; from UX2 on, Edit is reached through
+        // Run and Cancel returns there, so the picker-to-Run and
+        // Run-to-picker steps are taken but not measured.
         const button = name => gallery.getByRole("button", { name, exact: typeof name === "string" });
         const step = async (name, label, measured = true) => {
           await button(name).click();
           await settle(page, label, measured);
         };
+        const journeys = new Set();
         const planJourney = async () => {
-          if (variant === "baseline") {
-            await step(/^Run a plan/, "plan:open-picker");
+          await step(/^(Run a plan|Plans)/, "plan:open-picker");
+          const pickerEdits = await button(/Daily clean.*Edit plan/).count() > 0;
+          journeys.add(pickerEdits ? "picker-edit" : "run-edit");
+          if (pickerEdits) {
             await step(/Daily clean.*Edit plan/, "plan:open-editor");
             await step("Back to plans", "plan:leave-editor");
           } else {
-            await step(/^(Run a plan|Plans)/, "plan:open-picker");
             await step(/Daily clean/, "plan:to-run", false);
             await step("Edit Daily clean", "plan:open-editor");
             await step("Cancel", "plan:leave-editor");
@@ -239,7 +243,7 @@ try {
         // Impute unreported interactions at the 16 ms reporting threshold.
         // This is an estimate: recorded durations retain browser quantization.
         const estimated = [...measured.interactions, ...Array(100 - measured.interactions.length).fill(16)];
-        samples.push({ variant, sceneFingerprint, traceFile, hostLoadBefore, hostLoadAfter,
+        samples.push({ variant, journey: [...journeys].join(","), sceneFingerprint, traceFile, hostLoadBefore, hostLoadAfter,
           initialUniqueScripts: initialScripts.length,
           initialScriptEstimatedGzipBytes: gzipBytes(initialScripts), workflowAddedUniqueScripts: warmedScripts.length - initialScripts.length,
           hostExtraModuleEstimatedGzipBytes: variant === "candidate" ? hostGzipBytes : null,
@@ -273,14 +277,14 @@ try {
       logicalCpus: cpus().length, tracing: Boolean(traceDirectory),
       viewport: "1280x900", dpr: 1, headless, network: "loopback, unthrottled", cpuThrottle: 1,
       cache: "new browser context per sample; no-store assets", order: "AB BA AB",
-      journey: "60 2D/3D toggles, 5 four-action plan editor loops (home → picker → saved plan's Edit → out of Edit → home), 10 room-list/back loops; lazy workflow warmed first; UX2's unmeasured Run hops excluded" },
+      journey: "60 2D/3D toggles, 5 four-action plan editor loops (home → picker → saved plan's Edit → out of Edit → home, by the picker's own route), 10 room-list/back loops; lazy workflow warmed first; unmeasured Run hops excluded" },
     limits: ["Synthetic lab proxy; not field INP or mobile/robot acceptance", "Scene hash must match between builds",
       "Event Timing threshold 16 ms; unreported interactions imputed at 16 ms; browser quantization retained",
       "Tracing adds diagnostic overhead; trace-enabled timings do not qualify the untraced performance gate",
       "Gzip bytes are offline size estimates; the loopback server sends uncompressed JavaScript",
       "Candidate review-only assets are reported separately; shared compiled production chunks serve the synthetic journey",
       "Candidate includes actual registered HA extra modules; historical baseline is panel-only and has no host-wide byte total",
-      "Both variants measure opening and leaving the saved plan's Edit view; UX2 reaches it through Run, and those Run hops are taken but not measured",
+      "Both variants measure opening and leaving the saved plan's Edit view by the route their picker offers (each sample records it); from UX2 on that route passes Run, and those Run hops are taken but not measured",
       "Heap is one observation after each journey, not a leak bound; no GPU FPS or transport latency measurement"],
     summary, samples }, null, 2));
 } finally {
