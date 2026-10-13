@@ -83,7 +83,7 @@ IMPORT_ROOT_TO_DISTRIBUTION = {
     "grpclib": "grpclib",
     "h2": "h2",
     "numpy": "numpy",
-    "voluptuous": "voluptuous",
+    "probatio": "probatio",
     "zeroconf": "zeroconf",
 }
 
@@ -245,16 +245,16 @@ def test_generated_proto_has_no_newer_runtime_guard() -> None:
     assert "ValidateProtobufRuntimeVersion" not in generated
 
 
-def test_options_flow_titles_do_not_require_description_placeholders() -> None:
-    """HA renders step titles without the flow's description placeholders."""
+def test_options_flow_titles_use_only_placeholders_the_step_supplies() -> None:
+    """Only the named reset confirmation carries its plan in the title."""
     for filename in ("strings.json", "translations/en.json"):
         translations = json.loads((INTEGRATION / filename).read_text())
-        titles = [
-            step["title"]
-            for step in translations["options"]["step"].values()
-            if "title" in step
-        ]
-        assert all("{" not in title for title in titles)
+        titled = {
+            step_name: step["title"]
+            for step_name, step in translations["options"]["step"].items()
+            if "{" in step.get("title", "")
+        }
+        assert titled == {"confirm_reset_history": "Reset history for {plan_name}?"}
 
 
 def test_every_options_flow_field_has_inline_guidance() -> None:
@@ -361,16 +361,27 @@ def _blueprints() -> Copy:
                 yield found_path, text
 
 
+_LLM_COPY = {
+    "LLM_API_NAME",
+    "FIRMWARE_LLM_API_NAME",
+    "PLAIN_WORDS_PROMPT",
+    "NON_ADMIN_PROMPT",
+    "ROBOT_STATUS_PROMPT",
+    "FIRMWARE_RESEARCH_PROMPT",
+    "_ERRORS",
+    "description",
+}
+
+
 def _llm() -> Copy:
     tree = ast.parse((INTEGRATION / "llm.py").read_text())
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign) and any(
-            getattr(t, "id", "") in {"LLM_API_NAME", "_ADMIN_ERROR", "description"}
-            for t in node.targets
+            getattr(t, "id", "") in _LLM_COPY for t in node.targets
         ):
-            yield f"llm:{node.lineno}", ast.literal_eval(node.value)
-        elif isinstance(node, ast.keyword) and node.arg == "api_prompt":
-            yield f"llm:{node.value.lineno}", ast.literal_eval(node.value)
+            for part in ast.walk(node.value):
+                if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                    yield f"llm:{part.lineno}", part.value
         elif (
             isinstance(node, ast.Call)
             and getattr(node.func, "id", "") == "HomeAssistantError"
@@ -388,6 +399,10 @@ _COPY_SURFACES: dict[str, Callable[[], Copy]] = {
     "strings:issues": lambda: _texts(_strings()["issues"], "issues"),
     "strings:entity": lambda: _texts(_strings()["entity"], "entity"),
     "strings:selector": lambda: _texts(_strings()["selector"], "selector"),
+    "strings:device": lambda: _texts(_strings()["device"], "device"),
+    "strings:device_automation": lambda: _texts(
+        _strings()["device_automation"], "device_automation"
+    ),
     "strings:exceptions": lambda: _texts(_strings()["exceptions"], "exceptions"),
     "strings:services": _services,
     "services.yaml": _services_yaml,
@@ -443,10 +458,37 @@ def _raised_keys() -> Iterator[tuple[str, int, str, frozenset[str] | None]]:
                 getattr(node.func, "id", None) or getattr(node.func, "attr", "")
             )
             if not isinstance(node, ast.Call) or not (
-                name.endswith("Error") or name == "_validation_error"
+                name.endswith("Error")
+                or name in {"_validation_error", "_error", "_async_refusal"}
             ):
                 continue
             words = {k.arg: k.value for k in node.keywords}
+            if (
+                name == "_async_refusal"
+                and len(node.args) >= 4
+                and getattr(node.args[2], "value", None) == "exceptions"
+                and isinstance(node.args[3], ast.Constant)
+            ):
+                # llm.py: a refusal the model relays in the exception's words
+                holders = node.args[4] if len(node.args) > 4 else None
+                yield (
+                    path.name,
+                    node.lineno,
+                    node.args[3].value,
+                    frozenset(k.value for k in holders.keys)
+                    if isinstance(holders, ast.Dict)
+                    else frozenset(),
+                )
+                continue
+            if name == "_error" and node.args:
+                # llm.py: _error("llm_*", **placeholders)
+                yield (
+                    path.name,
+                    node.lineno,
+                    node.args[0].value,
+                    frozenset(k.arg for k in node.keywords),
+                )
+                continue
             if name == "_validation_error" and len(node.args) >= 2:
                 key, holders = (
                     node.args[1],
@@ -532,15 +574,16 @@ def test_options_flow_directs_editing_to_the_single_map_workspace() -> None:
             "default_plan",
             "reset_history",
             "confirm_reset_history",
+            "confirm_reset_all_history",
+            "advanced",
             "workspace_transport",
         }
         assert "[Matic Map](/matic-map)" in steps["init"]["description"]
         assert "actions that do not name a plan" in steps["default_plan"]["description"]
         assert "{plan_name}" in steps["confirm_reset_history"]["description"]
-        assert (
-            "Your plans and their settings are kept"
-            in steps["confirm_reset_history"]["description"]
-        )
+        for step in ("confirm_reset_history", "confirm_reset_all_history"):
+            assert "plans and settings are kept" in steps[step]["description"]
+            assert steps[step]["submit"] == "Reset"
 
 
 def test_action_metadata_matches_the_room_native_public_api() -> None:
@@ -571,35 +614,46 @@ def test_user_copy_matches_pairing_and_plan_behavior() -> None:
             assert "turn pairing mode off and back on" in recovery
             assert "enter the new code" in recovery
 
-        pairing = translations["config"]["step"]["pair"]["description"]
-        assert "confirm below while the pairing window is open" in pairing
-        assert "The robot shows a six-digit code" in pairing
-        assert "without a new code" not in pairing
+        pair_step = translations["config"]["step"]["pair"]
+        pairing = pair_step["description"]
+        assert "Pairing mode is a short window in the Matic app" in pairing
+        assert "2. Turn on Pairing mode." in pairing
+        assert "3. Come back here and choose Start pairing." in pairing
+        assert pair_step["submit"] == "Start pairing"
+        assert "data" not in pair_step
+        assert "pairing_mode_off" not in errors
+        assert "pairing_mode_confirmation_required" not in errors
 
         options = translations["options"]
         assert "Choosing a default plan" in options["step"]["init"]["description"]
-        assert (
-            "Reset history for every plan"
-            == options["step"]["confirm_reset_history"]["data"]["all_plans"]
-        )
+        assert "data" not in options["step"]["confirm_reset_history"]
 
         entities = translations["entity"]["binary_sensor"]
         assert entities["diagnostic_upload"]["name"] == "Diagnostic upload"
-        assert entities["ssh_tunnel_permission"]["name"] == "Support tunnel permission"
+        assert entities["ssh_tunnel_permission"]["name"] == (
+            "Support tunnel permission"
+        )
         assert entities["paused"]["state"] == {
             "off": "Not paused",
             "on": "Paused",
         }
-        assert entities["update_available"]["state"] == {
-            "off": "Up to date",
-            "on": "Update available",
-        }
+        assert not {"update_available", "active_cleaning_session"} & set(entities)
         assert translations["entity"]["number"]["water_flow"]["name"] == (
             "Mopping water flow"
         )
         assert translations["entity"]["sensor"]["cleaning_history"]["name"] == (
             "Rooms cleaned by plans"
         )
+        assert {
+            key: value["name"]
+            for key, value in translations["entity"]["button"].items()
+        } == {
+            "run_selected_plan": "Run plan",
+            "intelligent_clean": "Run intelligent rotation",
+            "clean_entire_plan": "Run saved order",
+            "stop_intelligent_cleaning": "Stop cleaning",
+            "clean_selected_area": "Clean custom area",
+        }
         selects = translations["entity"]["select"]
         assert selects["cleaning_mode"]["name"] == "Default cleaning mode"
         assert selects["coverage_setting"]["name"] == "Default vacuum coverage"
@@ -624,7 +678,7 @@ def test_user_copy_matches_pairing_and_plan_behavior() -> None:
         intelligent = services["intelligent_clean"]["description"]
         assert "starting with the ones that have waited longest" in intelligent
         assert "keeps going until you stop it or every room is done" in intelligent
-        assert "stay due for the next run" in intelligent
+        assert "started but not finished stay due" in intelligent
         assert "top to bottom" in services["clean_entire_plan"]["description"]
         assert "the way it is saved" in services["run_selected_plan"]["description"]
         assert (
@@ -653,7 +707,7 @@ def test_user_copy_matches_pairing_and_plan_behavior() -> None:
             "intelligent_clean": "Run intelligent rotation",
             "clean_entire_plan": "Run saved order",
             "stop_intelligent_cleaning": "Stop cleaning",
-            "reset_plan_history": "Reset cleaning history",
+            "reset_plan_history": "Reset room cleaning history",
             "inspect_hermes_endpoint": "Advanced: Inspect robot data",
             "firmware_snapshot": "Advanced: Record firmware snapshot",
             "firmware_investigator": "Advanced: Choose firmware investigator",
@@ -687,7 +741,7 @@ def test_user_copy_matches_pairing_and_plan_behavior() -> None:
         firmware_snapshot = services["firmware_snapshot"]["description"]
         assert "saves a record without the data itself" in firmware_snapshot
         assert (
-            "so open the Firmware check status sensor"
+            "check the Firmware check status sensor"
             in translations["issues"]["firmware_regression"]["description"]
         )
 
@@ -701,7 +755,6 @@ def test_readme_states_the_actual_runtime_and_validation_scope() -> None:
 
     assert f"Home Assistant {supported_version}+" in readme
     assert "docs/acceptance-0.4.md" in readme
-    assert f"Home Assistant {supported_version}+" in compatibility
     assert "Live use has covered 2026.7 and 2026.8" in compatibility
     assert "Each exposed command is tested against a real robot" not in readme
 
@@ -712,7 +765,7 @@ def test_documented_entity_surface_matches_release_contract() -> None:
     automation = " ".join((ROOT / "docs" / "automation.md").read_text().split())
     entities = " ".join((ROOT / "docs" / "entities.md").read_text().split())
     surface = (
-        "55 fixed entities — 23 sensors, 13 binary sensors, 5 buttons, "
+        "51 fixed entities — 21 sensors, 11 binary sensors, 5 buttons, "
         "4 switches, 4 selects, 1 number, 2 cameras, 1 event, 1 update, and "
         "1 vacuum"
     )

@@ -8,8 +8,8 @@ from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import probatio
 import pytest
-import voluptuous as vol
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import Context, ServiceCall
 from homeassistant.exceptions import (
@@ -63,9 +63,13 @@ from custom_components.matic_robot.managed_executor import (
 from custom_components.matic_robot.plans import (
     MANUAL_ROOM_SEQUENCE_PLAN_ID,
     MAX_SAVED_PLANS_PER_ROBOT,
+    CadenceBindingError,
     CleaningPlanManager,
     CleaningRoom,
+    DuplicateRoomError,
+    EmptyPlanError,
     MetadataAdmissionClosedError,
+    PlanDisabledError,
     RoomSequenceLimitError,
     SavedPlanLimitError,
     plan_floor_token,
@@ -77,8 +81,6 @@ from custom_components.matic_robot.room_sequence import (
     resolve_room_sequence,
 )
 from custom_components.matic_robot.services import (
-    _PREVIEW_CHANGED,
-    _PREVIEW_STALE,
     CLEAN_AREA_SERVICE_SCHEMA,
     CLEAN_ROOM_SEQUENCE_SCHEMA,
     CLEAN_SERVICE_SCHEMA,
@@ -95,6 +97,7 @@ from custom_components.matic_robot.services import (
     _ensure_stop_settled,
     _entry_for_entity,
     _plan_cadence_bindings,
+    _plan_request_error,
     _require_matic_control,
     _resolve_loaded_matic_vacuums,
     _resolve_room_id,
@@ -132,7 +135,7 @@ def test_room_service_schemas_share_the_bounded_sequence_size() -> None:
         ),
     ):
         assert len(schema(payload)["rooms"]) == MAX_ROOM_SEQUENCE_SIZE
-        with pytest.raises(vol.Invalid):
+        with pytest.raises(probatio.Invalid):
             schema({**payload, "rooms": rooms[: MAX_ROOM_SEQUENCE_SIZE + 1]})
 
     save_payload = {
@@ -143,7 +146,7 @@ def test_room_service_schemas_share_the_bounded_sequence_size() -> None:
     assert len(SAVE_PLAN_SCHEMA(save_payload)["rooms"]) == MAX_ROOM_SEQUENCE_SIZE
     assert len(SAVE_PLAN_SCHEMA({**save_payload, "rooms": rooms[:101]})["rooms"]) == 101
     assert len(SAVE_PLAN_SCHEMA({**save_payload, "rooms": rooms[:256]})["rooms"]) == 256
-    with pytest.raises(vol.Invalid):
+    with pytest.raises(probatio.Invalid):
         SAVE_PLAN_SCHEMA({**save_payload, "rooms": rooms})
 
     clean_payload = {**entity, "rooms": [room["room"] for room in rooms]}
@@ -158,7 +161,7 @@ def test_room_service_schemas_share_the_bounded_sequence_size() -> None:
         )
         == MAX_ROOM_SEQUENCE_SIZE
     )
-    with pytest.raises(vol.Invalid):
+    with pytest.raises(probatio.Invalid):
         CLEAN_SERVICE_SCHEMA(clean_payload)
 
 
@@ -357,10 +360,8 @@ def test_room_management_reference_is_stable_and_fail_closed() -> None:
                 "room-bedroom-west": "BEDROOM",
             },
         )
-    assert err.value.translation_key == "unknown_rooms"
-    assert err.value.translation_placeholders == {
-        "rooms": "ambiguous room name: Bedroom"
-    }
+    assert err.value.translation_key == "ambiguous_room"
+    assert err.value.translation_placeholders == {"room": "Bedroom"}
 
     with pytest.raises(ServiceValidationError, match="Unknown Matic room"):
         _resolve_room_id("Missing", {"room-bedroom": "Bedroom"})
@@ -1916,9 +1917,7 @@ async def test_preview_room_sequence_matches_dispatch_and_rejects_stale_token(
                 "custom_components.matic_robot.services._saved_plan_context",
                 return_value=context,
             ),
-            pytest.raises(
-                ServiceValidationError, match="Each room can appear only once"
-            ),
+            pytest.raises(ServiceValidationError, match="more than once"),
         ):
             await _registered_handler(services, "preview_room_sequence")(
                 duplicate_preview_call
@@ -1940,9 +1939,7 @@ async def test_preview_room_sequence_matches_dispatch_and_rejects_stale_token(
                 "custom_components.matic_robot.services._async_execute_rooms",
                 execute,
             ),
-            pytest.raises(
-                ServiceValidationError, match="Each room can appear only once"
-            ),
+            pytest.raises(ServiceValidationError, match="more than once"),
         ):
             await _registered_handler(services, "clean_room_sequence")(
                 duplicate_dispatch
@@ -1968,7 +1965,7 @@ async def test_preview_room_sequence_matches_dispatch_and_rejects_stale_token(
     ):
         await _registered_handler(services, "clean_room_sequence")(dispatch_call)
     execute_with_mutation.assert_awaited_once()
-    assert raised.value.translation_placeholders == {"error": _PREVIEW_CHANGED}
+    assert raised.value.translation_key == "room_sequence_preview_changed"
 
     schedule["progress"] = {"mop": 1, "coverage": 1}
     schedule["policy"]["do_mop_next"] = False
@@ -1988,9 +1985,11 @@ async def test_preview_room_sequence_matches_dispatch_and_rejects_stale_token(
             "custom_components.matic_robot.services._async_execute_rooms",
             execute_with_invalid_map,
         ),
-        pytest.raises(ServiceValidationError, match="different map"),
+        pytest.raises(ServiceValidationError) as invalid_map,
     ):
         await _registered_handler(services, "clean_room_sequence")(dispatch_call)
+    assert invalid_map.value.translation_key == "invalid_plan"
+    assert "different map" in str(invalid_map.value.__cause__)
     execute_with_invalid_map.assert_awaited_once()
 
     with (
@@ -1998,9 +1997,10 @@ async def test_preview_room_sequence_matches_dispatch_and_rejects_stale_token(
             "custom_components.matic_robot.services._saved_plan_context",
             return_value=context,
         ),
-        pytest.raises(ServiceValidationError, match="different map"),
+        pytest.raises(ServiceValidationError) as invalid_preview,
     ):
         await _registered_handler(services, "preview_room_sequence")(preview_call)
+    assert invalid_preview.value.translation_key == "invalid_plan"
 
     schedule["identity"] = identity
     schedule["progress"] = {"mop": 0, "coverage": 0}
@@ -2021,7 +2021,7 @@ async def test_preview_room_sequence_matches_dispatch_and_rejects_stale_token(
     ):
         await _registered_handler(services, "clean_room_sequence")(stale_call)
     execute.assert_not_awaited()
-    assert raised.value.translation_placeholders == {"error": _PREVIEW_STALE}
+    assert raised.value.translation_key == "room_sequence_preview_changed"
 
 
 async def test_preview_room_sequence_requires_administrator(hass) -> None:
@@ -2441,6 +2441,26 @@ async def test_reset_room_cadence_service_targets_one_room_and_reports_blockers(
         "reset_modes": ["mop", "coverage"],
     }
 
+    other_room = ServiceCall(
+        hass,
+        DOMAIN,
+        "reset_room_cadence",
+        {"entity_id": ["vacuum.test"], "plan": "Home", "room_id": "room-attic"},
+    )
+    with (
+        patch(
+            "custom_components.matic_robot.services._saved_plan_context",
+            return_value=context,
+        ),
+        pytest.raises(ServiceValidationError) as outside,
+    ):
+        await _registered_handler(services, "reset_room_cadence")(other_room)
+    assert outside.value.translation_key == "room_not_in_plan"
+    assert outside.value.translation_placeholders == {
+        "room": "room-attic",
+        "plan": "Home",
+    }
+
     manager._robot("serial")["active_plan"] = {
         "plan_id": "home",
         "room_id": "room-office",
@@ -2450,11 +2470,10 @@ async def test_reset_room_cadence_service_targets_one_room_and_reports_blockers(
             "custom_components.matic_robot.services._saved_plan_context",
             return_value=context,
         ),
-        pytest.raises(
-            ServiceValidationError, match="cannot reset while its plan is running"
-        ),
+        pytest.raises(ServiceValidationError) as blocked,
     ):
         await _registered_handler(services, "reset_room_cadence")(reset)
+    assert blocked.value.translation_key == "cadence_reset_blocked"
 
 
 async def test_reset_room_cadence_service_returns_no_receipt_on_save_failure(
@@ -2775,7 +2794,7 @@ async def test_cleaning_service_rejects_invalid_cadence_resolution(
             "custom_components.matic_robot.services._saved_plan_context",
             return_value=context,
         ),
-        pytest.raises(ServiceValidationError, match="invalid cadence") as raised,
+        pytest.raises(ServiceValidationError) as raised,
     ):
         await _registered_handler(services, service)(call)
 
@@ -2833,9 +2852,10 @@ async def test_run_selected_plan_rejects_malformed_authoritative_preview(
             "custom_components.matic_robot.services._async_execute_rooms",
             AsyncMock(),
         ) as execute,
-        pytest.raises(ServiceValidationError, match=message) as raised,
+        pytest.raises(ServiceValidationError) as raised,
     ):
         await _registered_handler(services, "run_selected_plan")(call)
+    assert str(raised.value.__cause__) == message
 
     assert raised.value.translation_key == "invalid_plan"
     execute.assert_not_awaited()
@@ -2903,7 +2923,7 @@ async def test_legacy_oversized_plan_cannot_be_previewed_or_dispatched(hass) -> 
     ):
         await _registered_handler(services, "run_selected_plan")(call)
 
-    assert raised.value.translation_key == "invalid_plan"
+    assert raised.value.translation_key == "room_sequence_limit"
     execute.assert_not_awaited()
 
 
@@ -2998,9 +3018,7 @@ async def test_tokenized_saved_run_localizes_preview_failure_after_preflight(
             "custom_components.matic_robot.services._async_execute_rooms",
             AsyncMock(side_effect=invoke_validation),
         ) as execute,
-        pytest.raises(
-            ServiceValidationError, match="authoritative preview unavailable"
-        ) as raised,
+        pytest.raises(ServiceValidationError) as raised,
     ):
         await _registered_handler(services, "run_selected_plan")(token_call)
 
@@ -3099,8 +3117,7 @@ async def test_legacy_saved_run_revalidates_after_stop_settlement(
         with pytest.raises(ServiceValidationError) as raised:
             await pending
 
-    assert raised.value.translation_key == "invalid_plan"
-    assert "resolution changed" in str(raised.value) or changed_input == "map"
+    assert raised.value.translation_key == "plan_preview_changed"
     execute.assert_awaited_once()
     room_start.assert_not_awaited()
     client.async_send_user_command.assert_not_awaited()
@@ -3337,7 +3354,7 @@ async def test_intelligent_exact_preview_stop_and_reset_actions(hass) -> None:
     ):
         await _registered_handler(services, "run_selected_plan")(token_call)
     changed_execute.assert_awaited_once()
-    assert raised.value.translation_placeholders == {"error": _PREVIEW_CHANGED}
+    assert raised.value.translation_key == "plan_preview_changed"
 
     manager._robot("serial")["plans"]["upstairs"]["return_to_base"] = True
     manager._robot("serial")["plans"]["upstairs"]["return_to_base"] = False
@@ -3354,7 +3371,7 @@ async def test_intelligent_exact_preview_stop_and_reset_actions(hass) -> None:
     ):
         await _registered_handler(services, "run_selected_plan")(token_call)
     stale_execute.assert_not_awaited()
-    assert raised.value.translation_placeholders == {"error": _PREVIEW_STALE}
+    assert raised.value.translation_key == "plan_preview_changed"
     manager._robot("serial")["plans"]["upstairs"]["return_to_base"] = True
 
     lock = manager.lock("serial")
@@ -3472,7 +3489,7 @@ async def test_managed_actions_ignore_inactive_stop(hass) -> None:
             await _registered_handler(services, "intelligent_clean")(missing)
         with pytest.raises(ServiceValidationError, match="Unknown"):
             await _registered_handler(services, "reset_plan_history")(reset_missing)
-        with pytest.raises(ServiceValidationError, match="disabled"):
+        with pytest.raises(ServiceValidationError, match="turned off"):
             await _registered_handler(services, "preview_plan")(disabled)
         await _registered_handler(services, "stop_intelligent_cleaning")(stop)
     services.async_call.assert_not_awaited()
@@ -3521,7 +3538,7 @@ def test_service_cadence_schema_rejects_non_integer_or_out_of_range_intervals(
     payload = {"scope": "shared", field: value}
     original = deepcopy(payload)
 
-    with pytest.raises(vol.Invalid):
+    with pytest.raises(probatio.Invalid):
         ROOM_CADENCE_SCHEMA(payload)
 
     assert payload == original
@@ -3846,7 +3863,7 @@ async def test_incremental_plan_save_rejects_the_101st_room_atomically(hass) -> 
     ):
         await _registered_handler(services, "save_plan_room")(call)
 
-    assert raised.value.translation_key == "invalid_plan"
+    assert raised.value.translation_key == "room_sequence_limit"
     assert len(manager.plan("serial", "home")["rooms"]) == MAX_ROOM_SEQUENCE_SIZE
     manager._store.async_save.assert_not_awaited()
 
@@ -3960,7 +3977,7 @@ async def test_save_plan_allows_only_strict_legacy_room_reductions(hass) -> None
             await _registered_handler(services, "save_plan")(
                 save_call("legacy", equal_size_with_new_room)
             )
-        assert equal_size_error.value.translation_key == "invalid_plan"
+        assert equal_size_error.value.translation_key == "room_sequence_limit"
         assert manager._store.async_save.await_count == 0
 
         duplicate_room = [*rooms[1:100], rooms[0], rooms[0]]
@@ -3968,7 +3985,7 @@ async def test_save_plan_allows_only_strict_legacy_room_reductions(hass) -> None
             await _registered_handler(services, "save_plan")(
                 save_call("legacy", duplicate_room)
             )
-        assert duplicate_error.value.translation_key == "invalid_plan"
+        assert duplicate_error.value.translation_key == "room_sequence_limit"
         assert manager._store.async_save.await_count == 0
 
         for selected_rooms in (rooms[1:], rooms[2:]):
@@ -3983,7 +4000,7 @@ async def test_save_plan_allows_only_strict_legacy_room_reductions(hass) -> None
             await _registered_handler(services, "save_plan")(
                 save_call("new", rooms[1:])
             )
-        assert new_plan_error.value.translation_key == "invalid_plan"
+        assert new_plan_error.value.translation_key == "room_sequence_limit"
         assert "new" not in manager.plans("serial")
         assert manager._store.async_save.await_count == 2
 
@@ -4070,9 +4087,10 @@ async def test_save_plan_reports_the_per_robot_plan_limit(hass) -> None:
             "custom_components.matic_robot.services._saved_plan_context",
             return_value=context,
         ),
-        pytest.raises(ServiceValidationError, match="at most") as raised,
+        pytest.raises(ServiceValidationError) as raised,
     ):
         await _registered_handler(services, "save_plan")(call)
+    assert raised.value.translation_key == "plan_limit_reached"
 
     assert isinstance(raised.value.__cause__, SavedPlanLimitError)
     manager._store.async_save.assert_not_awaited()
@@ -4135,9 +4153,7 @@ async def test_save_plan_translates_cadence_edit_blocked_during_run(hass) -> Non
             "custom_components.matic_robot.services._saved_plan_context",
             return_value=("vacuum.test", entry, "serial", {room.id: room.name}),
         ),
-        pytest.raises(
-            ServiceValidationError, match="cannot change while its plan is running"
-        ) as raised,
+        pytest.raises(ServiceValidationError) as raised,
     ):
         await _registered_handler(services, "save_plan")(call)
 
@@ -4165,9 +4181,7 @@ async def test_delete_plan_translates_running_plan_lock(hass) -> None:
             "custom_components.matic_robot.services._saved_plan_context",
             return_value=("vacuum.test", SimpleNamespace(), "serial", {}),
         ),
-        pytest.raises(
-            ServiceValidationError, match="cannot be deleted while it is running"
-        ) as raised,
+        pytest.raises(ServiceValidationError) as raised,
     ):
         await _registered_handler(services, "delete_plan")(call)
 
@@ -4969,9 +4983,72 @@ async def test_firmware_services_translate_tracker_value_errors(
             "custom_components.matic_robot.services._entry_for_entity",
             return_value=SimpleNamespace(entry_id="entry-one"),
         ),
-        pytest.raises(ServiceValidationError, match="stale firmware request"),
+        pytest.raises(ServiceValidationError) as raised,
     ):
         await _registered_handler(services, service)(call)
+    assert (
+        raised.value.translation_key
+        == {
+            "firmware_investigator": "firmware_evidence_unavailable",
+            "firmware_notification": "firmware_notification_stale",
+        }[service]
+    )
+
+
+async def test_firmware_investigator_rejects_unusable_names() -> None:
+    hass = SimpleNamespace(data={}, auth=SimpleNamespace(async_get_user=AsyncMock()))
+    services = await _registered_services(hass)
+    tracker = hass.data[DOMAIN]["firmware_tracker"]
+    hass.auth.async_get_user.return_value = SimpleNamespace(is_admin=True)
+    call = ServiceCall(
+        hass,
+        DOMAIN,
+        "firmware_investigator",
+        {"entity_id": ["vacuum.one"], "provider": "Open Claw"},
+        context=Context(user_id="admin"),
+    )
+    with (
+        patch(
+            "custom_components.matic_robot.services._resolve_loaded_matic_vacuums",
+            return_value=["vacuum.one"],
+        ),
+        patch(
+            "custom_components.matic_robot.services._entry_for_entity",
+            return_value=SimpleNamespace(entry_id="entry-one"),
+        ),
+        pytest.raises(ServiceValidationError) as raised,
+    ):
+        await _registered_handler(services, "firmware_investigator")(call)
+    assert raised.value.translation_key == "invalid_investigator"
+    tracker.async_configure_investigator.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("error", "key", "placeholders"),
+    [
+        (
+            RoomSequenceLimitError("internal limit detail"),
+            "room_sequence_limit",
+            {"limit": "100"},
+        ),
+        (PlanDisabledError("internal disabled detail"), "plan_disabled", None),
+        (EmptyPlanError("internal empty detail"), "plan_empty", None),
+        (DuplicateRoomError("internal duplicate detail"), "duplicate_room", None),
+        (
+            CadenceBindingError("internal binding detail"),
+            "room_schedule_map_unconfirmed",
+            None,
+        ),
+        (ValueError("internal detail"), "invalid_plan", None),
+    ],
+)
+def test_plan_request_errors_never_expose_internal_text(
+    error: ValueError, key: str, placeholders: dict[str, str] | None
+) -> None:
+    translated = _plan_request_error(error)
+    assert translated.translation_key == key
+    assert translated.translation_placeholders == placeholders
+    assert str(error) not in str(translated)
 
 
 async def test_firmware_snapshot_requires_exactly_one_robot() -> None:
@@ -5026,7 +5103,7 @@ async def test_plan_runs_reject_disabled_plans_and_unknown_selection(hass) -> No
         "custom_components.matic_robot.services._saved_plan_context",
         return_value=context,
     ):
-        with pytest.raises(ServiceValidationError, match="disabled"):
+        with pytest.raises(ServiceValidationError, match="turned off"):
             await _registered_handler(services, "intelligent_clean")(disabled)
         with pytest.raises(ServiceValidationError, match="Unknown Matic cleaning"):
             await _registered_handler(services, "run_selected_plan")(missing)
@@ -5057,9 +5134,8 @@ async def test_save_plan_rejects_names_that_produce_no_plan_id(hass) -> None:
         pytest.raises(ServiceValidationError) as excinfo,
     ):
         await _registered_handler(services, "save_plan")(call)
-    assert "Plan ID is empty" in str(excinfo.value)
-    assert excinfo.value.translation_key == "invalid_plan"
-    assert excinfo.value.translation_placeholders == {"error": "Plan ID is empty"}
+    assert excinfo.value.translation_key == "plan_name_unusable"
+    assert excinfo.value.translation_placeholders is None
     assert manager.plans("serial") == {}
 
 

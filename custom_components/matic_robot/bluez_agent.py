@@ -92,12 +92,16 @@ class MaticPairingAgent(ServiceInterface):
                 "No Home Assistant passkey prompt is active",
             )
         try:
-            return await self._passkey_exchange.async_request_passkey()
+            passkey = await self._passkey_exchange.async_request_passkey()
         except BluetoothPasskeyCancelledError as err:
             raise DBusError(
                 "org.bluez.Error.Canceled",
                 "The Matic passkey request ended",
             ) from err
+        # The freshness gate requires this: a submitted code alone does not
+        # prove that the bond BlueZ completed used it.
+        self._passkey_exchange.note_answered()
+        return passkey
 
     @method()
     def DisplayPinCode(self, device: DBusObjectPath, pincode: DBusString) -> DBusVoid:
@@ -160,7 +164,8 @@ class BlueZPairingSession:
     def __init__(self, bus: MessageBus, *, default_agent_ready: bool = True) -> None:
         self._bus = bus
         self._default_agent_ready = default_agent_ready
-        self.reused_existing_bond = False
+        # None until async_pair decides; only False proves a new bond.
+        self.reused_existing_bond: bool | None = None
 
     async def async_require_connection_agent(self, device_path: str | None) -> None:
         """Require the scoped agent for robot-initiated security on connection."""
@@ -222,7 +227,7 @@ class BlueZPairingSession:
         self, device_path: str, *, replace_existing: bool = False
     ) -> None:
         """Ask BlueZ to bond while this connection's agent is authoritative."""
-        self.reused_existing_bond = False
+        self.reused_existing_bond = None
         if await self._async_is_paired(device_path):
             if replace_existing:
                 await self.async_remove_bond(device_path)
@@ -249,6 +254,7 @@ class BlueZPairingSession:
                 device_path
             ):
                 _LOGGER.debug("Reusing the concurrently completed Matic bond")
+                self.reused_existing_bond = False
                 return
             if err.dbus_error == _BLUEZ_IN_PROGRESS:
                 # Matic's own Security Request already started this bond;
@@ -256,9 +262,11 @@ class BlueZPairingSession:
                 # pairing timeout bounds this wait.
                 _LOGGER.debug("Waiting for the Matic-initiated bond to finish")
                 await self._async_wait_until_paired(device_path)
+                self.reused_existing_bond = False
                 return
             raise
         _LOGGER.debug("BlueZ completed the scoped Matic bond")
+        self.reused_existing_bond = False
 
 
 @asynccontextmanager

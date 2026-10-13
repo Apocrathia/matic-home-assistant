@@ -7,7 +7,9 @@ states the robot reported, and how a managed plan ended. No debug logging is nee
 
 ## Start here
 
-1. Download integration diagnostics soon after an unexpected stop or dock visit.
+1. Soon after an unexpected stop or dock visit, open Settings > Devices &
+   services > Matic (Unofficial), select ⋮ on the robot's entry, then
+   Download diagnostics.
 2. Find the plan's `run_id` and match it to room events and command observations.
 3. Compare the managed outcome with native history for the requested cleaning mode.
 
@@ -34,7 +36,11 @@ A returning state without a matching command shows no integration-requested dock
 in that observed window; it does not identify an app, physical, or robot-side cause.
 Poll and push messages can arrive out of order.
 
-## Query through MCP
+## Query through an assistant
+
+Administrators can use these tools from the **Matic: Robot status
+(administrators only)** LLM API in Assist or Home Assistant's MCP server.
+
 
 - `MaticGetActivity`: use `kind: commands`, `states`, `stream`, or `all`.
 - For another page, pass `next_before_sequence` as `before_sequence`, with the

@@ -24,7 +24,7 @@ Pair once over Bluetooth; everyday control, maps, and state use your local netwo
 - **Map Studio:** interactive 3D and 2D maps, robot position, room selection, and saved map history.
 - **Named custom areas:** draw and edit reusable areas, including across room boundaries, then run them from a dashboard or automation.
 - **Controls and dashboards:** start, pause, stop, dock, adjust robot settings, and use map cameras, sensors, and switches.
-- **Run insight:** inspect plan outcomes, command activity, and per-mode history through local diagnostics and administrator-only read-only MCP tools.
+- **Run insight:** inspect plan outcomes, command activity, and per-mode history through local diagnostics and administrator-only assistant tools for Assist and MCP.
 - **Firmware tracking:** compare local protocol snapshots and see compatibility changes in Home Assistant.
 
 Home Assistant schedules and automations can run saved named areas or room
@@ -36,7 +36,7 @@ locally in Home Assistant. [Matic Cues](docs/privacy.md#matic-cues) uses Matic's
 
 ## Install
 
-Requires **Home Assistant 2026.7+** and a Bluetooth adapter built into or attached
+Requires **Home Assistant 2026.10+** and a Bluetooth adapter built into or attached
 to the Home Assistant host for pairing. Bluetooth proxies cannot complete setup.
 
 1. In HACS, add [this repository](https://github.com/ProspectOre/matic-home-assistant) as a custom **Integration** repository.
