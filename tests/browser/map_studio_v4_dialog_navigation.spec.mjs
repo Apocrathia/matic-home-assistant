@@ -18,11 +18,32 @@ async function setup(page, plans = [plan("daily", "Daily")]) {
   await panel.getByRole("button", { name: /^Run a plan/ }).click();
   await panel.getByRole("button", { name: new RegExp(`^${plans[0].name}`) }).click();
   await panel.getByRole("button", { name: `Edit ${plans[0].name}`, exact: true }).click();
+  // Opening Edit moves focus to its heading a frame later; typing before
+  // that would lose the keystrokes to the focus move.
+  await expect(panel.getByRole("heading", { level: 2, name: "Edit plan" })).toBeFocused();
   return { panel, fixture };
 }
 
 async function back(page) {
   await page.evaluate(() => history.back());
+}
+
+// Holds the lazy catalog-writes chunk until the test releases it.
+async function holdCatalogWrites(page) {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  await page.route("**/chunks/catalog-writes-*.js", async (route) => {
+    await gate;
+    await route.fallback();
+  });
+  return release;
+}
+
+async function sendIntent(page, tag, detail) {
+  await page.evaluate(({ tag, detail }) => {
+    const shell = document.querySelector(tag).shadowRoot.querySelector("matic-map-shell-v4");
+    shell.dispatchEvent(new CustomEvent("matic-workspace-intent", { detail, bubbles: true, composed: true }));
+  }, { tag, detail });
 }
 
 test.describe("UX2 discard dialog navigation", () => {
@@ -40,7 +61,7 @@ test.describe("UX2 discard dialog navigation", () => {
     await expect(panel.getByRole("button", { name: /^Run a plan/ })).toBeVisible();
   });
 
-  test("Back-opened dialog save continues to the picker, and the next Back goes home", async ({ page }) => {
+  test("Back-opened dialog save on a saved plan continues to Run, then Back reaches the picker and home", async ({ page }) => {
     const { panel } = await setup(page);
     await panel.getByRole("textbox", { name: "Plan name" }).fill("Back save");
     await back(page);
@@ -92,6 +113,78 @@ test.describe("UX2 discard dialog navigation", () => {
     await expect.poll(() => page.evaluate(() => history.state?.maticMapLayer?.depth)).toBe(1);
     await back(page);
     await expect(panel.getByRole("button", { name: /^Run a plan/ })).toBeVisible();
+  });
+
+  test("Escape on a dirty new plan, then Save in the dialog, lands on the picker", async ({ page }) => {
+    const fixture = await installPanelFixture(page, {
+      moduleSource: "packaged",
+      initialPlanCatalog: {
+        rooms: [{ room_id: "kitchen", name: "Kitchen", boundary: [[0, 0], [5, 0], [5, 5]] }],
+        plans: [], selected_plan: null,
+      },
+    });
+    await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+    const panel = page.locator(fixture.panelTag);
+    await panel.getByRole("button", { name: /^Create a plan/ }).click();
+    await panel.getByRole("button", { name: "Create a plan", exact: true }).click();
+    await panel.getByRole("textbox", { name: "Plan name" }).fill("Escaped plan");
+    await panel.getByRole("list", { name: "Rooms", exact: true }).getByRole("checkbox").first().check();
+    await panel.getByRole("textbox", { name: "Plan name" }).press("Escape");
+    const dialog = panel.getByRole("dialog", { name: "Discard changes?" });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(panel.getByRole("heading", { level: 2, name: "Your plans" })).toBeVisible();
+    await expect(panel.getByRole("button", { name: /^Escaped plan/ })).toBeVisible();
+    await expect.poll(() => panel.evaluate((element) => element.getWorkspaceSnapshot().workflow)).toBe("plans");
+  });
+
+  for (const tone of ["success", "error"]) {
+    test(`an unrelated ${tone} notice while the writes load does not settle the dialog save`, async ({ page }) => {
+      const release = await holdCatalogWrites(page);
+      const { panel, fixture } = await setup(page);
+      await panel.getByRole("textbox", { name: "Plan name" }).fill("Held edit");
+      await panel.getByRole("button", { name: "Cancel", exact: true }).click();
+      const dialog = panel.getByRole("dialog", { name: "Discard changes?" });
+      await dialog.getByRole("button", { name: "Save", exact: true }).click();
+      await sendIntent(page, fixture.panelTag, {
+        type: "set-notice", notice: { tone, key: "v4_notice_status_refreshed", fallback: "Status refreshed" },
+      });
+      await expect.poll(() => panel.evaluate((element) => element.getWorkspaceSnapshot().notice?.tone ?? null)).toBe(tone);
+      // Let any settle rule run before checking the dialog held.
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      await expect(dialog, "an unrelated notice must not close the dialog").toBeVisible();
+      await expect.poll(() => panel.evaluate((element) => {
+        const state = element.getWorkspaceSnapshot();
+        return { view: state.planView, dirty: state.planDraft.dirty, name: state.planDraft.name };
+      })).toEqual({ view: "edit", dirty: true, name: "Held edit" });
+      expect(await page.evaluate(() => window.__panelFixture.serviceCalls.length)).toBe(0);
+      release();
+      await expect(dialog).toHaveCount(0);
+      await expect(panel.getByRole("heading", { level: 2, name: "Held edit" })).toBeVisible();
+      await expect.poll(() => panel.evaluate((element) => {
+        const state = element.getWorkspaceSnapshot();
+        return { view: state.planView, dirty: state.planDraft.dirty, notice: state.notice?.key ?? null };
+      })).toEqual({ view: "run", dirty: false, notice: "v4_notice_plan_saved" });
+    });
+  }
+
+  test("dialog Save leaves an existing notice alone until the save starts", async ({ page }) => {
+    const release = await holdCatalogWrites(page);
+    const { panel, fixture } = await setup(page);
+    await panel.getByRole("textbox", { name: "Plan name" }).fill("Notice kept");
+    await sendIntent(page, fixture.panelTag, {
+      type: "set-notice", notice: { tone: "info", key: "v4_notice_status_refreshed", fallback: "Status refreshed" },
+    });
+    await panel.getByRole("button", { name: "Cancel", exact: true }).click();
+    const dialog = panel.getByRole("dialog", { name: "Discard changes?" });
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    expect(await panel.evaluate((element) => element.getWorkspaceSnapshot().notice?.key ?? null)).toBe("v4_notice_status_refreshed");
+    await expect(dialog).toBeVisible();
+    release();
+    await expect(dialog).toHaveCount(0);
+    await expect(panel.getByRole("heading", { level: 2, name: "Notice kept" })).toBeVisible();
   });
 
   test("Delete lands on the picker and Back from there goes home", async ({ page }) => {

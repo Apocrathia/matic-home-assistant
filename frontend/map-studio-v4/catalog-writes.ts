@@ -40,6 +40,8 @@ export interface CatalogWriteContext {
   disposed(): boolean;
   /** Gives back the mutation resource before the write's own follow-up reads finish. */
   release(): void;
+  /** Says once that the write was saved; effects.ts says "not saved" for any other end. */
+  settled(saved: boolean): void;
 }
 
 export const saveArea = async (context: CatalogWriteContext): Promise<void> => {
@@ -79,6 +81,7 @@ export const saveArea = async (context: CatalogWriteContext): Promise<void> => {
         draw: { ...latest.draw, dirty: false, strokeCount: 0, undo: [], redo: [], outlineUndo: [], outlineRedo: [] },
       } : {}),
     });
+    context.settled(true);
     const areas = await effects.loadAreas({ reconcileDraft: false });
     const refreshed = store.value;
     if (current() && savedDraft && refreshed.areaDraft === savedDraft
@@ -138,6 +141,7 @@ export const savePlan = async (context: CatalogWriteContext): Promise<void> => {
       // The saved draft is clean, so the plan returns to Run (plan.md §5).
       store.dispatch({ type: "set-plan-view", view: "run" });
     }
+    context.settled(true);
     const catalog = await refreshPlansAfterWrite(context);
     if (savedDraft && store.value.workflow === "plan"
       && store.value.planDraft === savedDraft

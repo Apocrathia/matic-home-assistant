@@ -11,6 +11,7 @@ import type {
   NoButtonAction,
   PrimaryAction,
   ResetCadenceAction,
+  SaveSettled,
   WorkspaceIntent,
   WorkspaceNotice,
   WorkspaceState,
@@ -385,7 +386,11 @@ export class MaticMapShellV4 extends LitElement {
   #helpLauncher: HTMLElement | null = null;
   // What Discard goes on to: the intent that asked, or Try again's reload.
   #pendingNavigation: WorkspaceIntent | "reload" | null = null;
-  #dialogSaveRequested = false;
+  // The save Discard changes? started; only that save's own answer settles it.
+  #dialogSave: object | null = null;
+  // Where a saved dialog goes once the dialog has closed: two dismissals in
+  // one task would race the browser history traversal the first one starts.
+  #afterDialog: WorkspaceIntent | "reload" | null = null;
   // The workflows the entry screen's enabled rows offered at its last render
   // (#launch), plus Map diagnostics, which Map options offers on any screen.
   #launchers = new Set<string>();
@@ -671,27 +676,8 @@ export class MaticMapShellV4 extends LitElement {
           });
         });
       }
-      // shell.md §5: a save started from Discard changes? has settled. Saved,
-      // the dialog closes and the navigation that asked goes on without
-      // discarding; not saved, it closes and the user stays with the draft.
-      const dialogSaveSettled = this.#dialogSaveRequested
-        && this.state.command !== "pending"
-        && ((this.state.notice !== previous?.notice
-          && (this.state.notice?.tone === "success" || this.state.notice?.tone === "error"))
-          || (previous?.command === "pending" && !this.state.notice));
-      if (dialogSaveSettled) {
-        this.#dialogSaveRequested = false;
-        const pending = this.#pendingNavigation;
-        this.#pendingNavigation = null;
-        if (this.state.dialog) this.#dismissDialog();
-        if (this.state.notice?.tone === "success") {
-          if (pending === "reload") reloadInto(this.state.workflow);
-          // The draft this shell holds may still read dirty for a render, so
-          // the intent skips the confirmation the saved draft no longer needs.
-          else if (pending) this.#emit(pending);
-        }
-      }
       if (!previous?.dialog && this.state.dialog) {
+        this.#afterDialog = null;
         if (this.state.dialog === "discardDraft" && !this.#pendingNavigation && previous) {
           // Browser Back opens this dialog in the history controller, outside
           // #intent. Capture the view Back was leaving before a save changes it.
@@ -714,10 +700,13 @@ export class MaticMapShellV4 extends LitElement {
           // Browser Back dismisses the dialog through the layer controller,
           // bypassing the button/keyboard handler. Clear the pending intent
           // and restore the native selector so it cannot show a floor that
-          // the store did not select.
-          this.#pendingNavigation = null;
-          this.#dialogSaveRequested = false;
+          // the store did not select. A save in flight keeps it: its answer
+          // decides whether the navigation goes on.
+          if (!this.#dialogSave) this.#pendingNavigation = null;
           this.#restoreSelectors();
+          const next = this.#afterDialog;
+          this.#afterDialog = null;
+          this.#continue(next);
         }
         // Safari does not focus a button on a pointing-device click. Use the
         // explicit workflow launcher if there was no nested active element.
@@ -893,9 +882,33 @@ export class MaticMapShellV4 extends LitElement {
     if (pending && pending.type !== "dismiss-top-layer") queueMicrotask(() => this.#emit(pending));
   }
 
+  // shell.md §5: the save Discard changes? started has answered. Saved, the
+  // dialog closes and the navigation that asked goes on without discarding;
+  // not saved, it closes and the user stays with the draft. The answer comes
+  // from inside the write, so this waits a task for the state it left.
+  #dialogSaveSettled(token: object, saved: boolean): void {
+    setTimeout(() => {
+      if (this.#dialogSave !== token) return;
+      this.#dialogSave = null;
+      this.requestUpdate();
+      const next = saved ? this.#pendingNavigation : null;
+      this.#pendingNavigation = null;
+      if (this.state.dialog !== "discardDraft") return this.#continue(next);
+      this.#afterDialog = next;
+      this.#dismissDialog();
+    });
+  }
+
+  #continue(next: WorkspaceIntent | "reload" | null): void {
+    if (next === "reload") reloadInto(this.state.workflow);
+    // The draft this shell holds may still read dirty for a render, so the
+    // intent skips the confirmation the saved draft no longer needs.
+    else if (next) this.#emit(next);
+  }
+
   #keepDraft(): void {
     // A save from the dialog is in flight; it closes the dialog itself.
-    if (this.state.command === "pending") return;
+    if (this.state.command === "pending" || this.#dialogSave) return;
     this.#pendingNavigation = null;
     this.#dismissDialog();
     this.#restoreSelectors();
@@ -920,9 +933,9 @@ export class MaticMapShellV4 extends LitElement {
     if (launcher) requestAnimationFrame(() => launcher.focus({ preventScroll: true }));
   }
 
-  #dispatchAction(action: string | ResetCadenceAction): void {
+  #dispatchAction(action: string | ResetCadenceAction, settled?: SaveSettled): void {
     this.dispatchEvent(new CustomEvent(WORKSPACE_ACTION_EVENT, {
-      detail: typeof action === "string" ? { id: action } : action,
+      detail: typeof action === "string" ? { id: action, settled } : action,
       bubbles: true,
       composed: true,
     }));
@@ -1656,7 +1669,7 @@ export class MaticMapShellV4 extends LitElement {
     } : state.dialog === null ? undefined : this.#views.value?.dialogCopy(state.dialog, state, this.localize);
     // Discard changes? offers the save the primary would make, and holds every
     // button while that save is in flight.
-    const busy = discard && state.command === "pending";
+    const busy = discard && (state.command === "pending" || this.#dialogSave !== null);
     const save = discard && (primary.id === "save-plan" || primary.id === "save-area") && (primary.enabled || busy) ? primary.id : null;
     const sheetOffset = narrow && !state.fullMap ? `--map-sheet-offset:${this._sheetOffset}px` : "--map-sheet-offset:0px";
     const showDrawTools = narrow && state.workflow === "draw";
@@ -1935,9 +1948,10 @@ export class MaticMapShellV4 extends LitElement {
                   aria-describedby=${busy ? "dialog-saving" : nothing}
                   @click=${() => {
                     if (busy) return;
-                    this.#dialogSaveRequested = true;
-                    this.#intent({ type: "set-notice", notice: null });
-                    this.#dispatchAction(save);
+                    const token = {};
+                    this.#dialogSave = token;
+                    this.requestUpdate();
+                    this.#dispatchAction(save, (saved) => this.#dialogSaveSettled(token, saved));
                   }}
                 >${this.#t("v4_save", "Save")}</button>` : nothing}
                 <button

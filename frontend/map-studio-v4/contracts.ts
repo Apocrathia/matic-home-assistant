@@ -83,7 +83,10 @@ export interface ResetCadenceAction {
   readonly mode: "mop" | "coverage";
 }
 
-export type WorkspaceAction = { readonly id: string } | ResetCadenceAction;
+/** Told once whether this save was acknowledged, so Discard changes? settles on its own save. */
+export type SaveSettled = (saved: boolean) => void;
+
+export type WorkspaceAction = { readonly id: string; readonly settled?: SaveSettled } | ResetCadenceAction;
 
 export interface ResourceStamp {
   readonly entryKey: string;

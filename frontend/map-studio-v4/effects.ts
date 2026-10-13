@@ -4,6 +4,7 @@ import {
   type ResourceStamp,
   type ResourceState,
   type ResetCadenceAction,
+  type SaveSettled,
   type WorkspaceNotice,
   type WorkspaceState,
   type Workflow,
@@ -2258,16 +2259,16 @@ export class EffectController {
     };
   }
 
-  saveArea(): Promise<void> {
-    return this.#write("area-mutation", NOTICES.areaSaveFailed, (writes, context) => writes.saveArea(context));
+  saveArea(settled?: SaveSettled): Promise<void> {
+    return this.#write("area-mutation", NOTICES.areaSaveFailed, (writes, context) => writes.saveArea(context), settled);
   }
 
   deleteArea(): Promise<void> {
     return this.#write("area-mutation", NOTICES.areaDeleteFailed, (writes, context) => writes.deleteArea(context));
   }
 
-  savePlan(): Promise<void> {
-    return this.#write("plan-mutation", NOTICES.planSaveFailed, (writes, context) => writes.savePlan(context));
+  savePlan(settled?: SaveSettled): Promise<void> {
+    return this.#write("plan-mutation", NOTICES.planSaveFailed, (writes, context) => writes.savePlan(context), settled);
   }
 
   deletePlan(): Promise<void> {
@@ -2287,17 +2288,27 @@ export class EffectController {
   // the module loads cancels it as one would cancel its request. Before it is
   // sent it must still be admitted, as when the old code sent it at once. If
   // the module failed, the write shows its own failure notice and `command`
-  // stays as it was.
+  // stays as it was. `settled` hears once whether this write was saved; a
+  // write refused, cancelled or failed is not.
   async #write(
     resource: (typeof MUTATION_RESOURCES)[number],
     failure: WorkspaceNotice,
     run: (writes: CatalogWrites, context: CatalogWriteContext) => Promise<void>,
+    settled?: SaveSettled,
   ): Promise<void> {
+    let answer = settled;
+    const settle = (saved: boolean): void => {
+      const once = answer;
+      answer = undefined;
+      once?.(saved);
+    };
     const state = this.#store.value;
     // Every catalog write refuses while a command is pending or another write
     // holds its resource, so taking the resource never cancels a write.
-    if (state.command === "pending" || this.#controllers.has(resource)) return;
+    if (state.command === "pending" || this.#controllers.has(resource)) return settle(false);
     const controller = this.#controller(resource);
+    // A cancelled write is not saved, even while its request still waits.
+    controller.signal.addEventListener("abort", () => settle(false), { once: true });
     try {
       const writes = await this.#catalogWritesModule();
       const live = this.#store.value;
@@ -2317,15 +2328,17 @@ export class EffectController {
         projection: () => this.#projection,
         disposed: () => this.#disposed,
         release: () => this.#release(resource, controller),
+        settled: settle,
       });
     } finally {
       this.#release(resource, controller);
+      settle(false);
     }
   }
 
-  executeAction(id: string): Promise<void>;
+  executeAction(id: string, settled?: SaveSettled): Promise<void>;
   executeAction(action: ResetCadenceAction): Promise<void>;
-  async executeAction(idOrAction: string | ResetCadenceAction): Promise<void> {
+  async executeAction(idOrAction: string | ResetCadenceAction, settled?: SaveSettled): Promise<void> {
     const id = typeof idOrAction === "string" ? idOrAction : idOrAction.id;
     switch (id) {
       case "recheck-status": {
@@ -2439,13 +2452,14 @@ export class EffectController {
         this.#store.dispatch({ type: "open-workflow", workflow: "areaReview" });
         return;
       case "save-area":
-        await this.saveArea();
+        await this.saveArea(settled);
         return;
       case "save-plan":
         // A clean saved plan has nothing to write: Done returns to Run.
         if (this.#store.value.planDraft.id && !this.#store.value.planDraft.dirty) {
           this.#store.dispatch({ type: "set-plan-view", view: "run" });
-        } else await this.savePlan();
+          settled?.(true);
+        } else await this.savePlan(settled);
         return;
       case "delete-plan":
         await this.deletePlan();
