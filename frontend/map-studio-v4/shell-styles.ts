@@ -229,13 +229,17 @@ export const shellStyles = [tokens, base, controls, css`
        text below AA (4.3:1 on the default light theme). Pull it towards
        the body text colour so it clears 4.5:1 on both schemes. */
     .quick-actions .ms-row--featured .ms-row__body small { color: color-mix(in srgb, var(--ms-text-quiet) 70%, var(--ms-text)); }
+    /* A demoted card drops its tint and reads in the disabled colour; it stays
+       in place and focusable, described by the one home reason (home-rooms.md §4). */
+    .quick-actions .ms-row[aria-disabled="true"] { --ms-local: var(--ms-surface-sunken); border-color: var(--ms-line); }
     .quick-actions .ms-row[aria-disabled="true"] .ms-row__lead { color: var(--ms-text-disabled); background: color-mix(in srgb, var(--ms-text) 6%, var(--ms-local)); }
-    .quick-actions .ms-row[aria-disabled="true"] .ms-row__body strong { color: var(--ms-text-disabled); }
+    .quick-actions .ms-row[aria-disabled="true"] .ms-row__body strong,
+    .quick-actions .ms-row[aria-disabled="true"] .ms-row__body small { color: var(--ms-text-disabled); }
+    .home-actions { display: flex; margin: 0 0 var(--ms-space-4); }
     .shelf-heading { margin: var(--ms-space-5) 0 var(--ms-space-2); color: var(--ms-text-quiet); font-size: var(--ms-t-sm); font-weight: var(--ms-w-bold); }
-    .host-state, .problem { display: grid; gap: var(--ms-space-2); padding: var(--ms-space-4); border: 1px solid var(--ms-line); border-radius: var(--ms-radius-md); }
-    .host-state h3 { margin: 0; font-size: var(--ms-t-md); }
-    .host-state p, .problem p, .loading { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-sm); line-height: var(--ms-lh-normal); }
-    .host-state .ms-btn, .problem .ms-btn { justify-self: start; text-decoration: none; }
+    .problem { display: grid; gap: var(--ms-space-2); padding: var(--ms-space-4); border: 1px solid var(--ms-line); border-radius: var(--ms-radius-md); }
+    .problem p, .loading { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-sm); line-height: var(--ms-lh-normal); }
+    .problem .ms-btn { justify-self: start; text-decoration: none; }
     .map-display { display: grid; gap: var(--ms-space-2); }
     .map-display .ms-segment { --ms-local: var(--ms-surface-sunken); border: 1px solid var(--ms-line); border-radius: var(--ms-radius-md); background: var(--ms-local); }
     .map-display .ms-segment .ms-btn { flex: 1; }
@@ -432,7 +436,8 @@ export const shellStyles = [tokens, base, controls, css`
     .narrow .precision-popover { position: static; inline-size: auto; block-size: auto; }
 
     @media (forced-colors: active) {
-      .dialog, .full-map-hud, .mobile-sheet, .host-state, .problem, .notice { border: 1px solid CanvasText; }
+      .dialog, .full-map-hud, .mobile-sheet, .problem, .notice { border: 1px solid CanvasText; }
+      .quick-actions .ms-row--featured:not([aria-disabled="true"]) { border-color: CanvasText; }
       .sheet-handle { background: CanvasText; }
     }
 

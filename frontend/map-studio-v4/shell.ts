@@ -62,6 +62,7 @@ import { formatList, translate } from "./localize";
 import { needsDraftConfirmation } from "./draft-navigation";
 import {
   deleteSubject,
+  hasStoppableWork,
   initialWorkspaceState,
   isSelectedRobotUnavailable,
   selectStopSecondaryAction,
@@ -172,6 +173,73 @@ const statusCopy = (state: WorkspaceState, localize?: Localize): StatusPresentat
   };
 };
 
+/**
+ * Home's one state (home-rooms.md §4 H1-H11), checked in the strip's order.
+ * Each state has one heading and at most one description; the cards and
+ * the Maps group follow from it, so nothing is stated twice (MS-HOME-03).
+ */
+type HomeKind =
+  | "ready" | "locating" | "busy" | "paused" | "problem" | "map-unavailable" | "map-limited"
+  | "offline" | "reconnecting" | "administrator" | "robot-unavailable" | "read-only" | "setup";
+
+const homeState = (state: WorkspaceState): HomeKind => {
+  const { host } = state;
+  if (!host.connected) return "reconnecting";
+  if (!host.administrator) return "administrator";
+  if (host.robotCount === 0) return "setup";
+  if (isSelectedRobotUnavailable(state)) return "robot-unavailable";
+  if (!host.robotConnected) return "offline";
+  if (isReadOnlyWorkspace(state)) return "read-only";
+  if (state.activity === "problem") return "problem";
+  if ((hasStoppableWork(state) && state.activity !== "paused")
+    || state.activity === "stopping" || state.command === "settling"
+    || state.resources.entry?.stopSettlePending === true) return "busy";
+  if (state.activity === "paused") return "paused";
+  if (state.coherence === "unavailable" || state.coherence === "blocked") return "map-unavailable";
+  if (state.coherence === "degraded") return "map-limited";
+  if (state.coherence === "verifying" || state.coherence === "booting") return "locating";
+  return "ready";
+};
+
+const homeCopy = (kind: HomeKind, state: WorkspaceState, t: (key: string, fallback: string) => string): {
+  readonly title: string;
+  readonly description: string;
+} => {
+  switch (kind) {
+    case "ready":
+      return { title: t("v4_what_to_clean", "Choose what to clean"), description: "" };
+    case "locating":
+      return { title: t("v4_what_to_clean", "Choose what to clean"), description: t("v4_reason_locating", "Waiting for the robot to confirm which floor it is on.") };
+    case "busy":
+      return { title: t("v4_home_busy_title", "The robot is busy"), description: t("v4_home_busy_detail", "You can start a new clean when it's done.") };
+    case "paused":
+      return { title: t("v4_home_busy_title", "The robot is busy"), description: t("v4_home_paused_detail", "Resume or stop this clean before starting a new one.") };
+    case "problem":
+      return { title: t("v4_attention_title", "The robot needs attention"), description: t("v4_attention_body", "The robot reported a problem. Check it in the Matic app, then start a new clean.") };
+    case "map-unavailable":
+      return { title: t("v4_what_to_clean", "Choose what to clean"), description: t("v4_map_unavailable_status", "Home Assistant can't show the map right now, so cleaning can't start.") };
+    case "map-limited":
+      return { title: t("v4_what_to_clean", "Choose what to clean"), description: t("v4_map_limited_body", "Home Assistant can show this map but can't confirm it well enough to start cleaning.") };
+    case "offline":
+      return { title: t("v4_robot_offline_title", "Robot offline"), description: t("v4_robot_offline_body", "Showing the last known map. Cleaning comes back when the robot reconnects.") };
+    case "reconnecting":
+      return { title: t("v4_reconnecting_title", "Reconnecting to Home Assistant"), description: t("v4_reconnecting_body", "Cleaning controls come back when Home Assistant reconnects.") };
+    case "administrator":
+      return { title: t("v4_admin_title", "Administrator access required"), description: t("v4_admin_body", "Ask a Home Assistant administrator to open this map.") };
+    case "robot-unavailable":
+      return { title: t("v4_selected_robot_unavailable", "Selected robot unavailable"), description: t("v4_choose_another_robot", "Choose another robot to open its map.") };
+    case "read-only":
+      return {
+        title: t("v4_saved_map_read_only_title", "Saved map is read only"),
+        description: state.dataMode === "live"
+          ? t("v4_map_recovery_automatic", "Cleaning controls return automatically when the live map is ready.")
+          : t("v4_saved_map_read_only_detail", "Return to the live map to choose rooms, run a plan, or draw a custom area."),
+      };
+    case "setup":
+      return { title: t("v4_setup_title", "Set up your robot"), description: t("v4_no_robot_body", "Add the Matic (Unofficial) integration to see a map here.") };
+  }
+};
+
 const workflowCopy = (state: WorkspaceState, localize?: Localize): {
   readonly title: string;
   readonly description: string;
@@ -198,15 +266,7 @@ const workflowCopy = (state: WorkspaceState, localize?: Localize): {
     case "support":
       return { title: t("v4_map_diagnostics", "Map diagnostics"), description: t("v4_map_support_detail", "Details to share with support") };
     case "none":
-      if (isReadOnlyWorkspace(state)) {
-        return {
-          title: t("v4_saved_map_read_only_title", "Saved map is read only"),
-          description: state.dataMode === "live"
-            ? t("v4_map_recovery_automatic", "Cleaning controls return automatically when the live map is ready.")
-            : t("v4_saved_map_read_only_detail", "Return to the live map to choose rooms, run a plan, or draw a custom area."),
-        };
-      }
-      return { title: t("v4_what_to_clean", "Choose what to clean"), description: t("v4_clean_detail", "Choose rooms, a saved plan, or a custom area.") };
+      return homeCopy(homeState(state), state, t);
   }
 };
 
@@ -1286,6 +1346,8 @@ export class MaticMapShellV4 extends LitElement {
         : rooms)
       : "";
     const editing = state.workflow === "plan" && state.planView === "edit";
+    // No bar when it would be empty: idle home has none (home-rooms.md §3).
+    if (!summary && !editing && !(primary && "label" in primary) && !secondary) return nothing;
     // Edit pairs Cancel with the primary.
     return html`
       <div class=${editing ? "action-bar paired" : "action-bar"}>
@@ -1297,28 +1359,20 @@ export class MaticMapShellV4 extends LitElement {
     `;
   }
 
-  #hostState(title: string, body: string, extra: unknown = nothing) {
-    return html`
-      <div class="host-state">
-        <h3>${title}</h3>
-        <p>${body}</p>
-        ${extra}
-      </div>
-    `;
-  }
-
   // An entry row's tap; an enabled row also records it for a resumed Try again.
   #launch(workflow: Workflow, disabled = false): () => void {
     if (!disabled) this.#launchers.add(workflow);
     return () => { if (!disabled) this.#workflow(workflow); };
   }
 
-  #shelfRow(label: string, glyph: string, workflow: Workflow, detail?: string, disabled = false) {
+  #shelfRow(label: string, glyph: string, workflow: Workflow, detail?: string, disabled = false, describedBy?: string) {
     return html`
       <button
         class="ms-row"
         type="button"
+        data-launcher=${workflow}
         aria-disabled=${disabled ? "true" : nothing}
+        aria-describedby=${disabled && describedBy ? describedBy : nothing}
         @click=${this.#launch(workflow, disabled)}
       >
         <span class="ms-row__lead">${icon(glyph)}</span>
@@ -1362,135 +1416,101 @@ export class MaticMapShellV4 extends LitElement {
     `;
   }
 
-  #entry(state: WorkspaceState, narrow: boolean, status: StatusPresentation) {
+  // Home (home-rooms.md §3): the heading and description come from homeCopy;
+  // this is the body under them. Cards are demoted, never hidden, while the
+  // robot is busy or the map is not ready, and they share the one reason the
+  // description states (MS-HOME-03). Maps keeps history and diagnostics one
+  // tap away; a map or robot problem lists diagnostics first.
+  #entry(state: WorkspaceState, narrow: boolean) {
     const t = (key: string, fallback: string, placeholders?: Record<string, string | number>): string =>
       this.#t(key, fallback, placeholders);
     this.#launchers = new Set(["support"]);
+    const kind = homeState(state);
     // Built where shown, so only a shown row counts as a launcher.
-    const historyRow = () => this.#shelfRow(
-      t("v4_map_history", "Map history"),
-      iconHistory,
-      "history",
-      t("v4_map_history_detail", "Saved maps show one floor each. They can't be edited and never show where the robot is now."),
-    );
-    const diagnosticsRow = () => this.#shelfRow(
-      t("v4_map_diagnostics", "Map diagnostics"),
-      iconDiagnostics,
-      "support",
-      t("v4_map_support_detail", "Details to share with support"),
-    );
-    const { host } = state;
-    if (!host.connected) return this.#hostState(t("v4_reconnecting_title", "Reconnecting to Home Assistant"), t("v4_reconnecting_body", "Cleaning controls come back when Home Assistant reconnects."));
-    if (!host.administrator) return this.#hostState(t("v4_admin_title", "Administrator access required"), t("v4_admin_body", "Ask a Home Assistant administrator to open this map."));
-    if (host.robotCount === 0) {
-      return this.#hostState(
-        t("v4_no_robot_title", "No robot set up"),
-        t("v4_no_robot_body", "Add the Matic (Unofficial) integration to see a map here."),
-      );
-    }
-    if (isSelectedRobotUnavailable(state)) {
-      return this.#hostState(t("v4_selected_robot_unavailable", "Selected robot unavailable"), t("v4_choose_another_robot", "Choose another robot to open its map."));
-    }
-    if (!host.robotConnected) {
+    const maps = (diagnosticsFirst: boolean) => {
+      const history = this.#shelfRow(t("v4_map_history", "Map history"), iconHistory, "history", t("v4_history_quick_detail", "Browse earlier floor maps."));
+      const diagnostics = this.#shelfRow(t("v4_map_diagnostics", "Map diagnostics"), iconDiagnostics, "support", t("v4_diagnostics_quick_detail", "Check the map and copy details for support."));
       return html`
-        ${this.#hostState(t("v4_robot_offline_title", "Robot offline"), t("v4_robot_offline_body", "Showing the last known map. Cleaning comes back when the robot reconnects."))}
-        <h3 class="shelf-heading">${t("v4_more", "Map tools")}</h3>
-        <div class="shelf">${historyRow()}${diagnosticsRow()}</div>
+        <h3 class="ms-section-heading">${t("v4_maps_heading", "Maps")}</h3>
+        <div class="shelf maps">${diagnosticsFirst ? [diagnostics, history] : [history, diagnostics]}</div>
       `;
+    };
+    switch (kind) {
+      case "reconnecting":
+      case "administrator":
+      case "robot-unavailable":
+      case "setup":
+        return nothing;
+      case "offline":
+      case "read-only":
+        return maps(false);
+      case "problem":
+        return html`
+          <div class="home-actions">
+            <button class="ms-btn ms-btn--secondary" type="button" data-launcher="support-open" @click=${this.#launch("support")}>${t("v4_open_diagnostics", "Open map diagnostics")}</button>
+          </div>
+          ${maps(true)}
+        `;
+      default:
+        break;
     }
-    if (isReadOnlyWorkspace(state)) {
-      return html`
-        <h3 class="shelf-heading">${t("v4_more", "Map tools")}</h3>
-        <div class="shelf">
-          ${historyRow()}
-          ${diagnosticsRow()}
-        </div>
-      `;
-    }
-    const locating = state.coherence === "verifying" || state.coherence === "booting";
+    const held = kind !== "ready";
     const plansResource = state.resources.plans;
     const plans = plansResource.value;
     const noRooms = plans !== null && plans.rooms.length === 0;
     const planCount = plans?.plans.length ?? 0;
     const plansLoading = plansResource.status === "loading";
     const plansUnavailable = plansResource.status === "error";
-    const roomsDisabled = locating || noRooms;
-    const roomsReason = locating
-      ? t("v4_reason_locating", "Waiting for the robot to confirm which floor it is on.")
-      : noRooms ? t("v4_no_rooms_reason", "Can't clean rooms until you name them in the Matic app.") : null;
-    const planReason = locating
-      ? t("v4_reason_locating", "Waiting for the robot to confirm which floor it is on.")
-      : null;
-    const customAreaReason = locating
-      ? t("v4_reason_locating", "Waiting for the robot to confirm which floor it is on.")
-      : t("v4_areas_quick_detail", "Draw or choose a custom area");
+    const roomsDisabled = held || noRooms;
+    const card = (launcher: Workflow, featured: boolean, glyph: string, disabled: boolean, title: unknown, detail: unknown) => html`
+      <button
+        class=${featured ? "ms-row ms-row--card ms-row--featured" : "ms-row ms-row--card"}
+        type="button"
+        data-launcher=${launcher}
+        aria-disabled=${disabled ? "true" : nothing}
+        aria-describedby=${held ? "home-reason" : nothing}
+        @click=${this.#launch(launcher, disabled)}
+      >
+        <span class="ms-row__lead">${icon(glyph)}</span>
+        <span class="ms-row__body"><strong>${title}</strong><small>${detail}</small></span>
+        <span class="ms-row__trail">${icon(iconChevronRight)}</span>
+      </button>
+    `;
     return html`
-      ${state.activity === "problem"
-        ? this.#hostState(t("v4_attention_title", "The robot needs attention"), t("v4_attention_body", "The robot reported a problem. Check it in the Matic app, then start a new clean."))
-        : status.recheck ? html`
-          <div class="host-state">
-            <p>${t("v4_map_limited_body", "Home Assistant can show this map but can't confirm it well enough to start cleaning.")}</p>
-            <button
-              class="ms-btn ms-btn--secondary"
-              type="button"
-              aria-disabled=${state.rechecking ? "true" : nothing}
-              @click=${() => { if (!this.state.rechecking) this.#dispatchAction("recheck-status"); }}
-            >${t("v4_retry", "Try again")}</button>
-          </div>
-        ` : html`
-          <div class="quick-actions" role="group" aria-label=${t("v4_cleaning_choices", "Cleaning choices")}>
-            <button
-              class="ms-row ms-row--card ms-row--featured"
-              type="button"
-              aria-disabled=${roomsDisabled ? "true" : nothing}
-              @click=${this.#launch("rooms", roomsDisabled)}
-            >
-              <span class="ms-row__lead">${icon(iconRobot)}</span>
-              <span class="ms-row__body">
-                <strong>${t("v4_clean_rooms", "Clean rooms")}</strong>
-                <small>${roomsReason ?? t("v4_clean_rooms_hint", "Choose rooms for this run")}</small>
-              </span>
-              <span class="ms-row__trail">${icon(iconChevronRight)}</span>
-            </button>
-            <button
-              class="ms-row ms-row--card"
-              type="button"
-              aria-disabled=${locating ? "true" : nothing}
-              @click=${this.#launch("plans", locating)}
-            >
-              <span class="ms-row__lead">${icon(iconPlan)}</span>
-              <span class="ms-row__body">
-                <strong>${plansLoading
-                  ? t("v4_plans_loading", "Checking saved plans")
-                  : plansUnavailable
-                    ? t("v4_plans_unavailable", "Plans unavailable")
-                    : planCount
-                      ? t("v4_run_a_plan", "Run a plan")
-                      : t("v4_create_plan", "Create a plan")}</strong>
-                <small>${planReason ?? (plansLoading
-                  ? t("v4_plans_loading_hint", "Reading plans for this floor")
-                  : plansUnavailable
-                    ? t("v4_plans_unavailable_hint", "Try again to load your plans.")
-                    : planCount
-                      ? planCount === 1 ? t("v4_saved_routine", "1 saved plan") : t("v4_saved_routines", "{count} saved plans", { count: planCount })
-                      : t("v4_no_plans_hint", "Save a plan to repeat a set of rooms."))}</small>
-              </span>
-              <span class="ms-row__trail">${icon(iconChevronRight)}</span>
-            </button>
-          </div>
-        `}
-      <h3 class="shelf-heading">${t("v4_more", "Map tools")}</h3>
-      <div class="shelf">
-        ${this.#shelfRow(
+      ${kind === "map-unavailable" || kind === "map-limited" ? html`
+        <div class="home-actions">
+          <button
+            class="ms-btn ms-btn--secondary"
+            type="button"
+            aria-disabled=${state.rechecking ? "true" : nothing}
+            @click=${() => { if (!this.state.rechecking) this.#dispatchAction("recheck-status"); }}
+          >${t("v4_retry", "Try again")}</button>
+        </div>
+      ` : nothing}
+      <div class="quick-actions" role="group" aria-label=${t("v4_cleaning_choices", "Cleaning choices")}>
+        ${card("rooms", true, iconRobot, roomsDisabled,
+          t("v4_clean_rooms", "Clean rooms"),
+          !held && noRooms ? t("v4_no_rooms_reason", "Can't clean rooms until you name them in the Matic app.") : t("v4_rooms_quick_detail", "Pick rooms and clean them now."))}
+        ${card("plans", false, iconPlan, held,
+          plansLoading
+            ? t("v4_plans_loading", "Checking saved plans")
+            : plansUnavailable
+              ? t("v4_plans_unavailable", "Plans unavailable")
+              : planCount
+                ? t("v4_run_a_plan", "Run a plan")
+                : t("v4_create_plan", "Create a plan"),
+          plansLoading
+            ? t("v4_plans_loading_hint", "Reading plans for this floor")
+            : plansUnavailable
+              ? t("v4_plans_unavailable_hint", "Try again to load your plans.")
+              : planCount
+                ? planCount === 1 ? t("v4_saved_routine", "1 saved plan") : t("v4_saved_routines", "{count} saved plans", { count: planCount })
+                : t("v4_no_plans_hint", "Save a plan to repeat a set of rooms."))}
+        ${card("draw", false, iconNewArea, held,
           t("v4_custom_areas", "Clean custom area"),
-          iconNewArea,
-          "draw",
-          customAreaReason,
-          locating,
-        )}
-        ${historyRow()}
-
+          t("v4_areas_quick_detail", "Draw or choose a custom area"))}
       </div>
+      ${maps(kind === "map-unavailable")}
       ${narrow ? html`
         <h3 class="shelf-heading" id="map-display-heading">${t("v4_map_display", "Map display")}</h3>
         <div class="map-display">
@@ -1524,8 +1544,8 @@ export class MaticMapShellV4 extends LitElement {
     `;
   }
 
-  #workflowBody(state: WorkspaceState, narrow: boolean, status: StatusPresentation) {
-    if (state.workflow === "none") return this.#entry(state, narrow, status);
+  #workflowBody(state: WorkspaceState, narrow: boolean) {
+    if (state.workflow === "none") return this.#entry(state, narrow);
     const tools = this.#tools(state.workflow);
     if (tools !== "ready") {
       // A phone's draw sheet rests at peek, with the body below it, so the
@@ -1582,11 +1602,12 @@ export class MaticMapShellV4 extends LitElement {
     `;
   }
 
-  #panel(state: WorkspaceState, narrow: boolean, status: StatusPresentation) {
+  #panel(state: WorkspaceState, narrow: boolean) {
     const { description } = workflowCopy(state, this.localize);
+    // Home's demoted cards are described by this one line (home-rooms.md §4).
     return html`
-      ${description ? html`<p class="panel-description">${description}</p>` : nothing}
-      ${this.#workflowBody(state, narrow, status)}
+      ${description ? html`<p class="panel-description" id=${state.workflow === "none" ? "home-reason" : nothing}>${description}</p>` : nothing}
+      ${this.#workflowBody(state, narrow)}
     `;
   }
 
@@ -1881,7 +1902,7 @@ export class MaticMapShellV4 extends LitElement {
                   @pointercancel=${this.#bodyUp}
                 >
                   ${this.#panelTop(state)}
-                  <div class="sheet-body" role="region" aria-labelledby="workspace-title">${this.#panel(state, narrow, status)}</div>
+                  <div class="sheet-body" role="region" aria-labelledby="workspace-title">${this.#panel(state, narrow)}</div>
                 </div>
                 ${this.#actionBar(state, footerPrimary, footerSecondary)}
               ` : html`
@@ -1894,7 +1915,7 @@ export class MaticMapShellV4 extends LitElement {
                 </div>
                 <section class="workflow">
                   ${this.#panelTop(state)}
-                  <div class="workflow-body" role="region" aria-labelledby="workspace-title">${this.#panel(state, narrow, status)}</div>
+                  <div class="workflow-body" role="region" aria-labelledby="workspace-title">${this.#panel(state, narrow)}</div>
                   ${this.#actionBar(state, footerPrimary, footerSecondary)}
                 </section>
               `}

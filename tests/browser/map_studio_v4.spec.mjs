@@ -459,7 +459,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     ]);
     await page.unroute("**/chunks/workflow-panel-*.js");
     const limited = await loadGallery(page, { scenario: "map-limited" });
-    await expect(limited.locator(".host-state")).toContainText("Home Assistant can show this map but can't confirm it well enough to start cleaning.");
+    await expect(limited.locator("#home-reason")).toContainText("Home Assistant can show this map but can't confirm it well enough to start cleaning.");
     expect(await limited.evaluate((element) => {
       const { workflow, notice } = element.getWorkspaceSnapshot();
       return { workflow, notice };
@@ -2121,10 +2121,10 @@ test.describe("Map Studio v0.4 foundation", () => {
     const gallery = await loadGallery(page, { scenario: "map-limited" });
     await expect(gallery.locator(".status-copy strong")).toHaveText("Map limited");
     await expect(gallery.locator(".status-copy small")).toHaveText("Cleaning can't start");
-    const body = gallery.locator(".host-state");
-    await expect(body).toContainText("Home Assistant can show this map but can't confirm it well enough to start cleaning.");
-    await expect(gallery.locator(".quick-actions")).toHaveCount(0);
-    const retry = body.getByRole("button", { name: "Try again", exact: true });
+    await expect(gallery.locator("#home-reason")).toContainText("Home Assistant can show this map but can't confirm it well enough to start cleaning.");
+    // The cards stay, demoted (home-rooms.md §4 H8 layout).
+    await expect(gallery.locator('.quick-actions .ms-row[aria-disabled="true"]')).toHaveCount(3);
+    const retry = gallery.locator(".home-actions").getByRole("button", { name: "Try again", exact: true });
     await expect(retry).not.toHaveAttribute("aria-disabled", "true");
     await page.evaluate((tag) => {
       const element = document.querySelector(tag);
@@ -2163,10 +2163,10 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(gallery.locator(".action-bar")).not.toContainText("Set up a robot");
     await page.evaluate((tag) => document.querySelector(tag).setScenario("problem"), GALLERY_TAG);
     await expect(gallery.locator(".status-copy strong")).toHaveText("Needs attention");
-    await expect(gallery.locator(".action-bar")).not.toContainText("Check the robot");
+    // No footer button, so no footer at all (home-rooms.md §3: the bar is absent when idle).
+    await expect(gallery.locator(".action-bar button")).toHaveCount(0);
     await page.evaluate((tag) => document.querySelector(tag).setScenario("unsupported"), GALLERY_TAG);
-    await expect(gallery.locator(".action-bar")).not.toContainText("Map unavailable");
-    await expect(gallery.locator(".action-bar")).not.toContainText("Finding the map");
+    await expect(gallery.locator(".action-bar button")).toHaveCount(0);
     await expect(gallery.locator(".status-copy strong")).toHaveText("Map unavailable");
     await expect(gallery.locator(".status-copy small")).toContainText("Home Assistant can't show the map right now, so cleaning can't start.");
 
@@ -4640,7 +4640,9 @@ test.describe("Map Studio v0.4 foundation", () => {
 
   test("keeps workflow navigation and Stop together in the inspector", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "cleaning" });
-    await gallery.getByRole("button", { name: /^Clean rooms/ }).click();
+    // A busy robot demotes the home cards (home-rooms.md §4 H4), so Rooms is
+    // opened directly: the view a clean that started from it is left in.
+    await gallery.evaluate((element) => element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), workflow: "rooms" }));
     const inspector = gallery.locator(".inspector");
     await expect(inspector.getByRole("button", { name: "Back to all tasks" })).toBeVisible();
     await expect(inspector.getByRole("button", { name: "Back to all tasks" })).toHaveText("All tasks");
@@ -5360,7 +5362,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     const gallery = await loadGallery(page, { scenario: "ready" });
 
     await gallery.getByRole("complementary", { name: "Cleaning panel" })
-      .getByRole("button", { name: /^Clean rooms Choose rooms for this run/ }).click();
+      .getByRole("button", { name: /^Clean rooms Pick rooms and clean them now\./ }).click();
     await gallery.getByRole("button", { name: "2D", exact: true }).click();
     const appearance = gallery.getByRole("group", { name: "Map style" });
     await expect(appearance.getByRole("button")).toHaveText(["Photo", "Room colors"]);
@@ -5406,16 +5408,16 @@ test.describe("Map Studio v0.4 foundation", () => {
       .toHaveText(["House", "Shed", "Annex · No saved map for this floor yet"]);
     await expect(gallery.getByLabel("Choose floor", { exact: true }).locator('option[value="saved-2"]'))
       .toBeDisabled();
-    // Two featured choices, then a plainly named map-tools shelf. The entry never offers a
+    // Three task cards, then the Maps group (home-rooms.md §3). The entry never offers a
     // phantom "Run plan" before a plan has been chosen.
     const quick = gallery.locator(".quick-actions").getByRole("button");
-    await expect(quick).toHaveCount(2);
-    await expect(quick.nth(0)).toHaveAccessibleName(/^Clean rooms Choose rooms for this run/);
+    await expect(quick).toHaveCount(3);
+    await expect(quick.nth(0)).toHaveAccessibleName(/^Clean rooms Pick rooms and clean them now\./);
     await expect(quick.nth(0)).toHaveClass(/ms-row--featured/);
     await expect(quick.nth(1)).toHaveAccessibleName(/^Run a plan (1 saved plan|\d+ saved plans)/);
-    await expect(gallery.getByRole("heading", { name: "Map tools", level: 3 })).toBeVisible();
-    await expect(gallery.locator(".shelf").getByRole("button", { name: /^Clean custom area Draw or choose a custom area/ })).toBeVisible();
-    await expect(gallery.locator(".shelf").getByRole("button", { name: /^Map history Saved maps show one floor each\. They can't be edited and never show where the robot is now\./ })).toBeVisible();
+    await expect(quick.nth(2)).toHaveAccessibleName(/^Clean custom area Draw or choose a custom area/);
+    await expect(gallery.getByRole("heading", { name: "Maps", level: 3 })).toBeVisible();
+    await expect(gallery.locator(".maps").getByRole("button", { name: /^Map history Browse earlier floor maps\./ })).toBeVisible();
     await expect(gallery.getByRole("button", { name: /^Run plan/ })).toHaveCount(0);
     // The launcher and the Rooms strip action share "Clean rooms"; each view holds only one.
     await expect(gallery.getByRole("button", { name: /^Clean rooms/ })).toHaveCount(1);
@@ -5425,13 +5427,13 @@ test.describe("Map Studio v0.4 foundation", () => {
     await gallery.getByLabel("Choose floor", { exact: true }).selectOption("current");
     await expect.poll(async () => (await snapshot(page)).selection.floorId).toBe("current");
 
-    await gallery.getByRole("button", { name: /^Clean rooms Choose rooms for this run/ }).click();
+    await gallery.getByRole("button", { name: /^Clean rooms Pick rooms and clean them now\./ }).click();
     await expect(gallery.getByRole("heading", { name: "Choose rooms" })).toBeVisible();
     // Disabled actions stay focusable and explain themselves: aria-disabled
     // plus an aria-describedby reason, which is stronger than `disabled`.
     const cleanRooms = gallery.getByRole("button", { name: "Clean rooms", exact: true });
     await expect(cleanRooms).toHaveCount(1);
-    // A leaked launcher ("Clean rooms Choose rooms for this run") would not match the exact name.
+    // A leaked launcher ("Clean rooms Pick rooms and clean them now.") would not match the exact name.
     await expect(gallery.getByRole("button", { name: /^Clean rooms/ })).toHaveCount(1);
     await expect(cleanRooms).toHaveAttribute("aria-disabled", "true");
     await expect(cleanRooms).toHaveAccessibleDescription(/room/i);
@@ -5705,10 +5707,12 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(gallery.locator("matic-map-canvas-v4 .map-message")).toContainText("Locating");
     await expect(gallery.locator(".root > .sr-only[aria-live=polite]")).toHaveText("Locating");
     // Locating has no footer button (shell.md §2 row 8); the sheet body gives
-    // the reason on the choices it holds back.
+    // the reason once, under the heading, and the held cards point at it
+    // (home-rooms.md §4 H3).
     await expect(gallery.getByRole("button", { name: "Finding the map" })).toHaveCount(0);
+    await expect(gallery.locator("#home-reason")).toHaveText("Waiting for the robot to confirm which floor it is on.");
     await expect(gallery.getByRole("button", { name: /^Clean rooms/ }))
-      .toContainText("Waiting for the robot to confirm which floor it is on.");
+      .toHaveAccessibleDescription("Waiting for the robot to confirm which floor it is on.");
     await expect(mapLive).toContainText("not available");
   });
 

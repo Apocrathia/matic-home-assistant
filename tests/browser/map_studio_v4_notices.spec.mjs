@@ -678,7 +678,7 @@ test("Try again on a limited map rereads the catalog once and is disabled meanwh
   const strip = panel.locator(".sheet-status");
   await expect(strip).toContainText("Map limited");
   await expect(strip).toContainText("Cleaning can't start");
-  const retry = panel.locator(".host-state").getByRole("button", { name: "Try again", exact: true });
+  const retry = panel.locator(".home-actions").getByRole("button", { name: "Try again", exact: true });
   await expect(retry).not.toHaveAttribute("aria-disabled", "true");
 
   await page.evaluate(() => window.__panelFixture.deferNextCatalog());

@@ -182,6 +182,8 @@ text-align: start;
 font-size: var(--ms-t-sm);
 }
 .ms-row--card { min-block-size: var(--ms-control-lg); padding: var(--ms-space-3); }
+.ms-section-heading { margin: var(--ms-space-5) 0 var(--ms-space-2); color: var(--ms-text-quiet); font-size: var(--ms-t-md); font-weight: var(--ms-w-bold); line-height: var(--ms-lh-tight); }
+.ms-section-heading:first-child { margin-block-start: 0; }
 .ms-row--stack { display: grid; gap: var(--ms-space-2); }
 .ms-row--menu { --ms-local: var(--ms-surface-card); border-color: transparent; border-radius: var(--ms-radius-sm); }
 .ms-row--featured { --ms-local: color-mix(in srgb, var(--ms-accent) 10%, var(--ms-surface-sunken)); border-color: color-mix(in srgb, var(--ms-accent) 30%, var(--ms-line)); }
