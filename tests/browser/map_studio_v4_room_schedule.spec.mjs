@@ -291,6 +291,30 @@ test.describe("room schedule model", () => {
     });
   });
 
+  // Codex P2 (#253): a scope change starts fresh progress (plans.py
+  // reset_private_progress), so a schedule due on the shared count can still
+  // be brought forward in the same save.
+  test("leaving a shared schedule makes its due work available to bring forward", async ({ page }) => {
+    const result = await run(page, `
+      const shared = p({ scope: "shared", mopEveryN: 3, coverageEveryN: 2, periodicCoverageSetting: "heavy_duty" });
+      const catalogRoom = { roomId: "a", name: "Kitchen", sharedCadence: shared };
+      const due = g({ mopDue: true, coverageDue: true, nextMopIn: 1, nextCoverageIn: 1 });
+      const staying = input(shared, room(shared), due, catalogRoom);
+      const leaving = input({ ...shared, scope: "plan" }, room(shared), due, catalogRoom);
+      const left = m.scheduleModel(t, "en", leaving);
+      const on = m.withNextClean(leaving, true);
+      const sharing = input(p({ scope: "shared", mopEveryN: 3 }), room(p({ mopEveryN: 3 })), g({ mopDue: true, nextMopIn: 1 }));
+      return { staying: m.scheduleModel(t, "en", staying).next, left: left.next, statuses: [left.mop.status, left.coverage.status],
+        on: [on.scope, on.doMopNext, on.doCoverageNext], sharing: m.scheduleModel(t, "en", sharing).next?.label };`);
+    expect(result).toEqual({
+      staying: null,
+      left: { label: "Mop and heavy duty vacuum on the next clean", on: false, mop: true, coverage: true, blocked: null },
+      statuses: [null, null],
+      on: ["plan", true, true],
+      sharing: "Mop on the next clean",
+    });
+  });
+
   test("row and room reasons", async ({ page }) => {
     const result = await run(page, `
       const unverified = m.scheduleModel(t, "en", input(p({ mopEveryN: 3 }), undefined, undefined, undefined,
@@ -786,9 +810,15 @@ test.describe("next clean, Advanced and joining", () => {
   test("leaving a shared schedule says other plans keep it", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "plan-cadence-shared" });
     const schedule = gallery.getByRole("group", { name: "Room schedule for Kitchen" });
+    // The rotation is due on the shared count; the plan's fresh count can bring it forward.
+    await expect(schedule.getByRole("switch")).toHaveAccessibleName("Mop on the next clean");
     await schedule.getByText("Advanced", { exact: true }).click();
     await schedule.getByRole("radio", { name: "In this plan only" }).check();
     await expect(schedule.getByText("Saving starts new progress for this plan only, and other plans keep the shared schedule.", { exact: true })).toBeVisible();
+    const next = schedule.getByRole("switch");
+    await expect(next).toHaveAccessibleName("Mop and heavy duty vacuum on the next clean");
+    await next.click();
+    expect((await snapshot(page)).planDraft.rooms[0].cadence).toMatchObject({ scope: "plan", doMopNext: true, doCoverageNext: true });
   });
 });
 
