@@ -921,7 +921,8 @@ export const PLAN_BLOCKERS: Partial<Record<NextRunPreviewBlocker, Reason>> = {
   plan_has_no_rooms: { reason: "Can't run this plan until it has at least one room.", reasonKey: "v4_preview_no_rooms" },
   plan_room_limit: { reason: "Can't run this plan until it has 100 rooms or fewer.", reasonKey: "v4_preview_room_limit" },
   invalid_plan: { reason: "Can't run this plan until you open Edit and save it again.", reasonKey: "v4_preview_invalid" },
-  plan_disabled: PLAN_PAUSED,
+  // No `plan_disabled`: a paused draft gives PLAN_PAUSED first, and a preview
+  // still paused after the switch turned it on is stale, so it is retried.
 };
 
 /** One room's blocking schedule reason, most specific first (plan.md R3), or null when it can run. */

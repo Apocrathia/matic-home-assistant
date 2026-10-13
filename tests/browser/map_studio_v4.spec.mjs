@@ -1149,7 +1149,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       await expect(gallery.locator("ol.run-list")).toHaveCount(0);
       const rows = gallery.locator("ul.run-list > li");
       await expect(rows).toHaveText(["Kitchen Vacuum · Optimal", "Living room Vacuum · Optimal", "Office Vacuum · Optimal"]);
-      await expect(rows.locator(".ms-badge")).toHaveCount(0);
+      await expect(rows.locator(".pos-badge")).toHaveCount(0);
       const enabled = gallery.getByRole("switch", { name: "Plan enabled" });
       await expect(enabled).toHaveAttribute("aria-checked", "true");
       await expect(enabled).toHaveAccessibleDescription("When it's on, this plan can run from here, from automations and from Home Assistant actions.");
@@ -1226,6 +1226,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       [{ command: "pending", pendingAction: "run-plan" }, "Waiting for Home Assistant to check the next run."],
       [{ activity: "cleaning" }, "Can't change this until the robot finishes."],
       [{ host: { connected: true, robotConnected: false } }, "Waiting for Home Assistant to reach the robot again."],
+      [{ pageActive: false }, "Waiting for the map to be ready."],
     ]) {
       await gallery.evaluate((element, { value, base }) => {
         element.replaceWorkspaceState({ ...base, ...value, ...(value.host ? { host: { ...base.host, ...value.host } } : {}) });
@@ -1272,12 +1273,67 @@ test.describe("Map Studio v0.4 foundation", () => {
     await panel.getByRole("button", { name: /^Daily clean/ }).click();
     const enabled = panel.getByRole("switch", { name: "Plan enabled" });
     await expect(enabled).toHaveAttribute("aria-checked", "true");
-    await enabled.click();
+    // From the keyboard, so every engine gives the switch focus (Safari does not on a click).
+    await enabled.focus();
+    await page.keyboard.press("Space");
     await expect.poll(() => page.evaluate(() => window.__panelFixture.serviceCalls.length)).toBe(1);
     const call = await page.evaluate(() => window.__panelFixture.serviceCalls[0]);
     expect(call).toMatchObject({ domain: "matic_robot", service: "save_plan", data: { plan_id: "daily", enabled: false } });
     await expect(panel.locator("[data-notice-slot], [data-notice-toast]").filter({ hasText: "Plan paused" }).first()).toBeVisible();
     await expect(enabled).toHaveAttribute("aria-checked", "false");
+    // plan.md §5: focus stays on the switch after success and after failure.
+    await expect(enabled).toBeFocused();
+    await page.evaluate(() => window.__panelFixture.failNextService("save_plan"));
+    await page.keyboard.press("Space");
+    await expect.poll(() => page.evaluate(() => window.__panelFixture.serviceCalls.length)).toBe(2);
+    await expect(enabled).toHaveAttribute("aria-checked", "false");
+    await expect(enabled).toBeFocused();
+  });
+
+  test("Run's summary uses the one-room forms", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-saved-intelligent" });
+    await settleWorkspace(gallery);
+    const oneRoom = (seconds) => gallery.evaluate((element, seconds) => {
+      const state = element.getWorkspaceSnapshot();
+      const catalog = state.resources.plans.value;
+      const plans = catalog.plans.map((plan) => ({ ...plan, rooms: plan.rooms.slice(0, 1), roomOrder: plan.roomOrder.slice(0, 1),
+        nextRunEstimateSeconds: seconds, nextRunPreview: { ...plan.nextRunPreview, rooms: plan.nextRunPreview.rooms.slice(0, 1) } }));
+      element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...state.resources.plans, value: { ...catalog, plans } } } });
+    }, seconds);
+    await oneRoom(1_980);
+    await expect(gallery.locator(".summary")).toHaveText("1 room · about 33 min");
+    await oneRoom(null);
+    await expect(gallery.locator(".summary")).toHaveText("1 room");
+  });
+
+  test("a next run with no usable preview asks to retry it", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-saved-intelligent" });
+    await settleWorkspace(gallery);
+    for (const preview of [null, { previewToken: "not-a-token" }]) {
+      await gallery.evaluate((element, preview) => {
+        const state = element.getWorkspaceSnapshot();
+        const catalog = state.resources.plans.value;
+        const plans = catalog.plans.map((plan) => ({ ...plan, nextRunPreview: preview && { ...plan.nextRunPreview, ...preview } }));
+        element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...state.resources.plans, value: { ...catalog, plans } } } });
+      }, preview);
+      await expect(gallery.locator(".problem")).toHaveText("Can't run this plan until you retry its next-run preview.");
+      await expect(gallery.getByRole("button", { name: "Try again", exact: true })).toBeVisible();
+    }
+  });
+
+  test("turning a paused plan on shows no problem while it saves, then retries the stale preview", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-run-paused" });
+    await settleWorkspace(gallery);
+    const base = await gallery.evaluate((element) => element.getWorkspaceSnapshot());
+    await gallery.evaluate((element, base) => element.replaceWorkspaceState({ ...base, command: "pending", pendingAction: "save-plan",
+      planDraft: { ...base.planDraft, enabled: true } }), base);
+    await expect(gallery.getByRole("switch", { name: "Plan enabled" })).toHaveAttribute("aria-checked", "true");
+    await expect(gallery.locator(".problem")).toHaveCount(0);
+    await expect(gallery.getByRole("button", { name: "Try again", exact: true })).toHaveCount(0);
+    await expect(gallery.getByText("Can't run this plan until you turn it on.")).toHaveCount(0);
+    // The save is done but the preview still says paused: it is stale, so it is retried.
+    await gallery.evaluate((element, base) => element.replaceWorkspaceState({ ...base, planDraft: { ...base.planDraft, enabled: true } }), base);
+    await expect(gallery.locator(".problem")).toHaveText("Can't run this plan until you retry its next-run preview.");
   });
 
   test("delete dialogs use a generic title, the bare verb and the saved name", async ({ page }) => {
@@ -8731,7 +8787,8 @@ test.describe("plan primary action", () => {
       ["plan_has_no_rooms", "v4_preview_no_rooms", "Can't run this plan until it has at least one room."],
       ["plan_room_limit", "v4_preview_room_limit", "Can't run this plan until it has 100 rooms or fewer."],
       ["invalid_plan", "v4_preview_invalid", "Can't run this plan until you open Edit and save it again."],
-      ["plan_disabled", "v4_reason_run_plan_paused"],
+      // An enabled draft with a preview still paused: the preview is stale, so it is retried.
+      ["plan_disabled", "v4_reason_run_plan_preview"],
       ["preview_unavailable", "v4_reason_run_plan_preview"],
       ["coverage_requires_vacuum", "v4_reason_run_plan_preview"],
     ];
@@ -9079,8 +9136,7 @@ test.describe("plan effects", () => {
         dirty: (store) => store.patch({ planDraft: { ...store.value.planDraft, dirty: true } }),
         unsaved: (store) => store.patch({ planDraft: { ...store.value.planDraft, id: null } }),
         pending: (store) => store.patch({ command: "pending" }),
-        failed: (store) => store.patch({ command: "failed" }),
-        map: (store) => store.patch({ pageActive: false }),
+        map:(store) => store.patch({ pageActive: false }),
         working: (store) => store.patch({ activity: "cleaning" }),
       };
       const outcome = {};
@@ -9095,8 +9151,24 @@ test.describe("plan effects", () => {
       return outcome;
     });
     for (const value of Object.values(result)) expect(value).toEqual({ unchanged: true, calls: 0, reloads: 0 });
-    expect(Object.keys(result)).toHaveLength(8);
+    expect(Object.keys(result)).toHaveLength(7);
   });
+
+  // The switch looks enabled after a failed or settling command, so it works then too.
+  for (const command of ["failed", "settling"]) {
+    test(`the Run switch saves after a ${command} command`, async ({ page }) => {
+      await loadPlanEffects(page);
+      const result = await page.evaluate(async (command) => {
+        const run = await window.planEffects("plan-saved-intelligent");
+        run.store.patch({ command });
+        await run.effects.setPlanEnabled(false);
+        const outcome = { calls: run.calls.map(([service, data]) => [service, data.enabled]), command: run.store.value.command };
+        run.effects.dispose();
+        return outcome;
+      }, command);
+      expect(result).toEqual({ calls: [["save_plan", false]], command: "idle" });
+    });
+  }
 
   for (const context of ["disposed", "robot", "user"]) {
     for (const rejected of [false, true]) {

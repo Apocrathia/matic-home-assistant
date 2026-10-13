@@ -202,9 +202,10 @@ export const setPlanEnabled = async (context: CatalogWriteContext, enabled: bool
   const { state, store, effects } = context;
   const { notice, canEditCoordinates, hasStoppableWork, draftForPlan } = context.helpers;
   const id = state.planDraft.id;
-  // Admitted when asked for and still now, for the same clean saved plan.
+  // Admitted when asked for and still now, for the same clean saved plan. A
+  // failed or settling command does not hold it; the write gate refuses pending.
   const switchable = (value: WorkspaceState): boolean => value.workflow === "plan" && value.planView === "run"
-    && value.planDraft === state.planDraft && !value.planDraft.dirty && value.command === "idle"
+    && value.planDraft === state.planDraft && !value.planDraft.dirty
     && canEditCoordinates(value) && !hasStoppableWork(value);
   const writer = planWriter(context);
   if (!id || !writer || !switchable(state) || !switchable(store.value)) return;

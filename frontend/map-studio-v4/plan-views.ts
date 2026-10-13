@@ -59,7 +59,7 @@ export class MaticPlanViewsV4 extends LitElement {
 .row-lines bdi { overflow: hidden; font-weight: var(--ms-w-bold); text-overflow: ellipsis; white-space: nowrap; }
 .row-lines small { color: color-mix(in srgb, var(--ms-text) 78%, var(--ms-local, var(--ms-surface-card))); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
 .row-lines .ms-chip { justify-self: start; }
-.ms-badge { display: grid; flex: none; place-items: center; inline-size: 1.5rem; block-size: 1.5rem; border-radius: 50%; background: color-mix(in srgb, var(--ms-accent) 12%, var(--ms-surface-card)); font-size: var(--ms-t-xs); font-weight: var(--ms-w-bold); font-variant-numeric: tabular-nums; }
+.pos-badge { display: grid; flex: none; place-items: center; inline-size: 1.5rem; block-size: 1.5rem; border-radius: 50%; background: color-mix(in srgb, var(--ms-accent) 12%, var(--ms-surface-card)); font-size: var(--ms-t-xs); font-weight: var(--ms-w-bold); font-variant-numeric: tabular-nums; }
 .problem { margin: 0 0 var(--ms-space-2); padding: var(--ms-space-3); border-inline-start: 3px solid var(--ms-danger); border-radius: var(--ms-radius-md); background: color-mix(in srgb, var(--ms-danger) 12%, var(--ms-surface-card)); font-size: var(--ms-t-sm); line-height: var(--ms-lh-snug); }
 .switch-row { display: flex; gap: var(--ms-space-3); align-items: center; min-block-size: var(--ms-control); }
 .switch-copy { display: grid; flex: 1; gap: 0.125rem; min-inline-size: 0; font-size: var(--ms-t-md); }
@@ -188,7 +188,7 @@ export class MaticPlanViewsV4 extends LitElement {
   #runRow(name: string, setting: string, position: number | null, options: { readonly part?: number; readonly blocked?: boolean } = {}) {
     return html`<li class="run-row" ?data-break=${options.part !== undefined}>
       ${options.part === undefined ? nothing : html`<span class="sr-only">${this.#t("v4_part_break", "Part {number} starts here; the robot may stop at the dock first", { number: this.#count(options.part) })}</span>`}
-      ${position === null ? nothing : html`<span class="ms-badge" aria-hidden="true">${this.#count(position)}</span>`}
+      ${position === null ? nothing : html`<span class="pos-badge" aria-hidden="true">${this.#count(position)}</span>`}
       <span class="row-lines">
         <bdi>${name}</bdi>
         <small>${setting}</small>
@@ -211,7 +211,10 @@ export class MaticPlanViewsV4 extends LitElement {
     const ordered = plan.runBehavior === "ordered";
     const previewRooms = ready && preview ? preview.rooms : [];
     const blockedRoom = !paused && blocker ? roomBlocker(state, plan)?.jump.roomId ?? null : null;
-    const problem = paused || ready || blockedRoom ? null : (blocker && PLAN_BLOCKERS[blocker]) || PLAN_PREVIEW;
+    // While a save is pending the preview is about to be read again, so it has no problem yet.
+    const problem = paused || ready || blockedRoom || state.pendingAction === "save-plan"
+      ? null
+      : (blocker && PLAN_BLOCKERS[blocker]) || PLAN_PREVIEW;
     const count = ready ? previewRooms.length : plan.rooms.length;
     const seconds = ready ? plan.nextRunEstimateSeconds : null;
     const minutes = seconds === null ? "" : this.#count(Math.max(1, Math.round(seconds / 60)));
@@ -253,7 +256,7 @@ export class MaticPlanViewsV4 extends LitElement {
       })}</p>` : nothing}
       ${problem ? html`<p class="problem">${this.#t(problem.reasonKey, problem.reason)}</p>
         <button class="ms-btn ms-btn--secondary" type="button" @click=${() => this.#intent({ type: "open-workflow", workflow: "plan" })}>${this.#t("v4_retry", "Try again")}</button>` : nothing}
-      ${ready && ordered ? html`<ol class="run-list">${rows}</ol>` : html`<ul class="run-list">${rows}</ul>`}
+      ${ready && ordered ? html`<ol class="run-list" role="list">${rows}</ol>` : html`<ul class="run-list" role="list">${rows}</ul>`}
       ${this.#switch()}
       ${end ? html`<p class="quiet">${end}</p>` : nothing}
     `;
