@@ -926,7 +926,7 @@ export const PLAN_BLOCKERS: Partial<Record<NextRunPreviewBlocker, Reason>> = {
 };
 
 /** One room's blocking schedule reason, most specific first (plan.md R3), or null when it can run. */
-const roomBlockReason = (reasons: readonly CadenceReason[], room: string) => {
+export const roomBlockReason = (reasons: readonly CadenceReason[], room: string) => {
   const has = (...blocking: CadenceReason[]): boolean => blocking.some((reason) => reasons.includes(reason));
   return has("mop_progress_unverified", "coverage_progress_unverified")
     ? {

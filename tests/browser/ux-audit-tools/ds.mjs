@@ -53,17 +53,15 @@ for (const [w, h] of [[390, 844], [1440, 900]]) {
   for (const p of census.pairs) console.log("   ", p);
 }
 
-// ---- 2. Undefined token consequence: summary font-weight ------------------
+// ---- 2. Schedule heading weight (MS-DS-04) ---------------------------------
 await openScenario(page, "plan-cadence-shared", { width: 390, height: 844 });
 await inject(page);
-await openAllDetails();
-console.log("\n== --ms-w-semibold (undefined) on .cadence-config > summary:");
+console.log("\n== Schedule h3 weight (room-schedule.md §8: --ms-w-bold):");
 console.log(JSON.stringify(await page.evaluate(() => {
   const a = window.__uxAudit;
-  const s = a.all().find((e) => e.localName === "summary" && a.visible(e));
-  const cs = getComputedStyle(s);
+  const heading = a.all().find((e) => e.matches(".schedule-head h3") && a.visible(e));
   const host = a.shell().shadowRoot.querySelector("matic-map-workflow-v4");
-  return { fontWeight: cs.fontWeight, fontSize: cs.fontSize, token: getComputedStyle(host).getPropertyValue("--ms-w-semibold") || "(undefined)", strongSibling: getComputedStyle(a.all().find((e) => e.matches(".plan-option-copy strong") && a.visible(e))).fontWeight };
+  return { fontWeight: heading && getComputedStyle(heading).fontWeight, token: getComputedStyle(host).getPropertyValue("--ms-w-bold") || "(undefined)" };
 })));
 
 // ---- 3. Control height census (390) ---------------------------------------

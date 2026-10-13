@@ -2,6 +2,7 @@ import { isWorkspaceIntent } from "./contracts";
 import type { DialogKind, Localize, ResetCadenceAction, WorkspaceIntent, WorkspaceState } from "./contracts";
 import { needsDraftConfirmation } from "./draft-navigation";
 import { translate } from "./localize";
+import { PLAN_VIEWS_TAG, WORKFLOW_TAG } from "./element-tags";
 import { deleteSubject } from "./state";
 
 export interface DialogPresentation {
@@ -117,4 +118,16 @@ export const confirmDialog = (
   emit({ type: "dismiss-top-layer" });
   if (action !== "reset-room-cadence") dispatch(action);
   else if (request) dispatch({ id: action, planId: request.planId, roomId: request.roomId, mode: request.mode });
+};
+
+/**
+ * Where focus returns when a dialog closes, when that is not its launcher: a
+ * schedule Reset returns to the header of the room that holds it, its
+ * disclosure, since the menu or inline button may be gone (room-schedule.md §5).
+ */
+export const dialogReturnTarget = (previous: WorkspaceState, root: ParentNode): HTMLElement | null => {
+  const request = previous.cadenceResetRequest;
+  if (previous.dialog !== "confirmResetCadence" || !request) return null;
+  const views = root.querySelector(WORKFLOW_TAG)?.shadowRoot?.querySelector(PLAN_VIEWS_TAG)?.shadowRoot;
+  return views?.querySelector<HTMLElement>(`[data-room-disclosure="${CSS.escape(request.roomId)}"]`) ?? null;
 };
