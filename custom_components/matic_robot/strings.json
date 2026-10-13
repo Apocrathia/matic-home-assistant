@@ -209,7 +209,6 @@
     "v4_reconnecting_body": "Cleaning controls come back when Home Assistant reconnects.",
     "v4_reconnecting_detail": "The map is read only until Home Assistant reconnects.",
     "v4_recharging": "Charging to resume",
-    "v4_recharging_battery": "Charging to resume · {percent}% battery",
     "v4_recharging_detail": "Will resume automatically when ready",
     "v4_reconnecting_title": "Reconnecting to Home Assistant",
     "v4_returning": "Returning",

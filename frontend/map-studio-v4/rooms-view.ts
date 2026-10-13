@@ -182,17 +182,28 @@ export class MaticRoomsViewV4 extends LitElement {
     super.disconnectedCallback();
   }
 
+  // An opened disclosure is brought into view: on a phone's half sheet its
+  // controls would otherwise sit below the fold.
+  protected override updated(changed: PropertyValues<this>): void {
+    if ((changed as Map<string, unknown>).has("_open") && this._open !== null) this.renderRoot.querySelector(".settings-body, .row-expanded")?.scrollIntoView({ block: "nearest" });
+  }
+
   // Escape closes the open disclosure and returns to its button before the
-  // shell sees it (shell.md §5 Escape order): from inside the view, or from
-  // the shell's closed Map options button, where Escape 1 left focus after
-  // closing the menu (Review Focus 4). A native select keeps Escape.
+  // shell sees it (shell.md §5 Escape order), from anywhere in the shell
+  // (the action bar, the closed Map options button after Escape 1 closed the
+  // menu; Review Focus 4) unless an open top layer outside this view (a menu,
+  // a dialog, an expanded launcher) is on the path. A native select keeps
+  // Escape.
   readonly #keydown = (event: KeyboardEvent): void => {
     if (event.key !== "Escape" || this._open === null || isNativeSelectControl(event)) return;
     if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
     const path = event.composedPath();
-    const target = path[0];
-    const menuButton = target instanceof HTMLElement && target.getAttribute("aria-haspopup") === "menu" && target.getAttribute("aria-expanded") !== "true";
-    if (!path.includes(this) && !menuButton) return;
+    const panel = (this.getRootNode() as ShadowRoot).host;
+    const shell = (panel.getRootNode() as ShadowRoot).host;
+    if (!path.includes(shell)) return;
+    const topLayer = (node: EventTarget): boolean => node instanceof HTMLElement && node.getRootNode() !== this.renderRoot
+      && (node.getAttribute("role") === "menu" || node.getAttribute("role") === "dialog" || node.getAttribute("aria-expanded") === "true");
+    if (path.some(topLayer)) return;
     event.preventDefault();
     const selector = this._open === "settings" ? '[data-disclosure="settings"]' : `[data-room-disclosure="${CSS.escape(this._open)}"]`;
     this._open = null;

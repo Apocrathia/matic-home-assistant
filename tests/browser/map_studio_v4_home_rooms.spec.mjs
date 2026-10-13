@@ -763,6 +763,11 @@ test.describe("Map options and the rail (home-rooms.md §5 Display, §11 MS-HOME
     await expect(menu.getByRole("menuitemradio", { name: "Room colors" })).toHaveAttribute("aria-checked", "true");
     await expect(menu.getByRole("menuitemradio", { name: "Photo" })).toHaveAttribute("aria-checked", "false");
     await expect(menu).toBeVisible();
+    // The chosen row shows it: the selected tint and a check glyph (walkthrough finding 1).
+    await expect(menu.getByRole("menuitemradio", { name: "Room colors" })).toHaveAttribute("data-selected", "true");
+    await expect(menu.getByRole("menuitemradio", { name: "Room colors" }).locator("svg")).toHaveCount(1);
+    await expect(menu.getByRole("menuitemradio", { name: "Photo" })).not.toHaveAttribute("data-selected", "true");
+    await expect(menu.getByRole("menuitemradio", { name: "Photo" }).locator("svg")).toHaveCount(0);
 
     await menu.getByRole("menuitemcheckbox", { name: "Room names" }).click();
     await expect.poll(async () => (await snapshot(page)).labelsVisible).toBe(false);
@@ -1023,6 +1028,22 @@ for (const narrow of [true, false]) {
       await forceSelect(coverage, "quick");
       await expect.poll(async () => (await snapshot(page)).selection.roomSettings.find((room) => room.roomId === "room-a").coverageSetting).toBe(before);
       await expect(coverage).toHaveValue(before);
+    });
+
+    test("an opened disclosure scrolls into view, and Escape from the action bar closes it first", async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "rooms-ready", narrow });
+      await settingsRow(gallery).click();
+      const body = panelOf(gallery).locator(narrow ? ".sheet-body" : ".workflow-body");
+      const mode = gallery.locator("#clean-settings").getByRole("combobox", { name: "Cleaning mode" });
+      await expect.poll(async () => {
+        const [scroller, select] = await Promise.all([body.boundingBox(), mode.boundingBox()]);
+        return select.y >= scroller.y && select.y + select.height <= scroller.y + scroller.height + 0.5;
+      }).toBe(true);
+      await gallery.getByRole("button", { name: "Clean 4 rooms" }).focus();
+      await page.keyboard.press("Escape");
+      await expect(settingsRow(gallery)).toHaveAttribute("aria-expanded", "false");
+      await expect(settingsRow(gallery)).toBeFocused();
+      expect((await snapshot(page)).workflow).toBe("rooms");
     });
 
     test("Escape peels the menu, then the disclosure, then Rooms (Review Focus 4)", async ({ page }) => {

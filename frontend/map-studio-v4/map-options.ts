@@ -1,5 +1,6 @@
 import { html, nothing, type ReactiveControllerHost } from "lit";
 import type { WorkspaceIntent, WorkspaceState } from "./contracts";
+import { icon, iconDone } from "./icons";
 import { MenuController } from "./menu-controller";
 
 type Host = ReactiveControllerHost & HTMLElement & { readonly renderRoot: ParentNode };
@@ -30,7 +31,7 @@ export class MapOptions {
 
   render({ state, narrow, browserFullscreen, t, intent, diagnostics, fullscreen }: MapOptionsContext) {
     const radio = (checked: boolean, label: string, select: () => void) => html`
-      <button class="ms-row ms-row--menu" type="button" role="menuitemradio" aria-checked=${String(checked)} tabindex="-1" @click=${select}>${label}</button>
+      <button class="ms-row ms-row--menu" type="button" role="menuitemradio" aria-checked=${String(checked)} data-selected=${checked ? "true" : nothing} tabindex="-1" @click=${select}><span>${label}</span>${checked ? icon(iconDone) : nothing}</button>
     `;
     const detail = (quality: WorkspaceState["quality"], label: string) =>
       radio(state.quality === quality, label, () => intent({ type: "set-quality", quality }));

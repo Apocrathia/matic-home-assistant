@@ -142,7 +142,7 @@ const statusCopy = (state: WorkspaceState, localize?: Localize): StatusPresentat
   if (state.activity === "recharging") {
     const battery = state.batteryPercent === null
       ? t("v4_recharging_detail", "Will resume automatically when ready")
-      : t("v4_recharging_battery", "Charging to resume · {percent}% battery", { percent: state.batteryPercent });
+      : t("v4_battery", "{percent}% battery", { percent: state.batteryPercent });
     return { title: t("v4_recharging", "Charging to resume"), detail: withMapConsequence(battery), icon: iconCharging, notable: true };
   }
   if (state.activity === "paused") return { title: t("v4_paused", "Paused"), detail: withMapConsequence(t("v4_can_resume", "Cleaning can resume")), icon: iconPaused, notable: true };
@@ -1369,7 +1369,9 @@ export class MaticMapShellV4 extends LitElement {
     else this.#focusPanel();
   }
 
-  #shelfRow(label: string, glyph: string, workflow: Workflow, detail?: string, disabled = false, described = disabled, classes = "ms-row") {
+  // `described` links a held control to the home reason, which only the held
+  // home states render (R12), so a row disabled on its own never points at it.
+  #shelfRow(label: string, glyph: string, workflow: Workflow, detail?: string, disabled = false, described = false, classes = "ms-row") {
     return html`
       <button
         class=${classes}
@@ -1560,7 +1562,7 @@ export class MaticMapShellV4 extends LitElement {
   #plansRow(state: WorkspaceState, held: boolean) {
     const plans = state.resources.plans.value;
     if (!plans?.plans.some((candidate) => candidate.id === plans.selectedPlan)) return nothing;
-    return this.#shelfRow(this.#t("v4_your_plans", "Your plans"), iconPlan, "plans", undefined, held);
+    return this.#shelfRow(this.#t("v4_your_plans", "Your plans"), iconPlan, "plans", undefined, held, held);
   }
 
   #workflowBody(state: WorkspaceState, narrow: boolean) {
