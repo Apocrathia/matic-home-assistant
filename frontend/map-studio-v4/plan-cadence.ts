@@ -438,13 +438,16 @@ export const withInterval = (input: ScheduleInput, kind: ScheduleKind, every: nu
     if (join) return join;
     if (unjoinable(f)) return withInterval({ ...input, room: { ...input.room, cadence: { ...policy, scope: "plan" } } }, kind, every);
   }
+  // Off has nothing to bring forward and every clean is always due, and the
+  // switch names neither, so either clears the row's next-clean flag.
+  const keepFlag = every !== null && every > 1;
   if (kind === "mop") {
-    return every === null ? { ...policy, mopEveryN: null, doMopNext: false } : { ...policy, mopEveryN: every };
+    return { ...policy, mopEveryN: every, doMopNext: keepFlag && policy.doMopNext };
   }
   if (every === null) return { ...policy, coverageEveryN: null, doCoverageNext: false };
   return policy.coverageEveryN === null
     ? { ...policy, coverageEveryN: every, periodicCoverageSetting: input.offLevel ?? policy.periodicCoverageSetting ?? "heavy_duty" }
-    : { ...policy, coverageEveryN: every };
+    : { ...policy, coverageEveryN: every, doCoverageNext: keepFlag && policy.doCoverageNext };
 };
 
 /** A new rotation level: a draft change only while the rotation is on. */

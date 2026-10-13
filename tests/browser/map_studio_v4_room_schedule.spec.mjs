@@ -315,6 +315,29 @@ test.describe("room schedule model", () => {
     });
   });
 
+  // Codex P2 (#253): every clean is always due and hides the switch, so a
+  // row moved there drops the flag the switch set, as turning it Off does.
+  test("moving a row to every clean clears the work it brought forward", async ({ page }) => {
+    const result = await run(page, `
+      const on = p({ mopEveryN: 3, coverageEveryN: 4, periodicCoverageSetting: "quick", doMopNext: true, doCoverageNext: true });
+      const i = input(on, room(on), g({ nextMopIn: 1, nextCoverageIn: 1 }));
+      const mopOne = m.withInterval(i, "mop", 1);
+      const coverageOne = m.withInterval(i, "coverage", 1);
+      const mopTwo = m.withInterval(i, "mop", 2);
+      return { mopOne: [mopOne.mopEveryN, mopOne.doMopNext, mopOne.doCoverageNext],
+        coverageOne: [coverageOne.coverageEveryN, coverageOne.doCoverageNext, coverageOne.doMopNext, coverageOne.periodicCoverageSetting],
+        mopTwo: [mopTwo.mopEveryN, mopTwo.doMopNext],
+        // Saved at every clean, raised again later: the switch is back, and off.
+        back: (() => { const saved = { ...mopOne, doCoverageNext: false }; const due = g({ nextMopIn: 1, nextCoverageIn: 1 });
+          return m.scheduleModel(t, "en", input(m.withInterval(input(saved, room(saved), due), "mop", 3), room(saved), due)).next; })() };`);
+    expect(result).toEqual({
+      mopOne: [1, false, true],
+      coverageOne: [1, false, true, "quick"],
+      mopTwo: [2, true],
+      back: { label: "Mop on the next clean", on: false, mop: true, coverage: false, blocked: null },
+    });
+  });
+
   test("row and room reasons", async ({ page }) => {
     const result = await run(page, `
       const unverified = m.scheduleModel(t, "en", input(p({ mopEveryN: 3 }), undefined, undefined, undefined,
