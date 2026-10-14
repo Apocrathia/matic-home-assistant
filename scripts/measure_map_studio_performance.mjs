@@ -178,6 +178,9 @@ try {
         // measured.
         const planJourney = async () => {
           await step(/^(Run a plan|Plans|Run Daily clean)/, "plan:open");
+          // The first open loads the lazy views; choose the branch once the
+          // plan's row or Run view has rendered, not while it is loading.
+          await button(/Daily clean/).first().waitFor();
           const homeRun = await button("Edit Daily clean").count() > 0;
           const pickerEdits = !homeRun && await button(/Daily clean.*Edit plan/).count() > 0;
           journeys.add(homeRun ? "home-run-edit" : pickerEdits ? "picker-edit" : "run-edit");
