@@ -508,21 +508,23 @@ export class MaticMapShellV4 extends LitElement {
     if (!document.fullscreenElement && this.state.fullMap) this.#intent({ type: "exit-full-map" });
   };
 
+  // design-system.md §7: the inspector at 1024 and up, and from 768 in
+  // landscape (the compact inspector); a sheet otherwise, compact when short.
+  #measure({ width, height }: { width: number; height: number }): void {
+    // A hidden panel measures 0 × 0; keep the layout it will come back to.
+    if (!width || !height) return;
+    const compact = height < 480;
+    this._measuredNarrow = compact || width < 768 || (width < 1024 && width <= height);
+    if (compact !== this._compact) {
+      this._compact = compact;
+      this._sheetDetent = startingDetent(this.state, compact);
+    }
+  }
+
   override connectedCallback(): void {
     super.connectedCallback();
     this.#resizeObserver = new ResizeObserver(([entry]) => {
-      if (!entry) return;
-      // design-system.md §7: the inspector at 1024 and up, and from 768 in
-      // landscape (the compact inspector); a sheet otherwise, compact when short.
-      const { width, height } = entry.contentRect;
-      // A hidden panel measures 0 × 0; keep the layout it will come back to.
-      if (!width || !height) return;
-      const compact = height < 480;
-      this._measuredNarrow = compact || width < 768 || (width < 1024 && width <= height);
-      if (compact !== this._compact) {
-        this._compact = compact;
-        this._sheetDetent = startingDetent(this.state, compact);
-      }
+      if (entry) this.#measure(entry.contentRect);
     });
     this.#resizeObserver.observe(this);
     document.addEventListener("fullscreenchange", this.#fullscreenChange);
@@ -611,6 +613,13 @@ export class MaticMapShellV4 extends LitElement {
     // page (shell.md §5 Focus, MS-KEY-01).
     this.#focused = this.shadowRoot?.activeElement ?? null;
     if (!changed.has("state")) return;
+    // Home Assistant flips its narrow hint as the panel resizes, but the
+    // ResizeObserver can report frames later. Measure now so this render
+    // never lays out from the old size and moves a control under a key press.
+    const previous = changed.get("state") as WorkspaceState | undefined;
+    if (previous && previous.narrowHint !== this.state.narrowHint && this.isConnected) {
+      this.#measure(this.getBoundingClientRect());
+    }
     // The untranslated title names the status row, so only a new row is
     // announced, in the current language.
     const row = statusCopy(this.state).title;
@@ -619,7 +628,6 @@ export class MaticMapShellV4 extends LitElement {
     }
     this.#statusRow = row;
     const next = this.state.notice;
-    const previous = changed.get("state") as WorkspaceState | undefined;
     if (next === previous?.notice) return;
     // A workflow change clears a success notice from the slot, but a toast
     // already showing it finishes its timer (shell.md §4 rule 5).

@@ -553,6 +553,8 @@ test.describe("Map Studio v0.4 foundation", () => {
       });
       const stop = gallery.getByRole("button", { name: "Stop cleaning" });
       await stop.focus();
+      // The key press must reach Stop; a layout change in between would move it.
+      await expect(stop).toBeFocused();
       await page.keyboard.press("Enter");
       await expect(stop).toHaveCount(0);
       const focused = await gallery.evaluate((element, selector) => {

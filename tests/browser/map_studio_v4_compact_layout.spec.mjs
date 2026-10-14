@@ -154,6 +154,51 @@ test.describe("compact sheet at 844×390 (MS-RESP-01, -02, -03)", () => {
   });
 });
 
+// A narrow-hint change lays out from the host's size at that moment, not
+// from the last ResizeObserver delivery, which can land frames later (as on
+// Linux WebKit in CI). A control focused in between would otherwise move
+// under the user's key press (the phone-bar Stop test).
+test.describe("layout follows the host at once", () => {
+  test("a narrow hint change measures the host in the same update; the measurement still wins", async ({ page }) => {
+    await page.addInitScript(() => {
+      const Native = window.ResizeObserver;
+      window.ResizeObserver = class extends Native {
+        constructor(callback) {
+          super((entries, observer) => setTimeout(() => callback(entries.map((entry) => ({
+            target: entry.target, contentRect: entry.target.getBoundingClientRect(),
+          })), observer), 300));
+        }
+      };
+    });
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    const gallery = page.locator(GALLERY);
+    await page.evaluate(async (tag) => {
+      await import("/map_studio_v4-review/review.js");
+      await customElements.whenDefined(tag);
+      const element = document.createElement(tag);
+      Object.assign(element, { controls: false, scenario: "cleaning", narrow: false });
+      document.body.style.margin = "0";
+      document.body.append(element);
+    }, GALLERY);
+    // The hint alone, as Home Assistant sets it: the gallery's own narrow
+    // attribute would also resize its stage.
+    const layoutAfterHint = (narrow) => gallery.evaluate(async (element, next) => {
+      element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), narrowHint: next });
+      const shell = element.shadowRoot.querySelector("matic-map-shell-v4");
+      await element.updateComplete;
+      await shell.updateComplete;
+      return shell.shadowRoot.querySelector(".root").classList.contains("narrow") ? "narrow" : "wide";
+    }, narrow);
+    await expect(gallery.locator(".root.wide")).toBeAttached();
+    await page.waitForTimeout(500);
+    expect(await layoutAfterHint(true), "a wide host keeps the inspector whatever the hint").toBe("wide");
+    await layoutAfterHint(false);
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect(await layoutAfterHint(true), "the phone layout before the observer reports").toBe("narrow");
+  });
+});
+
 test.describe("compact inspector (MS-RESP-04)", () => {
   test("768×600 gets the 320 px inspector; portrait and narrower keep the sheet", async ({ page }) => {
     let gallery = await stage(page, "rooms", { width: 768, height: 600 });
