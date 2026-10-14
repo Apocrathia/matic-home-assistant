@@ -405,8 +405,11 @@ test.describe("Your areas", () => {
     await expect(heading(gallery, "Draw an area")).toBeVisible();
     await gallery.locator(".action-bar").getByRole("button", { name: "Cancel" }).click();
     await expect(heading(gallery, "Entryway")).toBeVisible();
+    // Cancel hands focus to Redraw a frame later (WebKit does not focus a
+    // clicked button), and Escape is the shell's key, so wait for it.
+    await expect(gallery.getByRole("button", { name: "Redraw" })).toBeFocused();
     await page.keyboard.press("Escape");
-    expect((await snapshot(page)).workflow).toBe("areas");
+    await expect.poll(async () => (await snapshot(page)).workflow).toBe("areas");
   });
 
   test("New area's Cancel and Escape return to Your areas with focus on New area", async ({ page }) => {

@@ -34,9 +34,19 @@ const pinsOf = (stored: Stored, entryId: string): HomePin[] | null => {
     .map(({ kind, id }) => ({ kind, id }));
 };
 
-/** Writes one robot's pins over a fresh read, so other robots' records stay as they are. */
-export const writePins = async (connection: WorkspaceConnection, entryId: string, pins: readonly HomePin[]): Promise<void> => {
+/**
+ * Writes one robot's pins over a fresh read, so other robots' records stay as
+ * they are. `stillOwned` is asked again after that read: a write whose owner
+ * changed meanwhile is dropped, never sent to the next user's data.
+ */
+export const writePins = async (
+  connection: WorkspaceConnection,
+  entryId: string,
+  pins: readonly HomePin[],
+  stillOwned: () => boolean = () => true,
+): Promise<void> => {
   const stored = await readStored(connection);
+  if (!stillOwned()) return;
   await connection.sendMessagePromise({
     type: "frontend/set_user_data",
     key: HOME_PINS_KEY,
@@ -65,14 +75,19 @@ const settledPlans = (store: WorkspaceStore, entryId: string): Promise<{ readonl
  * nothing: no pins now, no record, so the next load seeds. A seed whose write
  * fails still shows; the next load tries again.
  */
-export const loadPins = async (connection: WorkspaceConnection, store: WorkspaceStore, entryId: string): Promise<HomePin[]> => {
+export const loadPins = async (
+  connection: WorkspaceConnection,
+  store: WorkspaceStore,
+  entryId: string,
+  stillOwned: () => boolean = () => true,
+): Promise<HomePin[]> => {
   const pins = pinsOf(await readStored(connection), entryId);
   if (pins) return pins;
   const plans = await settledPlans(store, entryId);
-  if (!plans) return [];
+  if (!plans || !stillOwned()) return [];
   const seeded: HomePin[] = plans.selected ? [{ kind: "plan", id: plans.selected }] : [];
   try {
-    await writePins(connection, entryId, seeded);
+    await writePins(connection, entryId, seeded, stillOwned);
   } catch {
     // Shown now, written on a later load.
   }

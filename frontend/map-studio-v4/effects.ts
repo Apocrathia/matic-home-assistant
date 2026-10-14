@@ -507,6 +507,9 @@ export class EffectController {
         cameras: loadedPreferences.cameras,
       } : {}),
     });
+    // A new user or robot owns its own home shortcuts from this moment: the
+    // last owner's are cleared and its queued writes cut off.
+    this.#syncPinsOwner();
     if (!projection.host.administrator) {
       this.#stopPolling();
       this.#clearPrivate("access-required", projection.entryKey);
@@ -2172,53 +2175,87 @@ export class EffectController {
       && state.resources.areas.status === "idle") {
       void this.loadAreas();
     }
-    if (state.selection.entryId && state.selection.entryId !== this.#pinsEntry) void this.loadHomePins();
+    this.#syncPinsOwner();
+    const owner = this.#pinsOwner;
+    if (owner && this.#pinsReadFor !== owner) void this.loadHomePins();
   }
 
-  // Home shortcuts (home-pins.ts): read once per robot, written in order.
-  #pinsEntry: string | null = null;
+  // Home shortcuts (home-pins.ts) belong to one Home Assistant user and one
+  // robot. Each owner change clears them, cuts off every write queued for the
+  // last owner, and reads the new owner's afresh; a read commits only while
+  // its owner and its token are still current (Codex PRRT_kwDOTau7uM6sNi6X).
+  #pinsOwner: string | null = null;
+  // The owner the last read was started for; a new owner is read once the
+  // workspace resumes (#resumeAreaCatalog), as the first one was.
+  #pinsReadFor: string | null = null;
+  #pinsEpoch = 0;
+  #pinsToken = 0;
   #pinsWrite: Promise<unknown> = Promise.resolve();
 
+  #currentPinsOwner(): string | null {
+    const { owner, selection } = this.#store.value;
+    return owner && selection.entryId ? JSON.stringify([owner.userKey, selection.entryId]) : null;
+  }
+
+  #syncPinsOwner(): void {
+    const owner = this.#currentPinsOwner();
+    if (owner === this.#pinsOwner) return;
+    this.#pinsOwner = owner;
+    this.#pinsEpoch += 1;
+    this.#pinsToken += 1;
+    this.#pinsWrite = Promise.resolve();
+    if (this.#store.value.homePins.status !== "idle" || this.#store.value.homePins.pins.length) {
+      this.#store.patch({ homePins: { status: "idle", pins: [] } });
+    }
+  }
+
   async loadHomePins(): Promise<void> {
+    this.#syncPinsOwner();
+    const owner = this.#pinsOwner;
+    this.#pinsReadFor = owner;
+    const token = ++this.#pinsToken;
     const entryId = this.#store.value.selection.entryId;
-    this.#pinsEntry = entryId;
     const connection = this.#workspaceConnection;
-    if (!entryId || !connection?.sendMessagePromise) {
+    const current = (): boolean => !this.#disposed && token === this.#pinsToken
+      && owner === this.#pinsOwner && this.#currentPinsOwner() === owner;
+    if (!owner || !entryId || !connection?.sendMessagePromise) {
       this.#store.patch({ homePins: { status: "unavailable", pins: [] } });
       return;
     }
     this.#store.patch({ homePins: { status: "loading", pins: [] } });
     try {
-      const pins = await (await import("./home-pins")).loadPins(connection, this.#store, entryId);
-      if (this.#disposed || this.#store.value.selection.entryId !== entryId) return;
+      const pins = await (await import("./home-pins")).loadPins(connection, this.#store, entryId, current);
+      if (!current()) return;
       this.#store.patch({ homePins: { status: "ready", pins } });
       this.#resumeAreaCatalog();
     } catch {
-      if (!this.#disposed && this.#store.value.selection.entryId === entryId) {
-        this.#store.patch({ homePins: { status: "error", pins: [] } });
-      }
+      if (current()) this.#store.patch({ homePins: { status: "error", pins: [] } });
     }
   }
 
   /**
-   * Writes the pins the reducer already shows. Each queued write sends the
-   * list as it is when its turn comes, so a later change is never lost to an
-   * earlier snapshot; a failed write undoes only its own change, at the place
-   * the pin had (`previous` is the list before it).
+   * Writes the pins the reducer already shows, for the owner they were
+   * changed for. Each queued write sends the list as it is when its turn
+   * comes, so a later change is never lost to an earlier snapshot, and none
+   * is sent once the owner changed. A failed write undoes only its own
+   * change, at the place the pin had (`previous` is the list before it).
    */
   saveHomePin(pin: HomePin, pinned: boolean, previous: readonly HomePin[]): void {
     const entryId = this.#store.value.selection.entryId;
     const connection = this.#workspaceConnection;
-    if (!entryId || !connection || this.#store.value.homePins.status !== "ready") return;
+    const owner = this.#pinsOwner;
+    const epoch = this.#pinsEpoch;
+    if (!entryId || !connection || !owner || owner !== this.#currentPinsOwner()
+      || this.#store.value.homePins.status !== "ready") return;
     const same = (candidate: HomePin): boolean => candidate.kind === pin.kind && candidate.id === pin.id;
+    const current = (): boolean => !this.#disposed && epoch === this.#pinsEpoch
+      && this.#currentPinsOwner() === owner && this.#store.value.homePins.status === "ready";
     this.#pinsWrite = this.#pinsWrite.then(async () => {
       const module = await import("./home-pins");
-      const current = (): boolean => !this.#disposed && this.#store.value.selection.entryId === entryId
-        && this.#store.value.homePins.status === "ready";
       if (!current()) return;
       try {
-        await module.writePins(connection, entryId, this.#store.value.homePins.pins);
-        this.#resumeAreaCatalog();
+        await module.writePins(connection, entryId, this.#store.value.homePins.pins, current);
+        if (current()) this.#resumeAreaCatalog();
       } catch {
         if (!current()) return;
         const pins = this.#store.value.homePins.pins.filter((candidate) => !same(candidate));
