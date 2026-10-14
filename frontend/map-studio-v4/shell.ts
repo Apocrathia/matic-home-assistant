@@ -1190,7 +1190,8 @@ export class MaticMapShellV4 extends LitElement {
       return;
     }
     this.#intent({ type: "enter-full-map" });
-    Promise.resolve(this.renderRoot.querySelector<HTMLElement>(".app")?.requestFullscreen?.()).catch(() => undefined);
+    // The root, not .app: its dialogs and toasts are .app's siblings.
+    Promise.resolve(this.renderRoot.querySelector<HTMLElement>(".root")?.requestFullscreen?.()).catch(() => undefined);
   }
 
   readonly #exitFullMap = (): void => {

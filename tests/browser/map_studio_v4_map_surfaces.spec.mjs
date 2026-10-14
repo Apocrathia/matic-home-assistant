@@ -192,11 +192,12 @@ const fullMapToggle = (gallery) => gallery.getByRole("button", { name: "Full map
 const hudOf = (gallery) => gallery.getByRole("region", { name: "Robot status and action" });
 const exitButton = (gallery) => hudOf(gallery).getByRole("button", { name: "Exit full map", exact: true });
 
-// A browser full screen double: records requests on the app, answers
-// fullscreenchange, and lets a test leave full screen from outside.
+// A browser full screen double: records requests on the shell's root (which
+// owns the app, its dialogs and toasts), answers fullscreenchange, and lets a
+// test leave full screen from outside.
 const installFullscreen = (page) => page.evaluate((tag) => {
   const shell = document.querySelector(tag).shadowRoot.querySelector("matic-map-shell-v4");
-  const app = shell.shadowRoot.querySelector(".app");
+  const app = shell.shadowRoot.querySelector(".root");
   let current = null;
   window.__fs = { requests: 0, exits: 0 };
   Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => current });
@@ -1417,4 +1418,68 @@ test.describe("Final review", () => {
     await patchState(gallery, { command: "idle", areaDraft: { ...state.areaDraft, status: "stale", canRebind: false } });
     await expect(clean).toHaveAccessibleDescription("Can't clean this area until you redraw it.");
   });
+});
+
+// Codex review of 6d97a6fc: what the first review missed.
+test.describe("Codex review", () => {
+  test("in browser full screen the discard dialog and the toast show and take the pointer", async ({ page, browserName }) => {
+    const gallery = await loadGallery(page, { scenario: "draw-saved", viewport: { width: 1024, height: 768 } });
+    await fullMapToggle(gallery).click();
+    const fullscreen = await page.waitForFunction(() => Boolean(document.fullscreenElement), null, { timeout: 5000 }).then(() => true, () => false);
+    test.skip(!fullscreen, `${browserName} headless refused full screen`);
+    await expect(hudOf(gallery)).toBeVisible();
+    // What a user sees in the browser's full screen: the top layer is the
+    // full-screen element, so anything outside it is neither painted nor hit.
+    const shown = (selector) => page.evaluate(({ tag, selector }) => {
+      const root = document.querySelector(tag).shadowRoot.querySelector("matic-map-shell-v4").shadowRoot;
+      const element = root.querySelector(selector);
+      const owner = root.fullscreenElement;
+      if (!element || !owner) return { inside: false, hit: false };
+      const box = element.getBoundingClientRect();
+      const hit = root.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+      return { inside: owner.contains(element), hit: Boolean(hit) && element.contains(hit) };
+    }, { tag: GALLERY_TAG, selector });
+    await dispatchIntent(page, { type: "set-notice", notice: { key: "v4_notice_area_saved", fallback: "Area saved", tone: "success" } });
+    await expect(gallery.getByRole("region", { name: "Notifications" })).toBeVisible();
+    expect(await shown("[data-notice-toast] .ms-notice, [data-notice-toast] > *")).toEqual({ inside: true, hit: true });
+    await patchState(gallery, { dialog: "discardDraft" });
+    const dialog = gallery.getByRole("dialog", { name: "Discard changes?" });
+    await expect(dialog).toBeVisible();
+    expect(await shown(".dialog [data-dialog-initial-focus]")).toEqual({ inside: true, hit: true });
+    await expect(dialog.locator("[data-dialog-initial-focus]")).toBeFocused();
+    // The browser may take Escape to leave full screen (D3, R24), so close by the button.
+    await dialog.locator("[data-dialog-initial-focus]").click();
+    await expect(dialog).toHaveCount(0);
+    expect((await snapshot(page)).fullMap).toBe(true);
+  });
+
+  for (const scenario of ["draw", "area-review-saved"]) {
+    test(`${scenario} entered from 3D moves the map on a right-, Shift- or arrow-key move, as in 2D`, async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario, viewport: { width: 1024, height: 768 } });
+      await patchState(gallery, { view: "three" });
+      expect((await snapshot(page)).view).toBe("three");
+      const bounds = await gallery.locator(".map-root").boundingBox();
+      const from = { x: bounds.x + bounds.width * 0.45, y: bounds.y + bounds.height * 0.3 };
+      const to = { x: from.x + 90, y: from.y + 45 };
+      const top = async () => (await snapshot(page)).cameras.top;
+      const moved = (a, b) => Math.hypot(b.targetX - a.targetX, b.targetZ - a.targetZ);
+      await drag(page, from, to, { button: "right" });
+      await expect.poll(async () => Boolean(await top())).toBe(true);
+      const first = await top();
+      await drag(page, from, to, { button: "right" });
+      const second = await top();
+      expect(moved(first, second), "right-drag moves the map").toBeGreaterThan(0.01);
+      expect(second.yaw).toBeCloseTo(first.yaw, 6);
+      await page.keyboard.down("Shift");
+      await drag(page, from, to);
+      await page.keyboard.up("Shift");
+      const third = await top();
+      expect(moved(second, third), "Shift-drag moves the map").toBeGreaterThan(0.01);
+      expect(third.yaw).toBeCloseTo(second.yaw, 6);
+      await gallery.locator(".map-root").focus();
+      await page.keyboard.press("ArrowLeft");
+      await expect.poll(async () => moved(third, await top()), "an arrow key moves the map").toBeGreaterThan(0.01);
+      expect((await top()).yaw).toBeCloseTo(third.yaw, 6);
+    });
+  }
 });
