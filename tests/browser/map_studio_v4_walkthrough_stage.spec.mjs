@@ -108,7 +108,7 @@ test("every walkthrough cell's hash parses without an error", async ({ page }) =
     return hashes.flatMap((hash) => parseStageHash(hash).errors.map((error) => `${hash}: ${error}`));
   }, ids.map((id) => cellHash(id)));
   expect(errors).toEqual([]);
-  expect(findCell("R12-C01")).toBeNull();
+  expect(findCell("R14-C01")).toBeNull();
 });
 
 test("a cell ID staged with another cell's settings is refused, not labelled as that cell", async ({ page }) => {
@@ -122,9 +122,9 @@ test("a cell ID staged with another cell's settings is refused, not labelled as 
   const errors = await page.evaluate(async (hashes) => {
     const { parseStageHash } = await import("/map_studio_v4-review/stage.js");
     return hashes.map((hash) => parseStageHash(hash).errors);
-  }, [`${cellHash("R01-C01")}&step=2`, "cell=R12-C01&steps=ready", "steps=plans&w=1024&h=768"]);
+  }, [`${cellHash("R01-C01")}&step=2`, "cell=R14-C01&steps=ready", "steps=plans&w=1024&h=768"]);
   expect(errors[0]).toEqual([]);
-  expect(errors[1].join()).toContain("R12-C01 is not a walkthrough cell");
+  expect(errors[1].join()).toContain("R14-C01 is not a walkthrough cell");
   expect(errors[2]).toEqual([]);
 });
 

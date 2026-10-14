@@ -1025,6 +1025,9 @@ test("discarding plan edits through Escape returns to the plan, then the picker"
     const { workflow, planView, planDraft } = element.getWorkspaceSnapshot();
     return { workflow, planView, dirty: planDraft.dirty };
   })).toEqual({ workflow: "plan", planView: "run", dirty: false });
+  // Escape is the shell's key: wait for the discard's focus move (a frame
+  // later, and WebKit does not focus a clicked button) to land inside it.
+  await expect.poll(() => page.evaluate(() => document.activeElement?.localName)).toBe("matic-map-studio-gallery-v0-4-0");
   await page.keyboard.press("Escape");
   await expect(gallery.getByRole("heading", { name: "Your plans", exact: true })).toBeVisible();
 });
