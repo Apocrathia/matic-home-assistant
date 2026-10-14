@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import { icon, iconChevronRight, iconCleaning, iconDue, iconNoticeWarning } from "./icons";
+import { icon, iconCleaning, iconDue, iconNoticeWarning } from "./icons";
 import type { SavedArea, SavedPlan } from "./backend-contracts";
 import type { HomePin, PrimaryAction, WorkspaceIntent, WorkspaceState } from "./contracts";
 import { areaSelection, draftForPlan, selectPrimaryAction } from "./state";
@@ -21,7 +21,6 @@ export interface ShortcutHost {
   /** Home is held (busy, locating, map not ready): every card says why through the home reason. */
   readonly held: boolean;
   readonly run: (pin: HomePin) => void;
-  readonly open: (pin: HomePin) => void;
   readonly emit: (intent: WorkspaceIntent) => void;
 }
 
@@ -45,41 +44,30 @@ export const areaShortcutAction = (state: WorkspaceState, area: SavedArea) => se
 // the shortcut says what to do instead.
 const CHECK_AREA = { label: "", kind: "primary", enabled: false, id: "check-area", reason: "Can't clean this area until you check it.", reasonKey: "v4_reason_check_area" } as const;
 
-// Every shortcut leads with the play glyph, so it reads as "starts now",
-// unlike the cards that open a screen; Open is a bordered button of its own.
+// A shortcut is one button that runs (owner, 2026-10-14): it leads with the
+// play glyph, so it reads as "starts now", unlike the cards that open a
+// screen. Changing a plan or area is Your plans' or Your areas' job.
 const shortcut = (host: ShortcutHost, pin: HomePin, name: string, title: string, lines: unknown, action: PrimaryAction | null, run: string, chip: unknown) => {
   const { t, held } = host;
   const enabled = !held && action?.id === run && action.enabled;
   const reasonAction = held || enabled ? null : action;
   // Only the name is isolated (copy-style <bdi>).
   const [before = "", after = ""] = title.split("\u0000");
-  return html`<div class="shortcut">
-    <button
-      class="ms-row ms-row--card shortcut-run"
-      type="button"
-      data-launcher=${`run:${pin.kind}:${pin.id}`}
-      aria-disabled=${enabled ? nothing : "true"}
-      aria-describedby=${held ? "home-reason" : nothing}
-      @click=${() => { if (enabled) host.run(pin); }}
-    >
-      <span class="ms-row__lead">${icon(iconCleaning)}</span>
-      <span class="ms-row__body">
-        <strong class="card-title"><span class="card-name">${before}<bdi>${name}</bdi>${after}</span>${chip}</strong>
-        ${lines}
-        ${reasonAction?.reason ? html`<span class="card-lines"><span class="line" data-tone="warning">${icon(iconNoticeWarning)}${actionReason(t, reasonAction, false, host.emit)}</span></span>` : nothing}
-      </span>
-    </button>
-    <button
-      class="ms-btn ms-btn--icon ms-btn--secondary shortcut-open"
-      type="button"
-      data-launcher=${`open:${pin.kind}:${pin.id}`}
-      aria-label=${t("v4_open_named", "Open {name}", { name })}
-      title=${t("v4_open_named", "Open {name}", { name })}
-      aria-disabled=${held ? "true" : nothing}
-      aria-describedby=${held ? "home-reason" : nothing}
-      @click=${() => { if (!held) host.open(pin); }}
-    >${icon(iconChevronRight, { directional: true })}</button>
-  </div>`;
+  return html`<button
+    class="ms-row ms-row--card shortcut"
+    type="button"
+    data-launcher=${`run:${pin.kind}:${pin.id}`}
+    aria-disabled=${enabled ? nothing : "true"}
+    aria-describedby=${held ? "home-reason" : nothing}
+    @click=${() => { if (enabled) host.run(pin); }}
+  >
+    <span class="ms-row__lead">${icon(iconCleaning)}</span>
+    <span class="ms-row__body">
+      <strong class="card-title"><span class="card-name">${before}<bdi>${name}</bdi>${after}</span>${chip}</strong>
+      ${lines}
+      ${reasonAction?.reason ? html`<span class="card-lines"><span class="line" data-tone="warning">${icon(iconNoticeWarning)}${actionReason(t, reasonAction, false, host.emit)}</span></span>` : nothing}
+    </span>
+  </button>`;
 };
 
 const planShortcut = (host: ShortcutHost, pin: HomePin, plan: SavedPlan) => {

@@ -5431,15 +5431,14 @@ test.describe("Map Studio v0.4 foundation", () => {
     // Three task cards, then the Maps group (home-rooms.md §3). The entry never offers a
     // phantom "Run plan" before a plan has been chosen.
     const quick = gallery.locator(".quick-actions").getByRole("button");
-    await expect(quick).toHaveCount(5);
+    await expect(quick).toHaveCount(4);
     await expect(quick.nth(0)).toHaveAccessibleName(/^Clean rooms Pick rooms and clean them now\./);
     await expect(quick.nth(0)).toHaveClass(/ms-row--featured/);
-    // The default plan pinned as a shortcut with its Open, the custom-area
-    // card, then the Your plans row (UX9 owner ruling).
+    // The default plan pinned as a one-tap shortcut, the custom-area card,
+    // then the Your plans row (UX9 owner ruling).
     await expect(quick.nth(1)).toHaveAccessibleName(/^Run Daily clean 3 rooms/);
-    await expect(quick.nth(2)).toHaveAccessibleName("Open Daily clean");
-    await expect(quick.nth(3)).toHaveAccessibleName(/^Clean custom area Draw or choose a custom area/);
-    await expect(quick.nth(4)).toHaveAccessibleName("Your plans");
+    await expect(quick.nth(2)).toHaveAccessibleName(/^Clean custom area Draw or choose a custom area/);
+    await expect(quick.nth(3)).toHaveAccessibleName("Your plans");
     await expect(gallery.getByRole("heading", { name: "Maps", level: 3 })).toBeVisible();
     await expect(gallery.locator(".maps").getByRole("button", { name: /^Map history Browse earlier floor maps\./ })).toBeVisible();
     await expect(gallery.getByRole("button", { name: /^Run plan/ })).toHaveCount(0);

@@ -55,7 +55,7 @@ state. A cell ID with settings other than its own is an error too, and the banne
 | R10 | Offline, locating, error and access states | `steps=ha-offline,robot-offline,transition,problem,map-unavailable,map-limited,access,unsupported` | Each state says what is true, what it stops and one next action. |
 | R11 | Setup and first clean | `steps=empty,multi-robot,rooms,rooms-ready` | No robot leads to Open integration; the first clean reads as one obvious path. |
 | R12 | Your areas | `steps=areas-list,areas-stale,areas-empty,area-review-saved,draw` | Each row shows its setting and what a changed map needs; New area, last, is the one way into Draw; Back returns to the list. |
-| R13 | Home shortcuts | `steps=home-shortcuts,home-plan-due-full,home-unpinned,home-shortcut-blocked,home-shortcut-running,home-pins-error,plan-saved-intelligent` | One tap runs a pinned plan or area; a held one says why; Open goes to it; Show on home pins and unpins. |
+| R13 | Home shortcuts | `steps=home-shortcuts,home-plan-due-full,home-unpinned,home-shortcut-blocked,home-shortcut-running,home-pins-error,plan-saved-intelligent` | One tap runs a pinned plan or area; a held one says why; there is no separate Open; Show on home pins and unpins. |
 
 ## Setups (columns)
 

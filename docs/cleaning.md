@@ -143,6 +143,7 @@ automations need only the saved name.
 A plan or area with **Show on home** turned on appears on the home screen,
 after **Clean rooms**, in the order you added it. One tap runs it, exactly as
 **Run plan** or **Clean this area** would; a shortcut that can't run says why,
-and **Stop** shows while it runs. **Open {name}** beside it opens the plan or area.
+and **Stop** shows while it runs. To change one, use **Your plans** or
+**Clean custom area**.
 Your default plan starts as a shortcut until you change the list. Each Home
 Assistant user has their own shortcuts.
