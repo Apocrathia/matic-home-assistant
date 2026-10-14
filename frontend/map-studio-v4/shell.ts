@@ -1618,10 +1618,6 @@ export class MaticMapShellV4 extends LitElement {
       t: this.#tr,
       held,
       emit: (intent: WorkspaceIntent) => this.#intent(intent),
-      open: (pin: HomePin) => {
-        this.#intent(pin.kind === "plan" ? { type: "select-plan", planId: pin.id, origin: "home" } : { type: "select-area", areaId: pin.id, workflow: "areaReview" });
-        this.#homeLauncher = `open:${pin.kind}:${pin.id}`;
-      },
       run: (pin: HomePin) => {
         // Run plan needs its Run view (effects.ts run-plan); the shell
         // returns home once the run starts. Clean this area runs from here.

@@ -76,7 +76,7 @@
       "id": "R13",
       "journey": "Home shortcuts",
       "steps": ["home-shortcuts", "home-plan-due-full", "home-unpinned", "home-shortcut-blocked", "home-shortcut-running", "home-pins-error", "plan-saved-intelligent"],
-      "check": "One tap runs a pinned plan or area; a held one says why; Open goes to it; Show on home pins and unpins"
+      "check": "One tap runs a pinned plan or area; a held one says why; no separate Open button; Show on home pins and unpins"
     }
   ],
   "columns": [

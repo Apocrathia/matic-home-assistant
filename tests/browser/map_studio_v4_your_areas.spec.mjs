@@ -44,7 +44,12 @@ const focusedText = (page) => page.evaluate(() => {
 // Each button's visible text, one space between its lines.
 const texts = (locator) => locator.evaluateAll((elements) => elements.map((element) => element.innerText.replace(/\s+/g, " ").trim()));
 const choices = (gallery) => gallery.getByRole("group", { name: "Cleaning choices" });
-const runButton = (gallery, name) => choices(gallery).locator("button.shortcut-run").filter({ hasText: name });
+const runButton = (gallery, name) => choices(gallery).locator("button.shortcut").filter({ hasText: name });
+// Changing a pinned plan goes through Your plans; home has no Open control.
+const openPlan = async (root, name) => {
+  await root.getByRole("button", { name: "Your plans", exact: true }).click();
+  await root.getByRole("button", { name: new RegExp(`^${name}`) }).click();
+};
 const heading = (gallery, name) => gallery.getByRole("heading", { level: 2, name, exact: true });
 const areaRows = (gallery) => gallery.locator("[data-area-row]");
 
@@ -106,22 +111,20 @@ test.describe("home shortcuts", () => {
     await expect.poll(() => texts(choices(gallery).getByRole("button"))).toEqual([
       "Clean rooms Pick rooms and clean them now.",
       expect.stringMatching(/^Run Daily clean 3 rooms · /),
-      "",
       "Clean Entryway Vacuum · Optimal",
-      "",
       expect.stringMatching(/^Run Weekend refresh /),
-      "",
       "Clean custom area Draw or choose a custom area",
       "Your plans",
     ]);
-    const opens = choices(gallery).locator(".shortcut-open");
-    await expect(opens.nth(0)).toHaveAccessibleName("Open Daily clean");
-    await expect(opens.nth(1)).toHaveAccessibleName("Open Entryway");
-    for (const open of await opens.all()) {
-      const box = await open.boundingBox();
-      expect(box.width).toBeGreaterThanOrEqual(44);
-      expect(box.height).toBeGreaterThanOrEqual(44);
+    // Each shortcut is one button that runs (owner, 2026-10-14): no Open beside it.
+    const shortcuts = choices(gallery).locator("button.shortcut");
+    await expect(shortcuts).toHaveCount(3);
+    for (const shortcut of await shortcuts.all()) {
+      expect(await shortcut.evaluate((element) => element.parentElement.closest("button") === null && element.querySelectorAll("button, a, [role=button]").length === 0)).toBe(true);
     }
+    await expect(choices(gallery).getByRole("button", { name: /^Open / })).toHaveCount(0);
+    const [first, rooms] = [await shortcuts.first().boundingBox(), await choices(gallery).getByRole("button", { name: /^Clean rooms/ }).boundingBox()];
+    expect(Math.abs(first.width - rooms.width)).toBeLessThanOrEqual(1);
     await expect(gallery.getByRole("button", { name: "Your areas" })).toHaveCount(0);
   });
 
@@ -187,34 +190,28 @@ test.describe("home shortcuts", () => {
       await expect(runButton(gallery, name)).toHaveAttribute("aria-disabled", "true");
       await expect(runButton(gallery, name)).toHaveAccessibleDescription(reason);
     }
-    await expect(choices(gallery).locator(".shortcut-open").first()).toHaveAttribute("aria-disabled", "true");
     await expect(gallery.getByRole("button", { name: "Stop cleaning", exact: true }).first()).toBeVisible();
   });
 
-  test("Open goes to the plan's Run view, and Back and Escape return to it", async ({ page }) => {
+  test("a shortcut refused at Run returns home to the shortcut by Back and by Escape", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "home-shortcuts" });
-    await recordActions(page);
-    const open = gallery.getByRole("button", { name: "Open Daily clean" });
-    await open.click();
-    expect(await actions(page)).toEqual([]);
+    await runButton(gallery, "Daily clean").click();
     expect(await snapshot(page)).toMatchObject({ workflow: "plan", planView: "run", planOrigin: "home" });
     await gallery.getByRole("button", { name: "Back to all tasks" }).click();
-    await expect.poll(() => focusedText(page)).toBe("button Open Daily clean");
-    await page.keyboard.press("Enter");
-    await expect(heading(gallery, "Daily clean")).toBeFocused();
-    await page.keyboard.press("Escape");
-    await expect.poll(() => focusedText(page)).toBe("button Open Daily clean");
+    await expect.poll(() => focusedText(page)).toMatch(/^button Run Daily clean/);
   });
 
-  test("Open on an area goes to its screen; Back steps to Your areas, then home", async ({ page }) => {
+  test("a pinned plan and area change through Your plans and Your areas", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "home-shortcuts" });
-    await gallery.getByRole("button", { name: "Open Entryway" }).click();
-    await expect(heading(gallery, "Entryway")).toBeVisible();
-    await gallery.getByRole("button", { name: "Back to areas" }).click();
-    await expect(heading(gallery, "Your areas")).toBeVisible();
-    await expect.poll(() => focusedText(page)).toMatch(/^button Entryway/);
+    await openPlan(gallery, "Daily clean");
+    expect(await snapshot(page)).toMatchObject({ workflow: "plan", planView: "run", planOrigin: "plans" });
+    await expect(gallery.getByRole("switch", { name: "Show on home" })).toHaveAttribute("aria-checked", "true");
+    await gallery.getByRole("button", { name: "Back to plans" }).click();
     await gallery.getByRole("button", { name: "Back to all tasks" }).click();
-    await expect.poll(() => focusedText(page)).toBe("button Open Entryway");
+    await choices(gallery).getByRole("button", { name: /^Clean custom area/ }).click();
+    await gallery.getByRole("button", { name: /^Entryway/ }).click();
+    await expect(heading(gallery, "Entryway")).toBeVisible();
+    await expect(gallery.getByRole("switch", { name: "Show on home" })).toHaveAttribute("aria-checked", "true");
   });
 
   test("a failed read shows nothing pinned and one quiet line with Try again; home still works", async ({ page }) => {
@@ -228,7 +225,7 @@ test.describe("home shortcuts", () => {
 
   test("Show on home on a plan's Run view pins and unpins it, in the order pinned", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "home-shortcuts" });
-    await gallery.getByRole("button", { name: "Open Daily clean" }).click();
+    await openPlan(gallery, "Daily clean");
     const pin = gallery.getByRole("switch", { name: "Show on home" });
     await expect(pin).toHaveAttribute("aria-checked", "true");
     await expect(pin).toHaveAccessibleDescription("Adds a one-tap button for this plan to the Matic Map home screen.");
@@ -269,16 +266,14 @@ test.describe("home shortcuts", () => {
 });
 
 test.describe("home shortcuts: review fixes", () => {
-  test("a shortcut starts with the play glyph and Open is a bordered button of its own", async ({ page }) => {
+  test("a shortcut starts with the play glyph and is the whole row", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "home-shortcuts" });
     const run = runButton(gallery, "Daily clean");
-    const open = gallery.getByRole("button", { name: "Open Daily clean" });
     const rooms = choices(gallery).getByRole("button", { name: /^Clean rooms/ });
     const glyph = (locator) => locator.locator(".ms-row__lead path").getAttribute("d");
     expect(await glyph(run)).not.toBe(await glyph(rooms));
     expect(await glyph(run)).toBe(await glyph(runButton(gallery, "Entryway")));
     await expect(run.locator(".ms-row__trail")).toHaveCount(0);
-    expect(await open.evaluate((element) => getComputedStyle(element).borderTopStyle)).toBe("solid");
   });
 
   test("a held shortcut's reason is readable text, not disabled grey", async ({ page }) => {
@@ -526,11 +521,11 @@ test.describe("home shortcuts in Home Assistant's user data", () => {
     const panel = await mountPanel(page, { userData: {} });
     await expect.poll(() => pins(page)).toEqual({ status: "ready", pins: [{ kind: "plan", id: "daily" }] });
     expect(await stored(page)).toEqual({ [KEY]: { pins: [{ kind: "plan", id: "daily" }] } });
-    await expect(panel.getByRole("button", { name: "Open Daily clean" })).toBeVisible();
+    await expect(panel.locator("button.shortcut")).toHaveAccessibleName(/^Run Daily clean/);
 
     const cleared = await mountPanel(page, { userData: { [KEY]: { pins: [] }, [OTHER]: { pins: [{ kind: "area", id: "x" }] } } });
     await expect.poll(() => pins(page)).toEqual({ status: "ready", pins: [] });
-    await expect(cleared.getByRole("button", { name: "Open Daily clean" })).toHaveCount(0);
+    await expect(cleared.locator("button.shortcut")).toHaveCount(0);
     await expect(cleared.getByRole("button", { name: "Your plans", exact: true })).toBeVisible();
   });
 
@@ -578,7 +573,7 @@ test.describe("home shortcuts in Home Assistant's user data", () => {
 
   test("one tap runs the plan through run_selected_plan with its preview, then home shows Stop", async ({ page }) => {
     const panel = await mountPanel(page, { userData: { [KEY]: { pins: [{ kind: "plan", id: "daily" }] } } });
-    const run = panel.locator("button.shortcut-run");
+    const run = panel.locator("button.shortcut");
     await expect(run).toHaveAccessibleName(/^Run Daily clean/);
     await expect(run).not.toHaveAttribute("aria-disabled", "true");
     await page.evaluate(() => window.__panelFixture.deferNextService());
@@ -599,7 +594,7 @@ test.describe("home shortcuts in Home Assistant's user data", () => {
     const panel = await mountPanel(page, { initialPlanCatalog, userData: { [KEY]: { pins } } });
     await expect.poll(() => page.evaluate(() => window.__pinPanel.getWorkspaceSnapshot().homePins.status)).toBe("ready");
     await page.evaluate(() => window.__panelFixture.failNextUserData("frontend/set_user_data"));
-    await panel.getByRole("button", { name: "Open Daily clean" }).click();
+    await openPlan(panel, "Daily clean");
     await panel.getByRole("switch", { name: "Show on home" }).click();
     await expect.poll(() => page.evaluate(() => window.__pinPanel.getWorkspaceSnapshot().notice?.key)).toBe("v4_notice_shortcuts_save_failed");
     expect(await page.evaluate(() => window.__pinPanel.getWorkspaceSnapshot().homePins.pins)).toEqual(pins);

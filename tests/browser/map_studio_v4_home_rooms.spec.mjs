@@ -248,9 +248,9 @@ test.describe("home by state", () => {
       await expect(gallery.getByRole("heading", { name: "Choose what to clean", level: 2 })).toBeVisible();
       await expect(panelOf(gallery).locator(".panel-description")).toHaveCount(0);
       const group = gallery.getByRole("group", { name: "Cleaning choices" });
-      // Three cards (the default plan pinned as a shortcut, with its Open
-      // button) and, last, the Your plans row (UX9 owner ruling).
-      await expect(group.getByRole("button")).toHaveCount(5);
+      // Three cards (the default plan pinned as a one-tap shortcut) and,
+      // last, the Your plans row (UX9 owner ruling).
+      await expect(group.getByRole("button")).toHaveCount(4);
       await expect(cards(gallery)).toHaveCount(3);
       await expect(cards(gallery).nth(0)).toHaveAccessibleName(/^Clean rooms Pick rooms and clean them now\./);
       await expect(cards(gallery).nth(0)).toHaveClass(/ms-row--featured/);
@@ -507,26 +507,25 @@ test.describe("the plan card", () => {
     await expect(planCard(gallery)).toHaveAccessibleName(/^Run Daily clean Paused 3 rooms/);
   });
 
-  test("Open goes to Run from home and comes back to Open by Back and by Escape", async ({ page }) => {
+  test("a shortcut held on Run comes back to the shortcut by Back and by Escape", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "ready" });
-    await gallery.getByRole("button", { name: "Open Daily clean" }).click();
+    await planCard(gallery).click();
     expect(await snapshot(page)).toMatchObject({ workflow: "plan", planView: "run", planOrigin: "home" });
-    await expect(gallery.getByRole("heading", { level: 2, name: "Daily clean" })).toBeFocused();
     await gallery.getByRole("button", { name: "Back to all tasks" }).click();
     expect((await snapshot(page)).workflow).toBe("none");
-    await expect.poll(() => focusedText(page)).toBe("button Open Daily clean");
+    await expect.poll(() => focusedText(page)).toMatch(/^button Run Daily clean/);
 
     await page.keyboard.press("Enter");
-    await expect(gallery.getByRole("heading", { level: 2, name: "Daily clean" })).toBeFocused();
+    expect(await snapshot(page)).toMatchObject({ workflow: "plan", planView: "run", planOrigin: "home" });
     await page.keyboard.press("Escape");
     expect((await snapshot(page)).workflow).toBe("none");
-    await expect.poll(() => focusedText(page)).toBe("button Open Daily clean");
+    await expect.poll(() => focusedText(page)).toMatch(/^button Run Daily clean/);
   });
 
-  // The installed panel routes select-plan through EffectController, so the
-  // origin has to survive that path too (Codex, #254): Back from Run lands on
-  // home with the shortcut's Open focused, not in the picker.
-  test("the installed panel keeps the shortcut's home origin: Back from Run returns home and refocuses Open", async ({ page }) => {
+  // The installed panel routes a shortcut's select-plan and Run plan through
+  // EffectController (Codex, #254): the run goes out once, and a rejection
+  // lands back on home with its notice and the shortcut focused.
+  test("the installed panel runs a shortcut once and a rejection returns home to it with its notice", async ({ page }) => {
     const rooms = ["kitchen", "hall"].map((id, index) => ({
       room_id: id, name: id === "kitchen" ? "Kitchen" : "Hall",
       boundary: [[index * 6, 0], [index * 6 + 6, 0], [index * 6 + 6, 5], [index * 6, 5]],
@@ -538,6 +537,12 @@ test.describe("the plan card", () => {
         id: "daily", name: "Daily", enabled: true, run_behavior: "ordered", rooms: planRooms,
         room_order: planRooms.map((room) => room.room_id), return_to_base: true,
         finish_current_room: false, finish_current_room_threshold: 50,
+        next_run_preview: {
+          preview_token: "e".repeat(64),
+          rooms: rooms.map((room) => ({ room_id: room.room_id, name: room.name, cleaning_mode: "vacuum", coverage_setting: "standard", cadence_reasons: [] })),
+          mission_boundaries: [],
+          blocker: null,
+        },
       }],
     }, userData: { "matic_robot_home_shortcuts.synthetic-entry": { pins: [{ kind: "plan", id: "daily" }] } } });
     const panel = page.locator(fixture.panelTag);
@@ -547,13 +552,18 @@ test.describe("the plan card", () => {
     }, fixture.panelTag);
     await page.setViewportSize({ width: 1024, height: 768 });
     await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
-    const open = panel.getByRole("button", { name: "Open Daily" });
-    await expect(open).toBeVisible();
-    await open.click();
-    await expect.poll(state).toEqual({ workflow: "plan", planView: "run", planOrigin: "home" });
-    await panel.getByRole("button", { name: "Back to all tasks" }).click();
+    const run = panel.locator("button.shortcut");
+    await expect(run).toHaveAccessibleName(/^Run Daily/);
+    await expect(run).not.toHaveAttribute("aria-disabled", "true", { timeout: 15_000 });
+    await page.evaluate(() => window.__panelFixture.failNextService("run_selected_plan", {
+      translation_domain: "matic_robot",
+      translation_key: "coverage_native_session_active",
+    }));
+    await run.click();
+    await expect.poll(() => page.evaluate(() => window.__panelFixture.serviceCalls.map((call) => call.service))).toEqual(["run_selected_plan"]);
     await expect.poll(state).toMatchObject({ workflow: "none" });
-    await expect.poll(() => focusedText(page)).toBe("button Open Daily");
+    await expect.poll(() => page.evaluate((tag) => document.querySelector(tag).getWorkspaceSnapshot().notice?.key, fixture.panelTag)).toBe("v4_notice_coverage_robot_busy");
+    await expect.poll(() => focusedText(page)).toMatch(/^button Run Daily/);
   });
 
   // UX9: a catalog being reread or that failed keeps its last list, so the
@@ -646,8 +656,8 @@ test.describe("the plan card", () => {
   // plan is already gone.
   test("Escape from a Run whose plan is gone returns home with focus on the card or heading", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "ready" });
-    await gallery.getByRole("button", { name: "Open Daily clean" }).click();
-    await expect(gallery.getByRole("heading", { level: 2, name: "Daily clean" })).toBeFocused();
+    await planCard(gallery).click();
+    await expect(gallery.getByRole("heading", { level: 2, name: "Daily clean" })).toBeVisible();
     await gallery.evaluate((element) => {
       const state = element.getWorkspaceSnapshot();
       const plans = state.resources.plans;
