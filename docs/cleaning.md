@@ -135,7 +135,7 @@ an [automation](automation.md#custom-areas).
 
 If the map changes, its row says **Map changed** and the area opens as
 **Check {name}**, asking for **Save area** or **Redraw**; an area the map can't
-place any more says **Needs redrawing**. Coordinates stay in Home Assistant;
+place any more says **Redraw it before cleaning**. Coordinates stay in Home Assistant;
 automations need only the saved name.
 
 ## Home shortcuts
@@ -143,6 +143,6 @@ automations need only the saved name.
 A plan or area with **Show on home** turned on appears on the home screen,
 after **Clean rooms**, in the order you added it. One tap runs it, exactly as
 **Run plan** or **Clean this area** would; a shortcut that can't run says why,
-and **Stop** shows while it runs. The arrow beside it opens the plan or area.
+and **Stop** shows while it runs. **Open {name}** beside it opens the plan or area.
 Your default plan starts as a shortcut until you change the list. Each Home
 Assistant user has their own shortcuts.

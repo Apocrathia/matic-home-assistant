@@ -2,6 +2,7 @@
 // full; custom areas get Your areas; saved plans and areas can be pinned to
 // home as one-tap shortcuts, kept in Home Assistant's per-user frontend data.
 import { expect, test } from "@playwright/test";
+import { build } from "esbuild";
 
 import { installPanelFixture } from "./map_studio_v4_panel_fixture.mjs";
 
@@ -254,7 +255,7 @@ test.describe("home shortcuts", () => {
     const pin = gallery.getByRole("switch", { name: "Show on home" });
     for (const [status, reason] of [
       ["loading", "Waiting for Home Assistant to load your home shortcuts."],
-      ["error", "Can't change this until Home Assistant loads your home shortcuts."],
+      ["error", "Can't change this until you choose Try again on the home screen."],
     ]) {
       await patchState(gallery, { homePins: { status, pins: [] } });
       await expect(pin).toHaveAttribute("aria-disabled", "true");
@@ -264,6 +265,73 @@ test.describe("home shortcuts", () => {
     }
     await patchState(gallery, { homePins: { status: "unavailable", pins: [] } });
     await expect(pin).toHaveCount(0);
+  });
+});
+
+test.describe("home shortcuts: review fixes", () => {
+  test("a shortcut starts with the play glyph and Open is a bordered button of its own", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "home-shortcuts" });
+    const run = runButton(gallery, "Daily clean");
+    const open = gallery.getByRole("button", { name: "Open Daily clean" });
+    const rooms = choices(gallery).getByRole("button", { name: /^Clean rooms/ });
+    const glyph = (locator) => locator.locator(".ms-row__lead path").getAttribute("d");
+    expect(await glyph(run)).not.toBe(await glyph(rooms));
+    expect(await glyph(run)).toBe(await glyph(runButton(gallery, "Entryway")));
+    await expect(run.locator(".ms-row__trail")).toHaveCount(0);
+    expect(await open.evaluate((element) => getComputedStyle(element).borderTopStyle)).toBe("solid");
+  });
+
+  test("a held shortcut's reason is readable text, not disabled grey", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "home-shortcut-blocked" });
+    const colors = await runButton(gallery, "Porch mat").evaluate((button) => ({
+      reason: getComputedStyle(button.querySelector(".line[data-tone=warning]")).color,
+      title: getComputedStyle(button.querySelector("strong")).color,
+    }));
+    expect(colors.reason).not.toBe(colors.title);
+  });
+
+  test("while the plan list is reread or failed, the plan shortcut is held with its Run view's reason", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "home-shortcuts" });
+    const plans = (await snapshot(page)).resources.plans;
+    for (const [status, reason] of [
+      // The Run view's own gate already holds a list being read.
+      ["loading", "Load the room and plan list before choosing a cleaning action."],
+      ["error", "Load the room and plan list before choosing a cleaning action."],
+    ]) {
+      await patchState(gallery, { resources: { ...(await snapshot(page)).resources, plans: { ...plans, status } } });
+      await expect(runButton(gallery, "Daily clean")).toHaveAttribute("aria-disabled", "true");
+      await expect(runButton(gallery, "Daily clean").locator(".line[data-tone=warning]")).toHaveText(reason);
+    }
+  });
+
+  test("a refused shortcut run stays on Run, and a later Run plan there does not jump home", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "home-shortcuts" });
+    await runButton(gallery, "Daily clean").click();
+    await patchState(gallery, { command: "pending", pendingAction: "run-plan" });
+    await patchState(gallery, { command: "idle", pendingAction: null });
+    await patchState(gallery, { command: "starting" });
+    await page.waitForTimeout(100);
+    expect((await snapshot(page)).workflow).toBe("plan");
+  });
+
+  test("New area after viewing an area starts a blank drawing", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "areas-list" });
+    await areaRows(gallery).nth(0).click();
+    await gallery.getByRole("button", { name: "Back to areas" }).click();
+    await gallery.getByRole("button", { name: "New area", exact: true }).click();
+    const state = await snapshot(page);
+    expect({ id: state.areaDraft.id, areaId: state.selection.areaId, circles: state.draw.circles.length }).toEqual({ id: null, areaId: null, circles: 0 });
+    await expect(gallery.getByRole("button", { name: "Back to areas" }).first()).toBeAttached();
+  });
+
+  test("Show on home sits below the run's end line, apart from Plan enabled", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-saved-intelligent" });
+    const end = gallery.getByText("Returns to the dock when finished");
+    const enabled = gallery.getByRole("switch", { name: "Plan enabled" });
+    const pin = gallery.getByRole("switch", { name: "Show on home" });
+    const [endBox, enabledBox, pinBox] = [await end.boundingBox(), await enabled.boundingBox(), await pin.boundingBox()];
+    expect(enabledBox.y).toBeLessThan(endBox.y);
+    expect(pinBox.y).toBeGreaterThan(endBox.y + endBox.height);
   });
 });
 
@@ -294,7 +362,7 @@ test.describe("Your areas", () => {
       "Entryway Vacuum · Optimal",
       "Under the dining table Mop",
       "Hallway rug Vacuum · Heavy duty Map changed · Check it before cleaning",
-      "Porch mat Vacuum · Optimal Needs redrawing before it can clean",
+      "Porch mat Vacuum · Optimal Redraw it before cleaning",
       "New area",
     ]);
     await expect(areaRows(gallery).locator("bdi")).toHaveText(["Entryway", "Under the dining table", "Hallway rug", "Porch mat"]);
@@ -309,7 +377,7 @@ test.describe("Your areas", () => {
   test("the stale scenario reads plainly", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "areas-stale" });
     await expect(areaRows(gallery).nth(0)).toHaveAccessibleName(/^Entryway Vacuum · Optimal Map changed · Check it before cleaning$/);
-    await expect(areaRows(gallery).nth(3)).toHaveAccessibleName(/^Porch mat Vacuum · Optimal Needs redrawing before it can clean$/);
+    await expect(areaRows(gallery).nth(3)).toHaveAccessibleName(/^Porch mat Vacuum · Optimal Redraw it before cleaning$/);
   });
 
   test("an area opens its screen with Clean this area, Redraw, its settings and Delete; Back and Escape return to its row", async ({ page }) => {
@@ -517,6 +585,18 @@ test.describe("home shortcuts in Home Assistant's user data", () => {
     await page.evaluate(() => window.__panelFixture.releaseService());
   });
 
+
+  test("a failed write puts an unpinned shortcut back in its place", async ({ page }) => {
+    const pins = [{ kind: "plan", id: "x" }, { kind: "plan", id: "daily" }, { kind: "plan", id: "y" }];
+    const panel = await mountPanel(page, { userData: { [KEY]: { "synthetic-entry": { pins } } } });
+    await expect.poll(() => page.evaluate(() => window.__pinPanel.getWorkspaceSnapshot().homePins.status)).toBe("ready");
+    await page.evaluate(() => window.__panelFixture.failNextUserData("frontend/set_user_data"));
+    await panel.getByRole("button", { name: "Open Daily clean" }).click();
+    await panel.getByRole("switch", { name: "Show on home" }).click();
+    await expect.poll(() => page.evaluate(() => window.__pinPanel.getWorkspaceSnapshot().notice?.key)).toBe("v4_notice_shortcuts_save_failed");
+    expect(await page.evaluate(() => window.__pinPanel.getWorkspaceSnapshot().homePins.pins)).toEqual(pins);
+  });
+
   test("browser Back steps New area → Your areas → home", async ({ page }) => {
     const panel = await mountPanel(page, {});
     await panel.getByRole("button", { name: /^Clean custom area/ }).click();
@@ -537,5 +617,39 @@ test.describe("home shortcuts in Home Assistant's user data", () => {
     await panel.getByRole("button", { name: /^Daily clean/ }).click();
     await expect(panel.getByRole("switch", { name: "Plan enabled" })).toBeVisible();
     await expect(panel.getByRole("switch", { name: "Show on home" })).toHaveCount(0);
+  });
+});
+
+// ---- Seeding, on the module itself -----------------------------------------
+
+test.describe("home-pins seeding", () => {
+  test("seeds the default plan only from a plan list that loaded", async ({ page }) => {
+    const bundle = await build({
+      stdin: { contents: 'export { loadPins } from "./frontend/map-studio-v4/home-pins"; export { WorkspaceStore } from "./frontend/map-studio-v4/state"; export { createGalleryState } from "./frontend/map-studio-v4/gallery-state";', resolveDir: process.cwd() },
+      bundle: true, format: "esm", write: false,
+    });
+    await page.route("**/home-pins-test.js", (route) => route.fulfill({ contentType: "text/javascript", body: bundle.outputFiles[0].text }));
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    const result = await page.evaluate(async () => {
+      const { loadPins, WorkspaceStore, createGalleryState } = await import("/home-pins-test.js");
+      const run = async (status, failWrite = false) => {
+        const writes = [];
+        const connection = { sendMessagePromise: async (message) => {
+          if (message.type === "frontend/get_user_data") return { value: null };
+          if (failWrite) throw new Error("synthetic");
+          writes.push(message.value);
+          return null;
+        } };
+        const initial = createGalleryState("ready");
+        const store = new WorkspaceStore({ ...initial, resources: { ...initial.resources, plans: { ...initial.resources.plans, status } } });
+        const pins = await loadPins(connection, store, initial.selection.entryId);
+        return { pins, writes };
+      };
+      return { ready: await run("ready"), error: await run("error"), failedWrite: await run("ready", true) };
+    });
+    expect(result.ready.pins).toEqual([{ kind: "plan", id: "daily" }]);
+    expect(result.ready.writes).toHaveLength(1);
+    expect(result.error).toEqual({ pins: [], writes: [] });
+    expect(result.failedWrite.pins).toEqual([{ kind: "plan", id: "daily" }]);
   });
 });

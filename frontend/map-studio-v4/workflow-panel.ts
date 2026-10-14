@@ -309,7 +309,7 @@ line-height: var(--ms-lh-snug);
               <small>${settingLabel(this.#tr, area)}</small>
               ${check || redraw ? html`<span class="lines"><span class="line" data-tone="warning">${icon(iconNoticeWarning)}<span>${check
                 ? this.#t("v4_area_row_check", "Map changed · Check it before cleaning")
-                : this.#t("v4_area_row_redraw", "Needs redrawing before it can clean")}</span></span></span>` : nothing}
+                : this.#t("v4_area_row_redraw", "Redraw it before cleaning")}</span></span></span>` : nothing}
             </span>
             <span class="ms-row__trail">${icon(iconChevronRight)}</span>
           </button></div>`;

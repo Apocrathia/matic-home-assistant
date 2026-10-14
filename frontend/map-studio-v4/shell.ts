@@ -747,10 +747,16 @@ export class MaticMapShellV4 extends LitElement {
     if (changed.has("state")) {
       this.#resumeWorkflow();
       const previous = changed.get("state") as WorkspaceState | undefined;
+      // A shortcut's run returns home once it starts; a run that was refused
+      // (its check went back to idle, or a notice says why) stays on Run with
+      // its reason, and a later Run plan there no longer jumps home.
       if (this.#pinRun && (this.state.workflow !== "plan" || this.state.selection.planId !== this.#pinRun)) this.#pinRun = null;
       else if (this.#pinRun && (this.state.command === "starting" || hasStoppableWork(this.state))) {
         this.#pinRun = null;
         this.#emit({ type: "open-workflow", workflow: "none" });
+      } else if (this.#pinRun && this.state.command === "idle"
+        && (previous?.command === "pending" || (this.state.notice !== null && previous?.notice !== this.state.notice))) {
+        this.#pinRun = null;
       }
       if (previous?.precisionOpen && !this.state.precisionOpen) {
         this.#brushLauncher()?.focus();
@@ -1490,7 +1496,7 @@ export class MaticMapShellV4 extends LitElement {
       >
         <span class="ms-row__lead">${icon(glyph)}</span>
         <span class="ms-row__body"><strong>${label}</strong>${detail ? html`<small>${detail}</small>` : nothing}</span>
-        <span class="ms-row__trail">${icon(iconChevronRight)}</span>
+        <span class="ms-row__trail">${icon(iconChevronRight, { directional: true })}</span>
       </button>
     `;
   }

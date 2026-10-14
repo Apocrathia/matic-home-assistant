@@ -43,7 +43,7 @@ state. A cell ID with settings other than its own is an error too, and the banne
 
 | ID | Journey | Row part | What to check |
 |---|---|---|---|
-| R01 | Home, default plan card and Your plans | `steps=home-plan-due,home-plan-paused,home-plan-blocked,ready` | The task cards, the pinned plan's due lines in full and the Your plans row last. |
+| R01 | Home, plan shortcut and Your plans | `steps=home-plan-due,home-plan-paused,home-plan-blocked,ready` | The task cards, the pinned plan's due lines in full and the Your plans row last. |
 | R02 | Plan pick, run, edit, save and delete | `steps=plans,plan-saved-intelligent,plan-saved-ordered,plan-run-parts,plan-run-paused,plan-run-blocked,plan-edit-ordered,plan-dirty,plan-dirty:discardDraft,plan-new,plan-saved-intelligent:confirmDeletePlan` | Picker to Run to Edit; numbers only in Saved order; Save, Cancel and Delete ask only when data would be lost. |
 | R03 | Room schedules | `steps=plan-cadence-shared,plan-schedule-available,plan-schedule-joining,plan-schedule-conflict,plan-cadence-blocked,plan-cadence-shared:confirmResetCadence` | Each schedule row says when work is due; sharing, joining and Reset read plainly. |
 | R04 | Rooms view | `steps=rooms,rooms-ready,rooms-busy,rooms-failed,rooms-empty,room-limit` | Map and list stay in step; each disabled Clean says why. |

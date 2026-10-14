@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import { icon, iconChevronRight, iconDue, iconNewArea, iconNoticeWarning, iconPlan } from "./icons";
+import { icon, iconChevronRight, iconCleaning, iconDue, iconNoticeWarning } from "./icons";
 import type { SavedArea, SavedPlan } from "./backend-contracts";
 import type { HomePin, PrimaryAction, WorkspaceIntent, WorkspaceState } from "./contracts";
 import { areaSelection, draftForPlan, selectPrimaryAction } from "./state";
@@ -25,7 +25,7 @@ export interface ShortcutHost {
   readonly emit: (intent: WorkspaceIntent) => void;
 }
 
-/** What the plan's Run view would offer now. */
+/** What the plan's Run view would offer now (a list being reread or that failed holds it there too). */
 export const planShortcutAction = (state: WorkspaceState, plan: SavedPlan) => selectPrimaryAction({
   ...state,
   workflow: "plan",
@@ -45,7 +45,9 @@ export const areaShortcutAction = (state: WorkspaceState, area: SavedArea) => se
 // the shortcut says what to do instead.
 const CHECK_AREA = { label: "", kind: "primary", enabled: false, id: "check-area", reason: "Can't clean this area until you check it.", reasonKey: "v4_reason_check_area" } as const;
 
-const shortcut = (host: ShortcutHost, pin: HomePin, name: string, title: string, glyph: string, lines: unknown, action: PrimaryAction | null, run: string, chip: unknown) => {
+// Every shortcut leads with the play glyph, so it reads as "starts now",
+// unlike the cards that open a screen; Open is a bordered button of its own.
+const shortcut = (host: ShortcutHost, pin: HomePin, name: string, title: string, lines: unknown, action: PrimaryAction | null, run: string, chip: unknown) => {
   const { t, held } = host;
   const enabled = !held && action?.id === run && action.enabled;
   const reasonAction = held || enabled ? null : action;
@@ -60,7 +62,7 @@ const shortcut = (host: ShortcutHost, pin: HomePin, name: string, title: string,
       aria-describedby=${held ? "home-reason" : nothing}
       @click=${() => { if (enabled) host.run(pin); }}
     >
-      <span class="ms-row__lead">${icon(glyph)}</span>
+      <span class="ms-row__lead">${icon(iconCleaning)}</span>
       <span class="ms-row__body">
         <strong class="card-title"><span class="card-name">${before}<bdi>${name}</bdi>${after}</span>${chip}</strong>
         ${lines}
@@ -68,7 +70,7 @@ const shortcut = (host: ShortcutHost, pin: HomePin, name: string, title: string,
       </span>
     </button>
     <button
-      class="ms-btn ms-btn--icon shortcut-open"
+      class="ms-btn ms-btn--icon ms-btn--secondary shortcut-open"
       type="button"
       data-launcher=${`open:${pin.kind}:${pin.id}`}
       aria-label=${t("v4_open_named", "Open {name}", { name })}
@@ -85,7 +87,7 @@ const planShortcut = (host: ShortcutHost, pin: HomePin, plan: SavedPlan) => {
   const action = planShortcutAction(state, plan);
   const due = plan.enabled ? dueLines(t, state.locale, plan.nextRunPreview?.rooms ?? []) : [];
   return shortcut(
-    host, pin, plan.name, t("v4_run_named_plan", "Run {plan}", { plan: "\u0000" }), iconPlan,
+    host, pin, plan.name, t("v4_run_named_plan", "Run {plan}", { plan: "\u0000" }),
     html`<small>${planRowLine2(t, state.locale, plan)}</small>${due.length ? html`<span class="card-lines">${due.map((line) => html`<span class="line">${icon(iconDue)}${line}</span>`)}</span>` : nothing}`,
     "label" in action ? action : null, "run-plan",
     plan.enabled ? nothing : html`<span class="ms-chip">${t("v4_paused", "Paused")}</span>`,
@@ -96,7 +98,7 @@ const areaShortcut = (host: ShortcutHost, pin: HomePin, area: SavedArea) => {
   const { t, state } = host;
   const action = areaShortcutAction(state, area);
   return shortcut(
-    host, pin, area.name, t("v4_clean_named_area", "Clean {area}", { area: "\u0000" }), iconNewArea,
+    host, pin, area.name, t("v4_clean_named_area", "Clean {area}", { area: "\u0000" }),
     html`<small>${settingLabel(t, area)}</small>`,
     !("label" in action) ? null : action.id === "save-area" ? CHECK_AREA : action, "run-area",
     nothing,
@@ -118,7 +120,7 @@ export const homeShortcuts = (host: ShortcutHost) => {
     const area = areas.find((candidate) => candidate.id === pin.id);
     return area ? areaShortcut(host, pin, area) : nothing;
   })}${state.homePins.status === "error" ? html`<p class="pins-error">${t("v4_shortcuts_unavailable", "Home Assistant couldn't load your home shortcuts.")} <button
-    class="ms-btn ms-btn--sm ms-btn--secondary"
+    class="ms-btn ms-btn--secondary"
     type="button"
     @click=${() => host.emit({ type: "reload-home-pins" })}
   >${t("v4_retry", "Try again")}</button></p>` : nothing}`;
@@ -135,7 +137,7 @@ export const homePinSwitch = (t: Translate, state: WorkspaceState, pin: HomePin,
   const pinned = pins.some((candidate) => candidate.kind === pin.kind && candidate.id === pin.id);
   const reason = status === "ready" ? null
     : status === "error"
-      ? t("v4_reason_shortcuts_unavailable", "Can't change this until Home Assistant loads your home shortcuts.")
+      ? t("v4_reason_shortcuts_unavailable", "Can't change this until you choose Try again on the home screen.")
       : t("v4_reason_shortcuts_loading", "Waiting for Home Assistant to load your home shortcuts.");
   return html`
     <div class="switch-row">

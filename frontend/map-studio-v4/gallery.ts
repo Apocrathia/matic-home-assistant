@@ -126,6 +126,12 @@ export class MaticMapStudioGalleryV4 extends LitElement {
   #intent(event: CustomEvent<unknown>): void {
     if (!isWorkspaceIntent(event.detail)) return;
     event.stopPropagation();
+    // The effects' share of opening Draw (openWorkflow): a new drawing from
+    // anywhere but an area's own screen starts with no area selected.
+    const before = this.#store.value.workflow;
+    if (event.detail.type === "open-workflow" && event.detail.workflow === "draw" && before !== "draw" && before !== "areaReview") {
+      this.#store.replace({ ...this.#store.value, ...areaSelection(this.#store.value, null) });
+    }
     this.#store.dispatch(event.detail);
     // The effects' share of an area selection, played on the synthetic catalog.
     if (event.detail.type === "select-area") {

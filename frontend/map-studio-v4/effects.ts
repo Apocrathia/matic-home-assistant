@@ -2200,21 +2200,30 @@ export class EffectController {
     }
   }
 
-  /** Writes the pins the reducer already shows; a failed write puts the change back. */
-  saveHomePin(pin: HomePin, pinned: boolean): void {
+  /**
+   * Writes the pins the reducer already shows. Each queued write sends the
+   * list as it is when its turn comes, so a later change is never lost to an
+   * earlier snapshot; a failed write undoes only its own change, at the place
+   * the pin had (`previous` is the list before it).
+   */
+  saveHomePin(pin: HomePin, pinned: boolean, previous: readonly HomePin[]): void {
     const entryId = this.#store.value.selection.entryId;
     const connection = this.#workspaceConnection;
     if (!entryId || !connection || this.#store.value.homePins.status !== "ready") return;
-    const pins = this.#store.value.homePins.pins;
+    const same = (candidate: HomePin): boolean => candidate.kind === pin.kind && candidate.id === pin.id;
     this.#pinsWrite = this.#pinsWrite.then(async () => {
       const module = await import("./home-pins");
+      const current = (): boolean => !this.#disposed && this.#store.value.selection.entryId === entryId
+        && this.#store.value.homePins.status === "ready";
+      if (!current()) return;
       try {
-        await module.writePins(connection, entryId, pins);
+        await module.writePins(connection, entryId, this.#store.value.homePins.pins);
         this.#resumeAreaCatalog();
       } catch {
-        if (this.#disposed || this.#store.value.selection.entryId !== entryId) return;
-        this.#store.dispatch({ type: "set-home-pin", pin, pinned: !pinned });
-        this.#store.patch({ notice: module.PINS_SAVE_FAILED });
+        if (!current()) return;
+        const pins = this.#store.value.homePins.pins.filter((candidate) => !same(candidate));
+        if (!pinned) pins.splice(Math.min(Math.max(previous.findIndex(same), 0), pins.length), 0, pin);
+        this.#store.patch({ homePins: { status: "ready", pins }, notice: module.PINS_SAVE_FAILED });
       }
     }).catch(() => undefined);
   }

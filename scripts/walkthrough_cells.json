@@ -2,7 +2,7 @@
   "rows": [
     {
       "id": "R01",
-      "journey": "Home, default plan card and Your plans",
+      "journey": "Home, plan shortcut and Your plans",
       "steps": ["home-plan-due", "home-plan-paused", "home-plan-blocked", "ready"],
       "check": "The task cards, the pinned plan's due lines in full and the Your plans row last"
     },

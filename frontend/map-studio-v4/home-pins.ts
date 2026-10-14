@@ -44,26 +44,38 @@ export const writePins = async (connection: WorkspaceConnection, entryId: string
   });
 };
 
-// The default plan, once the plan list has settled for this robot.
-const settledDefaultPlan = (store: WorkspaceStore, entryId: string): Promise<string | null> => new Promise((resolve) => {
+// The plan list once it has settled for this robot: undefined when it could
+// not be read (or the robot changed), so nothing is decided from it.
+const settledPlans = (store: WorkspaceStore, entryId: string): Promise<{ readonly selected: string | null } | undefined> => new Promise((resolve) => {
   const check = (state: WorkspaceState): boolean => {
-    if (state.selection.entryId !== entryId) { resolve(null); return true; }
+    if (state.selection.entryId !== entryId) { resolve(undefined); return true; }
     const { status, value } = state.resources.plans;
     if (status === "idle" || status === "loading") return false;
-    resolve(value?.plans.some((plan) => plan.id === value.selectedPlan) ? value.selectedPlan : null);
+    if (status !== "ready" || !value) { resolve(undefined); return true; }
+    resolve({ selected: value.plans.some((plan) => plan.id === value.selectedPlan) ? value.selectedPlan : null });
     return true;
   };
   if (check(store.value)) return;
   const stop = store.subscribe((state) => { if (check(state)) stop(); });
 });
 
-/** Reads this robot's pins, seeding the default plan when there is no record. */
+/**
+ * Reads this robot's pins. With no record yet, the default plan becomes the
+ * first pin and is written once. A plan list that failed to load decides
+ * nothing: no pins now, no record, so the next load seeds. A seed whose write
+ * fails still shows; the next load tries again.
+ */
 export const loadPins = async (connection: WorkspaceConnection, store: WorkspaceStore, entryId: string): Promise<HomePin[]> => {
   const pins = pinsOf(await readStored(connection), entryId);
   if (pins) return pins;
-  const plan = await settledDefaultPlan(store, entryId);
-  const seeded: HomePin[] = plan ? [{ kind: "plan", id: plan }] : [];
-  await writePins(connection, entryId, seeded);
+  const plans = await settledPlans(store, entryId);
+  if (!plans) return [];
+  const seeded: HomePin[] = plans.selected ? [{ kind: "plan", id: plans.selected }] : [];
+  try {
+    await writePins(connection, entryId, seeded);
+  } catch {
+    // Shown now, written on a later load.
+  }
   return seeded;
 };
 

@@ -36,6 +36,9 @@ export const shellWorkflowStyles = css`
     .quick-actions .card-title .ms-chip { flex: none; }
     .quick-actions .card-lines { display: block; margin-block-start: 0.125rem; color: var(--ms-text); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
     .quick-actions .ms-row[aria-disabled="true"] .card-lines { color: var(--ms-text-disabled); }
+    /* A held shortcut's reason is the one thing that says why: readable text. */
+    .quick-actions .ms-row[aria-disabled="true"] .line[data-tone="warning"] { color: var(--ms-text-quiet); }
+    .shortcut-run:not([aria-disabled="true"]) .ms-row__lead { color: var(--ms-resolved-indicator, var(--ms-accent)); }
     .quick-actions .line { display: block; padding-inline-start: 1.25rem; text-indent: -1.25rem; }
     .quick-actions .line .ms-icon { display: inline-block; inline-size: 1rem; block-size: 1rem; margin-inline-end: var(--ms-space-1); vertical-align: -0.1875rem; color: var(--ms-resolved-indicator, var(--ms-accent)); }
     .quick-actions .line[data-tone="warning"] .ms-icon { color: var(--ms-warning); }

@@ -71,6 +71,8 @@ export class MaticPlanViewsV4 extends LitElement {
 .pos-badge { display: grid; flex: none; place-items: center; inline-size: 1.5rem; block-size: 1.5rem; border-radius: 50%; background: color-mix(in srgb, var(--ms-accent) 12%, var(--ms-surface-card)); font-size: var(--ms-t-xs); font-weight: var(--ms-w-bold); font-variant-numeric: tabular-nums; }
 .problem { margin: 0 0 var(--ms-space-2); padding: var(--ms-space-3); border-inline-start: 3px solid var(--ms-danger); border-radius: var(--ms-radius-md); background: color-mix(in srgb, var(--ms-danger) 12%, var(--ms-surface-card)); font-size: var(--ms-t-sm); line-height: var(--ms-lh-snug); }
 .switch-row { display: flex; gap: var(--ms-space-3); align-items: center; min-block-size: var(--ms-control); }
+.pin-setting { margin-block-start: var(--ms-space-3); }
+.pin-setting:empty { display: none; }
 .switch-copy { display: grid; flex: 1; gap: 0.125rem; min-inline-size: 0; font-size: var(--ms-t-md); }
 .switch-copy small, .reason { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
 .sr-only { position: absolute; overflow: hidden; inline-size: 1px; block-size: 1px; margin: -1px; padding: 0; border: 0; clip-path: inset(50%); white-space: nowrap; }
@@ -342,8 +344,8 @@ export class MaticPlanViewsV4 extends LitElement {
         <button class="ms-btn ms-btn--secondary" type="button" @click=${() => this.#intent({ type: "open-workflow", workflow: "plan" })}>${this.#t("v4_retry", "Try again")}</button>` : nothing}
       ${ready && ordered ? html`<ol class="run-list" role="list">${rows}</ol>` : html`<ul class="run-list" role="list">${rows}</ul>`}
       ${this.#switch()}
-      ${homePinSwitch(this.#t, state, { kind: "plan", id: plan.id }, (intent) => this.#intent(intent))}
       ${end ? html`<p class="quiet">${end}</p>` : nothing}
+      <div class="pin-setting">${homePinSwitch(this.#t, state, { kind: "plan", id: plan.id }, (intent) => this.#intent(intent))}</div>
     `;
   }
 

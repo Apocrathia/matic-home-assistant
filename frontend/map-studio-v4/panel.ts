@@ -261,7 +261,7 @@ export class MaticMapPanelV4 extends LitElement {
     }
     if (intent.type === "set-home-pin") {
       const before = this.#store.value;
-      if (this.#store.dispatch(intent) !== before) this.#effects?.saveHomePin(intent.pin, intent.pinned);
+      if (this.#store.dispatch(intent) !== before) this.#effects?.saveHomePin(intent.pin, intent.pinned, before.homePins.pins);
       return;
     }
     if (intent.type === "reload-home-pins") {
