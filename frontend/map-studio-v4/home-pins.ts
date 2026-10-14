@@ -4,14 +4,18 @@ import type { WorkspaceConnection } from "./workspace-transport";
 
 /**
  * Home shortcuts live in Home Assistant's per-user frontend data, never in
- * the integration's storage: one key for this integration, one record per
- * robot (config entry), each a list of pins in the order they were added.
+ * the integration's storage: one key per robot (config entry),
+ * `matic_robot_home_shortcuts.<entry_id>`, holding that robot's pins in the
+ * order they were added. A write touches only its own robot's key, so two
+ * tabs on different robots never read-modify-write each other's lists
+ * (Codex PRRT_kwDOTau7uM6sPDWX). Two tabs on the same robot write the whole
+ * list each shows: the last write wins, for that user's own list only.
  * A robot with no record has never been set up, and its backend default plan
  * becomes the first pin once (owner ruling, 2026-10-13).
  */
 export const HOME_PINS_KEY = "matic_robot_home_shortcuts";
 
-type Stored = Readonly<Record<string, { readonly pins?: unknown }>>;
+const keyFor = (entryId: string): string => `${HOME_PINS_KEY}.${entryId}`;
 
 const isPin = (value: unknown): value is HomePin => {
   if (!value || typeof value !== "object") return false;
@@ -19,15 +23,10 @@ const isPin = (value: unknown): value is HomePin => {
   return (kind === "plan" || kind === "area") && typeof id === "string" && id.length > 0;
 };
 
-const readStored = async (connection: WorkspaceConnection): Promise<Stored> => {
-  const response = await connection.sendMessagePromise<{ value?: unknown } | null>({ type: "frontend/get_user_data", key: HOME_PINS_KEY });
-  const value = response?.value;
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Stored : {};
-};
-
 /** One robot's pins, or null when this user never set any for it. */
-const pinsOf = (stored: Stored, entryId: string): HomePin[] | null => {
-  const record = stored[entryId];
+const readPins = async (connection: WorkspaceConnection, entryId: string): Promise<HomePin[] | null> => {
+  const response = await connection.sendMessagePromise<{ value?: unknown } | null>({ type: "frontend/get_user_data", key: keyFor(entryId) });
+  const record = response?.value as { pins?: unknown } | null | undefined;
   if (!record || typeof record !== "object" || !Array.isArray(record.pins)) return null;
   const seen = new Set<string>();
   return record.pins.filter(isPin).filter(({ kind, id }) => !seen.has(`${kind}:${id}`) && Boolean(seen.add(`${kind}:${id}`)))
@@ -35,9 +34,8 @@ const pinsOf = (stored: Stored, entryId: string): HomePin[] | null => {
 };
 
 /**
- * Writes one robot's pins over a fresh read, so other robots' records stay as
- * they are. `stillOwned` is asked again after that read: a write whose owner
- * changed meanwhile is dropped, never sent to the next user's data.
+ * Writes one robot's pins to its own key. A write whose owner changed before
+ * its turn (`stillOwned`) is dropped, never sent to the next user's data.
  */
 export const writePins = async (
   connection: WorkspaceConnection,
@@ -45,12 +43,11 @@ export const writePins = async (
   pins: readonly HomePin[],
   stillOwned: () => boolean = () => true,
 ): Promise<void> => {
-  const stored = await readStored(connection);
   if (!stillOwned()) return;
   await connection.sendMessagePromise({
     type: "frontend/set_user_data",
-    key: HOME_PINS_KEY,
-    value: { ...stored, [entryId]: { pins: pins.map(({ kind, id }) => ({ kind, id })) } },
+    key: keyFor(entryId),
+    value: { pins: pins.map(({ kind, id }) => ({ kind, id })) },
   });
 };
 
@@ -100,7 +97,7 @@ export const loadPins = async (
   entryId: string,
   stillOwned: () => boolean = () => true,
 ): Promise<HomePin[] | null> => {
-  const pins = pinsOf(await readStored(connection), entryId);
+  const pins = await readPins(connection, entryId);
   if (pins) return pins;
   const plans = await settledPlans(store, entryId);
   if (!stillOwned()) return [];

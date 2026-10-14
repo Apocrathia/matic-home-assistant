@@ -38,16 +38,16 @@ async function setup(page, stores) {
         const user = h.user;
         log.push({ user, type: message.type, value: structuredClone(message.value ?? null) });
         const answer = () => {
-          if (message.type === "frontend/get_user_data") return { value: structuredClone(data[user]?.[KEY] ?? null) };
+          if (message.type === "frontend/get_user_data") return { value: structuredClone(data[user]?.[message.key] ?? null) };
           if (message.type === "frontend/set_user_data") {
             h.sets += 1;
             if (h.sets === h.failSetAt) throw new Error("synthetic write failure");
-            data[user] = { ...(data[user] ?? {}), [KEY]: structuredClone(message.value) };
+            data[user] = { ...(data[user] ?? {}), [message.key]: structuredClone(message.value) };
             return null;
           }
           throw new Error(`unexpected ${message.type}`);
         };
-        if (h.hold.has(message.type)) {
+        if (h.hold.has(message.type) || (h.holdAll && message.type === "frontend/get_user_data")) {
           h.hold.delete(message.type);
           return new Promise((resolve) => held.push({ user, type: message.type, release: (value) => resolve(value ?? answer()) }));
         }
@@ -70,17 +70,24 @@ async function setup(page, stores) {
       pose: async () => null,
       dispose() {},
     };
-    const store = new WorkspaceStore();
-    const controller = new EffectController(store, backend, connection, false);
-    h.store = store;
-    h.controller = controller;
-    h.sync = (user, entryKey) => {
-      h.user = user;
-      controller.sync({ host: { connected: true, administrator: true, robotConnected: true, robotCount: 2 },
+    const make = () => {
+      const store = new WorkspaceStore();
+      const controller = new EffectController(store, backend, connection, false);
+      const sync = (user, entryKey) => {
+        h.user = user;
+        controller.sync({ host: { connected: true, administrator: true, robotConnected: true, robotCount: 2 },
         activity: "idle", batteryPercent: 50, language: "en", userKey: user, vacuumEntityId: "vacuum.x", entryKey,
         robotLabel: "Matic", robots: [{ entryId: "synthetic-entry", label: "A" }, { entryId: "entry-b", label: "B" }] });
+      };
+      return { store, controller, sync };
     };
-    h.pins = () => ({ entry: store.value.selection.entryId, ...store.value.homePins });
+    const first = make();
+    h.store = first.store;
+    h.controller = first.controller;
+    h.sync = first.sync;
+    // A second tab or dashboard: its own controller on the same user's data.
+    h.make = make;
+    h.pins = () => ({ entry: h.store.value.selection.entryId, ...h.store.value.homePins });
     window.pinsHarness = h;
   }, { stores, KEY });
 }
@@ -90,7 +97,9 @@ const sync = (page, user, entry) => page.evaluate(([u, e]) => window.pinsHarness
 const hold = (page, type) => page.evaluate((t) => window.pinsHarness.hold.add(t), type);
 const heldCount = (page) => page.evaluate(() => window.pinsHarness.held.length);
 const release = (page, index, value) => page.evaluate(([i, v]) => window.pinsHarness.held[i].release(v), [index, value]);
-const record = (pinsList) => ({ [KEY]: { "synthetic-entry": { pins: pinsList }, "entry-b": { pins: [plan("b-plan")] } } });
+// One key per robot (Codex PRRT_kwDOTau7uM6sPDWX).
+const keyOf = (entry) => `${KEY}.${entry}`;
+const record = (pinsList) => ({ [keyOf("synthetic-entry")]: { pins: pinsList }, [keyOf("entry-b")]: { pins: [plan("b-plan")] } });
 
 test("a user who signs in on the same robot gets their own shortcuts, never the last user's", async ({ page }) => {
   await setup(page, { u1: record([plan("u1-plan")]), u2: record([plan("u2-plan")]) });
@@ -118,7 +127,7 @@ test("robot A, then B, then A again: the first A read, settling last, is dropped
   await sync(page, "u1", "synthetic-entry");
   await expect.poll(() => pins(page)).toEqual({ entry: "synthetic-entry", status: "ready", pins: [plan("fresh")] });
   // The first read answers late with what it saw then.
-  await release(page, 0, { value: { "synthetic-entry": { pins: [plan("stale")] } } });
+  await release(page, 0, { value: { pins: [plan("stale")] } });
   await page.waitForTimeout(50);
   expect(await pins(page)).toEqual({ entry: "synthetic-entry", status: "ready", pins: [plan("fresh")] });
 });
@@ -127,7 +136,7 @@ test("a write queued for one user is never sent after another user takes over", 
   await setup(page, { u1: record([plan("daily")]), u2: record([plan("u2-plan")]) });
   await sync(page, "u1", "synthetic-entry");
   await expect.poll(() => pins(page)).toMatchObject({ status: "ready", pins: [plan("daily")] });
-  await hold(page, "frontend/get_user_data"); // the first write's reread
+  await hold(page, "frontend/set_user_data"); // the first write, sent for u1 and still out
   await page.evaluate(() => {
     const h = window.pinsHarness;
     const pin = { kind: "plan", id: "weekend" };
@@ -144,8 +153,9 @@ test("a write queued for one user is never sent after another user takes over", 
   await release(page, 0);
   await page.waitForTimeout(100);
   const after = await page.evaluate(() => ({ data: window.pinsHarness.data, writes: window.pinsHarness.log.filter((call) => call.type === "frontend/set_user_data") }));
-  expect(after.writes).toEqual([]);
-  expect(after.data.u2[KEY]["synthetic-entry"].pins).toEqual([plan("u2-plan")]);
+  // Only the write already out for u1; the one queued behind it never went.
+  expect(after.writes.map((call) => call.user)).toEqual(["u1"]);
+  expect(after.data.u2[keyOf("synthetic-entry")].pins).toEqual([plan("u2-plan")]);
   expect(await pins(page)).toEqual({ entry: "synthetic-entry", status: "ready", pins: [plan("u2-plan")] });
 });
 
@@ -167,7 +177,7 @@ test("a failed write undoes only its own toggle, never a newer one of the same p
   await expect.poll(() => page.evaluate(() => window.pinsHarness.sets)).toBe(4);
   await page.waitForTimeout(50);
   expect(await pins(page)).toMatchObject({ status: "ready", pins: [plan("daily")] });
-  const stored = await page.evaluate((key) => window.pinsHarness.data.u1[key]["synthetic-entry"].pins, KEY);
+  const stored = await page.evaluate((key) => window.pinsHarness.data.u1[key].pins, keyOf("synthetic-entry"));
   expect(stored).toEqual([plan("daily")]);
 });
 
@@ -186,5 +196,41 @@ test("with no record yet, a plan list that failed first seeds the default plan o
   });
   expect(selected).toBeTruthy();
   await expect.poll(() => pins(page)).toMatchObject({ status: "ready", pins: [plan(selected)] });
-  await expect.poll(() => page.evaluate((key) => window.pinsHarness.data.u1[key]?.["synthetic-entry"]?.pins ?? null, KEY)).toEqual([plan(selected)]);
+  await expect.poll(() => page.evaluate((key) => window.pinsHarness.data.u1[key]?.pins ?? null, keyOf("synthetic-entry"))).toEqual([plan(selected)]);
+});
+
+const storedPins = (page, user, entry) => page.evaluate(([user, key]) => window.pinsHarness.data[user]?.[key]?.pins ?? null, [user, keyOf(entry)]);
+
+test("two tabs writing different robots at once keep both robots' shortcuts", async ({ page }) => {
+  const a = [plan("daily")];
+  const b = [plan("b-plan")];
+  await setup(page, { u1: { [keyOf("synthetic-entry")]: { pins: a }, [keyOf("entry-b")]: { pins: b } } });
+  await page.evaluate(() => {
+    const h = window.pinsHarness;
+    h.tabB = h.make();
+    h.sync("u1", "synthetic-entry");
+    h.tabB.sync("u1", "entry-b");
+  });
+  await expect.poll(() => pins(page)).toMatchObject({ status: "ready", pins: a });
+  await expect.poll(() => page.evaluate(() => window.pinsHarness.tabB.store.value.homePins)).toMatchObject({ status: "ready", pins: b });
+  // Both tabs pin at once; any read either write makes is held, then answered together.
+  await page.evaluate(() => {
+    const h = window.pinsHarness;
+    h.holdAll = true;
+    for (const [tab, id] of [[h, "weekend"], [h.tabB, "b-weekend"]]) {
+      const pin = { kind: "plan", id };
+      const before = tab.store.value.homePins.pins;
+      tab.store.dispatch({ type: "set-home-pin", pin, pinned: true });
+      tab.controller.saveHomePin(pin, true, before);
+    }
+  });
+  await page.waitForTimeout(100);
+  await page.evaluate(() => {
+    const h = window.pinsHarness;
+    h.holdAll = false;
+    for (const held of h.held.splice(0)) held.release();
+  });
+  await page.waitForTimeout(100);
+  expect(await storedPins(page, "u1", "synthetic-entry")).toEqual([plan("daily"), plan("weekend")]);
+  expect(await storedPins(page, "u1", "entry-b")).toEqual([plan("b-plan"), plan("b-weekend")]);
 });

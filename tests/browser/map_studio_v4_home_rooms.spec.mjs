@@ -539,7 +539,7 @@ test.describe("the plan card", () => {
         room_order: planRooms.map((room) => room.room_id), return_to_base: true,
         finish_current_room: false, finish_current_room_threshold: 50,
       }],
-    }, userData: { matic_robot_home_shortcuts: { "synthetic-entry": { pins: [{ kind: "plan", id: "daily" }] } } } });
+    }, userData: { "matic_robot_home_shortcuts.synthetic-entry": { pins: [{ kind: "plan", id: "daily" }] } } });
     const panel = page.locator(fixture.panelTag);
     const state = () => page.evaluate((tag) => {
       const { workflow, planView, planOrigin } = document.querySelector(tag).getWorkspaceSnapshot();

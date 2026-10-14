@@ -500,7 +500,9 @@ const PLAN_CATALOG = {
     },
   }],
 };
-const KEY = "matic_robot_home_shortcuts";
+// One user-data key per robot (Codex PRRT_kwDOTau7uM6sPDWX).
+const KEY = "matic_robot_home_shortcuts.synthetic-entry";
+const OTHER = "matic_robot_home_shortcuts.other-entry";
 
 async function mountPanel(page, options) {
   const fixture = await installPanelFixture(page, { initialPlanCatalog: PLAN_CATALOG, ...options });
@@ -517,35 +519,35 @@ async function mountPanel(page, options) {
   return panel;
 }
 const pins = (page) => page.evaluate(() => window.__pinPanel.getWorkspaceSnapshot().homePins);
-const stored = (page) => page.evaluate((key) => window.__panelFixture.userData()[key], KEY);
+const stored = (page) => page.evaluate((keys) => Object.fromEntries(keys.map((key) => [key, window.__panelFixture.userData()[key]]).filter(([, value]) => value !== undefined)), [KEY, OTHER]);
 
 test.describe("home shortcuts in Home Assistant's user data", () => {
   test("the default plan becomes the first shortcut once; a cleared list stays cleared", async ({ page }) => {
     const panel = await mountPanel(page, { userData: {} });
     await expect.poll(() => pins(page)).toEqual({ status: "ready", pins: [{ kind: "plan", id: "daily" }] });
-    expect(await stored(page)).toEqual({ "synthetic-entry": { pins: [{ kind: "plan", id: "daily" }] } });
+    expect(await stored(page)).toEqual({ [KEY]: { pins: [{ kind: "plan", id: "daily" }] } });
     await expect(panel.getByRole("button", { name: "Open Daily clean" })).toBeVisible();
 
-    const cleared = await mountPanel(page, { userData: { [KEY]: { "synthetic-entry": { pins: [] }, "other-entry": { pins: [{ kind: "area", id: "x" }] } } } });
+    const cleared = await mountPanel(page, { userData: { [KEY]: { pins: [] }, [OTHER]: { pins: [{ kind: "area", id: "x" }] } } });
     await expect.poll(() => pins(page)).toEqual({ status: "ready", pins: [] });
     await expect(cleared.getByRole("button", { name: "Open Daily clean" })).toHaveCount(0);
     await expect(cleared.getByRole("button", { name: "Your plans", exact: true })).toBeVisible();
   });
 
   test("pin and unpin are written for this robot only, keeping other robots' lists", async ({ page }) => {
-    const panel = await mountPanel(page, { userData: { [KEY]: { "synthetic-entry": { pins: [] }, "other-entry": { pins: [{ kind: "plan", id: "x" }] } } } });
+    const panel = await mountPanel(page, { userData: { [KEY]: { pins: [] }, [OTHER]: { pins: [{ kind: "plan", id: "x" }] } } });
     await expect.poll(() => pins(page)).toMatchObject({ status: "ready" });
     await panel.getByRole("button", { name: "Your plans", exact: true }).click();
     await panel.getByRole("button", { name: /^Daily clean/ }).click();
     const pin = panel.getByRole("switch", { name: "Show on home" });
     await pin.click();
-    await expect.poll(() => stored(page)).toEqual({ "synthetic-entry": { pins: [{ kind: "plan", id: "daily" }] }, "other-entry": { pins: [{ kind: "plan", id: "x" }] } });
+    await expect.poll(() => stored(page)).toEqual({ [KEY]: { pins: [{ kind: "plan", id: "daily" }] }, [OTHER]: { pins: [{ kind: "plan", id: "x" }] } });
     await pin.click();
-    await expect.poll(() => stored(page)).toEqual({ "synthetic-entry": { pins: [] }, "other-entry": { pins: [{ kind: "plan", id: "x" }] } });
+    await expect.poll(() => stored(page)).toEqual({ [KEY]: { pins: [] }, [OTHER]: { pins: [{ kind: "plan", id: "x" }] } });
   });
 
   test("a failed read leaves home working with nothing pinned and a quiet Try again", async ({ page }) => {
-    await installPanelFixture(page, { initialPlanCatalog: PLAN_CATALOG, userData: { [KEY]: { "synthetic-entry": { pins: [{ kind: "plan", id: "daily" }] } } } });
+    await installPanelFixture(page, { initialPlanCatalog: PLAN_CATALOG, userData: { [KEY]: { pins: [{ kind: "plan", id: "daily" }] } } });
     await page.evaluate(() => window.__panelFixture.failNextUserData("frontend/get_user_data"));
     await page.setViewportSize({ width: 1024, height: 768 });
     await page.evaluate(() => {
@@ -561,7 +563,7 @@ test.describe("home shortcuts in Home Assistant's user data", () => {
   });
 
   test("a failed write puts the switch back and says so", async ({ page }) => {
-    const panel = await mountPanel(page, { userData: { [KEY]: { "synthetic-entry": { pins: [] } } } });
+    const panel = await mountPanel(page, { userData: { [KEY]: { pins: [] } } });
     await expect.poll(() => pins(page)).toMatchObject({ status: "ready" });
     await page.evaluate(() => window.__panelFixture.failNextUserData("frontend/set_user_data"));
     await panel.getByRole("button", { name: "Your plans", exact: true }).click();
@@ -571,11 +573,11 @@ test.describe("home shortcuts in Home Assistant's user data", () => {
     await expect.poll(() => pins(page)).toEqual({ status: "ready", pins: [] });
     await expect(pin).toHaveAttribute("aria-checked", "false");
     expect(await page.evaluate(() => window.__pinPanel.getWorkspaceSnapshot().notice)).toMatchObject({ tone: "error", key: "v4_notice_shortcuts_save_failed" });
-    expect(await stored(page)).toEqual({ "synthetic-entry": { pins: [] } });
+    expect(await stored(page)).toEqual({ [KEY]: { pins: [] } });
   });
 
   test("one tap runs the plan through run_selected_plan with its preview, then home shows Stop", async ({ page }) => {
-    const panel = await mountPanel(page, { userData: { [KEY]: { "synthetic-entry": { pins: [{ kind: "plan", id: "daily" }] } } } });
+    const panel = await mountPanel(page, { userData: { [KEY]: { pins: [{ kind: "plan", id: "daily" }] } } });
     const run = panel.locator("button.shortcut-run");
     await expect(run).toHaveAccessibleName(/^Run Daily clean/);
     await expect(run).not.toHaveAttribute("aria-disabled", "true");
@@ -591,7 +593,7 @@ test.describe("home shortcuts in Home Assistant's user data", () => {
 
   test("a failed write puts an unpinned shortcut back in its place", async ({ page }) => {
     const pins = [{ kind: "plan", id: "x" }, { kind: "plan", id: "daily" }, { kind: "plan", id: "y" }];
-    const panel = await mountPanel(page, { userData: { [KEY]: { "synthetic-entry": { pins } } } });
+    const panel = await mountPanel(page, { userData: { [KEY]: { pins } } });
     await expect.poll(() => page.evaluate(() => window.__pinPanel.getWorkspaceSnapshot().homePins.status)).toBe("ready");
     await page.evaluate(() => window.__panelFixture.failNextUserData("frontend/set_user_data"));
     await panel.getByRole("button", { name: "Open Daily clean" }).click();
