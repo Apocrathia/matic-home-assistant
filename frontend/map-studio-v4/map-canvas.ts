@@ -141,6 +141,8 @@ export class MaticMapCanvasV4 extends LitElement {
        its popover keeps the top-right slot under Fit, above the camera steps. */
     :host([narrow]) .map-extras { inset-inline-end: auto; inset-inline-start: 0; inset-block-end: var(--map-sheet-offset, 0px); }
     :host([narrow]) .map-rail { --help-bottom: calc(var(--map-sheet-offset, 0px) + 44px + var(--ms-space-2)); }
+    /* A compact sheet at full leaves one rail row of map: the bottom clusters would cover the top one. */
+    :host([data-short]) :is(.map-extras, .camera-steps) { display: none; }
 
     .map-tools, .view-switch, .appearance-switch, .camera-steps { display: flex; }
 

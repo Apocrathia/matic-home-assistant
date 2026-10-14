@@ -94,9 +94,15 @@ export function createGalleryServer() {
     <body>
       <script type="module">
         import("/map_studio_v4-review/stage.js")
-          .then((stage) => stage.${frame ? "mountStageFrame" : "mountStagePage"}(document))
           .catch(() => {
-            document.body.textContent = "The review bundle has no stage. Run npm run build:map-studio-v4, then reload.";
+            throw new Error("The review bundle has no stage. Run npm run build:map-studio-v4, then reload.");
+          })
+          .then((stage) => stage.${frame ? "mountStageFrame" : "mountStagePage"}(document))
+          .catch((error) => {
+            const alert = document.createElement("p");
+            alert.setAttribute("role", "alert");
+            alert.textContent = String(error?.message ?? error);
+            document.body.append(alert);
           });
       </script>
     </body>

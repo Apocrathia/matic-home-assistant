@@ -92,7 +92,8 @@ interface StatusPresentation {
   readonly recheck?: boolean;
 }
 
-// How vacuum.py matches a firmware room phrase: case, spacing and a leading "the" aside.
+// How managed_executor.py matches a firmware room phrase to a room's ID or
+// name: case, spacing and a leading "the" aside.
 const roomKey = (name: string | null): string => name?.toLowerCase().replace(/\s+/gu, " ").trim().replace(/^the /u, "") ?? "";
 
 const statusCopy = (state: WorkspaceState, localize?: Localize, dates?: DateFormat): StatusPresentation => {
@@ -142,7 +143,7 @@ const statusCopy = (state: WorkspaceState, localize?: Localize, dates?: DateForm
   if (state.activity === "cleaning") {
     // Row 11: the room the robot reports, when it is a room on this floor.
     const area = roomKey(state.currentArea);
-    const room = area && state.resources.scene.value?.metadata.rooms.find((candidate) => roomKey(candidate.name) === area)?.name;
+    const room = area && state.resources.scene.value?.metadata.rooms.find((candidate) => roomKey(candidate.name) === area || roomKey(candidate.id) === area)?.name;
     return {
       title: t("v4_cleaning", "Cleaning"),
       detail: mapUnavailable ? t("v4_active_map_unavailable", "Live map unavailable") : room ? t("v4_cleaning_room", "In {room}", { room }) : battery,
@@ -514,6 +515,8 @@ export class MaticMapShellV4 extends LitElement {
       // design-system.md §7: the inspector at 1024 and up, and from 768 in
       // landscape (the compact inspector); a sheet otherwise, compact when short.
       const { width, height } = entry.contentRect;
+      // A hidden panel measures 0 × 0; keep the layout it will come back to.
+      if (!width || !height) return;
       const compact = height < 480;
       this._measuredNarrow = compact || width < 768 || (width < 1024 && width <= height);
       if (compact !== this._compact) {
@@ -1857,6 +1860,7 @@ export class MaticMapShellV4 extends LitElement {
                 .dates=${this.dates}
                 .outlineEditor=${this.#outline.value}
                 .narrow=${narrow}
+                ?data-short=${compact && this._sheetDetent === "full"}
                 .help=${help}
                 .recipes=${state.workflow === "draw" ? this.#views.value?.drawRecipes(this.#tr) ?? null : null}
               >${this.#floorSwitcher(state)}
@@ -1901,22 +1905,14 @@ export class MaticMapShellV4 extends LitElement {
                   ${this._sheetDetent === "peek" ? this.#back(state, true) : nothing}
                   <span class="sheet-status">${this.#sheetStatus(state, status)}</span>
                   ${compact ? this.#actionBar(state, footerPrimary, footerSecondary) : nothing}
-                  ${compact && this._sheetDetent === "full" ? nothing : html`<button
+                  ${(compact ? [this._sheetDetent === "full" ? -1 : 1] as const : [1, -1] as const).map((step) => html`<button
                     class="ms-btn ms-btn--icon ms-btn--sm"
                     type="button"
-                    aria-label=${this.#t("v4_show_more", "Expand panel")}
+                    aria-label=${step > 0 ? this.#t("v4_show_more", "Expand panel") : this.#t("v4_show_less", "Collapse panel")}
                     aria-controls="sheet-panel"
-                    aria-disabled=${this._sheetDetent === "full" ? "true" : nothing}
-                    @click=${() => this.#sheetStep(1)}
-                  >${icon(iconChevronUp)}</button>`}
-                  ${compact && this._sheetDetent === "peek" ? nothing : html`<button
-                    class="ms-btn ms-btn--icon ms-btn--sm"
-                    type="button"
-                    aria-label=${this.#t("v4_show_less", "Collapse panel")}
-                    aria-controls="sheet-panel"
-                    aria-disabled=${this._sheetDetent === "peek" ? "true" : nothing}
-                    @click=${() => this.#sheetStep(-1)}
-                  >${icon(iconChevronDown)}</button>`}
+                    aria-disabled=${this._sheetDetent === (step > 0 ? "full" : "peek") ? "true" : nothing}
+                    @click=${() => this.#sheetStep(step)}
+                  >${icon(step > 0 ? iconChevronUp : iconChevronDown)}</button>`)}
                 </div>
                 ${showDrawTools ? html`
                   <div class="sheet-tools">
@@ -1941,7 +1937,7 @@ export class MaticMapShellV4 extends LitElement {
               ` : html`
                 <div class="status-strip">
                   <span class="status-icon" aria-hidden="true">${icon(status.icon)}</span>
-                  <span class="status-copy"><strong>${status.title}</strong><small>${status.detail}</small></span>
+                  <span class="status-copy"><strong>${status.title}</strong>${status.detail ? html`<small>${status.detail}</small>` : nothing}</span>
                   ${statusAction
                     ? this.#actionButton(statusAction, "status-action ms-btn ms-btn--secondary", "status-reason")
                     : nothing}

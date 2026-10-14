@@ -14,7 +14,7 @@
     },
     {
       "id": "R03",
-      "journey": "Room schedules and cadence",
+      "journey": "Room schedules",
       "steps": ["plan-cadence-shared", "plan-schedule-available", "plan-schedule-joining", "plan-schedule-conflict", "plan-cadence-blocked", "plan-cadence-shared:confirmResetCadence"],
       "check": "Each schedule row says when work is due; sharing, joining and Reset read plainly"
     },

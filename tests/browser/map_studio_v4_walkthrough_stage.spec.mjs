@@ -78,6 +78,9 @@ test("a misspelled step is reported, not staged as another state", async ({ page
   await expect(page.getByRole("alert")).toContainText('Unknown step "plan-savd"');
   await openFrame(page, "steps=plan-savd");
   await expect(page.locator("html")).toHaveAttribute("data-stage-error", /plan-savd/u);
+  await page.goto("about:blank");
+  await openFrame(page, "steps=ready&widht=390");
+  await expect(page.locator("html")).toHaveAttribute("data-stage-error", /Unknown setting "widht"/u);
 });
 
 test("forced colours are flagged unless the browser has them on", async ({ page, browserName }) => {

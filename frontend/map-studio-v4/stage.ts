@@ -38,10 +38,15 @@ export interface StageParams {
   readonly errors: readonly string[];
 }
 
+const KNOWN_KEYS = ["cell", "steps", "step", "w", "h", "theme", "dir", "lang", "contrast", "motion", "input", "readout"];
+
 /** Reads a stage hash; anything it can't use is reported in `errors`, never guessed. */
 export const parseStageHash = (hash: string): StageParams => {
   const params = new URLSearchParams(hash.replace(/^#/u, ""));
   const errors: string[] = [];
+  for (const key of params.keys()) {
+    if (!KNOWN_KEYS.includes(key)) errors.push(`Unknown setting "${key}"`);
+  }
   const choice = <T extends string>(key: string, allowed: readonly T[]): T => {
     const value = params.get(key);
     const found = allowed.find((candidate) => candidate === value);

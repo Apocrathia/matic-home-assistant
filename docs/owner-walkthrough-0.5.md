@@ -22,7 +22,7 @@ size gets. Without a size the frame fills the window.
 1. Build the review bundle once per change: `npm run build:map-studio-v4`.
 2. Stage the cell: `npm run stage:walkthrough -- R01-C01`. The script serves the bundle on
    `http://127.0.0.1:4180`, prints the cell, what to try and its URL, and opens it in Safari.
-3. Post one short message: "Cell 12 of 99: Rooms view at phone landscape. Try: map and list stay in step; each
+3. Post one short message: "Cell 29 of 99: Rooms view at phone landscape. Try: map and list stay in step; each
    disabled Clean says why. Approve or critique?"
 4. Wait for the answer, record it in the ledger, then stage the next cell. Ctrl-C stops the server.
 
@@ -36,7 +36,8 @@ A cell ID is its row and column, `R04-C02`. The stage URL's hash is the cell ID,
 `/map-studio-v4-stage#cell=R04-C02&steps=rooms,rooms-ready,…&w=844&h=390`
 
 A step is a gallery scenario, optionally with a dialog after a colon (`plan-dirty:discardDraft`). `step=3` opens the
-third step directly. A misspelled step or setting is shown as an error on the page, never staged as another state.
+third step directly. A misspelled step, setting or value is shown as an error on the page, never staged as another
+state.
 
 ## Journeys (rows)
 
@@ -44,7 +45,7 @@ third step directly. A misspelled step or setting is shown as an error on the pa
 |---|---|---|---|
 | R01 | Home, default plan card and Your plans | `steps=home-plan-due,home-plan-paused,home-plan-blocked,ready` | The three task cards, the plan card's due lines and the Your plans row under it. |
 | R02 | Plan pick, run, edit, save and delete | `steps=plans,plan-saved-intelligent,plan-saved-ordered,plan-run-parts,plan-run-paused,plan-run-blocked,plan-edit-ordered,plan-dirty,plan-dirty:discardDraft,plan-new,plan-saved-intelligent:confirmDeletePlan` | Picker to Run to Edit; numbers only in Saved order; Save, Cancel and Delete ask only when data would be lost. |
-| R03 | Room schedules and cadence | `steps=plan-cadence-shared,plan-schedule-available,plan-schedule-joining,plan-schedule-conflict,plan-cadence-blocked,plan-cadence-shared:confirmResetCadence` | Each schedule row says when work is due; sharing, joining and Reset read plainly. |
+| R03 | Room schedules | `steps=plan-cadence-shared,plan-schedule-available,plan-schedule-joining,plan-schedule-conflict,plan-cadence-blocked,plan-cadence-shared:confirmResetCadence` | Each schedule row says when work is due; sharing, joining and Reset read plainly. |
 | R04 | Rooms view | `steps=rooms,rooms-ready,rooms-busy,rooms-failed,rooms-empty,room-limit` | Map and list stay in step; each disabled Clean says why. |
 | R05 | Custom areas: draw, review, redraw, delete | `steps=draw,draw-points,draw-saved,area-review-new,area-review-saved,draw-redraw,area-review-rebind,area-review-stale,area-review-rebind:confirmDeleteArea` | One tool row, one hint, Cancel beside the primary; review titles and Delete last. |
 | R06 | Map history | `steps=history,history-floors` | Saved maps are dated, show no robot and never start anything; Show live map returns. |
@@ -66,7 +67,7 @@ third step directly. A misspelled step or setting is shown as an error on the pa
 | C06 | Light/dark | `w=390&h=844&theme=dark` | Safari on the Mac, Home Assistant's dark palette |
 | C07 | RTL + one non-English language | `w=390&h=844&dir=rtl&lang=xa` | Safari on the Mac, right to left, pseudo-language |
 | C08 | Forced colours | `w=1024&h=768&contrast=forced&motion=reduce` | Chromium, opened by the script with forced colours and reduced motion on |
-| C09 | Screen-reader name/role read-out | `w=390&h=844&readout=tree` | The script prints the accessibility tree (names and roles), then opens Safari for VoiceOver |
+| C09 | Screen-reader name/role read-out | `w=390&h=844&readout=tree` | The script prints the accessibility tree (names and roles) of every step, then opens Safari for VoiceOver |
 
 ### Setup notes
 
@@ -80,8 +81,8 @@ third step directly. A misspelled step or setting is shown as an error on the pa
   colours and reduced motion emulated; the page warns when a browser has them off. Windows High Contrast on a real
   Windows machine is checked by hand for the primary and Stop buttons (`design-system.md` MS-DS-01, MS-DS-02) before
   the cell is approved.
-- **Read-out (C09).** The agent posts the accessibility tree the script prints with the cell: each control's role and
-  name, as a screen reader announces them. The owner can also turn on VoiceOver in the Safari frame.
+- **Read-out (C09).** The agent posts the accessibility trees the script prints with the cell, one per step: each
+  control's role and name, as a screen reader announces them. The owner can also turn on VoiceOver in the Safari frame.
 - **Setup (R11).** At desktop (R11-C04) the agent also opens Settings > Devices & services > Add integration > Matic
   in the owner's signed-in Safari to show the first setup screen, then closes it. Nothing is submitted, and no cell
   ever sends a robot command.

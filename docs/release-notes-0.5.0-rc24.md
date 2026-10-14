@@ -53,7 +53,7 @@ acceptance of identity recovery.
   Locating keeps Stop and the exit control.
 - 2026-10-12: assistants can run plans, clean rooms, stop and reset a room
   schedule through the same checks as Matic Map.
-- 2026-10-14: stable waits on the owner walkthrough above, staged by the
+- UX8 request: stable waits on the owner walkthrough above, staged by the
   maintainer and approved or critiqued cell by cell.
 
 ## Entity changes

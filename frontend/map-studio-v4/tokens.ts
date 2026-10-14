@@ -16,7 +16,8 @@ import { css } from "lit";
 //
 // 3. Light or dark is the inherited `color-scheme`: the panel sets it from
 //    Home Assistant's theme (design-system.md Decision 3), so tokens pick
-//    their value with light-dark(). Browsers without it follow the device.
+//    their value with light-dark(). (Controls already need relative colour
+//    syntax, which every browser with light-dark() has.)
 //
 // Authored compact on purpose. esbuild ships tagged-template contents
 // byte-for-byte -- --minify does not touch them -- so indentation is shipped
@@ -77,44 +78,6 @@ export const tokens = css`
 --ms-fast: 120ms;
 --ms-base: 180ms;
 --ms-ease: cubic-bezier(0.2, 0, 0, 1);
-}
-@supports not (color: light-dark(#000, #fff)) {
-:host {
---ms-accent: var(--primary-color, #0678ce);
---ms-on-accent: var(--text-primary-color, #fff);
---ms-danger: var(--error-color, #b3261e);
---ms-warning: var(--warning-color, #8a5b00);
---ms-success: var(--success-color, #2e7d4f);
---ms-surface-app: var(--primary-background-color, #f3f6f8);
---ms-surface-card: var(--card-background-color, #fff);
---ms-surface-sunken: var(--secondary-background-color, #eef2f4);
---ms-local: var(--card-background-color, #fff);
---ms-text: var(--primary-text-color, #1f2933);
---ms-text-quiet: color-mix(in srgb, var(--secondary-text-color, #5b6b75) 90%, var(--ms-text));
---ms-text-disabled: var(--disabled-text-color, #8a959c);
---ms-shadow-1: 0 1px 2px rgb(0 0 0 / 10%);
---ms-shadow-2: 0 4px 12px rgb(0 0 0 / 14%);
---ms-shadow-3: 0 12px 32px rgb(0 0 0 / 22%);
-}
-@media (prefers-color-scheme: dark) {
-:host {
---ms-accent: var(--primary-color, #58a6e8);
---ms-on-accent: var(--text-primary-color, #102234);
---ms-surface-app: var(--primary-background-color, #101a20);
---ms-surface-card: var(--card-background-color, #1a262d);
---ms-surface-sunken: var(--secondary-background-color, #141e23);
---ms-local: var(--card-background-color, #1a262d);
---ms-text: var(--primary-text-color, #eef4f7);
---ms-text-quiet: color-mix(in srgb, var(--secondary-text-color, #a4b3bc) 90%, var(--ms-text));
---ms-text-disabled: var(--disabled-text-color, #7c8a92);
---ms-danger: var(--error-color, #f2837b);
---ms-warning: var(--warning-color, #e0a63a);
---ms-success: var(--success-color, #74c69d);
---ms-shadow-1: 0 1px 2px rgb(0 0 0 / 40%);
---ms-shadow-2: 0 4px 12px rgb(0 0 0 / 48%);
---ms-shadow-3: 0 12px 32px rgb(0 0 0 / 60%);
-}
-}
 }
 @media (prefers-reduced-motion: reduce) {
 :host {

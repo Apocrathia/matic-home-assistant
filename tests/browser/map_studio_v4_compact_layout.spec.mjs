@@ -69,8 +69,8 @@ test.describe("status strip (MS-STATUS-01, MS-STATUS-05)", () => {
       for (const scenario of scenarios) {
         await gallery.evaluate((element, name) => element.setScenario(name), scenario);
         await patch(gallery, { batteryPercent: battery });
-        const title = (await strip(gallery).title.textContent())?.trim() ?? "";
-        const detail = (await strip(gallery).detail.textContent())?.trim() ?? "";
+        const title = (await strip(gallery).title.allTextContents()).join("").trim();
+        const detail = (await strip(gallery).detail.allTextContents()).join("").trim();
         if (!title) continue;
         expect(detail.toLowerCase().includes(title.toLowerCase()), `${scenario} (${battery}): ${title} · ${detail}`).toBe(false);
       }
@@ -102,20 +102,40 @@ test.describe("compact sheet at 844×390 (MS-RESP-01, -02, -03)", () => {
     const gallery = await stage(page, "rooms", LANDSCAPE);
     const sheet = gallery.locator(".mobile-sheet");
     const grip = gallery.locator(".sheet-grip");
+    // One toggle: it expands, then collapses at full, and keeps focus as it flips.
     await grip.getByRole("button", { name: "Expand panel", exact: true }).click();
     await expect(sheet).toHaveAttribute("data-detent", "full");
-    // The direction that can't move is hidden, not shown disabled.
     await expect(grip.getByRole("button", { name: "Expand panel", exact: true })).toBeHidden();
-    await grip.getByRole("button", { name: "Collapse panel", exact: true }).click();
+    await expect(grip.getByRole("button", { name: "Collapse panel", exact: true })).toBeFocused();
+    await page.keyboard.press("Enter");
     await expect(sheet).toHaveAttribute("data-detent", "peek");
     await expect(grip.getByRole("button", { name: "Collapse panel", exact: true })).toBeHidden();
+    await expect(grip.getByRole("button", { name: "Expand panel", exact: true })).toBeFocused();
   });
 
   test("peek leaves the map most of the height: 72 px, 92 with a reason, Draw about 120 to 140", async ({ page }) => {
-    for (const [steps, limit] of [["rooms-ready", 73], ["rooms", 93], ["draw", 141]]) {
-      const gallery = await stage(page, steps, LANDSCAPE);
+    for (const [steps, limit, viewport] of [["rooms-ready", 73], ["rooms", 93], ["draw", 141], ["draw", 141, { width: 320, height: 256 }]]) {
+      const gallery = await stage(page, steps, viewport ?? LANDSCAPE);
       const height = await gallery.locator(".mobile-sheet").evaluate((sheet) => sheet.getBoundingClientRect().height);
       expect(height, steps).toBeLessThanOrEqual(limit);
+    }
+  });
+
+  test("at full, the map's controls never cover each other", async ({ page }) => {
+    for (const [steps, viewport] of [["ready", LANDSCAPE], ["cleaning", LANDSCAPE], ["plans", { width: 320, height: 256 }]]) {
+      const gallery = await stage(page, steps, viewport);
+      await expect(gallery.locator(".mobile-sheet"), steps).toHaveAttribute("data-detent", "full");
+      const covered = await gallery.evaluate((element) => {
+        const shell = element.shadowRoot.querySelector(".map-shell, [class*='shell']")?.shadowRoot
+          ?? [...element.shadowRoot.querySelectorAll("*")].find((node) => node.shadowRoot?.querySelector(".floor-switcher"))?.shadowRoot;
+        const select = shell?.querySelector(".floor-switcher");
+        if (!select) return "no floor select";
+        const box = select.getBoundingClientRect();
+        // Retargeted to the shell's tree: a control over the select reads as the canvas.
+        const hit = shell.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+        return hit === select ? null : hit?.className || hit?.tagName || "nothing";
+      });
+      expect(covered, `${steps} ${JSON.stringify(viewport)}`).toBeNull();
     }
   });
 

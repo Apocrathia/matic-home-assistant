@@ -68,18 +68,24 @@ process.on("SIGTERM", stop);
 const [width, height] = ["w", "h"].map((key) => Number(new URLSearchParams(cellHash(id)).get(key)) || undefined);
 
 if (cell.column.stage === "readout") {
-  // The accessibility tree a screen reader reads: names and roles, as text.
+  // The accessibility tree a screen reader reads, names and roles as text,
+  // for every step of the journey.
   const { webkit } = await import("@playwright/test");
   const browser = await webkit.launch();
   const page = await browser.newPage({ viewport: { width: width ?? 390, height: height ?? 844 } });
-  await page.goto(cellUrl(staging.origins[0], id, FRAME_PATH));
-  await page.locator("html[data-stage-ready]").waitFor({ state: "attached" });
-  out("Accessibility tree (names and roles):");
-  out(await page.locator("body").ariaSnapshot());
+  for (const [index, step] of cell.row.steps.entries()) {
+    await page.goto("about:blank");
+    await page.goto(`${cellUrl(staging.origins[0], id, FRAME_PATH)}&step=${index + 1}`);
+    await page.locator("html[data-stage-ready]").waitFor({ state: "attached" });
+    out(`Step ${index + 1} of ${cell.row.steps.length}, ${step}: accessibility tree (names and roles):`);
+    out(await page.locator("body").ariaSnapshot());
+  }
   await browser.close();
 }
 
-if (cell.column.stage === "chromium") {
+if (flag("--print")) {
+  out("Not opening a browser (--print).");
+} else if (cell.column.stage === "chromium") {
   // Safari has no forced-colours mode, so this cell opens Chromium with
   // forced colours and reduced motion emulated, live and interactive.
   const { chromium } = await import("@playwright/test");
@@ -90,8 +96,6 @@ if (cell.column.stage === "chromium") {
   await page.goto(url);
   browser.on("disconnected", stop);
   out("Opened in Chromium with forced colours and reduced motion. Close the window or press Ctrl-C to stop.");
-} else if (flag("--print")) {
-  out("Not opening a browser (--print).");
 } else if (process.platform === "darwin") {
   spawn("open", ["-a", "Safari", url], { stdio: "ignore" }).unref();
   out("Opened in Safari. Press Ctrl-C to stop.");

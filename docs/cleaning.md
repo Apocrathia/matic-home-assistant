@@ -28,8 +28,8 @@ The robot handles battery and water servicing as needed.
 [Rooms with different settings in one run](mixed-room-missions.md).
 
 A plan defines what to clean. Home Assistant automations decide when it runs.
-Create and edit plans and custom areas in Matic Map. **Matic settings**, the
-integration's options in Settings > Devices & services > Matic, chooses the
+Create and edit plans and custom areas in Matic Map. **Matic settings**
+(Settings > Devices & services > Matic (Unofficial) > Configure) chooses the
 default plan and resets room cleaning history for one plan or for all plans.
 
 Rooms in a plan can also have [room schedules](room-schedules.md): mop every

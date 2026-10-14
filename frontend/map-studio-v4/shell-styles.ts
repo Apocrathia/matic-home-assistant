@@ -422,6 +422,8 @@ export const shellStyles = [tokens, base, controls, css`
     .compact .sheet-grip .ms-btn--block { inline-size: auto; min-block-size: var(--ms-control); }
     .compact .sheet-grip .action-reason { flex-basis: 100%; order: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .compact .action-summary { display: none; }
+    /* In Draw, Cancel beside the primary is the way back, so the grip drops Back. */
+    .compact [data-workflow="draw"] .sheet-grip:has(.paired) .sheet-back { display: none; }
     /* Draw at peek: the grip row and one 44 px tool row (map-surfaces.md §5). */
     .compact .sheet-tools { padding-block: var(--ms-space-1) 0; }
     .compact [data-detent="peek"] .sheet-hint { display: none; }
