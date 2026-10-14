@@ -459,7 +459,7 @@ export class GestureController {
       );
       return;
     }
-    if (event.altKey && this.#callbacks.state().view === "three") {
+    if (event.altKey && topView(this.#callbacks.state()) === "three") {
       this.#renderer.orbitBy(0, clamp(deltaY, -80, 80) * 0.75);
       return;
     }

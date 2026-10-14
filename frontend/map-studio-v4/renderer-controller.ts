@@ -117,6 +117,9 @@ const rebaseCameraTarget = (
 const forcesTop = (state: WorkspaceState | null): boolean =>
   state?.workflow === "draw" || state?.workflow === "areaReview";
 export const topView = (state: WorkspaceState): MapView => forcesTop(state) ? "top" : state.view;
+/** Room colors replace the photo wherever the map shows the top view. */
+const roomColours = (state: WorkspaceState | null): boolean =>
+  !!state && topView(state) === "top" && state.appearance === "rooms";
 
 const cameraPreferenceIsFit = (view: MapView, preference: CameraPreference | undefined): boolean => {
   if (!preference) return true;
@@ -1355,7 +1358,7 @@ export class RendererController {
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     if (!scene || !this.#program || !this.#vertexArray || !this.#buffer) return;
-    if (this.#state?.view === "top" && this.#state.appearance === "rooms") {
+    if (roomColours(this.#state)) {
       this.#renderedPoints = 0;
       return;
     }
@@ -1402,7 +1405,7 @@ export class RendererController {
   #renderFallback(): void {
     const scene = this.#scene;
     if (this.#mode !== "canvas2d" || !scene
-      || (this.#state?.view === "top" && this.#state.appearance === "rooms")) {
+      || roomColours(this.#state)) {
       this.#cancelFallback();
       this.#renderedPoints = 0;
       return;
@@ -1465,7 +1468,7 @@ export class RendererController {
     if (!scene || !state) return;
     const palette = this.#palette;
     if (this.#mode === "canvas2d" && this.#fallbackCanvas
-      && !(state.view === "top" && state.appearance === "rooms")) {
+      && !roomColours(state)) {
       // A WebGL canvas cannot acquire a 2D context after context loss.
       context.drawImage(this.#fallbackCanvas, 0, 0, bounds.width, bounds.height);
     }
@@ -1481,7 +1484,7 @@ export class RendererController {
       : null;
     // Every room draws with Room names on or in Room colors; otherwise only
     // the selected ones (home-rooms.md §5 Parity, R9).
-    const allRooms = state.labelsVisible || (state.view === "top" && state.appearance === "rooms");
+    const allRooms = state.labelsVisible || roomColours(state);
     if (allRooms || selectedNames.size) {
       context.lineWidth = 1.5;
       context.font = "600 12px system-ui, sans-serif";
@@ -1494,7 +1497,7 @@ export class RendererController {
         context.strokeStyle = selected ? rgba(palette.accent, 1) : rgba(palette.quiet, .7);
         context.fillStyle = selected
           ? rgba(palette.accent, .26)
-          : state.view === "top" && state.appearance === "rooms"
+          : roomColours(state)
             ? rgba(palette.roomFill, .94)
             : rgba(palette.plate, .04);
         context.beginPath();

@@ -4637,6 +4637,7 @@ test.describe("Map Studio v0.4 foundation", () => {
 
   test("makes every navigation model discoverable without covering the map permanently", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "ready" });
+    await gallery.getByRole("button", { name: "3D", exact: true }).click();
     // Help is a non-modal dialog anchored to the rail, not a second
     // complementary landmark: the workspace aside is the only one.
     await expect(gallery.getByRole("complementary")).toHaveCount(1);

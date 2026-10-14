@@ -68,6 +68,7 @@ test.describe("help (map-surfaces.md §5 Help, §11 MS-HELP-01/02)", () => {
 
   test("a fine pointer reads Trackpad, Mouse and Keyboard rows for the one gesture model", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "ready" });
+    await patchState(gallery, { view: "three" });
     const help = helpButton(gallery);
     await expect(help).toHaveAttribute("aria-expanded", "false");
     await help.click();
@@ -1422,6 +1423,50 @@ test.describe("Final review", () => {
 
 // Codex review of 6d97a6fc: what the first review missed.
 test.describe("Codex review", () => {
+  test("help rows follow the view the map shows: top-down rows in 2D, Draw and the area review, rotate rows in 3D", async ({ page }) => {
+    const top = {
+      Trackpad: "Scroll to move the map · pinch to zoom · twist to rotate",
+      Mouse: "Drag to move the map · wheel to zoom",
+      Keyboard: "WASD or arrows to move · +/− to zoom · 0 to fit",
+    };
+    const gallery = await loadGallery(page, { scenario: "ready" });
+    await helpButton(gallery).click();
+    expect(await rows(helpDialog(gallery)), "2D").toEqual(top);
+    await patchState(gallery, { view: "three" });
+    await expect(helpDialog(gallery).locator("dd").nth(1)).toHaveText("Drag to move the map · right-drag or Shift-drag to rotate · wheel to zoom");
+    const review = await loadGallery(page, { scenario: "area-review-saved" });
+    await patchState(review, { view: "three" });
+    await helpButton(review).click();
+    expect(await rows(helpDialog(review)), "area review from 3D").toEqual(top);
+  });
+
+  test("Alt-wheel tilts only a 3D map; in the forced top view it zooms like a wheel", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "area-review-saved", viewport: { width: 1024, height: 768 } });
+    await patchState(gallery, { view: "three" });
+    const bounds = await gallery.locator(".map-root").boundingBox();
+    await page.mouse.move(bounds.x + bounds.width * 0.5, bounds.y + bounds.height * 0.4);
+    await page.mouse.wheel(0, 1);
+    await expect.poll(async () => Boolean((await snapshot(page)).cameras.top)).toBe(true);
+    const before = (await snapshot(page)).cameras.top;
+    await page.keyboard.down("Alt");
+    await page.mouse.wheel(0, 200);
+    await page.keyboard.up("Alt");
+    await expect.poll(async () => (await snapshot(page)).cameras.top.zoom, "zoomed, not panned").not.toBeCloseTo(before.zoom, 3);
+  });
+
+  test("Room colors apply to the top view Draw and the area review show, whatever the saved view", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "area-review-saved", viewport: { width: 1024, height: 768 } });
+    const map = canvasOf(gallery);
+    const points = () => map.evaluate((element) => element.rendererDiagnostics()?.renderedPoints ?? -1);
+    await patchState(gallery, { view: "three", appearance: "photo" });
+    await expect.poll(points).toBeGreaterThan(0);
+    await patchState(gallery, { appearance: "rooms" });
+    await expect.poll(points, "room colours replace the photo").toBe(0);
+    const phone = await loadGallery(page, { scenario: "draw", narrow: true });
+    await patchState(phone, { view: "three" });
+    await optionsButton(phone).click();
+    await expect(optionsMenu(phone).getByRole("menuitemradio", { name: "Room colors" })).toBeVisible();
+  });
   test("in browser full screen the discard dialog and the toast show and take the pointer", async ({ page, browserName }) => {
     const gallery = await loadGallery(page, { scenario: "draw-saved", viewport: { width: 1024, height: 768 } });
     await fullMapToggle(gallery).click();

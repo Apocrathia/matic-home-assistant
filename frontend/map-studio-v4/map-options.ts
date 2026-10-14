@@ -2,6 +2,7 @@ import { html, nothing, type ReactiveControllerHost } from "lit";
 import type { WorkspaceIntent, WorkspaceState } from "./contracts";
 import { icon, iconDone } from "./icons";
 import { MenuController } from "./menu-controller";
+import { topView } from "./renderer-controller";
 
 type Host = ReactiveControllerHost & HTMLElement & { readonly renderRoot: ParentNode };
 
@@ -38,7 +39,7 @@ export class MapOptions {
         ${narrow ? html`
           <div role="group" aria-labelledby="menu-display">
             <p class="menu-heading" id="menu-display" role="presentation">${t("v4_map_display", "Map display")}</p>
-            ${state.view === "top" ? html`
+            ${topView(state) === "top" ? html`
               ${radio(state.appearance === "photo", t("map_style_photo", "Photo"), () => intent({ type: "set-appearance", appearance: "photo" }))}
               ${radio(state.appearance === "rooms", t("v4_room_colours", "Room colors"), () => intent({ type: "set-appearance", appearance: "rooms" }))}
             ` : nothing}
