@@ -195,13 +195,14 @@ export const shellStyles = [tokens, base, controls, css`
     .notice-toast[hidden] { display: none; }
     /* Narrow: the sheet's top edge. */
     .narrow > .notice-toast { inset-inline: 0; inset-block-end: calc(var(--map-sheet-offset, 0px) + var(--ms-space-2)); max-inline-size: calc(100% - 2 * var(--ms-space-3)); }
-    /* Full map: above the HUD, in its column. */
+    /* Full map: above the HUD band and the Draw dock, clear of "?". */
     .root:has(.full-map-hud) > .notice-toast {
       inset-inline: auto var(--ms-space-3);
-      inset-block-end: calc(max(var(--ms-space-3), var(--ms-safe-bottom)) + var(--ms-control-lg) + 3 * var(--ms-space-3));
-      inline-size: min(24rem, calc(100% - 1.5rem));
-      max-inline-size: none;
+      inset-block-end: calc(var(--map-sheet-offset, 0px) + max(var(--ms-space-3), var(--ms-safe-bottom)));
+      max-inline-size: min(24rem, calc(100% - 1.5rem));
     }
+    .narrow:has(.full-map-hud) > .notice-toast { inset-inline: 0; max-inline-size: calc(100% - 7.5rem); }
+    .root[data-dock] > .notice-toast { inset-block-end: calc(var(--map-sheet-offset, 0px) + 5.25rem); }
 
     /* minmax(0, 1fr): a card's one-line name must not widen the column. */
     .quick-actions, .shelf { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--ms-space-2); }

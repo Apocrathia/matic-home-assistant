@@ -351,7 +351,7 @@ export const reduceWorkspace = (
       return state.host.administrator
         && state.host.robotCount > 0
         && state.map.available
-        ? { ...state, fullMap: true }
+        ? { ...state, fullMap: true, precisionOpen: false }
         : state;
     case "exit-full-map":
       return { ...state, fullMap: false, precisionOpen: false };
@@ -943,6 +943,15 @@ export const canStartMotion = (state: WorkspaceState): boolean =>
   && (state.activity === "idle" || state.activity === "docked");
 
 type Reason = { readonly reason: string; readonly reasonKey: string };
+
+// While a command runs, the edits that would race it are held and say why
+// (shell.md §5); choosing a tool stays open, since painting is refused anyway.
+export const heldReasonKey = (state: WorkspaceState): Reason | null =>
+  state.command === "pending" ? { reason: "Waiting for the current change to finish.", reasonKey: "v4_reason_stop_busy" }
+    : state.command === "starting" ? { reason: "Waiting for the robot to begin.", reasonKey: "v4_reason_starting" }
+      : state.command === "settling" ? { reason: "Waiting for the robot to stop.", reasonKey: "v4_reason_stop" }
+        : null;
+
 const PLAN_SAVING: Reason = { reason: "Waiting for Home Assistant to save the plan.", reasonKey: "v4_reason_plan_saving" };
 
 const motionBlockReason = (state: WorkspaceState): Reason => {
@@ -1309,9 +1318,13 @@ export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction | NoBu
       labelKey: "v4_action_run_area",
       kind: "primary",
       enabled: current && canStartMotion(state),
-      ...(current
-        ? {}
-        : { reason: "Can't clean this area until you save it on the current map.", reasonKey: "v4_reason_run_area" }),
+      // Save is never offered here (that is the branch above), so the fix for
+      // a changed or unusable map is Redraw; a running command says it waits.
+      ...(!current
+        ? { reason: "Can't clean this area until you redraw it.", reasonKey: "v4_reason_run_area" }
+        : canStartMotion(state)
+          ? {}
+          : heldReasonKey(state) ?? motionBlockReason(state)),
     };
   }
   return noButton("choose-cleaning");

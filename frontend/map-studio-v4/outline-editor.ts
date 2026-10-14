@@ -72,15 +72,14 @@ export const zoneStyles = css`
     .zone-midpoint::before { inset: 13px; background: var(--ms-surface-card); }
     .zone-midpoint { color: var(--ms-accent); }
     .zone-help { position: absolute; inset: auto auto 88px 50%; translate: -50% 0; width: max-content; max-width: calc(100% - 24px); display: grid; justify-items: center; gap: 6px; font-size: 12px; pointer-events: none; }
-    .zone-point-actions, .zone-guidance { display: flex; align-items: center; gap: 4px; max-width: 100%; padding: 4px; border-radius: 14px; pointer-events: auto; }
+    .zone-point-actions { display: flex; align-items: center; gap: 4px; max-width: 100%; padding: 4px; border-radius: 14px; pointer-events: auto; }
     .zone-selection { padding-inline: 8px; color: var(--ms-text-quiet); white-space: nowrap; font-weight: 650; }
     .zone-point-actions .ms-btn { white-space: nowrap; padding-inline: 10px; border-radius: 10px; font-size: 12px; }
     .zone-point-actions .ms-btn + .ms-btn { border-inline-start: 1px solid var(--ms-line); }
-    .zone-guidance { padding: 6px 12px; gap: 8px; color: var(--ms-text-quiet); line-height: 1.4; }
-    .zone-guidance .ms-btn { flex-shrink: 0; }
     .zone-feedback { max-width: 100%; padding: 8px 12px; border-radius: 12px; color: var(--ms-resolved-danger-text, var(--ms-danger)); pointer-events: auto; }
     .zone-feedback[hidden] { display: none; }
-    .map-root[data-narrow="true"] .zone-help { bottom: 12px; }
+    /* A phone's rail keeps "?" in its bottom row; the point actions sit above it. */
+    .map-root[data-narrow="true"] .zone-help { bottom: calc(12px + 44px + 8px); }
 `;
 
 export class OutlineEditor {
@@ -279,10 +278,6 @@ export class OutlineEditor {
               <span class="zone-selection">${this.#t("v4_zone_point_number", "Point {number}", { number: selected + 1 })}</span>
               <button class="ms-btn" type="button" ?disabled=${points.length >= 64 || (!outline?.closed && selected === points.length - 1)} @click=${() => this.#insert(selected)}>${this.#t("v4_zone_insert_point", "Insert point")}</button>
               <button class="ms-btn" type="button" aria-label=${this.#t("v4_zone_delete_point_number", "Delete point {number}", { number: selected + 1 })} @click=${() => this.#remove(selected)}>${this.#t("v4_zone_delete_point", "Delete point")}</button>
-            </div>` : nothing}
-          ${selected === null || !outline?.closed ? html`
-            <div class="zone-guidance ms-surface">
-              <span>${outline?.closed ? this.#t("v4_zone_edit_help", "Tap to add points. Drag points to reshape.") : this.#t("v4_zone_create_help", "Place points around the area. The edges join automatically.")}</span>
             </div>` : nothing}
           <span class="zone-feedback ms-surface" role="status" ?hidden=${!this.#message}>${this.#message}</span>
         </div>

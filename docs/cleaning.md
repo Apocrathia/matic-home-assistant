@@ -84,7 +84,8 @@ or deselect it. The map and room list stay in sync.
 **Map history** lists each saved map by date. Choose one to show it: the map
 says **Saved map**, with its date and position, and shows no robot position.
 With three or more saved maps, the slider under them runs from **Oldest** to
-**Live**; **Mapped floors** appears when another floor is mapped. Nothing starts
+**Live** on your current floor and to **Newest** on another floor; **Mapped
+floors** appears when another floor is mapped. Nothing starts
 from a saved map; **Show live map** returns to the live map of your current
 floor. After carrying the robot, wait for its new map and position to appear.
 

@@ -1715,6 +1715,9 @@ export class MaticMapShellV4 extends LitElement {
     const footerSecondary = statusAction && statusAction === secondary ? null : secondary;
     const locatingInFullMap = state.fullMap
       && (state.coherence === "verifying" || state.coherence === "booting");
+    // The one Draw hint, above the sheet's tool rows so it reads at peek. The
+    // sheet grows upwards, so its arrival with the views chunk moves no tool.
+    const sheetHint = narrow && state.workflow === "draw" && this.#views.value?.drawHint(this.#tr, state);
     const canToggleWorkspace = state.fullMap || (
       state.host.administrator && state.host.robotCount > 0 && state.map.available
     );
@@ -1756,7 +1759,7 @@ export class MaticMapShellV4 extends LitElement {
     const toast = this._toast && (this._toast.tone === "success" || this._toast.tone === "error"
       || state.fullMap || (narrow && this._sheetDetent === "peek")) ? this._toast : null;
     return html`
-      <div class=${`root ${narrow ? "narrow" : "wide"}`} @keydown=${this.#keyboard}>
+      <div class=${`root ${narrow ? "narrow" : "wide"}`} ?data-dock=${!narrow && state.workflow === "draw"} @keydown=${this.#keyboard}>
         <button class="skip-link ms-btn ms-btn--primary" type="button" @click=${this.#skipToMap}>${this.#t("v4_skip_to_map", "Skip to the map")}</button>
         <button class="skip-link ms-btn ms-btn--primary" type="button" @click=${this.#skipToWorkspace}>${this.#t("v4_skip_to_workspace", "Skip to the panel")}</button>
         <div class="app" ?inert=${Boolean(dialog)}>
@@ -1892,6 +1895,7 @@ export class MaticMapShellV4 extends LitElement {
                 ${showDrawTools ? html`
                   <div class="sheet-tools">
                     ${chunkStatus(this.#tools("draw"), this.localize, this.#retry)}
+                    ${sheetHint ? html`<p class="draw-hint sheet-hint">${sheetHint}</p>` : nothing}
                     ${precisionOpen ? html`<${precisionControlsTag} class="sheet-precision" .state=${state} .localize=${this.localize}></${precisionControlsTag}>` : nothing}
                     ${renderDrawTools(state, { intent: (intent) => this.#intent(intent), openBrush: () => this.#openBrush(), t: (key, fallback, placeholders) => this.#t(key, fallback, placeholders) }, "grid")}
                   </div>
@@ -1931,7 +1935,7 @@ export class MaticMapShellV4 extends LitElement {
               >
                 <span class="hud-copy"><strong>${status.title}</strong><small>${status.detail}</small></span>
                 ${locatingInFullMap && primary.id !== "stop" ? nothing : this.#actionButton(primary, "ms-btn ms-btn--lg ms-btn--primary", "hud-reason")}
-                ${secondary && (!locatingInFullMap || secondary.id === "stop")
+                ${secondary?.id === "stop"
                   ? this.#actionButton(secondary, "ms-btn ms-btn--lg ms-btn--secondary", "hud-secondary-reason")
                   : nothing}
                 <button

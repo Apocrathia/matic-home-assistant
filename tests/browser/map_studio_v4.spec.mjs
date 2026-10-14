@@ -7968,7 +7968,9 @@ test("zone perimeter closes automatically and supports extending dragging insert
   }, GALLERY_TAG);
   await gallery.getByRole("button", { name: "Points", exact: true }).click();
   const canvas = gallery.locator(".scene-canvas");
-  await expect(gallery.locator(".zone-help")).toBeVisible();
+  // The canvas carries no Points guidance; the panel's one hint does (map-surfaces.md §6, R10).
+  await expect(gallery.locator(".zone-guidance")).toHaveCount(0);
+  await expect(gallery.locator(".draw-hint")).toHaveText("Click to add points · right-drag to move the map");
   const box = await canvas.boundingBox();
   await page.mouse.click(box.x + box.width * .3 - 45, box.y + box.height * .25 - 40);
   const clear = gallery.getByRole("button", { name: "Clear", exact: true });

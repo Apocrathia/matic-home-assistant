@@ -118,7 +118,7 @@ export class MaticMapCanvasV4 extends LitElement {
     }
 
     /* Navigation has stable corners; only orbit controls follow the sheet. */
-    .map-rail { --help-top: calc(44px + 2 * var(--ms-space-2)); --help-bottom: 116px; position: absolute; inset: 0.75rem; inset-inline: max(0.75rem, var(--ms-safe-left)) max(0.75rem, var(--ms-safe-right)); z-index: 4; pointer-events: none; }
+    .map-rail { --row: calc(44px + 2 * var(--ms-space-2)); --help-top: var(--row); --help-bottom: 116px; position: absolute; inset: 0.75rem; inset-inline: max(0.75rem, var(--ms-safe-left)) max(0.75rem, var(--ms-safe-right)); z-index: 4; pointer-events: none; }
     .map-rail > * { pointer-events: auto; }
     slot[name="scrim"] { display: contents; pointer-events: none; }
     ::slotted(.sheet-scrim) { pointer-events: auto; }
@@ -127,11 +127,11 @@ export class MaticMapCanvasV4 extends LitElement {
     .view-switch { flex: none; }
     .map-tools { position: absolute; inset-block-start: 0; inset-inline-end: 0; }
     .map-extras { position: absolute; inset-block-end: calc(var(--map-sheet-offset, 0px) + 52px); inset-inline-end: 0; display: flex; }
-    .appearance-switch { position: absolute; inset-block-start: calc(44px + 2 * var(--ms-space-2)); inset-inline-start: 0; }
+    .appearance-switch { position: absolute; inset-block-start: var(--row); inset-inline-start: 0; }
     .camera-steps { position: absolute; inset-block-end: var(--map-sheet-offset, 0px); inset-inline-end: 0; }
     .map-root:has(.selection-chip) .camera-steps { inset-block-end: calc(var(--map-sheet-offset, 0px) + 4rem); }
     .map-root:has(.selection-chip) .map-extras { inset-block-end: calc(var(--map-sheet-offset, 0px) + 4rem + 52px); }
-    .map-rail:has(.appearance-switch) { --help-top: calc(88px + 4 * var(--ms-space-2)); }
+    .map-rail:has(.appearance-switch) { --help-top: calc(2 * var(--row)); }
     .map-root:has(.selection-chip) .map-rail { --help-bottom: calc(116px + 4rem); }
     .navigation-help { position: absolute; inset-block-start: var(--help-top); inset-inline-end: 0; max-block-size: calc(100% - var(--help-top) - var(--help-bottom)); overflow: auto; box-sizing: border-box; }
     :host([narrow]) .map-context { max-inline-size: calc(100% - 52px); gap: var(--ms-space-1); }
@@ -148,15 +148,18 @@ export class MaticMapCanvasV4 extends LitElement {
     .map-dock, .map-scale, .map-message { position: absolute; z-index: 4; }
     /* The saved-map chip sits top centre under the rail's first row; the
        appearance switch steps down to make room (map-surfaces.md §4). */
-    .map-chip { position: absolute; inset-block-start: var(--help-top); inset-inline-start: 50%; translate: -50% 0; max-inline-size: 100%; padding: var(--ms-space-1) var(--ms-space-3); font-size: var(--ms-t-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+    .map-chip { position: absolute; inset-block-start: var(--row); inset-inline: 0; margin-inline: auto; inline-size: fit-content; max-inline-size: 100%; padding: var(--ms-space-1) var(--ms-space-3); font-size: var(--ms-t-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
     .map-chip :last-child::before { content: " · "; }
-    .map-root:has(.map-chip) .appearance-switch { inset-block-start: calc(2 * (44px + 2 * var(--ms-space-2))); }
+    .map-rail:has(.map-chip) { --help-top: calc(2 * var(--row)); }
+    .map-rail:has(.map-chip) .appearance-switch { inset-block-start: calc(2 * var(--row)); }
+    .map-rail:has(.map-chip):has(.appearance-switch) { --help-top: calc(3 * var(--row)); }
     .map-root:has(.map-chip) .scene-canvas { filter: saturate(0.35); }
 
     .map-dock {
-      inset-inline-start: 50%;
+      inset-inline: 0;
       inset-block-end: calc(0.75rem + var(--map-sheet-offset, 0px));
-      translate: -50% 0;
+      margin-inline: auto;
+      inline-size: fit-content;
       max-inline-size: calc(100% - 1rem);
     }
     .map-dock .draw-tools--row { flex-direction: row; gap: var(--ms-space-1); }
@@ -253,11 +256,14 @@ export class MaticMapCanvasV4 extends LitElement {
 /* Four labelled buttons span most of the map at desktop width; icons with tooltips keep the rail a narrow column. */
 .map-tools .ms-btn__label { position: absolute; overflow: hidden; inline-size: 1px; block-size: 1px; margin: -1px; padding: 0; border: 0; clip-path: inset(50%); white-space: nowrap; }
 @container (max-width: 29rem) {
-.map-tools button, .map-dock .draw-tools button { padding-inline: 0; inline-size: var(--ms-control); }
-/* Collapse the label to assistive text, never display:none. Hiding it would
+.map-tools button { padding-inline: 0; inline-size: var(--ms-control); }
+}
+/* Eight labelled tools need 49rem. Collapse the label to assistive text, never display:none. Hiding it would
    delete the accessible name and break every getByRole({ name }) query at
    narrow widths -- which is what the previous font-size:0 plus ::first-letter
    trick did, while also rendering the toolbar as "P E M U R D". */
+@container (max-width: 49rem) {
+.map-dock .draw-tools button { padding-inline: 0; inline-size: var(--ms-control); }
 .map-dock .draw-tools .ms-btn__label { position: absolute; overflow: hidden; inline-size: 1px; block-size: 1px; margin: -1px; padding: 0; border: 0; clip-path: inset(50%); white-space: nowrap; }
 }
 @media (forced-colors: active) {
@@ -514,13 +520,13 @@ export class MaticMapCanvasV4 extends LitElement {
     const draw = state.workflow === "draw";
     const saved = showScene ? savedMapPosition(state) : null;
     const helpTitle = this.#t("v4_how_to_move", "How to move the map");
-    // Draw forces the top view, so the view, appearance and camera groups are
-    // noise there; the sheet owns the tools on a phone. Both leave Fit and
+    // Draw and the area review force the top view, so the view, appearance
+    // and camera groups are noise there; the sheet owns the tools on a phone. Both leave Fit and
     // help in the map rail because workspace visibility belongs to the app
     // bar. Without a scene there is nothing to fit, switch or explain
     // (home-rooms.md §11 MS-HOME-04), so the rail keeps nothing. A phone's
     // Room names row is in Map options; its rail keeps the help "?".
-    const showView = showScene && !draw;
+    const showView = showScene && !draw && state.workflow !== "areaReview";
     const showAppearance = showView && !narrow && state.view === "top";
     const showCamera = showView && state.view === "three";
     const showTools = showScene && !locating;

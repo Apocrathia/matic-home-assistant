@@ -1,4 +1,4 @@
-import{T as e}from"./chunk-GLF7JOXJ.js";var s=e`
+import{U as e}from"./chunk-KQQJQ4OM.js";var s=e`
 .ms-switch {
 position: relative;
 flex: none;
@@ -87,5 +87,6 @@ transition: translate var(--ms-fast) var(--ms-ease);
 
     .narrow .sheet-grip:has(.sheet-back) { grid-template-columns: auto minmax(0, 1fr) auto auto; }
     .narrow .sheet-precision { display: block; margin-block-end: var(--ms-space-2); }
+    .narrow .sheet-hint { margin: 0 0 var(--ms-space-2); color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
 
 `;export{s as a,i as b};

@@ -87,8 +87,8 @@ export class MaticPrecisionControlsV4 extends LitElement {
     const label = this.#t("brush_size", "Brush width");
     const end = (delta: -1 | 1) => {
       const reason = delta < 0
-        ? cm <= MIN_CM ? this.#t("v4_brush_min_reason", "{size} is the smallest brush.", { size: size(MIN_CM) }) : null
-        : cm >= MAX_CM ? this.#t("v4_brush_max_reason", "{size} is the largest brush.", { size: size(MAX_CM) }) : null;
+        ? cm <= MIN_CM ? this.#t("v4_brush_min_reason", "Can't make the brush narrower than {size}.", { size: size(MIN_CM) }) : null
+        : cm >= MAX_CM ? this.#t("v4_brush_max_reason", "Can't make the brush wider than {size}.", { size: size(MAX_CM) }) : null;
       const endId = delta < 0 ? "brush-min" : "brush-max";
       return html`<button
         class="ms-btn ms-btn--icon"

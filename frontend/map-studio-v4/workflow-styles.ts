@@ -46,5 +46,6 @@ export const shellWorkflowStyles = css`
 
     .narrow .sheet-grip:has(.sheet-back) { grid-template-columns: auto minmax(0, 1fr) auto auto; }
     .narrow .sheet-precision { display: block; margin-block-end: var(--ms-space-2); }
+    .narrow .sheet-hint { margin: 0 0 var(--ms-space-2); color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
 
 `;

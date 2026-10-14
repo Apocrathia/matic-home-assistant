@@ -16,10 +16,11 @@ import {
 import { PLAN_VIEWS_TAG, PRECISION_CONTROLS_TAG, ROOMS_VIEW_TAG, WORKFLOW_TAG } from "./element-tags";
 import { WORKSPACE_INTENT_EVENT } from "./map-canvas";
 import { deleteSubject, hasStoppableWork, initialWorkspaceState } from "./state";
+import { heldReasonKey } from "./draw-tools";
 import { formatDateTime, translate } from "./localize";
 import { LazyChunk, chunkStatus } from "./lazy-chunk";
-import { heldReasonKey } from "./draw-tools";
 import { COVERAGES, MODES, coverageLabel, modeLabel } from "./plan-cadence";
+import type { Translate } from "./plan-copy";
 // The plan picker, Run and Edit, and the Rooms view.
 import "./plan-views";
 import "./rooms-view";
@@ -37,6 +38,24 @@ export { MapOptions } from "./map-options";
 export { drawRecipes, renderMapHelp } from "./map-help";
 export { roomTapAnnouncement, roomsGripLine, roomsSummary } from "./rooms-view";
 export { shellWorkflowStyles } from "./workflow-styles";
+
+// One hint for the tool in hand, chosen by the pointer that will use it;
+// Move map needs none (map-surfaces.md §6). The keyboard recipes are
+// assistive text on the map (map-help.ts). The shell renders it under the
+// phone sheet's tool rows; the panel renders it in the wide body.
+export const drawHint = (t: Translate, state: WorkspaceState): string | null => {
+  const { tool } = state.draw;
+  if (tool === "pan") return null;
+  const coarse = window.matchMedia("(any-pointer: coarse)").matches;
+  if (tool === "outline") {
+    return coarse
+      ? t("v4_points_hint_touch", "Tap to add points · two fingers to move the map")
+      : t("v4_points_hint_pointer", "Click to add points · right-drag to move the map");
+  }
+  return coarse
+    ? t("v4_draw_hint_touch", "Drag to paint · two fingers to move the map")
+    : t("v4_draw_hint_pointer", "Drag to paint · right-drag or Space-drag to move the map");
+};
 export { formControls } from "./form-controls";
 
 const planViewsTag = unsafeStatic(PLAN_VIEWS_TAG);
@@ -206,26 +225,11 @@ line-height: var(--ms-lh-snug);
     ></${planViewsTag}>`, workflow);
   }
 
-  // One hint for the tool in hand, chosen by the pointer that will use it;
-  // Move map needs none (map-surfaces.md §6). The keyboard recipes are
-  // assistive text on the map (map-help.ts).
-  #drawHint(): string | null {
-    const { tool } = this.state.draw;
-    if (tool === "pan") return null;
-    const coarse = window.matchMedia("(any-pointer: coarse)").matches;
-    if (tool === "outline") {
-      return coarse
-        ? this.#t("v4_points_hint_touch", "Tap to add points · two fingers to move the map")
-        : this.#t("v4_points_hint_pointer", "Click to add points · right-drag to move the map");
-    }
-    return coarse
-      ? this.#t("v4_draw_hint_touch", "Drag to paint · two fingers to move the map")
-      : this.#t("v4_draw_hint_pointer", "Drag to paint · right-drag or Space-drag to move the map");
-  }
-
   #draw() {
     const areas = this.state.resources.areas;
-    const hint = this.#drawHint();
+    // On a phone the sheet shows the hint under its tool rows, where it is
+    // read at peek; here it would hide until the sheet opens.
+    const hint = this.narrow ? null : drawHint(this.#tr, this.state);
     // Rows are held while a command runs, with the toolbar's reason (R12).
     const held = this.#heldReason();
     const row = (content: unknown, intent: WorkspaceIntent) => html`
@@ -330,7 +334,11 @@ line-height: var(--ms-lh-snug);
       ? Math.max(0, snapshots.findIndex((snapshot) => snapshot.id === this.state.selection.historyId))
       : snapshots.length;
     const live = this.#t("map_timeline_live_action", "Live");
-    const displayPosition = this._historyPreviewPosition ?? position;
+    // Only the live floor has a live map, so only its scrubber ends at Live; a
+    // saved floor's ends at its newest map and never changes floor under the thumb.
+    const liveEnd = Boolean(floor?.active);
+    const last = liveEnd ? snapshots.length : snapshots.length - 1;
+    const displayPosition = Math.min(this._historyPreviewPosition ?? position, last);
     const selectedSnapshot = snapshots[displayPosition];
     // Held while a command runs (R12): rows and scrubber say why and change nothing.
     const held = this.#heldReason();
@@ -371,7 +379,7 @@ line-height: var(--ms-lh-snug);
                 type="range"
                 class="ms-range"
                 min="0"
-                max=${String(snapshots.length)}
+                max=${String(last)}
                 step="1"
                 .value=${String(displayPosition)}
                 aria-valuetext=${selectedSnapshot ? formatDateTime(selectedSnapshot.createdAt, this.dates) : live}
@@ -389,7 +397,7 @@ line-height: var(--ms-lh-snug);
                 }}
               >
             </label>
-            <p class="timeline-ends" aria-hidden="true"><span>${this.#t("map_timeline_oldest", "Oldest")}</span><span>${live}</span></p>
+            <p class="timeline-ends" aria-hidden="true"><span>${this.#t("map_timeline_oldest", "Oldest")}</span><span>${liveEnd ? live : this.#t("map_timeline_newest", "Newest")}</span></p>
           ` : nothing}
           <div class="list">
             ${snapshots.map((snapshot, index) => html`

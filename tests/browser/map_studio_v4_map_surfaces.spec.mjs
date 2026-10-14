@@ -487,13 +487,19 @@ test.describe("Draw tools", () => {
     await expect(panel.getByText(/mapped floor|narrow edges/)).toHaveCount(0);
   });
 
-  test("a touch screen reads the touch hints @mobile", async ({ page }) => {
+  test("a touch screen reads the touch hints above the tool rows, at peek @mobile", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "draw", narrow: true });
-    await gallery.getByRole("button", { name: "Expand panel", exact: true }).click();
+    await expect(panelOf(gallery)).toHaveAttribute("data-detent", "peek");
     const hint = gallery.locator(".mobile-sheet .draw-hint");
+    await expect(hint).toHaveCount(1);
+    await expect(hint).toBeVisible();
     await expect(hint).toHaveText("Drag to paint · two fingers to move the map");
     await gallery.getByRole("button", { name: "Points", exact: true }).click();
     await expect(hint).toHaveText("Tap to add points · two fingers to move the map");
+    await gallery.getByRole("button", { name: "Expand panel", exact: true }).click();
+    await expect(hint).toHaveCount(1);
+    await gallery.getByRole("button", { name: "Move map", exact: true }).click();
+    await expect(hint).toHaveCount(0);
   });
 });
 
@@ -703,13 +709,13 @@ test.describe("Precision", () => {
     await expect(field).toHaveValue("60");
     await patchState(gallery, { draw: { ...state.draw, brushMeters: 2.5 } });
     await expect(plus).toHaveAttribute("aria-disabled", "true");
-    expect(await describedBy(plus)).toBe("250 cm is the largest brush.");
+    expect(await describedBy(plus)).toBe("Can't make the brush wider than 250 cm.");
     await expect(minus).not.toHaveAttribute("aria-disabled", "true");
     await plus.click({ force: true });
     expect((await snapshot(page)).draw.brushMeters).toBe(2.5);
     await patchState(gallery, { draw: { ...state.draw, brushMeters: 0.2 } });
     await expect(minus).toHaveAttribute("aria-disabled", "true");
-    expect(await describedBy(minus)).toBe("20 cm is the smallest brush.");
+    expect(await describedBy(minus)).toBe("Can't make the brush narrower than 20 cm.");
     await expect(plus).not.toHaveAttribute("aria-disabled", "true");
     await field.fill("7");
     await field.press("Tab");
@@ -801,7 +807,7 @@ test.describe("Area review", () => {
     await expect(panel.getByRole("heading", { level: 2 })).toHaveText("Entryway");
     await expect(body.locator("> :first-child")).toHaveText("Home Assistant can't use this area as it was saved, so redraw it.");
     await expect(body.locator("> :first-child")).toHaveRole("alert");
-    await expect(gallery.locator(".action-bar").getByRole("button", { name: "Clean this area", exact: true })).toHaveAccessibleDescription("Can't clean this area until you save it on the current map.");
+    await expect(gallery.locator(".action-bar").getByRole("button", { name: "Clean this area", exact: true })).toHaveAccessibleDescription("Can't clean this area until you redraw it.");
   });
 
   test("entering the review frames the area in the top view and dims the rest; leaving restores the camera", async ({ page }) => {
@@ -988,24 +994,24 @@ test.describe("History", () => {
     await expect(panel.getByRole("group", { name: "Mapped floors" })).toHaveCount(0);
   });
 
-  test("the scrubber appears from three snapshots, ends at Oldest and Live and fits a 320 px sheet @mobile", async ({ page }) => {
+  test("the scrubber appears from three snapshots, ends at Oldest and Newest on a saved floor and fits a 320 px sheet @mobile", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "history-floors", narrow: true, viewport: { width: 320, height: 844 } });
     const panel = gallery.locator(".mobile-sheet");
     const snapshots = await floorSnapshots(page, "saved-1");
     expect(snapshots).toHaveLength(4);
     const slider = panel.getByRole("slider", { name: "Map timeline" });
     await expect(slider).toHaveAttribute("min", "0");
-    await expect(slider).toHaveAttribute("max", "4");
+    await expect(slider).toHaveAttribute("max", "3");
     await expect(slider).toHaveClass(/ms-range/);
-    await expect(panel.locator(".timeline-ends span")).toHaveText(["Oldest", "Live"]);
+    await expect(panel.locator(".timeline-ends span")).toHaveText(["Oldest", "Newest"]);
     const [width, container] = await slider.evaluate((input) => [input.getBoundingClientRect().width, input.parentElement.getBoundingClientRect().width]);
     expect(width).toBeLessThanOrEqual(container + 0.5);
     expect(await panel.locator(".sheet-body").evaluate((body) => body.scrollWidth <= body.clientWidth), "no sideways scroll").toBe(true);
     await expect(slider).toHaveAttribute("aria-valuetext", await formatted(page, snapshots[1].createdAt));
     await expect(slider).toHaveValue("1");
     const preview = (value) => slider.evaluate((input, next) => { input.value = next; input.dispatchEvent(new Event("input", { bubbles: true })); }, value);
-    await preview("4");
-    await expect(slider).toHaveAttribute("aria-valuetext", "Live");
+    await preview("3");
+    await expect(slider).toHaveAttribute("aria-valuetext", await formatted(page, snapshots[3].createdAt));
     await preview("0");
     await expect(slider).toHaveAttribute("aria-valuetext", await formatted(page, snapshots[0].createdAt));
     const rows = panel.locator(".snapshot");
@@ -1016,12 +1022,13 @@ test.describe("History", () => {
     await expect(rows.nth(1).locator("small")).toHaveText("2 of 4");
     await rows.nth(3).click();
     await expect.poll(async () => (await snapshot(page)).selection.historyId).toBe(snapshots[3].id);
-    // Live at the end leaves the saved map but stays in History (R21).
-    await slider.evaluate((input) => { input.value = "4"; input.dispatchEvent(new Event("change", { bubbles: true })); });
-    await expect.poll(async () => (await snapshot(page)).selection.historyId).toBeNull();
-    expect((await snapshot(page)).dataMode).toBe("live");
+    // A saved floor has no live map, so its scrubber ends at its newest map
+    // and never changes floor under the thumb; Show live map is the way back.
+    await slider.evaluate((input) => { input.value = "3"; input.dispatchEvent(new Event("change", { bubbles: true })); });
+    await expect.poll(async () => (await snapshot(page)).selection.historyId).toBe(snapshots[3].id);
+    expect((await snapshot(page)).selection.floorId).toBe("saved-1");
     expect((await snapshot(page)).workflow).toBe("history");
-    await expect(chipOf(gallery)).toHaveCount(0);
+    await expect(chipOf(gallery)).toBeVisible();
   });
 
   test("Show live map is the one way back; Stop is its secondary while the robot works; a saved floor while live shows only the reason", async ({ page }) => {
@@ -1220,5 +1227,194 @@ test.describe("Announcements", () => {
     const hud = hudOf(full);
     await expect(hud).toBeVisible();
     expect(await hud.evaluate((element) => [element.getAttribute("aria-live"), element.querySelector("[aria-live], [role=status], [role=alert]")])).toEqual([null, null]);
+  });
+});
+
+// Final whole-branch review (Task 8): what two reviewers found a first-time
+// user could misread, each pinned here.
+const intersects = (a, b) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+const dispatchIntent = (page, detail) => page.evaluate(({ tag, detail }) => {
+  const shell = document.querySelector(tag).shadowRoot.querySelector("matic-map-shell-v4");
+  shell.dispatchEvent(new CustomEvent("matic-workspace-intent", { detail, bubbles: true, composed: true }));
+}, { tag: GALLERY_TAG, detail });
+
+test.describe("Final review", () => {
+  test("entering Full map closes the brush settings, so Brush never says expanded over nothing", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "draw", viewport: { width: 1024, height: 768 } });
+    await brushOf(canvasOf(gallery)).click();
+    await expect(brushOf(canvasOf(gallery))).toHaveAttribute("aria-expanded", "true");
+    await fullMapToggle(gallery).click();
+    await expect.poll(async () => (await snapshot(page)).precisionOpen).toBe(false);
+    await expect(brushOf(canvasOf(gallery))).toHaveAttribute("aria-expanded", "false");
+    // The first Escape now leaves Full map, not an invisible layer.
+    await page.keyboard.press("Escape");
+    await expect.poll(async () => (await snapshot(page)).fullMap).toBe(false);
+  });
+
+  test("the HUD holds the primary and Exit, with Stop as its only secondary (spec §4)", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "area-review-saved", viewport: { width: 1024, height: 768 } });
+    await fullMapToggle(gallery).click();
+    const hud = hudOf(gallery);
+    await expect(hud.getByRole("button")).toHaveText(["Clean this area", "Exit full map"]);
+    await patchState(gallery, { activity: "cleaning" });
+    await expect(hud.getByRole("button")).toHaveText([/Stop/, "Exit full map"]);
+    await patchState(gallery, { activity: "paused" });
+    await expect(hud.getByRole("button")).toHaveText([/^Resume/, /Stop/, "Exit full map"]);
+  });
+
+  test("the area review hides the 3D/2D and map style switches it cannot honour", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "area-review-saved", viewport: { width: 1024, height: 768 } });
+    await expect(helpButton(gallery)).toBeVisible();
+    await expect(gallery.getByRole("group", { name: "Map view" })).toHaveCount(0);
+    await expect(gallery.getByRole("group", { name: "Map style" })).toHaveCount(0);
+    await expect(gallery.getByRole("button", { name: "3D", exact: true })).toHaveCount(0);
+  });
+
+  test("Points keeps one hint, in the panel, and its handles never cover the rail's ? on a phone @mobile", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "draw-points", narrow: true });
+    await expect(canvasOf(gallery).locator(".zone-guidance")).toHaveCount(0);
+    await expect(canvasOf(gallery).getByText("Place points around the area")).toHaveCount(0);
+    await expect(gallery.locator(".mobile-sheet").getByText("Tap to add points · two fingers to move the map")).toBeVisible();
+    const help = helpButton(gallery);
+    await help.click();
+    await expect(helpDialog(gallery)).toBeVisible();
+    await page.keyboard.press("Escape");
+    // Select a point: its action bar sits above the rail's bottom row.
+    const state = await snapshot(page);
+    await patchState(gallery, { draw: { ...state.draw, outline: { closed: true, points: [{ x: 1, y: 1 }, { x: 3.5, y: 1 }, { x: 3.5, y: 2.5 }, { x: 1, y: 2.5 }] } } });
+    await canvasOf(gallery).getByRole("button", { name: "Point 1", exact: true }).tap();
+    const actions = canvasOf(gallery).locator(".zone-point-actions");
+    await expect(actions).toBeVisible();
+    expect(intersects(await actions.boundingBox(), await help.boundingBox())).toBe(false);
+  });
+
+  test("a toast in Full map sits above the Draw dock and the dock stays centred under RTL", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "draw", viewport: { width: 1024, height: 768 } });
+    await fullMapToggle(gallery).click();
+    const dock = gallery.getByRole("toolbar", { name: "Draw area tools" });
+    await dispatchIntent(page, { type: "set-notice", notice: { key: "v4_notice_area_saved", fallback: "Area saved", tone: "success" } });
+    const toast = gallery.getByRole("region", { name: "Notifications" });
+    await expect(toast).toBeVisible();
+    expect(intersects(await toast.boundingBox(), await dock.boundingBox()), "toast over the dock").toBe(false);
+    expect(intersects(await toast.boundingBox(), await hudOf(gallery).boundingBox()), "toast over the HUD").toBe(false);
+    await page.evaluate(() => { document.documentElement.dir = "rtl"; });
+    const canvas = await canvasOf(gallery).boundingBox();
+    const box = await dock.boundingBox();
+    expect(box.x).toBeGreaterThanOrEqual(canvas.x);
+    expect(box.x + box.width).toBeLessThanOrEqual(canvas.x + canvas.width);
+    expect(Math.abs(box.x + box.width / 2 - (canvas.x + canvas.width / 2))).toBeLessThanOrEqual(2);
+  });
+
+  test("the saved-map chip keeps its own row: centred under RTL and clear of the map style switch", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "history", viewport: { width: 1024, height: 768 } });
+    const chip = chipOf(gallery);
+    const style = gallery.getByRole("group", { name: "Map style" });
+    await expect(style).toBeVisible();
+    expect(intersects(await chip.boundingBox(), await style.boundingBox())).toBe(false);
+    const fit = gallery.getByRole("button", { name: "Fit the whole map on screen", exact: true });
+    expect(intersects(await chip.boundingBox(), await fit.boundingBox())).toBe(false);
+    await page.evaluate(() => { document.documentElement.dir = "rtl"; });
+    const canvas = await canvasOf(gallery).boundingBox();
+    const box = await chip.boundingBox();
+    expect(Math.abs(box.x + box.width / 2 - (canvas.x + canvas.width / 2))).toBeLessThanOrEqual(2);
+    const narrow = await loadGallery(page, { scenario: "history", narrow: true, viewport: { width: 320, height: 844 } });
+    const floor = narrow.getByRole("combobox").first();
+    expect(intersects(await chipOf(narrow).boundingBox(), await floor.boundingBox())).toBe(false);
+  });
+
+  test("a saved floor's scrubber ends at Newest and keeps its floor; the live floor's ends at Live and keeps focus", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "history-floors", viewport: { width: 1024, height: 768 } });
+    const panel = panelOf(gallery);
+    const slider = panel.getByRole("slider", { name: "Map timeline" });
+    const saved = await floorSnapshots(page, "saved-1");
+    await expect(slider).toHaveAttribute("max", "3");
+    await expect(panel.locator(".timeline-ends span")).toHaveText(["Oldest", "Newest"]);
+    await slider.focus();
+    await slider.evaluate((input) => { input.value = "3"; input.dispatchEvent(new Event("input", { bubbles: true })); });
+    await expect(slider).toHaveAttribute("aria-valuetext", await formatted(page, saved[3].createdAt));
+    await slider.evaluate((input) => { input.dispatchEvent(new Event("change", { bubbles: true })); });
+    await expect.poll(async () => (await snapshot(page)).selection.historyId).toBe(saved[3].id);
+    expect((await snapshot(page)).selection.floorId).toBe("saved-1");
+    await expect(slider).toBeFocused();
+    // The live floor with three saved maps: the end is Live, and Live keeps the scrubber under the thumb.
+    const state = await snapshot(page);
+    const catalog = state.resources.history.value;
+    const current = catalog.floors.find((floor) => floor.id === "current");
+    const extra = { ...current.snapshots[0], id: "current-extra", createdAt: "2026-08-20T08:00:00Z" };
+    await patchState(gallery, {
+      dataMode: "live",
+      floor: { ...state.floor, readOnly: false },
+      selection: { ...state.selection, floorId: "current", historyId: null },
+      resources: { ...state.resources, history: { ...state.resources.history, value: { ...catalog, floors: catalog.floors.map((floor) => floor.id === "current" ? { ...floor, snapshots: [extra, ...floor.snapshots] } : floor) } } },
+    });
+    await expect(slider).toHaveAttribute("max", "3");
+    await expect(panel.locator(".timeline-ends span")).toHaveText(["Oldest", "Live"]);
+    await expect(slider).toHaveValue("3");
+    await expect(slider).toHaveAttribute("aria-valuetext", "Live");
+    await slider.focus();
+    await slider.evaluate((input) => { input.value = "0"; input.dispatchEvent(new Event("change", { bubbles: true })); });
+    await expect.poll(async () => (await snapshot(page)).selection.historyId).toBe("current-extra");
+    await expect(slider).toBeFocused();
+    await slider.evaluate((input) => { input.value = "3"; input.dispatchEvent(new Event("change", { bubbles: true })); });
+    await expect.poll(async () => (await snapshot(page)).selection.historyId).toBeNull();
+    expect((await snapshot(page)).workflow).toBe("history");
+    await expect(slider).toBeFocused();
+  });
+
+  test("the dock fits its canvas: icon-only with tooltips beside the 1024 inspector, labelled and whole in Full map", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "draw", viewport: { width: 1024, height: 768 } });
+    const toolbar = gallery.getByRole("toolbar", { name: "Draw area tools" });
+    const buttons = toolbar.getByRole("button");
+    await expect(buttons).toHaveCount(8);
+    const inside = async () => {
+      const canvas = await canvasOf(gallery).boundingBox();
+      const box = await toolbar.boundingBox();
+      expect(box.x).toBeGreaterThanOrEqual(canvas.x);
+      expect(box.x + box.width).toBeLessThanOrEqual(canvas.x + canvas.width);
+      expect(await toolbar.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    };
+    const labelWidth = () => buttons.last().locator(".ms-btn__label").evaluate((label) => label.getBoundingClientRect().width);
+    // The 664 px inspector canvas cannot hold eight labelled 44 px tools (≈766 px): labels drop first.
+    await inside();
+    expect(await labelWidth()).toBeLessThanOrEqual(1);
+    for (const button of await buttons.all()) {
+      const box = await button.boundingBox();
+      expect(box.width).toBeGreaterThanOrEqual(44);
+      expect(await button.getAttribute("title")).toBeTruthy();
+    }
+    await expect(toolbar.getByRole("button", { name: "Undo", exact: true })).toHaveAttribute("title", "Undo");
+    await expect(toolbar.getByRole("button", { name: /^Brush width, / })).toHaveAccessibleDescription("");
+    await fullMapToggle(gallery).click();
+    await expect(hudOf(gallery)).toBeVisible();
+    await inside();
+    await expect.poll(labelWidth).toBeGreaterThan(40);
+    for (const button of await buttons.all()) {
+      expect(await button.evaluate((element) => element.scrollWidth <= element.clientWidth), await button.textContent()).toBe(true);
+    }
+  });
+
+  test("a toast in Full map on a phone stays clear of the rail's ? @mobile", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "ready", narrow: true });
+    await fullMapToggle(gallery).click();
+    await expect(hudOf(gallery)).toBeVisible();
+    await dispatchIntent(page, { type: "set-notice", notice: { key: "v4_notice_area_saved", fallback: "Area saved", tone: "success" } });
+    const toast = gallery.getByRole("region", { name: "Notifications" });
+    await expect(toast).toBeVisible();
+    const box = await toast.boundingBox();
+    expect(intersects(box, await helpButton(gallery).boundingBox())).toBe(false);
+    expect(intersects(box, await hudOf(gallery).boundingBox())).toBe(false);
+    expect(box.y + box.height).toBeLessThanOrEqual((await hudOf(gallery).boundingBox()).y);
+  });
+
+  test("Clean this area says why it waits and why a redrawn area is needed", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "area-review-saved" });
+    const clean = gallery.locator(".action-bar").getByRole("button", { name: "Clean this area", exact: true });
+    await expect(clean).toBeEnabled();
+    const state = await snapshot(page);
+    await patchState(gallery, { command: "pending" });
+    await expect(clean).toHaveAttribute("aria-disabled", "true");
+    await expect(clean).toHaveAccessibleDescription("Waiting for the current change to finish.");
+    await patchState(gallery, { command: "idle", areaDraft: { ...state.areaDraft, status: "stale", canRebind: false } });
+    await expect(clean).toHaveAccessibleDescription("Can't clean this area until you redraw it.");
   });
 });
