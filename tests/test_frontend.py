@@ -293,13 +293,15 @@ def test_every_ms_custom_property_is_defined() -> None:
 
 
 def test_plan_row_lines_ship_without_schedule_lines() -> None:
-    """The home plan card shares the picker's line helpers, not the Edit schedules.
+    """Home plan shortcuts share the picker's line helpers, in the lazy views.
 
-    home-rooms.md R1.
+    home-rooms.md R1; UX9 moved the home plan card into the views chunk as
+    pinned shortcuts, so neither the row lines nor the schedules ship at startup.
     """
     startup = _startup_source()
     workflow = _STUDIO_V4_WORKFLOW_CHUNK_PATHS[0].read_text(encoding="utf-8")
-    assert "v4_plan_row_rotation" in startup
+    assert "v4_plan_row_rotation" not in startup
+    assert "v4_plan_row_rotation" in workflow
     assert "v4_room_schedules_mop" not in startup
     assert "v4_room_schedules_mop" in workflow
 

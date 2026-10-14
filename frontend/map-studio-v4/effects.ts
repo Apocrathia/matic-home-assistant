@@ -1,6 +1,7 @@
 import {
   notice,
   type HassProjection,
+  type HomePin,
   type PlanOrigin,
   type ResourceStamp,
   type ResourceState,
@@ -154,7 +155,7 @@ const sameCoherenceGeneration = (left: ResourceStamp, right: ResourceStamp): boo
 
 const POSE_POLL_INTERVAL_MS = 1_000;
 const SPATIAL_READ_RECOVERY_INTERVAL_MS = 5_000;
-const READ_ONLY_WORKFLOWS: readonly Workflow[] = ["rooms", "plans", "plan", "draw", "areaReview"];
+const READ_ONLY_WORKFLOWS: readonly Workflow[] = ["rooms", "plans", "plan", "areas", "draw", "areaReview"];
 const MUTATION_RESOURCES = ["plan-mutation", "area-mutation"] as const;
 
 interface ManualPreviewCapture {
@@ -506,6 +507,9 @@ export class EffectController {
         cameras: loadedPreferences.cameras,
       } : {}),
     });
+    // A new user or robot owns its own home shortcuts from this moment: the
+    // last owner's are cleared and its queued writes cut off.
+    this.#syncPinsOwner();
     if (!projection.host.administrator) {
       this.#stopPolling();
       this.#clearPrivate("access-required", projection.entryKey);
@@ -2058,7 +2062,7 @@ export class EffectController {
       }
     }
     if (workflow === "plans" || workflow === "plan" || workflow === "rooms") await this.loadPlans();
-    if (workflow === "draw" || workflow === "areaReview") await this.loadAreas();
+    if (workflow === "areas" || workflow === "draw" || workflow === "areaReview") await this.loadAreas();
   }
 
   // `inPlace` keeps a ready catalog on screen: the read never shows loading
@@ -2166,10 +2170,111 @@ export class EffectController {
 
   #resumeAreaCatalog(): void {
     const state = this.#store.value;
-    if ((state.workflow === "draw" || state.workflow === "areaReview")
+    if ((state.workflow === "areas" || state.workflow === "draw" || state.workflow === "areaReview"
+      || state.homePins.pins.some((pin) => pin.kind === "area"))
       && state.resources.areas.status === "idle") {
       void this.loadAreas();
     }
+    this.#syncPinsOwner();
+    const owner = this.#pinsOwner;
+    if (owner && this.#pinsReadFor !== owner) void this.loadHomePins();
+  }
+
+  // Home shortcuts (home-pins.ts) belong to one Home Assistant user and one
+  // robot. Each owner change clears them, cuts off every write queued for the
+  // last owner, and reads the new owner's afresh; a read commits only while
+  // its owner and its token are still current (Codex PRRT_kwDOTau7uM6sNi6X).
+  #pinsOwner: string | null = null;
+  // The owner the last read was started for; a new owner is read once the
+  // workspace resumes (#resumeAreaCatalog), as the first one was.
+  #pinsReadFor: string | null = null;
+  #pinsEpoch = 0;
+  #pinsToken = 0;
+  #pinsWrite: Promise<unknown> = Promise.resolve();
+  // Each toggle's revision per pin: a failed write undoes its own toggle only
+  // while no newer toggle of that pin followed (Codex PRRT_kwDOTau7uM6sOOL7).
+  #pinRevisions = new Map<string, number>();
+
+  #currentPinsOwner(): string | null {
+    const { owner, selection } = this.#store.value;
+    return owner && selection.entryId ? JSON.stringify([owner.userKey, selection.entryId]) : null;
+  }
+
+  #syncPinsOwner(): void {
+    const owner = this.#currentPinsOwner();
+    if (owner === this.#pinsOwner) return;
+    this.#pinsOwner = owner;
+    this.#pinsEpoch += 1;
+    this.#pinsToken += 1;
+    this.#pinsWrite = Promise.resolve();
+    this.#pinRevisions.clear();
+    if (this.#store.value.homePins.status !== "idle" || this.#store.value.homePins.pins.length) {
+      this.#store.patch({ homePins: { status: "idle", pins: [] } });
+    }
+  }
+
+  async loadHomePins(): Promise<void> {
+    this.#syncPinsOwner();
+    const owner = this.#pinsOwner;
+    this.#pinsReadFor = owner;
+    const token = ++this.#pinsToken;
+    const entryId = this.#store.value.selection.entryId;
+    const connection = this.#workspaceConnection;
+    const current = (): boolean => !this.#disposed && token === this.#pinsToken
+      && owner === this.#pinsOwner && this.#currentPinsOwner() === owner;
+    if (!owner || !entryId || !connection?.sendMessagePromise) {
+      this.#store.patch({ homePins: { status: "unavailable", pins: [] } });
+      return;
+    }
+    this.#store.patch({ homePins: { status: "loading", pins: [] } });
+    try {
+      const module = await import("./home-pins");
+      const pins = await module.loadPins(connection, this.#store, entryId, current);
+      if (!current()) return;
+      this.#store.patch({ homePins: { status: "ready", pins: pins ?? [] } });
+      module.followPins(this.#store, this, entryId, current, !pins);
+      this.#resumeAreaCatalog();
+    } catch {
+      if (current()) this.#store.patch({ homePins: { status: "error", pins: [] } });
+    }
+  }
+
+  /**
+   * Writes the pins the reducer already shows, for the owner they were
+   * changed for. Each queued write sends the list as it is when its turn
+   * comes, so a later change is never lost to an earlier snapshot, and none
+   * is sent once the owner changed. A failed write undoes only its own
+   * change, at the place the pin had (`previous` is the list before it).
+   */
+  saveHomePin(pin: HomePin, pinned: boolean, previous: readonly HomePin[]): void {
+    const entryId = this.#store.value.selection.entryId;
+    const connection = this.#workspaceConnection;
+    const owner = this.#pinsOwner;
+    const epoch = this.#pinsEpoch;
+    if (!entryId || !connection || !owner || owner !== this.#currentPinsOwner()
+      || this.#store.value.homePins.status !== "ready") return;
+    const same = (candidate: HomePin): boolean => candidate.kind === pin.kind && candidate.id === pin.id;
+    const key = `${pin.kind}:${pin.id}`;
+    const revision = (this.#pinRevisions.get(key) ?? 0) + 1;
+    this.#pinRevisions.set(key, revision);
+    const current = (): boolean => !this.#disposed && epoch === this.#pinsEpoch
+      && this.#currentPinsOwner() === owner && this.#store.value.homePins.status === "ready";
+    this.#pinsWrite = this.#pinsWrite.then(async () => {
+      const module = await import("./home-pins");
+      if (!current()) return;
+      try {
+        await module.writePins(connection, entryId, this.#store.value.homePins.pins, current);
+        if (current()) this.#resumeAreaCatalog();
+      } catch {
+        if (!current()) return;
+        // A newer toggle of this pin stands: its own write sends the whole
+        // list again and reports its own failure.
+        if (this.#pinRevisions.get(key) !== revision) return;
+        const pins = this.#store.value.homePins.pins.filter((candidate) => !same(candidate));
+        if (!pinned) pins.splice(Math.min(Math.max(previous.findIndex(same), 0), pins.length), 0, pin);
+        this.#store.patch({ homePins: { status: "ready", pins }, notice: module.PINS_SAVE_FAILED });
+      }
+    }).catch(() => undefined);
   }
 
   async loadAreas({ reconcileDraft = true }: { reconcileDraft?: boolean } = {}): Promise<AreasCatalog | null> {

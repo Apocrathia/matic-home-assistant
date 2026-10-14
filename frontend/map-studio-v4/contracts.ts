@@ -55,6 +55,7 @@ export type Workflow =
   | "draw"
   | "plan"
   | "plans"
+  | "areas"
   | "areaReview"
   | "history"
   | "support";
@@ -321,6 +322,8 @@ export interface WorkspaceState {
   /** The Edit row whose settings are open; one at a time. */
   readonly expandedRoom: string | null;
   readonly areaDraft: AreaDraft;
+  /** This user's home shortcuts for the open robot, in the order they were added (HA frontend user data). */
+  readonly homePins: HomePins;
   readonly notice: WorkspaceNotice | null;
   readonly robotLabel: string;
   readonly robots: readonly RobotChoice[];
@@ -399,7 +402,21 @@ export type WorkspaceIntent =
   | { readonly type: "set-notice"; readonly notice: WorkspaceNotice | null }
   | { readonly type: "open-dialog"; readonly dialog: DialogKind }
   | { readonly type: "dismiss-top-layer" }
-  | { readonly type: "return-live" };
+  | { readonly type: "return-live" }
+  | { readonly type: "set-home-pin"; readonly pin: HomePin; readonly pinned: boolean }
+  | { readonly type: "reload-home-pins" };
+
+/** A saved plan or custom area shown on home as a one-tap shortcut. */
+export interface HomePin {
+  readonly kind: "plan" | "area";
+  readonly id: string;
+}
+
+/** `unavailable`: no Home Assistant connection to read user data with, so home shows none and says nothing. */
+export interface HomePins {
+  readonly status: "idle" | "loading" | "ready" | "error" | "unavailable";
+  readonly pins: readonly HomePin[];
+}
 
 export type PrimaryActionKind = "primary" | "danger" | "neutral" | "link";
 
@@ -558,6 +575,8 @@ const workspaceIntentTypes: Readonly<Record<WorkspaceIntent["type"], true>> = {
   "open-dialog": true,
   "dismiss-top-layer": true,
   "return-live": true,
+  "set-home-pin": true,
+  "reload-home-pins": true,
 };
 
 export const isWorkspaceIntent = (value: unknown): value is WorkspaceIntent => {

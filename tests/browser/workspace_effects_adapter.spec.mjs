@@ -50,6 +50,9 @@ const setup = async (page, deferInitialSnapshot = false) => {
     let snapshotCalls = 0;
     const connection = { subscribeMessage: async callback => { callbacks.push(callback); return () => {}; },
       sendMessagePromise: async message => {
+        // Home shortcuts read the user's frontend data on the same socket;
+        // this harness has none to give (UX9).
+        if (message.type?.startsWith("frontend/")) throw new Error("no user data in this harness");
         snapshotCalls += 1;
         return deferInitialSnapshot
           ? await new Promise(resolve => { initialSnapshotResolve = resolve; })

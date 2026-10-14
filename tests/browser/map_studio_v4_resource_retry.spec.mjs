@@ -43,9 +43,9 @@ test("area review reports a failed reload and Try again recovers", async ({ page
   await page.evaluate(() => { window.__resourceRetry.armed = true; });
   await openWorkflow(page, "areaReview");
 
-  const alert = page.getByRole("alert").filter({ hasText: "Saved areas are unavailable right now." });
+  const alert = page.getByRole("alert").filter({ hasText: "Home Assistant couldn't load your saved areas." });
   await expect(alert).toBeVisible();
-  await expect(alert).toHaveText("Saved areas are unavailable right now.");
+  await expect(alert).toHaveText("Home Assistant couldn't load your saved areas.");
   await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
   await page.getByRole("button", { name: "Try again" }).click();
   await expect.poll(() => page.evaluate(() => window.__resourcePanel.getWorkspaceSnapshot().resources.areas.status)).toBe("ready");

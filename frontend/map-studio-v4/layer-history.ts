@@ -3,9 +3,12 @@ import { WorkspaceStore } from "./state";
 import { needsDraftConfirmation } from "./draft-navigation";
 
 // The plan picker sits under Run, and Run under a saved plan's Edit, so
-// browser Back steps Edit → Run → picker → home.
+// browser Back steps Edit → Run → picker → home. Custom areas stack the same
+// way: a redraw → the area → Your areas → home, and a new drawing → Your areas.
 const workflowDepth = (state: WorkspaceState): number => {
   if (state.workflow === "none") return 0;
+  if (state.workflow === "draw") return state.areaDraft.id === null ? 2 : 3;
+  if (state.workflow === "areaReview") return 2;
   if (state.workflow !== "plan") return 1;
   return state.planView === "edit" && state.planDraft.id !== null ? 3 : 2;
 };

@@ -5,6 +5,7 @@ import type { PropertyValues } from "lit";
 
 import type {
   DateFormat,
+  HomePin,
   Localize,
   NoticePlaceholders,
   NoticeTone,
@@ -42,7 +43,6 @@ import {
   iconCleaning,
   iconClose,
   iconDiagnostics,
-  iconDue,
   iconHistory,
   iconMenu,
   iconPlan,
@@ -63,7 +63,6 @@ import {
 } from "./map-canvas";
 import "./map-canvas";
 import { translate } from "./localize";
-import { planRowLine2, planRowLine3 } from "./plan-copy";
 import { needsDraftConfirmation } from "./draft-navigation";
 import {
   deleteSubject,
@@ -266,6 +265,9 @@ const workflowCopy = (state: WorkspaceState, localize?: Localize): {
     case "plans":
       // An empty picker is its card alone (plan.md §3).
       return { title: t("v4_your_plans", "Your plans"), description: state.resources.plans.value?.plans.length === 0 ? "" : t("v4_choose_plan_detail", "Tap a plan to see its next run.") };
+    case "areas":
+      // The view renders its description, as Rooms does (R6).
+      return { title: t("v4_your_areas", "Your areas"), description: "" };
     case "plan":
       // Run is titled with the plan's saved name: Run never shows a dirty draft.
       return {
@@ -312,6 +314,7 @@ const DEFAULT_DETENT: Readonly<Record<Workflow, SheetDetent>> = {
   draw: "peek",
   plan: "half",
   plans: "half",
+  areas: "half",
   areaReview: "half",
   history: "half",
   support: "full",
@@ -492,6 +495,8 @@ export class MaticMapShellV4 extends LitElement {
   #launchers = new Set<string>();
   /** The home launcher last pressed; it takes focus back when its workflow closes (home-rooms.md §5 Keyboard). */
   #homeLauncher: string | null = null;
+  // A plan shortcut's run, until it starts (then home) or its view is left.
+  #pinRun: string | null = null;
   #workflowStyled = false;
 
   // The views chunk brings the shell rules its markup needs (workflow-styles.ts,
@@ -742,6 +747,17 @@ export class MaticMapShellV4 extends LitElement {
     if (changed.has("state")) {
       this.#resumeWorkflow();
       const previous = changed.get("state") as WorkspaceState | undefined;
+      // A shortcut's run returns home once it starts; a run that was refused
+      // (its check went back to idle, or a notice says why) stays on Run with
+      // its reason, and a later Run plan there no longer jumps home.
+      if (this.#pinRun && (this.state.workflow !== "plan" || this.state.selection.planId !== this.#pinRun)) this.#pinRun = null;
+      else if (this.#pinRun && (this.state.command === "starting" || hasStoppableWork(this.state))) {
+        this.#pinRun = null;
+        this.#emit({ type: "open-workflow", workflow: "none" });
+      } else if (this.#pinRun && this.state.command === "idle"
+        && (previous?.command === "pending" || (this.state.notice !== null && previous?.notice !== this.state.notice))) {
+        this.#pinRun = null;
+      }
       if (previous?.precisionOpen && !this.state.precisionOpen) {
         this.#brushLauncher()?.focus();
       }
@@ -847,7 +863,7 @@ export class MaticMapShellV4 extends LitElement {
         // so a key pressed straight away still reaches the shell.
         void this.updateComplete.then(() => {
           if (state.workflow === "none") return this.#focusHomeLauncher();
-          if (previous.workflow !== "plan" && previous.workflow !== "draw") return this.#focusPanel();
+          if (previous.workflow !== "plan" && previous.workflow !== "draw" && previous.workflow !== "areaReview") return this.#focusPanel();
           requestAnimationFrame(() => {
             if (!this.#views.value?.focusPlanTarget(previous, state, this.renderRoot, isVisible)) this.#focusPanel();
           });
@@ -947,7 +963,16 @@ export class MaticMapShellV4 extends LitElement {
     const { coherence, workflow: open } = this.state;
     if (!workflow || (open === "none" && (coherence === "booting" || coherence === "verifying"))) return;
     this.#resume = null;
-    if (open === "none" && this.#launchers.has(workflow)) this.#workflow(workflow as Workflow);
+    if (open !== "none") return;
+    if (this.#launchers.has(workflow)) {
+      this.#workflow(workflow as Workflow);
+    } else if (workflow === "draw" && this.#launchers.has("areas")) {
+      // A new drawing opens from Your areas' New area (UX9), so it resumes
+      // the same road: Your areas, then Draw, with Back stepping through both.
+      this.#workflow("areas");
+      this.#homeLauncher = "areas";
+      this.#intent({ type: "open-workflow", workflow: "draw" });
+    }
   }
 
   // Every Try again (chunkStatus) reloads the page, which loses a dirty
@@ -1452,7 +1477,7 @@ export class MaticMapShellV4 extends LitElement {
   #focusHomeLauncher(): void {
     const key = this.#homeLauncher;
     this.#homeLauncher = null;
-    const target = key ? this.renderRoot.querySelector<HTMLElement>(`[data-launcher="${key}"]`) : null;
+    const target = key ? this.renderRoot.querySelector<HTMLElement>(`[data-launcher="${CSS.escape(key)}"]`) : null;
     if (isVisible(target)) target.focus({ preventScroll: true });
     else this.#focusPanel();
   }
@@ -1471,7 +1496,7 @@ export class MaticMapShellV4 extends LitElement {
       >
         <span class="ms-row__lead">${icon(glyph)}</span>
         <span class="ms-row__body"><strong>${label}</strong>${detail ? html`<small>${detail}</small>` : nothing}</span>
-        <span class="ms-row__trail">${icon(iconChevronRight)}</span>
+        <span class="ms-row__trail">${icon(iconChevronRight, { directional: true })}</span>
       </button>
     `;
   }
@@ -1571,85 +1596,43 @@ export class MaticMapShellV4 extends LitElement {
         ${card("rooms", true, iconRobot, roomsDisabled,
           t("v4_clean_rooms", "Clean rooms"),
           !held && noRooms ? t("v4_no_rooms_reason", "Can't clean rooms until you name them in the Matic app.") : t("v4_rooms_quick_detail", "Pick rooms and clean them now."))}
-        ${this.#planCard(state, held)}
-        ${this.#plansRow(state, held)}
-        ${card("draw", false, iconNewArea, held,
+        ${this.#shortcuts(state, held)}
+        ${card("areas", false, iconNewArea, held,
           t("v4_custom_areas", "Clean custom area"),
           t("v4_areas_quick_detail", "Draw or choose a custom area"))}
+        ${this.#shelfRow(t("v4_your_plans", "Your plans"), iconPlan, "plans", undefined, held, held)}
       </div>
       ${maps(kind === "map-unavailable")}
     `;
   }
 
-  // The plan card opens the default plan's Run view when that plan is on
-  // this floor (home-rooms.md D1), with the picker's lines; otherwise it
-  // opens the picker. The third line is clamped, but the name has all of it.
-  #planCard(state: WorkspaceState, held: boolean) {
-    const t = this.#tr;
-    const plansResource = state.resources.plans;
-    const plans = readyPlans(state);
-    const plan = plans?.plans.find((candidate) => candidate.id === plans.selectedPlan);
-    const planCount = plans?.plans.length ?? 0;
-    const loading = plansResource.status === "loading";
-    const unavailable = plansResource.status === "error";
-    const third = plan ? planRowLine3(t, state.locale, plan) : null;
-    // Only the name is isolated (copy-style <bdi>): the label is formatted
-    // around a marker and split there, so a name that repeats the label's
-    // own words still lands in the <bdi>.
-    const [before = "", after = ""] = plan ? t("v4_run_named_plan", "Run {plan}", { plan: "\u0000" }).split("\u0000") : [];
-    const open = () => {
-      if (held) return;
-      if (plan) this.#intent({ type: "select-plan", planId: plan.id, origin: "home" });
-      else this.#workflow("plans");
-      this.#homeLauncher = "plan";
-    };
-    if (!held) this.#launchers.add("plans");
-    return html`
-      <button
-        class="ms-row ms-row--card"
-        type="button"
-        data-launcher="plan"
-        aria-disabled=${held ? "true" : nothing}
-        aria-describedby=${held ? "home-reason" : nothing}
-        @click=${open}
-      >
-        <span class="ms-row__lead">${icon(iconPlan)}</span>
-        <span class="ms-row__body">
-          ${plan ? html`
-            <strong class="card-title"><span class="card-name">${before}<bdi>${plan.name}</bdi>${after}</span>${plan.enabled ? nothing : html`<span class="ms-chip">${t("v4_paused", "Paused")}</span>`}</strong>
-            <small>${planRowLine2(t, state.locale, plan)}</small>
-            ${third === null ? nothing : "blocked" in third
-              ? html`<span class="card-lines"><span class="line" data-tone="warning">${icon(iconNoticeWarning)}${third.blocked}</span></span>`
-              : html`<span class="card-lines">${third.due.map((line) => html`<span class="line">${icon(iconDue)}${line}</span>`)}</span>`}
-          ` : html`
-            <strong>${loading
-              ? t("v4_plans_loading", "Checking saved plans")
-              : unavailable
-                ? t("v4_plans_unavailable", "Plans unavailable")
-                : planCount
-                  ? t("v4_run_a_plan", "Run a plan")
-                  : t("v4_create_plan", "Create a plan")}</strong>
-            <small>${loading
-              ? t("v4_plans_loading_hint", "Reading plans for this floor")
-              : unavailable
-                ? t("v4_plans_unavailable_hint", "Try again to load your plans.")
-                : planCount
-                  ? planCount === 1 ? t("v4_saved_routine", "1 saved plan") : t("v4_saved_routines", "{count} saved plans", { count: planCount })
-                  : t("v4_no_plans_hint", "Save a plan to repeat a set of rooms.")}</small>
-          `}
-        </span>
-        <span class="ms-row__trail">${icon(iconChevronRight)}</span>
-      </button>
-    `;
-  }
-
-  // While the card opens Run (D1), the picker needs its own way in: a quiet
-  // row under the card (R4 amended by the owner, 2026-10-13). Without a
-  // default plan the card itself opens the picker, so the row is not shown.
-  #plansRow(state: WorkspaceState, held: boolean) {
-    const plans = readyPlans(state);
-    if (!plans?.plans.some((candidate) => candidate.id === plans.selectedPlan)) return nothing;
-    return this.#shelfRow(this.#t("v4_your_plans", "Your plans"), iconPlan, "plans", undefined, held, held);
+  // The saved plans and areas this user pinned (owner, 2026-10-13), drawn by
+  // the views chunk, which loads only when there is a shortcut or a failed
+  // read to show. A shortcut's tap is its screen's own primary action.
+  #shortcuts(state: WorkspaceState, held: boolean) {
+    const { status, pins } = state.homePins;
+    if (status !== "error" && !pins.length) return nothing;
+    this.#views.request();
+    return this.#views.value?.homeShortcuts({
+      state,
+      t: this.#tr,
+      held,
+      emit: (intent: WorkspaceIntent) => this.#intent(intent),
+      open: (pin: HomePin) => {
+        this.#intent(pin.kind === "plan" ? { type: "select-plan", planId: pin.id, origin: "home" } : { type: "select-area", areaId: pin.id, workflow: "areaReview" });
+        this.#homeLauncher = `open:${pin.kind}:${pin.id}`;
+      },
+      run: (pin: HomePin) => {
+        // Run plan needs its Run view (effects.ts run-plan); the shell
+        // returns home once the run starts. Clean this area runs from here.
+        if (pin.kind === "plan") {
+          this.#intent({ type: "select-plan", planId: pin.id, origin: "home" });
+          this.#pinRun = pin.id;
+        } else this.#intent({ type: "select-area", areaId: pin.id });
+        this.#homeLauncher = `run:${pin.kind}:${pin.id}`;
+        this.#dispatchAction(pin.kind === "plan" ? "run-plan" : "run-area");
+      },
+    }) ?? nothing;
   }
 
   #workflowBody(state: WorkspaceState, narrow: boolean) {
@@ -1684,9 +1667,12 @@ export class MaticMapShellV4 extends LitElement {
     if (state.workflow === "none" || (state.workflow === "plan" && state.planView === "edit")) return nothing;
     const plan = state.workflow === "plan" && state.planOrigin !== "home";
     const area = state.workflow === "draw" && state.areaDraft.id !== null ? state.areaDraft.name : null;
+    // An area's screen and a new drawing step back to Your areas.
+    const areas = area === null && (state.workflow === "areaReview" || state.workflow === "draw");
     const name = plan ? this.#t("v4_back_to_plans", "Back to plans")
       : area !== null ? this.#t("v4_back_to_area", "Back to {name}", { name: area })
-        : this.#t("v4_back_to_all_tasks", "Back to all tasks");
+        : areas ? this.#t("v4_back_to_areas", "Back to areas")
+          : this.#t("v4_back_to_all_tasks", "Back to all tasks");
     return html`
       <button
         class=${grip ? "sheet-back ms-btn ms-btn--icon ms-btn--sm" : "panel-back ms-btn ms-btn--secondary"}
@@ -1695,12 +1681,12 @@ export class MaticMapShellV4 extends LitElement {
         title=${grip ? name : nothing}
         data-dialog-launcher="discardDraft"
         @click=${(event: Event) => this.#leave(
-          plan ? { type: "open-workflow", workflow: "plans" }
+          plan || areas ? { type: "open-workflow", workflow: plan ? "plans" : "areas" }
             : area !== null ? { type: "select-area", areaId: state.areaDraft.id, workflow: "areaReview" }
               : { type: "open-workflow", workflow: "none" },
           event.currentTarget,
         )}
-      >${icon(iconBack, { directional: true })}${grip ? nothing : html`<span class="ms-btn__label">${plan ? this.#t("v4_your_plans", "Your plans") : area !== null ? html`<bdi>${area}</bdi>` : this.#t("v4_all_tasks", "All tasks")}</span>`}</button>
+      >${icon(iconBack, { directional: true })}${grip ? nothing : html`<span class="ms-btn__label">${plan ? this.#t("v4_your_plans", "Your plans") : area !== null ? html`<bdi>${area}</bdi>` : areas ? this.#t("v4_your_areas", "Your areas") : this.#t("v4_all_tasks", "All tasks")}</span>`}</button>
     `;
   }
 

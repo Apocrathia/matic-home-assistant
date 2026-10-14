@@ -86,7 +86,7 @@ test.describe("UX2 discard dialog navigation", () => {
     });
     await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
     const panel = page.locator(fixture.panelTag);
-    await panel.getByRole("button", { name: /^Create a plan/ }).click();
+    await panel.getByRole("button", { name: "Your plans", exact: true }).click();
     await panel.getByRole("button", { name: "Create a plan", exact: true }).click();
     await panel.getByRole("textbox", { name: "Plan name" }).fill("New plan");
     await panel.getByRole("list", { name: "Rooms", exact: true }).getByRole("checkbox").first().check();
@@ -125,7 +125,7 @@ test.describe("UX2 discard dialog navigation", () => {
     });
     await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
     const panel = page.locator(fixture.panelTag);
-    await panel.getByRole("button", { name: /^Create a plan/ }).click();
+    await panel.getByRole("button", { name: "Your plans", exact: true }).click();
     await panel.getByRole("button", { name: "Create a plan", exact: true }).click();
     await panel.getByRole("textbox", { name: "Plan name" }).fill("Escaped plan");
     await panel.getByRole("list", { name: "Rooms", exact: true }).getByRole("checkbox").first().check();

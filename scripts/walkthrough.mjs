@@ -9,7 +9,7 @@ export const walkthrough = JSON.parse(readFileSync(new URL("./walkthrough_cells.
 export const STAGE_PATH = "/map-studio-v4-stage";
 export const FRAME_PATH = "/map-studio-v4-stage-frame";
 
-/** Every cell ID, row by row: R01-C01 … R11-C09. */
+/** Every cell ID, row by row: R01-C01 … R13-C09. */
 export const cellIds = () =>
   walkthrough.rows.flatMap((row) => walkthrough.columns.map((column) => `${row.id}-${column.id}`));
 

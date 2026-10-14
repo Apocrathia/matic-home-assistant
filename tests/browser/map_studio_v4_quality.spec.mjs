@@ -371,13 +371,16 @@ for (const change of ["user", "robot", "access", "removed"]) {
 
 }
 
-test("All tasks returns from area review to the task chooser", async ({ page }) => {
+// UX9: area review steps back to Your areas, and Your areas to the chooser.
+test("Back returns from area review to Your areas, then to the task chooser", async ({ page }) => {
   await page.goto("/map-studio-v4-audit");
   const gallery = page.locator("matic-map-studio-gallery-v0-4-0");
   await gallery.evaluate(async (element) => {
     const module = await import("/map_studio_v4-review/review.js");
     element.replaceWorkspaceState({ ...module.createGalleryState("ready"), workflow: "areaReview" });
   });
+  await gallery.getByRole("button", { name: "Back to areas", exact: true }).click();
+  await expect(gallery.getByRole("heading", { level: 2, name: "Your areas" })).toBeVisible();
   await gallery.getByRole("button", { name: "Back to all tasks", exact: true }).click();
   await expect(gallery.getByRole("button", { name: /^Clean rooms/ })).toBeVisible();
 });
@@ -626,7 +629,7 @@ for (const kind of ["plan", "area"]) {
     // The heading's More actions stays, so the dialog keeps its launcher.
     expect(result.failed, "after a reload that fails").toEqual(kind === "plan"
       ? { status: "error", problem: "Home Assistant couldn't load rooms and plans.", dialog, detail, sameButton: true }
-      : { status: "error", problem: "Saved areas are unavailable right now.", dialog, detail, sameButton: true });
+      : { status: "error", problem: "Home Assistant couldn't load your saved areas.", dialog, detail, sameButton: true });
     expect(result.removed, "a ready catalog without the item closes the dialog").toEqual({ dialog: null });
   });
 }
@@ -1022,6 +1025,9 @@ test("discarding plan edits through Escape returns to the plan, then the picker"
     const { workflow, planView, planDraft } = element.getWorkspaceSnapshot();
     return { workflow, planView, dirty: planDraft.dirty };
   })).toEqual({ workflow: "plan", planView: "run", dirty: false });
+  // Escape is the shell's key: wait for the discard's focus move (a frame
+  // later, and WebKit does not focus a clicked button) to land inside it.
+  await expect.poll(() => page.evaluate(() => document.activeElement?.localName)).toBe("matic-map-studio-gallery-v0-4-0");
   await page.keyboard.press("Escape");
   await expect(gallery.getByRole("heading", { name: "Your plans", exact: true })).toBeVisible();
 });

@@ -197,9 +197,10 @@ export const planCancel = (
   `;
 };
 
-// Draw's Cancel (map-surfaces.md §4 R11): home when Draw opened from home,
-// the area's review when it opened from Redraw, which also reloads the saved
-// outline. Dirty drafts ask first through the launcher's discardDraft.
+// Draw's Cancel (map-surfaces.md §4 R11): Your areas for a new area (its one
+// way in, owner 2026-10-13), the area's review when it opened from Redraw,
+// which also reloads the saved outline. Dirty drafts ask first through the
+// launcher's discardDraft.
 export const drawCancel = (
   state: WorkspaceState,
   t: Translate,
@@ -213,11 +214,11 @@ export const drawCancel = (
     >${t("v4_cancel", "Cancel")}</button>
   `;
 
-/** Where Draw's Back and Cancel go: the saved area's review, else home. */
+/** Where Draw's Back and Cancel go: the saved area's review, else Your areas. */
 export const drawExit = (state: WorkspaceState): WorkspaceIntent =>
   state.areaDraft.id !== null
     ? { type: "select-area", areaId: state.areaDraft.id, workflow: "areaReview" }
-    : { type: "open-workflow", workflow: "none" };
+    : { type: "open-workflow", workflow: "areas" };
 
 /**
  * Where focus goes after leaving a plan view (plan.md §5 Navigation and
@@ -228,11 +229,17 @@ export const drawExit = (state: WorkspaceState): WorkspaceIntent =>
 const planFocusTarget = (previous: WorkspaceState, state: WorkspaceState, root: ParentNode): HTMLElement | null | undefined => {
   const panel = root.querySelector(WORKFLOW_TAG)?.shadowRoot;
   // Done or Cancel from a redraw lands on the review's Redraw (map-surfaces.md §4).
-  if (previous.workflow === "draw") {
-    return state.workflow === "areaReview" && previous.areaDraft.id !== null
+  if (previous.workflow === "draw" && state.workflow === "areaReview") {
+    return previous.areaDraft.id !== null
       ? root.querySelector("[data-redraw]") ?? panel?.querySelector("[data-redraw]")
       : null;
   }
+  // Back to Your areas lands on the area it left, else on New area.
+  if (state.workflow === "areas") {
+    const area = previous.areaDraft.id;
+    return (area && panel?.querySelector<HTMLElement>(`[data-area-row="${CSS.escape(area)}"]`)) || panel?.querySelector<HTMLElement>("[data-area-new]");
+  }
+  if (previous.workflow === "draw") return null;
   const views = panel?.querySelector(PLAN_VIEWS_TAG)?.shadowRoot;
   // Run's rows are never open, so an open row on entering Edit is Review's.
   if (state.workflow === "plan" && state.planView === "edit" && state.expandedRoom) {

@@ -145,7 +145,9 @@ test.describe("Map Studio v0.4 foundation", () => {
       if (request.url().includes("/chunks/workflow-panel-")) workflowRequests.push(request.url());
       if (request.url().includes("/chunks/diagnostics-panel-")) diagnosticsRequests.push(request.url());
     });
-    const gallery = await loadGallery(page, { scenario: "ready" });
+    // Nothing pinned: home shortcuts render from the workflow chunk (UX9),
+    // so a home with shortcuts loads it; a home without them does not.
+    const gallery = await loadGallery(page, { scenario: "home-unpinned" });
     await expect(gallery.locator(".panel-heading")).toBeVisible();
     expect(workflowRequests).toHaveLength(0);
 
@@ -290,10 +292,12 @@ test.describe("Map Studio v0.4 foundation", () => {
     const entryLength = await page.evaluate(() => history.length);
 
     await page.route("**/chunks/outline-editor-*.js", (route) => route.abort());
+    // UX9: Clean custom area opens Your areas, whose New area opens Draw.
     await panel.getByRole("button", { name: /Clean custom area/ }).click();
+    await panel.getByRole("button", { name: "New area", exact: true }).click();
     const failure = panel.getByRole("alert").filter({ hasText: "The cleaning tools didn't load. Reload the page to try again." });
     await expect(failure).toHaveCount(1);
-    expect(await page.evaluate(() => history.length)).toBe(entryLength + 1);
+    expect(await page.evaluate(() => history.length)).toBe(entryLength + 2);
 
     await page.unroute("**/chunks/outline-editor-*.js");
     await Promise.all([
@@ -305,8 +309,10 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect.poll(snapshot).toEqual({ workflow: "draw", ready: true });
     await expect(panel.getByRole("toolbar", { name: "Draw area tools" })).toBeVisible();
     await expect(failure).toHaveCount(0);
-    expect(await page.evaluate(() => history.length), "no layer entry is left behind").toBe(entryLength + 1);
+    expect(await page.evaluate(() => history.length), "no layer entry is left behind").toBe(entryLength + 2);
 
+    await page.evaluate(() => history.back());
+    await expect.poll(snapshot).toEqual({ workflow: "areas", ready: true });
     await page.evaluate(() => history.back());
     await expect.poll(snapshot).toEqual({ workflow: "none", ready: true });
     expect(await page.evaluate(() => history.state?.maticMapLayer ?? null)).toBeNull();
@@ -364,13 +370,16 @@ test.describe("Map Studio v0.4 foundation", () => {
     await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
     await panel.getByRole("button", { name: /Clean custom area/ }).click();
     await expect(panel.getByRole("alert").filter({ hasText: "The cleaning tools didn't load. Reload the page to try again." })).toHaveCount(1);
-    await page.evaluate((tag) => {
-      document.querySelector(tag).shadowRoot.querySelector("matic-map-shell-v4").dispatchEvent(new CustomEvent("matic-workspace-intent", {
-        detail: { type: "mark-draft", strokeDelta: 1 },
-        bubbles: true,
-        composed: true,
-      }));
-    }, fixture.panelTag);
+    // Your areas failed too, so its New area is opened as it would open Draw.
+    for (const detail of [{ type: "open-workflow", workflow: "draw" }, { type: "mark-draft", strokeDelta: 1 }]) {
+      await page.evaluate(({ tag, detail }) => {
+        document.querySelector(tag).shadowRoot.querySelector("matic-map-shell-v4").dispatchEvent(new CustomEvent("matic-workspace-intent", {
+          detail,
+          bubbles: true,
+          composed: true,
+        }));
+      }, { tag: fixture.panelTag, detail });
+    }
     await expect.poll(draft).toEqual({ workflow: "draw", dirty: true });
 
     await page.evaluate(() => history.back());
@@ -381,7 +390,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(dialog.getByRole("button", { name: "Keep editing" })).toBeVisible();
     await dialog.getByRole("button", { name: "Discard" }).click();
     await expect(dialog).toHaveCount(0);
-    await expect.poll(draft).toEqual({ workflow: "none", dirty: false });
+    await expect.poll(draft).toEqual({ workflow: "areas", dirty: false });
   });
 
   // One saved two-room plan, as Home Assistant's plan catalog sends it.
@@ -5003,11 +5012,11 @@ test.describe("Map Studio v0.4 foundation", () => {
       const state = element.getWorkspaceSnapshot();
       element.replaceWorkspaceState({
         ...state,
-        workflow: "draw",
+        workflow: "areas",
         resources: { ...state.resources, areas: { status: "empty", value: null, problem: null } },
       });
     }, GALLERY_TAG);
-    await expect(gallery.getByText("No saved areas yet. Draw one on the map.", { exact: true })).toBeVisible();
+    await expect(gallery.getByRole("heading", { level: 3, name: "No custom areas yet" })).toBeVisible();
 
     await page.evaluate((tag) => {
       const element = document.querySelector(tag);
@@ -5020,29 +5029,6 @@ test.describe("Map Studio v0.4 foundation", () => {
     }, GALLERY_TAG);
     // The shell's static alert region is always present, so filter to the panel's message.
     await expect(gallery.getByRole("alert").filter({ hasText: "Map history is unavailable" })).toHaveText("Map history is unavailable right now.");
-  });
-
-  test("keeps a saved-area destination intact through cancel and discard", async ({ page }) => {
-    const gallery = await loadGallery(page, { scenario: "draw" });
-    await page.evaluate((tag) => {
-      const element = document.querySelector(tag);
-      const state = element.getWorkspaceSnapshot();
-      element.replaceWorkspaceState({ ...state, resources: { ...state.resources, areas: { ...state.resources.areas, value: { ...state.resources.areas.value, areas: [...state.resources.areas.value.areas, { ...state.resources.areas.value.areas[0], id: "other-area", name: "Other area" }] } } } });
-    }, GALLERY_TAG);
-    // A saved row reads its name alone (no "Ready" tag, map-surfaces.md §3).
-    const target = gallery.getByRole("button", { name: "Other area", exact: true });
-    await target.click();
-    const dialog = gallery.getByRole("dialog", { name: "Discard changes?" });
-    await expect(dialog).toBeVisible();
-    expect(await snapshot(page)).toMatchObject({ workflow: "draw", selection: { areaId: null }, draw: { dirty: true } });
-    await dialog.getByRole("button", { name: "Keep editing" }).click();
-    expect(await snapshot(page)).toMatchObject({ workflow: "draw", selection: { areaId: null }, draw: { dirty: true } });
-    await target.click();
-    await dialog.getByRole("button", { name: "Discard", exact: true }).click();
-    await expect.poll(async () => {
-      const state = await snapshot(page);
-      return { workflow: state.workflow, areaId: state.selection.areaId, dialog: state.dialog };
-    }).toEqual({ workflow: "areaReview", areaId: "other-area", dialog: null });
   });
 
   test("asks before switching floors with an unsaved custom-area draft", async ({ page }) => {
@@ -5445,13 +5431,15 @@ test.describe("Map Studio v0.4 foundation", () => {
     // Three task cards, then the Maps group (home-rooms.md §3). The entry never offers a
     // phantom "Run plan" before a plan has been chosen.
     const quick = gallery.locator(".quick-actions").getByRole("button");
-    await expect(quick).toHaveCount(4);
+    await expect(quick).toHaveCount(5);
     await expect(quick.nth(0)).toHaveAccessibleName(/^Clean rooms Pick rooms and clean them now\./);
     await expect(quick.nth(0)).toHaveClass(/ms-row--featured/);
-    // The default plan's card (home-rooms.md D1), then the Your plans row (R4 amended).
+    // The default plan pinned as a shortcut with its Open, the custom-area
+    // card, then the Your plans row (UX9 owner ruling).
     await expect(quick.nth(1)).toHaveAccessibleName(/^Run Daily clean 3 rooms/);
-    await expect(quick.nth(2)).toHaveAccessibleName("Your plans");
+    await expect(quick.nth(2)).toHaveAccessibleName("Open Daily clean");
     await expect(quick.nth(3)).toHaveAccessibleName(/^Clean custom area Draw or choose a custom area/);
+    await expect(quick.nth(4)).toHaveAccessibleName("Your plans");
     await expect(gallery.getByRole("heading", { name: "Maps", level: 3 })).toBeVisible();
     await expect(gallery.locator(".maps").getByRole("button", { name: /^Map history Browse earlier floor maps\./ })).toBeVisible();
     await expect(gallery.getByRole("button", { name: /^Run plan/ })).toHaveCount(0);
@@ -5491,8 +5479,9 @@ test.describe("Map Studio v0.4 foundation", () => {
       });
     }, GALLERY_TAG);
 
-    const planAction = gallery.getByRole("button", { name: /^Checking saved plans/ });
-    await expect(planAction).toHaveAccessibleName("Checking saved plans Reading plans for this floor");
+    // UX9: with no catalog yet there is no shortcut to run, only Your plans.
+    await expect(gallery.getByRole("button", { name: /^Run Daily clean/ })).toHaveCount(0);
+    await expect(gallery.getByRole("button", { name: "Your plans", exact: true })).toBeVisible();
     await expect(gallery.getByRole("button", { name: /Create a plan/ })).toHaveCount(0);
   });
 
@@ -5709,12 +5698,12 @@ test.describe("Map Studio v0.4 foundation", () => {
         element.replaceWorkspaceState(window.__contrastGalleryStates.empty);
       });
       await expectContrast(".action-reason");
+      // Your areas' rows (UX9): the setting line and the warning line.
+      await gallery.evaluate((element) => element.setScenario("areas-list"));
+      await expectContrast(".area-row small");
+      await expectContrast(".area-row .line");
       await gallery.evaluate((element) => element.setScenario("draw"));
-      // The Rooms rows still on screen match the row selector, so wait for the
-      // Draw list itself before measuring its rows.
-      await expect(gallery.getByRole("group", { name: "Custom areas" })).toBeVisible();
       await expectContrast(".draw-hint");
-      await expectContrast(".ms-section-heading");
       await gallery.evaluate((element) => { element.narrow = true; element.setScenario("rooms"); });
       await expectContrast(".sheet-status");
       await gallery.evaluate((element) => { element.narrow = false; });
@@ -7598,10 +7587,14 @@ for (const narrow of [false, true]) for (const direction of ["ltr", "rtl"]) {
 for (const dirty of [false, true]) {
   test(`collapsed Draw sheet keeps an exit for ${dirty ? "unsaved" : "blank"} areas @mobile`, async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: dirty ? "draw" : "ready", narrow: true });
-    if (!dirty) await gallery.getByRole("button", { name: /^Clean custom area/ }).click();
+    if (!dirty) {
+      await gallery.getByRole("button", { name: /^Clean custom area/ }).click();
+      await gallery.getByRole("button", { name: "New area", exact: true }).click();
+    }
     const sheet = gallery.locator(".mobile-sheet");
     await expect(sheet).toHaveAttribute("data-detent", "peek");
-    const back = sheet.locator(".sheet-grip").getByRole("button", { name: "Back to all tasks" });
+    // UX9: a new drawing's Back goes to Your areas.
+    const back = sheet.locator(".sheet-grip").getByRole("button", { name: "Back to areas" });
     await expect(back).toBeVisible();
     await back.click();
     if (dirty) {
@@ -7618,8 +7611,8 @@ for (const dirty of [false, true]) {
       await back.click();
       await gallery.getByRole("button", { name: "Discard", exact: true }).click();
     }
-    await expect.poll(async () => (await snapshot(page)).workflow).toBe("none");
-    await expect(gallery.getByRole("button", { name: /^Clean rooms/ })).toBeVisible();
+    await expect.poll(async () => (await snapshot(page)).workflow).toBe("areas");
+    await expect(gallery.getByRole("button", { name: "New area", exact: true })).toBeVisible();
   });
 }
 
@@ -8504,6 +8497,7 @@ test("companion safe areas keep navigation and drawing actions clear of system U
   await expect.poll(async () => (await navigation.boundingBox())?.y).toBeGreaterThanOrEqual(62);
   const initialHeight = (await bar.boundingBox()).height;
   await gallery.getByRole("button", { name: /Clean custom area/ }).click();
+  await gallery.getByRole("button", { name: "New area", exact: true }).click();
   const clear = gallery.getByRole("button", { name: "Clear", exact: true });
   const clearBox = await clear.boundingBox();
   expect(clearBox.y + clearBox.height).toBeLessThanOrEqual(844 - 34);
@@ -9494,7 +9488,7 @@ for (const refresh of ["delayed", "failed"]) {
         return { acknowledged, left, afterRefresh: { workflow: store.value.workflow, dialog: store.value.dialog } };
       } finally { effects.dispose(); }
     }, refresh);
-    expect(result).toEqual({ acknowledged: { notice: "v4_notice_area_saved", areaDirty: false, drawDirty: false, id: "saved-zone" }, left: { workflow: "none", dialog: null }, afterRefresh: { workflow: "none", dialog: null } });
+    expect(result).toEqual({ acknowledged: { notice: "v4_notice_area_saved", areaDirty: false, drawDirty: false, id: "saved-zone" }, left: { workflow: "areas", dialog: null }, afterRefresh: { workflow: "areas", dialog: null } });
   });
 }
 
@@ -9581,7 +9575,7 @@ test("area save clears an obsolete discard prompt opened while the write was pen
       return { pendingDialog, savedDialog, workflow: store.value.workflow, notice: store.value.notice.key };
     } finally { effects.dispose(); }
   });
-  expect(result).toEqual({ pendingDialog: "discardDraft", savedDialog: null, workflow: "none", notice: "v4_notice_area_saved" });
+  expect(result).toEqual({ pendingDialog: "discardDraft", savedDialog: null, workflow: "areas", notice: "v4_notice_area_saved" });
 });
 
 test("map taps select run and plan rooms in both views and clear old deletion notices", async ({ page }) => {
@@ -9863,11 +9857,11 @@ test.describe("plan shell", () => {
     await expect(dialog).toHaveAccessibleDescription("This new plan hasn't been saved, and discarding it can't be undone.");
     await expect(dialog.getByRole("button"), "a plan with no rooms can't be saved").toHaveText(["Keep editing", "Discard"]);
     await scenario(gallery, "area-review-new");
-    await gallery.getByRole("button", { name: "Back to all tasks", exact: true }).click();
+    await gallery.getByRole("button", { name: "Back to areas", exact: true }).click();
     await expect(dialog).toHaveAccessibleDescription("This new area hasn't been saved, and discarding it can't be undone.");
     await scenario(gallery, "area-review-rebind");
     await patch(page, { areaDraft: { dirty: true } });
-    await gallery.getByRole("button", { name: "Back to all tasks", exact: true }).click();
+    await gallery.getByRole("button", { name: "Back to areas", exact: true }).click();
     await expect(dialog).toHaveAccessibleDescription("Your changes to \"Entryway\" haven't been saved, and discarding them can't be undone.");
   });
 
@@ -10264,7 +10258,8 @@ test.describe("Map Studio resolved theme colours", () => {
     await gallery.getByRole("button", { name: "Points", exact: true }).click();
     const feedback = gallery.locator(".zone-feedback");
     const ring = async () => {
-      const button = gallery.getByRole("button", { name: "Your plans" }).or(gallery.getByRole("button", { name: "All tasks" })).first();
+      // Draw's Back goes to Your areas (UX9).
+      const button = gallery.getByRole("button", { name: "Back to areas", exact: true });
       // A Tab first, so the focus is keyboard focus (:focus-visible).
       await page.keyboard.press("Tab");
       await button.focus();

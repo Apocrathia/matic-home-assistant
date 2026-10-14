@@ -2,9 +2,9 @@
   "rows": [
     {
       "id": "R01",
-      "journey": "Home, default plan card and Your plans",
+      "journey": "Home, plan shortcut and Your plans",
       "steps": ["home-plan-due", "home-plan-paused", "home-plan-blocked", "ready"],
-      "check": "The three task cards, the plan card's due lines and the Your plans row under it"
+      "check": "The task cards, the pinned plan's due lines in full and the Your plans row last"
     },
     {
       "id": "R02",
@@ -65,6 +65,18 @@
       "journey": "Setup and first clean",
       "steps": ["empty", "multi-robot", "rooms", "rooms-ready"],
       "check": "No robot leads to Open integration; the first clean reads as one obvious path"
+    },
+    {
+      "id": "R12",
+      "journey": "Your areas",
+      "steps": ["areas-list", "areas-stale", "areas-empty", "area-review-saved", "draw"],
+      "check": "Each row shows its setting and what a changed map needs; New area, last, is the one way into Draw; Back returns to the list"
+    },
+    {
+      "id": "R13",
+      "journey": "Home shortcuts",
+      "steps": ["home-shortcuts", "home-plan-due-full", "home-unpinned", "home-shortcut-blocked", "home-shortcut-running", "home-pins-error", "plan-saved-intelligent"],
+      "check": "One tap runs a pinned plan or area; a held one says why; Open goes to it; Show on home pins and unpins"
     }
   ],
   "columns": [

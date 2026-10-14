@@ -1,4 +1,5 @@
 import type {
+  AreasCatalog,
   CadenceReason,
   ManualRoomSequencePreview,
   NextRunPreview,
@@ -78,7 +79,16 @@ export type GalleryScenario =
   | "rooms-empty"
   | "home-plan-due"
   | "home-plan-paused"
-  | "home-plan-blocked";
+  | "home-plan-blocked"
+  | "home-plan-due-full"
+  | "home-shortcuts"
+  | "home-unpinned"
+  | "home-shortcut-blocked"
+  | "home-shortcut-running"
+  | "home-pins-error"
+  | "areas-list"
+  | "areas-empty"
+  | "areas-stale";
 
 const verified = (): WorkspaceState => ({
   ...initialWorkspaceState(),
@@ -113,6 +123,8 @@ const verified = (): WorkspaceState => ({
     plans: { status: "ready", value: syntheticPlans(), problem: null },
     areas: { status: "ready", value: syntheticAreas(), problem: null },
   },
+  // A user whose default plan was seeded as their first home shortcut.
+  homePins: { status: "ready", pins: [{ kind: "plan", id: "daily" }] },
   selection: {
     ...initialWorkspaceState().selection,
     entryId: "synthetic-entry",
@@ -132,6 +144,21 @@ const requireFixture = <T>(value: T | undefined, name: string): T => {
 };
 
 const savedDailyPlan = (): SavedPlan => requireFixture(syntheticPlans().plans[0], "plan");
+
+/** Your areas' catalog: the synthetic Entryway plus a mop area, a changed one and one that needs redrawing. */
+const galleryAreas = (): AreasCatalog => {
+  const catalog = syntheticAreas();
+  const entryway = requireFixture(catalog.areas[0], "area");
+  return {
+    ...catalog,
+    areas: [
+      entryway,
+      { ...entryway, id: "dining", name: "Under the dining table", cleaningMode: "mop", circles: [{ x: 5.5, y: 2, radius: 0.4 }] },
+      { ...entryway, id: "hallway", name: "Hallway rug", coverageSetting: "heavy_duty", status: "review", canRebind: true, circles: [{ x: 4.4, y: 4.2, radius: 0.3 }] },
+      { ...entryway, id: "porch", name: "Porch mat", status: "stale", circles: [{ x: 7.5, y: 5.5, radius: 0.3 }] },
+    ],
+  };
+};
 
 /**
  * The synthetic catalog has four named rooms. Larger catalogs append plain
@@ -677,6 +704,60 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
         nextRunPreview: previewFor([], { blocker: "cadence_progress_unverified" }),
         nextRunEstimateSeconds: null,
       })]));
+    case "home-plan-due-full": {
+      // One line per due kind, four in all: none is cut (owner, 2026-10-13).
+      const saved = savedDailyPlan();
+      const rooms: PlanRoom[] = [
+        { roomId: "room-a", cleaningMode: "vacuum", coverageSetting: "quick", cadenceReasons: ["mop_due", "coverage_due"] },
+        { roomId: "room-b", cleaningMode: "vacuum", coverageSetting: "standard", cadenceReasons: ["mop_due", "coverage_due"] },
+        { roomId: "room-c", cleaningMode: "vacuum", coverageSetting: "heavy_duty", cadenceReasons: ["coverage_due"] },
+        { roomId: "room-d", cleaningMode: "vacuum", coverageSetting: "heavy_duty", cadenceReasons: ["mop_due", "coverage_due"] },
+      ];
+      return withPlans(state, catalogWith([planWithRooms(saved, rooms)]));
+    }
+    case "home-shortcuts": {
+      // Two plans and an area pinned, in the order they were added.
+      const plans = withPlans(state, catalogWith([savedDailyPlan(), { ...savedDailyPlan(), id: "weekend", name: "Weekend refresh" }]));
+      return {
+        ...plans,
+        resources: { ...plans.resources, areas: { status: "ready", value: galleryAreas(), problem: null } },
+        homePins: { status: "ready", pins: [{ kind: "plan", id: "daily" }, { kind: "area", id: "entryway" }, { kind: "plan", id: "weekend" }] },
+      };
+    }
+    case "home-unpinned":
+      return { ...state, homePins: { status: "ready", pins: [] } };
+    case "home-shortcut-blocked": {
+      // A plan Home Assistant can't run and an area the map moved under.
+      const blocked = createGalleryState("home-plan-blocked");
+      return {
+        ...blocked,
+        resources: { ...blocked.resources, areas: { status: "ready", value: galleryAreas(), problem: null } },
+        homePins: { status: "ready", pins: [{ kind: "plan", id: "daily" }, { kind: "area", id: "hallway" }, { kind: "area", id: "porch" }] },
+      };
+    }
+    case "home-shortcut-running": {
+      // A pinned plan's run is under way: Stop holds the bar, shortcuts wait.
+      const pinned = createGalleryState("home-shortcuts");
+      return { ...pinned, activity: "cleaning", currentArea: "Kitchen", resources: { ...pinned.resources, entry: { ...syntheticEntry(), activePlan: true } } };
+    }
+    case "home-pins-error":
+      return { ...state, homePins: { status: "error", pins: [] } };
+    case "areas-list":
+      return { ...state, workflow: "areas", resources: { ...state.resources, areas: { status: "ready", value: galleryAreas(), problem: null } } };
+    case "areas-empty":
+      return { ...state, workflow: "areas", resources: { ...state.resources, areas: { status: "ready", value: { ...syntheticAreas(), areas: [], selectedArea: null }, problem: null } } };
+    case "areas-stale": {
+      // One area the map changed under, one Home Assistant can't place.
+      const areas = galleryAreas();
+      return {
+        ...state,
+        workflow: "areas",
+        resources: {
+          ...state.resources,
+          areas: { status: "ready", value: { ...areas, areas: areas.areas.map((area) => area.id === "entryway" ? { ...area, status: "review", canRebind: true } : area) }, problem: null },
+        },
+      };
+    }
     case "room-limit": {
       const rooms = galleryRooms(100);
       const roomIds = rooms.map((room) => room.roomId);
@@ -862,6 +943,15 @@ export const GALLERY_SCENARIOS: readonly GalleryScenario[] = [
   "home-plan-due",
   "home-plan-paused",
   "home-plan-blocked",
+  "home-plan-due-full",
+  "home-shortcuts",
+  "home-unpinned",
+  "home-shortcut-blocked",
+  "home-shortcut-running",
+  "home-pins-error",
+  "areas-list",
+  "areas-empty",
+  "areas-stale",
 ];
 
 /** Every dialog the shell can show; the UX audit captures each one. */
