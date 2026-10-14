@@ -18,6 +18,7 @@ export interface CatalogWriteHelpers {
   readonly initialWorkspaceState: typeof import("./state").initialWorkspaceState;
   readonly draftForPlan: typeof import("./state").draftForPlan;
   readonly hasStoppableWork: typeof import("./state").hasStoppableWork;
+  readonly hasSavedArea: typeof import("./state").hasSavedArea;
 }
 
 /**
@@ -105,6 +106,15 @@ export const saveArea = async (context: CatalogWriteContext): Promise<void> => {
   }
 };
 
+/** The plan names in an area-delete conflict, or null when the body is not one. */
+const conflictPlans = (body: unknown): string[] | null => {
+  const plans = (body as { plans?: unknown } | null)?.plans;
+  return Array.isArray(plans) && plans.length > 0 && plans.length <= 256
+    && plans.every((name) => typeof name === "string" && name.trim() && name.length <= 128)
+    ? plans as string[]
+    : null;
+};
+
 export const deleteArea = async (context: CatalogWriteContext): Promise<void> => {
   const { state, signal, store } = context;
   const { notice, canEditCoordinates, isAbort } = context.helpers;
@@ -114,8 +124,21 @@ export const deleteArea = async (context: CatalogWriteContext): Promise<void> =>
   const current = (): boolean => !context.disposed() && !signal.aborted;
   store.patch({ command: "pending", notice: null });
   try {
-    await context.backend.deleteArea(entry.areasUrl, areaId, signal);
+    const conflict = await context.backend.deleteArea(entry.areasUrl, areaId, signal);
     if (!current()) return;
+    if (conflict !== undefined) {
+      // Nothing was deleted: the area is all these plans clean, so they change first.
+      const plans = conflictPlans(conflict);
+      if (!plans) throw new context.helpers.BackendError("area-delete-failed", 409);
+      const names = new Intl.ListFormat(state.locale, { type: "conjunction" }).format(plans.map((name) => `"${name}"`));
+      store.patch({
+        command: "idle",
+        notice: plans.length === 1
+          ? notice("error", "v4_notice_area_in_plans_one", "Can't delete this area because it's all that {plans} cleans. Edit or delete that plan first.", { plans: names })
+          : notice("error", "v4_notice_area_in_plans", "Can't delete this area because it's all that {plans} clean. Edit or delete those plans first.", { plans: names }),
+      });
+      return;
+    }
     store.patch({ command: "idle", notice: notice("success", "v4_notice_area_deleted", "Area deleted") });
     // As a deleted plan returns to the picker, a deleted area returns to Your areas.
     const latest = store.value;
@@ -131,14 +154,16 @@ export const deleteArea = async (context: CatalogWriteContext): Promise<void> =>
 
 export const savePlan = async (context: CatalogWriteContext): Promise<void> => {
   const { state, store, effects } = context;
-  const { notice, canEditCoordinates, parseSavedPlanId, BackendError } = context.helpers;
+  const { notice, canEditCoordinates, parseSavedPlanId, BackendError, hasSavedArea } = context.helpers;
   const draft = state.planDraft;
   const plans = state.resources.plans.value;
-  if (!plans || !draft.name.trim() || !draft.rooms.length || !canEditCoordinates(state)) return;
+  const savedPlan = plans?.plans.find((plan) => plan.id === draft.id);
+  if (!plans || !draft.name.trim() || !canEditCoordinates(state)) return;
+  if (!draft.rooms.length && !hasSavedArea(savedPlan?.entries)) return;
   if (!draftIsLive(state, store.value)) return;
   let savedId = draft.id;
   // Home Assistant makes a new plan the default only when none exists.
-  const request = planSaveRequest(draft, plans.selectedPlan === draft.id);
+  const request = planSaveRequest(draft, plans.selectedPlan === draft.id, savedPlan?.entries);
   const saved = await serviceMutation(context, "save_plan", request, notice("success", "v4_notice_plan_saved", "Plan saved"), (response) => {
     const acknowledgedId = response === undefined && draft.id ? draft.id : parseSavedPlanId(response);
     if (draft.id && acknowledgedId !== draft.id) throw new BackendError("invalid-plan-save-response");
@@ -242,7 +267,7 @@ export const setPlanEnabled = async (context: CatalogWriteContext, enabled: bool
     return;
   }
   const sent = catalog && plan
-    ? await writer.send("save_plan", planSaveRequest({ ...draftForPlan(plan), enabled }, catalog.selectedPlan === id))
+    ? await writer.send("save_plan", planSaveRequest({ ...draftForPlan(plan), enabled }, catalog.selectedPlan === id, plan.entries))
     : writer.current() ? false : null;
   if (sent === null) return;
   store.patch({
@@ -266,13 +291,33 @@ const refreshPlansAfterWrite = (context: CatalogWriteContext) => {
   } });
 };
 
+/**
+ * The draft's rooms with the saved plan's custom areas kept in their places.
+ * A save replaces the whole plan, and the editor shows rooms only, so an area
+ * left out would be deleted. Each area keeps its saved position, and the
+ * draft's rooms fill the room places in order; extra rooms go last.
+ */
+const withSavedAreas = (rooms: readonly Record<string, unknown>[], entries: unknown): Record<string, unknown>[] => {
+  const queue = [...rooms];
+  const placed = (Array.isArray(entries) ? entries : []).flatMap((value: unknown) => {
+    const entry = (value ?? {}) as Record<string, unknown>;
+    if (entry.kind !== "area") return queue.splice(0, 1);
+    return typeof entry.area_id === "string" ? [{
+      area: entry.area_id,
+      ...(typeof entry.cleaning_mode === "string" ? { cleaning_mode: entry.cleaning_mode } : {}),
+      ...(typeof entry.coverage_setting === "string" ? { coverage_setting: entry.coverage_setting } : {}),
+    }] : [];
+  });
+  return [...placed, ...queue];
+};
+
 /** The one `save_plan` request shape, for Save and the Run switch. Parked rooms are never sent. */
-const planSaveRequest = (draft: PlanDraft, select: boolean): Record<string, unknown> => ({
+const planSaveRequest = (draft: PlanDraft, select: boolean, entries: unknown): Record<string, unknown> => ({
   ...(draft.id ? { plan_id: draft.id } : {}),
   name: draft.name.trim(),
   enabled: draft.enabled,
   run_behavior: draft.runBehavior,
-  rooms: draft.rooms.map((room) => ({
+  rooms: withSavedAreas(draft.rooms.map((room) => ({
     room: room.roomId,
     cleaning_mode: room.cleaningMode,
     coverage_setting: room.coverageSetting,
@@ -286,7 +331,7 @@ const planSaveRequest = (draft: PlanDraft, select: boolean): Record<string, unkn
         do_coverage_next: room.cadence.doCoverageNext,
       },
     } : {}),
-  })),
+  })), entries),
   return_to_base: draft.returnToBase,
   finish_current_room: draft.finishCurrentRoom,
   finish_current_room_threshold: draft.finishCurrentRoomThreshold,

@@ -114,7 +114,7 @@ identity change.
 The storage minor-10 migration isolates a legacy tracked-room rotation row only when its run ID matches the manual run being migrated. Because older private cadence aggregates
 do not retain per-run provenance, active private cadence modes on a colliding legacy plan ID keep their stored counts but become unverified. Preview and dispatch stay blocked
 until the owner explicitly resets each affected mode. Shared schedules and unrelated plans are left intact; the migration never reconstructs cadence from aggregate cleaning
-history.
+history. Minor 11 stamps each plan's rooms as ordered room `entries`; saved custom areas join that one list (with no cadence), and earlier builds refuse the store.
 
 Effective mode and coverage are resolved before mixed mission grouping and are persisted, with policy identity and cadence snapshot, before dispatch. Manual and saved-plan
 starts consume the authoritative preview, bound to identity, order, settings, and progress by a fingerprint revalidated after preparation awaits. Stop policy belongs to the

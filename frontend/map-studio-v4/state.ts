@@ -994,6 +994,12 @@ const motionBlockReason = (state: WorkspaceState): Reason => {
 };
 
 const PLAN_PAUSED: Reason = { reason: "Can't run this plan until you turn it on.", reasonKey: "v4_reason_run_plan_paused" };
+// The area executor ships in a later version; Home Assistant refuses these runs until then.
+const PLAN_AREAS: Reason = { reason: "Can't run plans with custom areas in this version yet.", reasonKey: "v4_reason_run_plan_areas" };
+
+/** Whether a saved plan's entries, as the backend sent them, include a custom area. */
+export const hasSavedArea = (entries: unknown): boolean =>
+  Array.isArray(entries) && entries.some((entry) => (entry as { kind?: unknown } | null)?.kind === "area");
 export const PLAN_PREVIEW: Reason = {
   reason: "Can't run this plan until you retry its next-run preview.",
   reasonKey: "v4_reason_run_plan_preview",
@@ -1266,9 +1272,11 @@ export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction | NoBu
       const legacyReduction = isLegacyPlanReduction(state, state.planDraft.rooms);
       const withinRoomLimit = state.planDraft.rooms.length <= MAX_ROOM_SEQUENCE_SIZE || legacyReduction;
       const editable = canEditCoordinates(state);
+      // A save keeps the plan's custom areas, so a plan of areas alone saves without rooms.
+      const savedAreas = hasSavedArea(state.resources.plans.value?.plans.find((plan) => plan.id === state.planDraft.id)?.entries);
       const enabled = editable
         && state.planDraft.name.trim().length > 0
-        && state.planDraft.rooms.length > 0
+        && (state.planDraft.rooms.length > 0 || savedAreas)
         && withinRoomLimit
         && state.command !== "pending";
       return {
@@ -1293,7 +1301,8 @@ export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction | NoBu
     }
     const plan = state.resources.plans.value?.plans.find((candidate) => candidate.id === state.planDraft.id);
     const blocker = plan?.nextRunPreview?.blocker;
-    const previewReady = Boolean(plan?.nextRunPreview && !blocker
+    const areas = Boolean(plan?.nextRunPreview?.steps?.some((step) => "areaId" in step));
+    const previewReady = !areas && Boolean(plan?.nextRunPreview && !blocker
       && /^[0-9a-f]{64}$/u.test(plan.nextRunPreview.previewToken ?? ""));
     return {
       id: "run-plan",
@@ -1307,7 +1316,9 @@ export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction | NoBu
           ? PLAN_PAUSED
           : previewReady
             ? {}
-            : (plan && blocker && (roomBlocker(state, plan) ?? PLAN_BLOCKERS[blocker])) || PLAN_PREVIEW),
+            : areas
+              ? PLAN_AREAS
+              : (plan && blocker && (roomBlocker(state, plan) ?? PLAN_BLOCKERS[blocker])) || PLAN_PREVIEW),
     };
   }
   if (state.workflow === "areaReview") {

@@ -187,6 +187,8 @@ export interface NextRunPreviewRoom {
 }
 
 export type NextRunPreviewBlocker =
+  | "area_map_changed"
+  | "area_missing"
   | "coverage_requires_vacuum"
   | "cadence_identity_unavailable"
   | "preview_unavailable"
@@ -199,8 +201,18 @@ export type NextRunPreviewBlocker =
   | "invalid_cadence_policy"
   | "invalid_plan";
 
+/** A saved custom area in a preview; areas run every time, so it has no cadence reasons. */
+export interface NextRunPreviewArea extends Omit<NextRunPreviewRoom, "roomId"> {
+  readonly areaId: string;
+}
+
+export type NextRunPreviewStep = NextRunPreviewRoom | NextRunPreviewArea;
+
 export interface NextRunPreview {
   readonly rooms: readonly NextRunPreviewRoom[];
+  /** Every step in run order, rooms and custom areas. Synthetic fixtures may leave it out; the steps are then `rooms`. */
+  readonly steps?: readonly NextRunPreviewStep[];
+  /** Offsets into `steps` when sent, else `rooms`. */
   readonly missionBoundaries: readonly number[];
   readonly blocker: NextRunPreviewBlocker | null;
   readonly previewToken?: string;
@@ -252,6 +264,11 @@ export interface SavedPlan {
   readonly finishCurrentRoomThreshold: number;
   readonly nextRunPreview?: NextRunPreview;
   readonly nextRunEstimateSeconds: number | null;
+  /**
+   * The backend's ordered entries exactly as sent. The editor shows rooms
+   * only, so a full-plan save reads its custom areas from here to keep them.
+   */
+  readonly entries?: unknown;
 }
 
 export interface PlansCatalog {
@@ -615,28 +632,37 @@ const parsePlanRoom = (value: unknown): PlanRoom => {
 const parseNextRunPreview = (value: unknown): NextRunPreview | undefined => {
   if (value === undefined || value === null) return undefined;
   const preview = objectValue(value, "invalid-plan-preview");
+  // A plan holds up to the room limit and as many custom areas again.
+  const steps = preview.entries ?? preview.rooms;
   if (!Array.isArray(preview.rooms) || preview.rooms.length > MAX_ROOM_SEQUENCE_SIZE
+    || !Array.isArray(steps) || steps.length > 2 * MAX_ROOM_SEQUENCE_SIZE
     || !Array.isArray(preview.mission_boundaries)
-    || preview.mission_boundaries.length > MAX_ROOM_SEQUENCE_SIZE - 1) {
+    || preview.mission_boundaries.length > steps.length) {
     throw new ContractError("invalid-plan-preview");
   }
-  const rooms: NextRunPreviewRoom[] = preview.rooms.map((candidate) => {
-    const room = objectValue(candidate, "invalid-plan-preview-room");
+  const stepCount = steps.length;
+  const parsedSteps: NextRunPreviewStep[] = steps.map((candidate) => {
+    const step = objectValue(candidate, "invalid-plan-preview-room");
     return {
-      roomId: boundedString(room.room_id, 128, "invalid-plan-preview-room-id"),
-      name: boundedString(room.name, 128, "invalid-plan-preview-room-name"),
-      cleaningMode: parseCleaningMode(room.cleaning_mode),
-      coverageSetting: parseCoverage(room.coverage_setting),
-      cadenceReasons: parseCadenceReasons(room.cadence_reasons),
+      ...(step.kind === "area"
+        ? { areaId: boundedString(step.area_id, 128, "invalid-plan-preview-room-id") }
+        : { roomId: boundedString(step.room_id, 128, "invalid-plan-preview-room-id") }),
+      name: boundedString(step.name, 128, "invalid-plan-preview-room-name"),
+      cleaningMode: parseCleaningMode(step.cleaning_mode),
+      coverageSetting: parseCoverage(step.coverage_setting),
+      cadenceReasons: parseCadenceReasons(step.cadence_reasons),
     };
   });
+  const rooms = parsedSteps.filter((step): step is NextRunPreviewRoom => "roomId" in step);
+  // A boundary falls strictly inside the steps, so a single step has none.
   const boundaries = preview.mission_boundaries.map((value) =>
-    boundedInteger(value, 1, Math.max(1, rooms.length - 1), "invalid-plan-preview-boundary"));
-  if (boundaries.some((value, index) => value >= rooms.length
-    || value <= (boundaries[index - 1] ?? 0))) {
+    boundedInteger(value, 1, stepCount - 1, "invalid-plan-preview-boundary"));
+  if (boundaries.some((value, index) => value <= (boundaries[index - 1] ?? 0))) {
     throw new ContractError("invalid-plan-preview-boundary-order");
   }
   const blockers: readonly NextRunPreviewBlocker[] = [
+    "area_map_changed",
+    "area_missing",
     "coverage_requires_vacuum",
     "cadence_identity_unavailable",
     "preview_unavailable",
@@ -653,13 +679,14 @@ const parseNextRunPreview = (value: unknown): NextRunPreview | undefined => {
   if (rawBlocker !== null && !blockers.includes(rawBlocker as NextRunPreviewBlocker)) {
     throw new ContractError("invalid-plan-preview-blocker");
   }
-  if (rawBlocker === null && rooms.length === 0) throw new ContractError("empty-plan-preview");
+  if (rawBlocker === null && stepCount === 0) throw new ContractError("empty-plan-preview");
   const previewToken = preview.preview_token;
   if (previewToken !== undefined && (typeof previewToken !== "string" || !/^[0-9a-f]{64}$/u.test(previewToken))) {
     throw new ContractError("invalid-plan-preview-token");
   }
   return {
     rooms,
+    steps: parsedSteps,
     missionBoundaries: boundaries,
     blocker: rawBlocker as NextRunPreviewBlocker | null,
     ...(typeof previewToken === "string" ? { previewToken } : {}),
@@ -817,6 +844,7 @@ export const parsePlansCatalog = (value: unknown): PlansCatalog => {
         ),
         ...(nextRunPreview === undefined ? {} : { nextRunPreview }),
         nextRunEstimateSeconds: estimateSeconds(plan.next_run_estimate_seconds),
+        entries: plan.entries,
       } satisfies SavedPlan;
     }),
   };

@@ -6,6 +6,7 @@ from collections.abc import (
     Callable,
     Coroutine,
     Mapping,
+    Sequence,
 )
 from functools import partial, wraps
 from typing import Any
@@ -68,12 +69,17 @@ from .plans import (
     CadenceBindingError,
     CleaningPlanManager,
     CleaningRoom,
+    DuplicatePlanAreaError,
     DuplicateRoomError,
     EmptyPlanError,
+    PlanAreaLimitError,
+    PlanAreaMapChangedError,
+    PlanAreaMissingError,
     PlanDisabledError,
     RoomSequenceLimitError,
     SavedPlanLimitError,
     async_get_plan_manager,
+    plan_entries,
     plan_floor_token,
     resolve_room_reference,
     resolve_rooms,
@@ -187,6 +193,31 @@ SAVED_ROOM_SCHEMA = probatio.Schema(_ROOM_FIELDS)
 SAVED_PLAN_ROOM_SCHEMA = probatio.Schema(
     {**_ROOM_FIELDS, probatio.Optional("cadence"): ROOM_CADENCE_SCHEMA}
 )
+# Areas take the same overrides as clean_area and never a cadence: the robot
+# reports no per-area completion, so an area runs every time.
+SAVED_PLAN_AREA_SCHEMA = probatio.Schema(
+    {
+        probatio.Required("area"): probatio.All(
+            cv.string, probatio.Length(min=1, max=128)
+        ),
+        probatio.Optional("cleaning_mode"): probatio.In(
+            [value.value for value in CleaningMode]
+        ),
+        probatio.Optional("coverage_setting"): probatio.In(
+            [value.value for value in CoverageSetting]
+        ),
+    }
+)
+
+
+def saved_plan_entry(value: object) -> dict[str, Any]:
+    """Validate one plan entry: a mapped room or a saved custom area."""
+    if isinstance(value, Mapping) and "area" in value:
+        if "room" in value:
+            raise probatio.Invalid("Use either room or area in one entry")
+        return dict(SAVED_PLAN_AREA_SCHEMA(value))
+    return dict(SAVED_PLAN_ROOM_SCHEMA(value))
+
 
 SAVED_PLAN_SERVICE_SCHEMA = cv.make_entity_service_schema(
     {
@@ -279,7 +310,7 @@ SAVE_PLAN_SCHEMA = cv.make_entity_service_schema(
         ),
         probatio.Required("rooms"): probatio.All(
             cv.ensure_list,
-            [SAVED_PLAN_ROOM_SCHEMA],
+            [saved_plan_entry],
             probatio.Length(min=1, max=MAX_LEGACY_PLAN_ROOM_SEQUENCE_SIZE),
         ),
         probatio.Optional("return_to_base", default=True): cv.boolean,
@@ -310,29 +341,44 @@ SAVE_PLAN_ROOM_SCHEMA = cv.make_entity_service_schema(
         probatio.Required("plan"): probatio.All(
             cv.string, probatio.Length(min=1, max=128)
         ),
-        probatio.Required("room"): SAVED_PLAN_ROOM_SCHEMA,
+        probatio.Required("room"): saved_plan_entry,
     }
 )
 
-DELETE_PLAN_ROOM_SCHEMA = cv.make_entity_service_schema(
-    {
-        probatio.Required("plan"): probatio.All(
-            cv.string, probatio.Length(min=1, max=128)
-        ),
-        probatio.Required("room"): cv.string,
-    }
+_PLAN_ENTRY_TARGET = {
+    probatio.Exclusive("room", "plan_entry"): cv.string,
+    probatio.Exclusive("area", "plan_entry"): probatio.All(
+        cv.string, probatio.Length(min=1, max=128)
+    ),
+}
+
+DELETE_PLAN_ROOM_SCHEMA = probatio.All(
+    cv.make_entity_service_schema(
+        {
+            probatio.Required("plan"): probatio.All(
+                cv.string, probatio.Length(min=1, max=128)
+            ),
+            **_PLAN_ENTRY_TARGET,
+        }
+    ),
+    cv.has_at_least_one_key("room", "area"),
 )
 
-MOVE_PLAN_ROOM_SCHEMA = cv.make_entity_service_schema(
-    {
-        probatio.Required("plan"): probatio.All(
-            cv.string, probatio.Length(min=1, max=128)
-        ),
-        probatio.Required("room"): cv.string,
-        probatio.Required("new_position"): probatio.All(
-            probatio.Coerce(int), probatio.Range(min=1, max=100)
-        ),
-    }
+MOVE_PLAN_ROOM_SCHEMA = probatio.All(
+    cv.make_entity_service_schema(
+        {
+            probatio.Required("plan"): probatio.All(
+                cv.string, probatio.Length(min=1, max=128)
+            ),
+            **_PLAN_ENTRY_TARGET,
+            # A plan holds up to the room limit and as many custom areas again.
+            probatio.Required("new_position"): probatio.All(
+                probatio.Coerce(int),
+                probatio.Range(min=1, max=2 * MAX_ROOM_SEQUENCE_SIZE),
+            ),
+        }
+    ),
+    cv.has_at_least_one_key("room", "area"),
 )
 
 INSPECT_ENDPOINT_SERVICE_SCHEMA = cv.make_entity_service_schema(
@@ -685,6 +731,13 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 call.data.get("plan"),
                 intelligent=intelligent,
             )
+            if _preview_has_area(preview):
+                # Area legs need the executor that ships in a later update;
+                # never start the rooms alone.
+                raise _validation_error(
+                    "Plans with custom areas can't run yet",
+                    "plan_areas_not_supported_yet",
+                )
             if preview_token is not None and preview_token != initial_preview_token:
                 raise _validation_error(
                     "The saved-plan preview is stale; refresh it before starting",
@@ -1211,12 +1264,23 @@ async def async_register_services(hass: HomeAssistant) -> None:
         plan_id = call.data.get("plan_id") or slugify(call.data["name"])
         if not plan_id or plan_id == "unknown":
             raise _validation_error("Plan ID is empty", "plan_name_unusable")
-        rooms = [_normalize_saved_room(room, room_map) for room in call.data["rooms"]]
+        rooms: list[dict[str, Any]] = []
+        entries: list[dict[str, Any]] = []
+        for item in call.data["rooms"]:
+            if "area" in item:
+                entries.append(
+                    _normalize_saved_area(manager, serial_number, entry, item)
+                )
+                continue
+            room = _normalize_saved_room(item, room_map)
+            rooms.append(room)
+            entries.append({"kind": "room", "room_id": room["room_id"]})
         plan = {
             "name": call.data["name"],
             "enabled": call.data["enabled"],
             "run_behavior": call.data["run_behavior"],
             "rooms": rooms,
+            "entries": entries,
             "room_order": [room["room_id"] for room in rooms],
             "return_to_base": call.data["return_to_base"],
             "finish_current_room": call.data["finish_current_room"],
@@ -1295,20 +1359,37 @@ async def async_register_services(hass: HomeAssistant) -> None:
             hass, call, require_current_floor=True
         )
         plan = _resolve_saved_plan(manager, serial_number, call.data["plan"])
-        room = _normalize_saved_room(call.data["room"], room_map)
+        entries = _saved_plan_entries(plan)
+        item = call.data["room"]
+        saved_entry: dict[str, Any]
+        if "area" in item:
+            saved_entry = _normalize_saved_area(manager, serial_number, entry, item)
+        else:
+            room = _normalize_saved_room(item, room_map)
+            saved_entry = {"kind": "room", "room_id": room["room_id"]}
+            if any(saved["room_id"] == room["room_id"] for saved in plan["rooms"]):
+                plan["rooms"] = [
+                    room if saved["room_id"] == room["room_id"] else saved
+                    for saved in plan["rooms"]
+                ]
+            else:
+                plan["rooms"].append(room)
+        key = "area_id" if saved_entry["kind"] == "area" else "room_id"
         position = next(
             (
                 index
-                for index, saved in enumerate(plan["rooms"])
-                if saved["room_id"] == room["room_id"]
+                for index, saved in enumerate(entries)
+                if saved["kind"] == saved_entry["kind"]
+                and saved[key] == saved_entry[key]
             ),
             None,
         )
         if position is None:
-            plan["rooms"].append(room)
-            position = len(plan["rooms"]) - 1
+            entries.append(saved_entry)
+            position = len(entries) - 1
         else:
-            plan["rooms"][position] = room
+            entries[position] = saved_entry
+        plan["entries"] = entries
         plan_id = plan.pop("id")
         cadence_floor_token, room_identities = _plan_cadence_bindings(entry)
         try:
@@ -1323,8 +1404,16 @@ async def async_register_services(hass: HomeAssistant) -> None:
         except ValueError as err:
             raise _plan_request_error(err) from err
         persisted = manager.plan(serial_number, plan_id)
+        if saved_entry["kind"] == "area":
+            return {
+                "plan_id": plan_id,
+                "position": position + 1,
+                "area": plan_entries(persisted)[position],
+            }
         persisted_room = next(
-            saved for saved in persisted["rooms"] if saved["room_id"] == room["room_id"]
+            saved
+            for saved in persisted["rooms"]
+            if saved["room_id"] == saved_entry["room_id"]
         )
         return {
             "plan_id": plan_id,
@@ -1346,29 +1435,31 @@ async def async_register_services(hass: HomeAssistant) -> None:
             hass, call, require_current_floor=True
         )
         plan = _resolve_saved_plan(manager, serial_number, call.data["plan"])
-        room_id = _resolve_room_id(call.data["room"], room_map)
-        deleted = next(
-            (room for room in plan["rooms"] if room["room_id"] == room_id), None
-        )
-        if deleted is None:
-            raise _validation_error(
-                f"Room is not part of this plan: {call.data['room']}",
-                "unknown_rooms",
-                {"rooms": str(call.data["room"])},
+        entries = _saved_plan_entries(plan)
+        position = _plan_entry_position(manager, serial_number, room_map, call, entries)
+        removed = entries.pop(position)
+        deleted: dict[str, Any] = removed
+        if removed["kind"] == "room":
+            deleted = next(
+                room for room in plan["rooms"] if room["room_id"] == removed["room_id"]
             )
-        plan["rooms"].remove(deleted)
-        if not plan["rooms"]:
+            plan["rooms"].remove(deleted)
+        plan["entries"] = entries
+        if not entries:
             plan["enabled"] = False
         plan_id = plan.pop("id")
         cadence_floor_token, room_identities = _plan_cadence_bindings(entry)
-        await manager.async_save_plan(
-            serial_number,
-            plan_id,
-            plan,
-            select=False,
-            floor_token=cadence_floor_token,
-            room_identities=room_identities,
-        )
+        try:
+            await manager.async_save_plan(
+                serial_number,
+                plan_id,
+                plan,
+                select=False,
+                floor_token=cadence_floor_token,
+                room_identities=room_identities,
+            )
+        except ValueError as err:
+            raise _plan_request_error(err) from err
         return {"plan_id": plan_id, "deleted": deleted}
 
     hass.services.async_register(
@@ -1385,40 +1476,47 @@ async def async_register_services(hass: HomeAssistant) -> None:
             hass, call, require_current_floor=True
         )
         plan = _resolve_saved_plan(manager, serial_number, call.data["plan"])
-        room_id = _resolve_room_id(call.data["room"], room_map)
-        room_count = len(plan["rooms"])
-        position = next(
-            (
-                index + 1
-                for index, room in enumerate(plan["rooms"])
-                if room["room_id"] == room_id
-            ),
-            0,
+        entries = _saved_plan_entries(plan)
+        position = (
+            _plan_entry_position(manager, serial_number, room_map, call, entries) + 1
         )
         new_position = call.data["new_position"]
-        if position == 0:
-            raise _validation_error(
-                f"Room is not part of this plan: {call.data['room']}",
-                "unknown_rooms",
-                {"rooms": str(call.data["room"])},
-            )
-        if not 1 <= new_position <= room_count:
-            raise _invalid_room_position(new_position, room_count)
-        room = plan["rooms"].pop(position - 1)
-        plan["rooms"].insert(new_position - 1, room)
+        if not 1 <= new_position <= len(entries):
+            raise _invalid_room_position(new_position, len(entries))
+        moved = entries.pop(position - 1)
+        entries.insert(new_position - 1, moved)
+        rooms_by_id = {room["room_id"]: room for room in plan["rooms"]}
+        plan["rooms"] = [
+            rooms_by_id[saved["room_id"]]
+            for saved in entries
+            if saved["kind"] == "room"
+        ]
+        plan["entries"] = entries
         plan_id = plan.pop("id")
         cadence_floor_token, room_identities = _plan_cadence_bindings(entry)
-        await manager.async_save_plan(
-            serial_number,
-            plan_id,
-            plan,
-            select=False,
-            floor_token=cadence_floor_token,
-            room_identities=room_identities,
-        )
+        try:
+            await manager.async_save_plan(
+                serial_number,
+                plan_id,
+                plan,
+                select=False,
+                floor_token=cadence_floor_token,
+                room_identities=room_identities,
+            )
+        except ValueError as err:
+            raise _plan_request_error(err) from err
         persisted = manager.plan(serial_number, plan_id)
+        if moved["kind"] == "area":
+            return {
+                "plan_id": plan_id,
+                "previous_position": position,
+                "position": new_position,
+                "area": plan_entries(persisted)[new_position - 1],
+            }
         persisted_room = next(
-            saved for saved in persisted["rooms"] if saved["room_id"] == room["room_id"]
+            saved
+            for saved in persisted["rooms"]
+            if saved["room_id"] == moved["room_id"]
         )
         return {
             "plan_id": plan_id,
@@ -1612,6 +1710,7 @@ def _saved_plan_preview(
     preview_kwargs: dict[str, Any] = {
         "floor_token": floor_token,
         "room_identities": room_identities,
+        "floor_plan": floor_plan,
     }
     if intelligent is not None:
         preview_kwargs["intelligent"] = intelligent
@@ -1656,8 +1755,35 @@ def _saved_plan_execution(
     return plan, rooms, cadence_by_room
 
 
+def _preview_has_area(preview: Mapping[str, Any]) -> bool:
+    """Report whether an authoritative preview includes a custom area."""
+    entries = preview.get("entries")
+    return isinstance(entries, list) and any(
+        isinstance(entry, Mapping) and entry.get("kind") == "area" for entry in entries
+    )
+
+
 def _plan_request_error(err: ValueError) -> ServiceValidationError:
     """Translate a rejected plan or room sequence without exposing its text."""
+    if isinstance(err, PlanAreaLimitError):
+        return _validation_error(
+            "The custom area limit is exceeded",
+            "plan_area_limit",
+            {"limit": str(MAX_ROOM_SEQUENCE_SIZE)},
+        )
+    if isinstance(err, PlanAreaMissingError):
+        return _validation_error(
+            "A custom area in the plan no longer exists", "plan_area_missing"
+        )
+    if isinstance(err, PlanAreaMapChangedError):
+        return _validation_error(
+            "The saved custom area belongs to a different room map",
+            "area_map_changed",
+        )
+    if isinstance(err, DuplicatePlanAreaError):
+        return _validation_error(
+            "A custom area appears more than once", "duplicate_area"
+        )
     if isinstance(err, RoomSequenceLimitError):
         return _validation_error(
             "The room limit is exceeded",
@@ -1709,6 +1835,94 @@ def _normalize_saved_room(
             else {}
         ),
     }
+
+
+def _normalize_saved_area(
+    manager: CleaningPlanManager,
+    serial_number: str,
+    entry: ConfigEntry[Any],
+    item: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Resolve one saved custom area that is bound to the current map."""
+    try:
+        area = manager.area(serial_number, item["area"])
+    except KeyError as err:
+        raise _validation_error(
+            f"Unknown Matic custom area: {item['area']}",
+            "unknown_area",
+            {"area": str(item["area"])},
+        ) from err
+    _floor_plan, _circles, mode, coverage = _validated_area_command(
+        area,
+        _current_floor_plan(entry),
+        item.get("cleaning_mode"),
+        item.get("coverage_setting"),
+    )
+    return {
+        "kind": "area",
+        "area_id": area["id"],
+        "cleaning_mode": mode.value,
+        "coverage_setting": coverage.value,
+    }
+
+
+def _saved_plan_entries(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Read a plan's ordered entries for an edit, or explain why it can't."""
+    try:
+        return plan_entries(plan)
+    except ValueError as err:
+        raise _plan_request_error(err) from err
+
+
+def _plan_entry_position(
+    manager: CleaningPlanManager,
+    serial_number: str,
+    room_map: Mapping[str, str],
+    call: ServiceCall,
+    entries: Sequence[Mapping[str, Any]],
+) -> int:
+    """Find the zero-based entry named by an action's room or area field."""
+    if "area" not in call.data:
+        room_id = _resolve_room_id(call.data["room"], room_map)
+        position = next(
+            (
+                index
+                for index, saved in enumerate(entries)
+                if saved["kind"] == "room" and saved["room_id"] == room_id
+            ),
+            None,
+        )
+        if position is None:
+            raise _validation_error(
+                f"Room is not part of this plan: {call.data['room']}",
+                "unknown_rooms",
+                {"rooms": str(call.data["room"])},
+            )
+        return position
+    reference = str(call.data["area"])
+    area_ids = [saved["area_id"] for saved in entries if saved["kind"] == "area"]
+    try:
+        area_id = str(manager.area(serial_number, reference)["id"])
+    except KeyError as err:
+        # An entry can still name an area that a store edit removed.
+        if reference not in area_ids:
+            raise _validation_error(
+                f"Unknown Matic custom area: {reference}",
+                "unknown_area",
+                {"area": reference},
+            ) from err
+        area_id = reference
+    if area_id not in area_ids:
+        raise _validation_error(
+            f"Custom area is not part of this plan: {reference}",
+            "area_not_in_plan",
+            {"area": reference},
+        )
+    return next(
+        index
+        for index, saved in enumerate(entries)
+        if saved["kind"] == "area" and saved["area_id"] == area_id
+    )
 
 
 def _resolve_room_id(identifier: str, room_map: Mapping[str, str]) -> str:

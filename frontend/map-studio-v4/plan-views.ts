@@ -21,8 +21,8 @@ import {
   initialWorkspaceState,
   roomBlocker,
 } from "./state";
-import { translate } from "./localize";
-import { dueLines, formatNumber, planRowLine2, planRowLine3 } from "./plan-copy";
+import { formatList, translate } from "./localize";
+import { dueLines, formatNumber, planAreas, planRowLine2, planRowLine3, roomsAndAreas, withPlanAreas } from "./plan-copy";
 import { scheduleLine, settingLabel } from "./plan-cadence";
 import { homePinSwitch } from "./home-shortcuts";
 
@@ -296,6 +296,9 @@ export class MaticPlanViewsV4 extends LitElement {
     const ready = !paused && Boolean(preview && !blocker && /^[0-9a-f]{64}$/u.test(preview.previewToken ?? ""));
     const ordered = plan.runBehavior === "ordered";
     const previewRooms = ready && preview ? preview.rooms : [];
+    // Custom areas keep their place among the rooms, and mission boundaries count them.
+    const steps = ready && preview ? preview.steps ?? previewRooms : [];
+    const areas = ready ? steps.length - previewRooms.length : planAreas(plan).length;
     const blockedRoom = !paused && blocker ? roomBlocker(state, plan)?.jump.roomId ?? null : null;
     // While a save is pending the preview is about to be read again, so it has no problem yet.
     const problem = paused || ready || blockedRoom || state.pendingAction === "save-plan"
@@ -304,25 +307,29 @@ export class MaticPlanViewsV4 extends LitElement {
     const count = ready ? previewRooms.length : plan.rooms.length;
     const seconds = ready ? plan.nextRunEstimateSeconds : null;
     const minutes = seconds === null ? "" : this.#count(Math.max(1, Math.round(seconds / 60)));
-    const summary = seconds === null
-      ? count === 1
-        ? this.#t("v4_plan_summary_rooms_one", "1 room")
-        : this.#t("v4_plan_summary_rooms", "{count} rooms", { count: this.#count(count) })
-      : count === 1
-        ? this.#t("v4_plan_summary_rooms_estimate_one", "1 room · about {minutes} min", { minutes })
-        : this.#t("v4_plan_summary_rooms_estimate", "{count} rooms · about {minutes} min", { count: this.#count(count), minutes });
+    const rooms = count === 1
+      ? this.#t("v4_plan_summary_rooms_one", "1 room")
+      : this.#t("v4_plan_summary_rooms", "{count} rooms", { count: this.#count(count) });
+    // A plan with a custom area has no estimate: the robot keeps no duration history for one.
+    const summary = areas
+      ? roomsAndAreas(this.#t, state.locale, count, areas)
+      : seconds === null
+        ? rooms
+        : count === 1
+          ? this.#t("v4_plan_summary_rooms_estimate_one", "1 room · about {minutes} min", { minutes })
+          : this.#t("v4_plan_summary_rooms_estimate", "{count} rooms · about {minutes} min", { count: this.#count(count), minutes });
     const boundaries = ready && preview ? preview.missionBoundaries : [];
     const rows = ready
-      ? previewRooms.map((room, index) => {
+      ? steps.map((step, index) => {
         const part = boundaries.indexOf(index);
-        return this.#runRow(room.name, settingLabel(this.#t, room), ordered ? index + 1 : null, part < 0 ? {} : { part: part + 2 });
+        return this.#runRow(step.name, settingLabel(this.#t, step), ordered ? index + 1 : null, part < 0 ? {} : { part: part + 2 });
       })
-      : draftForPlan(plan).rooms.map((room) => this.#runRow(
+      : withPlanAreas(plan, draftForPlan(plan).rooms.map((room) => this.#runRow(
         catalog.rooms.find((candidate) => candidate.roomId === room.roomId)?.name ?? room.roomId,
         settingLabel(this.#t, room),
         null,
         { blocked: room.roomId === blockedRoom },
-      ));
+      )), (area) => this.#runRow(area.name, settingLabel(this.#t, area), null));
     const end = draft.finishCurrentRoom
       ? this.#t("v4_plan_summary_finish", "When you press Stop, the robot finishes the current room if it's at least {percent}% done.", {
         percent: this.#count(draft.finishCurrentRoomThreshold),
@@ -544,6 +551,9 @@ export class MaticPlanViewsV4 extends LitElement {
     const gate = this.#gate(held);
     const ordered = draft.runBehavior === "ordered";
     const atLimit = draft.rooms.length >= MAX_ROOM_SEQUENCE_SIZE;
+    // Map Studio edits rooms only until areas join the editor; a save keeps the plan's areas.
+    const saved = catalog.plans.find((plan) => plan.id === draft.id);
+    const savedAreas = saved ? planAreas(saved) : [];
     const nameOf = (roomId: string): string => catalog.rooms.find((room) => room.roomId === roomId)?.name ?? roomId;
     const rows = [
       ...draft.rooms.map((room, index) => ({ roomId: room.roomId, room, index })),
@@ -591,6 +601,9 @@ export class MaticPlanViewsV4 extends LitElement {
           total: this.#count(catalog.rooms.length),
         })}</small>
       </div>
+      ${savedAreas.length ? html`<p class="quiet">${this.#t("v4_plan_edit_areas", "This plan also cleans {areas}. Saving keeps each custom area in its place.", {
+        areas: formatList(state.locale, savedAreas.map((area) => `"${area.name}"`)),
+      })}</p>` : nothing}
       ${atLimit ? html`<p class="reason" id="room-limit">${this.#t("v4_plan_room_limit", "Can't add more rooms until you remove one; a plan holds up to {limit}.", {
         limit: this.#count(MAX_ROOM_SEQUENCE_SIZE),
       })}</p>` : nothing}

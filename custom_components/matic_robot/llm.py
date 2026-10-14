@@ -649,8 +649,9 @@ class MaticGetPlanTool(_MaticTool):
     title = "Get plan preview"
     description = (
         "Returns a read-only preview of the next run of the selected or named "
-        "saved plan: room order, each room's settings, and where a settings "
-        "change splits the run into separate cleaning passes."
+        "saved plan: room and custom area order, each one's settings, and where "
+        "a settings change or a custom area splits the run into separate "
+        "cleaning passes. A plan with a custom area can't run yet."
     )
     annotations = _READ_ONLY
     parameters = llm.Tool.parameters.extend(
@@ -692,23 +693,34 @@ class MaticGetPlanTool(_MaticTool):
                     room.id: room_cadence_identity(floor_plan, room.id)
                     for room in floor_plan.rooms
                 },
+                floor_plan=floor_plan,
             )
         except (KeyError, ValueError) as err:
+            # A missing area or one drawn on another map lands here too.
             raise _error("llm_plan_unavailable", error=str(err)) from err
         plan_id = preview["plan_id"]
-        effective = [
-            CleaningRoom(
-                room["room_id"],
-                room["name"],
-                room["cleaning_mode"],
-                room["coverage_setting"],
-            )
-            for room in preview["rooms"]
-        ]
         cadence_by_room = {
             room["room_id"]: room["cadence"] for room in preview["rooms"]
         }
-        groups = leg_groups(effective, mixed_settings=True)
+        # Each custom area keeps its saved place as a pass of its own; the
+        # rooms between two areas group exactly as in a room-only plan.
+        groups: list[list[CleaningRoom] | dict[str, Any]] = []
+        rooms: list[CleaningRoom] = []
+        for item in preview["entries"]:
+            if item["kind"] == "area":
+                groups.extend(leg_groups(rooms, mixed_settings=True))
+                rooms = []
+                groups.append(item)
+                continue
+            rooms.append(
+                CleaningRoom(
+                    item["room_id"],
+                    item["name"],
+                    item["cleaning_mode"],
+                    item["coverage_setting"],
+                )
+            )
+        groups.extend(leg_groups(rooms, mixed_settings=True))
         rotation = preview["rotation"]
         snapshot = runtime.cleaning_plans.snapshot(serial_number)
         active = snapshot.get("active_plan")
@@ -720,6 +732,51 @@ class MaticGetPlanTool(_MaticTool):
                 None if runtime.cleaning_plans.lock(serial_number).locked() else False
             )
         )
+
+        def leg(
+            index: int, group: list[CleaningRoom] | dict[str, Any]
+        ) -> JsonObjectType:
+            handoff = "firmware_may_touch_dock" if index < len(groups) else "final_leg"
+            if isinstance(group, dict):
+                return {
+                    "leg": index,
+                    "custom_area": {
+                        "id": group["area_id"],
+                        "name": group["name"],
+                        "cleaning_mode": group["cleaning_mode"],
+                        "coverage_setting": group["coverage_setting"],
+                    },
+                    "cleaning_mode": group["cleaning_mode"],
+                    "coverage_setting": group["coverage_setting"],
+                    "handoff_after_leg": handoff,
+                }
+            return {
+                "leg": index,
+                "rooms": [
+                    {
+                        "id": room.room_id,
+                        "name": room.name,
+                        "cleaning_mode": room.cleaning_mode,
+                        "coverage_setting": room.coverage_setting,
+                        "cadence": cadence_by_room.get(room.room_id),
+                        "cadence_reasons": [
+                            reason
+                            for reason in ("mop_due", "coverage_due")
+                            if cadence_by_room.get(room.room_id, {}).get(reason) is True
+                        ],
+                    }
+                    for room in group
+                ],
+                "cleaning_mode": group[0].cleaning_mode
+                if len({room.cleaning_mode for room in group}) == 1
+                else "mixed",
+                "coverage_setting": group[0].coverage_setting
+                if len({room.coverage_setting for room in group}) == 1
+                else "mixed",
+                "dock_between_rooms": "firmware_resource_servicing_possible",
+                "handoff_after_leg": handoff,
+            }
+
         return llm.ToolResult(
             data=cast(
                 JsonObjectType,
@@ -734,45 +791,12 @@ class MaticGetPlanTool(_MaticTool):
                         "run_behavior": preview["run_behavior"],
                         "return_to_base": preview["return_to_base"],
                     },
+                    # Plans with custom areas can be previewed but not run yet.
+                    **({"runnable": False} if "area_count" in preview else {}),
                     "rotation": rotation,
                     "settings_boundary_count": max(0, len(groups) - 1),
                     "legs": [
-                        {
-                            "leg": index,
-                            "rooms": [
-                                {
-                                    "id": room.room_id,
-                                    "name": room.name,
-                                    "cleaning_mode": room.cleaning_mode,
-                                    "coverage_setting": room.coverage_setting,
-                                    "cadence": cadence_by_room.get(room.room_id),
-                                    "cadence_reasons": [
-                                        reason
-                                        for reason in ("mop_due", "coverage_due")
-                                        if cadence_by_room.get(room.room_id, {}).get(
-                                            reason
-                                        )
-                                        is True
-                                    ],
-                                }
-                                for room in group
-                            ],
-                            "cleaning_mode": group[0].cleaning_mode
-                            if len({room.cleaning_mode for room in group}) == 1
-                            else "mixed",
-                            "coverage_setting": group[0].coverage_setting
-                            if len({room.coverage_setting for room in group}) == 1
-                            else "mixed",
-                            "dock_between_rooms": (
-                                "firmware_resource_servicing_possible"
-                            ),
-                            "handoff_after_leg": (
-                                "firmware_may_touch_dock"
-                                if index < len(groups)
-                                else "final_leg"
-                            ),
-                        }
-                        for index, group in enumerate(groups, start=1)
+                        leg(index, group) for index, group in enumerate(groups, start=1)
                     ],
                 },
             )

@@ -325,6 +325,46 @@ for (const action of ["saveArea", "deleteArea"]) {
   }
 }
 
+// A delete that would leave a plan empty deletes nothing and names those plans.
+test("an area delete refused by its plans names them and keeps the area", async ({ page }) => {
+  await loadQualityModules(page);
+  const result = await page.evaluate(async () => {
+    const { EffectController, WorkspaceStore, createGalleryState } = await import("/quality-modules.js");
+    const remove = async (conflict) => {
+      const initial = createGalleryState("draw-saved");
+      const store = new WorkspaceStore(initial);
+      let areaReads = 0;
+      const effects = new EffectController(store, {
+        deleteArea: async () => conflict,
+        areas: async () => { areaReads += 1; return initial.resources.areas.value; },
+        dispose() {},
+      });
+      effects.sync({ host: initial.host, activity: initial.activity, batteryPercent: 92, robotLabel: "Synthetic", robots: initial.robots, language: "en", userKey: "one", entryKey: initial.selection.entryId, vacuumEntityId: "vacuum.synthetic" });
+      await effects.deleteArea();
+      const outcome = { notice: store.value.notice, areaId: store.value.selection.areaId === initial.selection.areaId, areaReads };
+      effects.dispose();
+      return outcome;
+    };
+    return {
+      one: await remove({ plans: ["Rug only"] }),
+      several: await remove({ plans: ["Rug only", "Spots"] }),
+      malformed: await Promise.all([{}, { plans: [] }, { plans: [""] }, { plans: [7] }, null].map(async (body) => (await remove(body)).notice?.key)),
+    };
+  });
+  expect(result.one).toEqual({
+    notice: {
+      tone: "error",
+      key: "v4_notice_area_in_plans_one",
+      fallback: "Can't delete this area because it's all that {plans} cleans. Edit or delete that plan first.",
+      placeholders: { plans: "\"Rug only\"" },
+    },
+    areaId: true,
+    areaReads: 0,
+  });
+  expect(result.several.notice).toMatchObject({ key: "v4_notice_area_in_plans", placeholders: { plans: "\"Rug only\" and \"Spots\"" } });
+  expect(result.malformed).toEqual(Array(5).fill("v4_notice_area_delete_failed"));
+});
+
 // As while a write is pending, a second write asked for while the first one's
 // module loads is refused; the first is never cancelled.
 test("an area delete asked for while an area save loads is refused", async ({ page }) => {

@@ -20,6 +20,10 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import llm
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.matic_robot.area_binding import (
+    AREA_SCHEMA_VERSION,
+    binding_for_floor_plan,
+)
 from custom_components.matic_robot.client.exceptions import CannotConnectError
 from custom_components.matic_robot.client.models import (
     CleaningModeResult,
@@ -932,6 +936,171 @@ async def test_plan_tool_projects_real_manager_cadence_preview(hass) -> None:
         await MaticGetPlanTool().async_call(
             hass, llm.ToolInput("MaticGetPlan", {}), _context()
         )
+
+
+def _saved_area(floor_plan: FloorPlan, name: str) -> dict[str, Any]:
+    return {
+        "schema_version": AREA_SCHEMA_VERSION,
+        "name": name,
+        "circles": [{"x": 0.1, "y": 0.1, "radius": 0.1}],
+        "cleaning_mode": "vacuum",
+        "coverage_setting": "standard",
+        "map_binding": binding_for_floor_plan(floor_plan),
+    }
+
+
+def _area_entry(area_id: str, cleaning_mode: str = "vacuum") -> dict[str, str]:
+    return {
+        "kind": "area",
+        "area_id": area_id,
+        "cleaning_mode": cleaning_mode,
+        "coverage_setting": "quick",
+    }
+
+
+def _area_leg(index: int, area_id: str, name: str, mode: str, handoff: str):
+    return {
+        "leg": index,
+        "custom_area": {
+            "id": area_id,
+            "name": name,
+            "cleaning_mode": mode,
+            "coverage_setting": "quick",
+        },
+        "cleaning_mode": mode,
+        "coverage_setting": "quick",
+        "handoff_after_leg": handoff,
+    }
+
+
+async def test_plan_tool_previews_custom_areas_in_run_order(hass) -> None:
+    floor_plan = FloorPlan(
+        4,
+        "partition",
+        b"partition",
+        (
+            Room("kitchen", "Kitchen", "kitchen", b"kitchen", ((0, 0), (1, 0), (1, 1))),
+            Room("study", "Study", "study", b"study", ((1, 0), (2, 0), (2, 1))),
+        ),
+    )
+    manager = CleaningPlanManager(hass)
+    manager._store = SimpleNamespace(async_save=AsyncMock())
+    serial = "synthetic-serial"
+    await manager.async_save_area(serial, "rug", _saved_area(floor_plan, "Rug"))
+    await manager.async_save_area(serial, "mat", _saved_area(floor_plan, "Mat"))
+    await manager.async_save_plan(
+        serial,
+        "mixed",
+        {
+            "name": "Mixed",
+            "enabled": True,
+            "run_behavior": "ordered",
+            "rooms": [
+                {
+                    "room_id": "kitchen",
+                    "cleaning_mode": "vacuum",
+                    "coverage_setting": "quick",
+                },
+                {
+                    "room_id": "study",
+                    "cleaning_mode": "vacuum_and_mop",
+                    "coverage_setting": "heavy_duty",
+                },
+            ],
+            "entries": [
+                _area_entry("rug"),
+                {"kind": "room", "room_id": "kitchen"},
+                {"kind": "room", "room_id": "study"},
+                _area_entry("mat", "vacuum_and_mop"),
+            ],
+        },
+    )
+    await manager.async_save_plan(
+        serial,
+        "spots",
+        {
+            "name": "Spots",
+            "rooms": [],
+            "entries": [_area_entry("mat"), _area_entry("rug")],
+        },
+        select=False,
+    )
+    await manager.async_save_plan(
+        serial,
+        "rooms",
+        {
+            "name": "Rooms",
+            "rooms": [
+                {
+                    "room_id": "kitchen",
+                    "cleaning_mode": "vacuum",
+                    "coverage_setting": "quick",
+                }
+            ],
+        },
+        select=False,
+    )
+    entry = _entry(floor_plan=floor_plan)
+    entry.runtime_data.cleaning_plans = manager
+    hass = _hass(entry)
+    tool = MaticGetPlanTool()
+
+    async def plan_preview(plan: str) -> dict[str, Any]:
+        result = await tool.async_call(
+            hass, llm.ToolInput(tool.name, {"plan": plan}), _context()
+        )
+        return result.data
+
+    mixed = await plan_preview("mixed")
+    assert mixed["runnable"] is False
+    # Each area is a pass of its own; the rooms between them share one.
+    assert mixed["settings_boundary_count"] == 2
+    assert mixed["legs"][0] == _area_leg(
+        1, "rug", "Rug", "vacuum", "firmware_may_touch_dock"
+    )
+    rooms_leg = mixed["legs"][1]
+    assert rooms_leg["leg"] == 2
+    assert [room["id"] for room in rooms_leg["rooms"]] == ["kitchen", "study"]
+    assert [room["cleaning_mode"] for room in rooms_leg["rooms"]] == [
+        "vacuum",
+        "vacuum_and_mop",
+    ]
+    assert rooms_leg["rooms"][0]["cadence_reasons"] == []
+    assert rooms_leg["cleaning_mode"] == "mixed"
+    assert rooms_leg["coverage_setting"] == "mixed"
+    assert rooms_leg["dock_between_rooms"] == "firmware_resource_servicing_possible"
+    assert rooms_leg["handoff_after_leg"] == "firmware_may_touch_dock"
+    assert mixed["legs"][2] == _area_leg(3, "mat", "Mat", "vacuum_and_mop", "final_leg")
+    assert not _INTERNAL_TERMS.search(json.dumps(mixed["legs"][0]["custom_area"]))
+
+    spots = await plan_preview("spots")
+    assert spots["runnable"] is False
+    assert spots["settings_boundary_count"] == 1
+    assert spots["legs"] == [
+        _area_leg(1, "mat", "Mat", "vacuum", "firmware_may_touch_dock"),
+        _area_leg(2, "rug", "Rug", "vacuum", "final_leg"),
+    ]
+
+    # Room-only plans keep their original shape.
+    rooms_only = await plan_preview("rooms")
+    assert "runnable" not in rooms_only
+    assert [leg["rooms"][0]["id"] for leg in rooms_only["legs"]] == ["kitchen"]
+
+    # A redrawn map or a deleted area stops the preview with its reason.
+    areas = manager._robot(serial)["areas"]
+    areas["mat"]["map_binding"] = binding_for_floor_plan(
+        FloorPlan(5, "partition", b"partition", floor_plan.rooms)
+    )
+    for plan in ("mixed", "spots"):
+        with pytest.raises(HomeAssistantError) as err:
+            await plan_preview(plan)
+        assert err.value.translation_key == "llm_plan_unavailable"
+        assert "not on this map" in str(err.value)
+    areas.pop("mat")
+    with pytest.raises(HomeAssistantError) as err:
+        await plan_preview("mixed")
+    assert err.value.translation_key == "llm_plan_unavailable"
+    assert "custom area is missing" in str(err.value)
 
 
 async def test_native_history_is_bounded_sanitized_and_failure_safe() -> None:

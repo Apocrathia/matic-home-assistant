@@ -1208,6 +1208,38 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(gallery.locator(".run-row[data-break]")).toHaveCount(1);
   });
 
+  test("Run lists custom areas in their place and counts them apart from rooms", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-saved-ordered" });
+    const preview = async (steps, missionBoundaries) => gallery.evaluate((element, [steps, missionBoundaries]) => {
+      const state = element.getWorkspaceSnapshot();
+      const catalog = state.resources.plans.value;
+      const plans = catalog.plans.map((plan) => ({ ...plan, nextRunPreview: { ...plan.nextRunPreview,
+        rooms: steps.filter((step) => step.roomId), steps, missionBoundaries } }));
+      element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...state.resources.plans, value: { ...catalog, plans } } } });
+    }, [steps, missionBoundaries]);
+    const rug = { areaId: "rug", name: "Rug", cleaningMode: "mop", coverageSetting: "quick", cadenceReasons: [] };
+    const kitchen = { roomId: "room-a", name: "Kitchen", cleaningMode: "vacuum", coverageSetting: "standard", cadenceReasons: [] };
+    const hall = { areaId: "hall", name: "Hall runner", cleaningMode: "vacuum", coverageSetting: "standard", cadenceReasons: [] };
+
+    await preview([rug, kitchen, hall], [1, 2]);
+    // Boundaries count every step, so each switch between a room and an area starts a part.
+    await expect(gallery.locator("ol.run-list > li")).toHaveText([
+      "1 Rug Mop",
+      "Part 2 starts here; the robot may stop at the dock first 2 Kitchen Vacuum · Optimal",
+      "Part 3 starts here; the robot may stop at the dock first 3 Hall runner Vacuum · Optimal",
+    ]);
+    await expect(gallery.getByText("1 room · 2 custom areas", { exact: true })).toBeVisible();
+    await expect(gallery.getByText("The robot cleans these rooms in 3 parts and may stop at the dock between parts.", { exact: true })).toBeVisible();
+    // Home Assistant refuses these runs until the area executor ships, so Run plan says so instead of failing.
+    await expect(gallery.getByRole("button", { name: /^Run plan/ })).toBeDisabled();
+    await expect(gallery.locator(".action-reason")).toHaveText("Can't run plans with custom areas in this version yet.");
+
+    await preview([rug], []);
+    await expect(gallery.locator("ol.run-list > li")).toHaveText(["1 Rug Mop"]);
+    await expect(gallery.getByText("1 custom area", { exact: true })).toBeVisible();
+    await expect(gallery.getByText("0 rooms", { exact: true })).toHaveCount(0);
+  });
+
   test("a paused plan lists its rooms and turns on from the switch", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "plan-run-paused" });
     await expect(gallery.getByText("3 rooms", { exact: true })).toBeVisible();
@@ -1217,6 +1249,29 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(gallery.getByRole("button", { name: "Try again", exact: true })).toHaveCount(0);
     await expect(gallery.locator(".problem")).toHaveCount(0);
     await expect(gallery.getByRole("button", { name: "Run plan Daily clean", exact: true })).toBeDisabled();
+  });
+
+  test("a paused plan with custom areas lists them in their places, in the picker and in Edit", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-run-paused" });
+    await gallery.evaluate((element) => {
+      const state = element.getWorkspaceSnapshot();
+      const catalog = state.resources.plans.value;
+      const plans = catalog.plans.map((plan) => plan.id !== state.planDraft.id ? plan : { ...plan, entries: [
+        { kind: "room", room_id: plan.rooms[0].roomId },
+        { kind: "area", area_id: "rug", name: "Rug", cleaning_mode: "mop", coverage_setting: "quick" },
+        ...plan.rooms.slice(1).map((room) => ({ kind: "room", room_id: room.roomId })),
+        { kind: "area", area_id: "gone", cleaning_mode: "unknown", coverage_setting: "quick" },
+      ] });
+      element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...state.resources.plans, value: { ...catalog, plans } } } });
+    });
+    await expect(gallery.getByText("3 rooms · 1 custom area", { exact: true })).toBeVisible();
+    // An area Map Studio can't read is left out rather than shown wrong.
+    await expect(gallery.locator("ul.run-list > li")).toHaveText(["Kitchen Vacuum · Optimal", "Rug Mop", "Living room Vacuum · Optimal", "Office Vacuum · Optimal"]);
+    await gallery.getByRole("button", { name: /^Edit / }).click();
+    await expect(gallery.getByText("This plan also cleans \"Rug\". Saving keeps each custom area in its place.", { exact: true })).toBeVisible();
+    await gallery.getByRole("button", { name: "Cancel", exact: true }).click();
+    await gallery.getByRole("button", { name: "Back to plans", exact: true }).click();
+    await expect(gallery.getByRole("button", { name: /^Daily clean/ })).toContainText("3 rooms · 1 custom area · ");
   });
 
   test("a room that blocks the run says Needs attention, and Review opens it in Edit", async ({ page }) => {
@@ -9280,6 +9335,50 @@ test.describe("plan effects", () => {
     });
   });
 
+  test("full-plan saves keep a plan's custom areas in their saved places", async ({ page }) => {
+    await loadPlanEffects(page);
+    const result = await page.evaluate(async () => {
+      const run = await window.planEffects("plan-saved-intelligent");
+      const { m, store, effects } = run;
+      const catalog = structuredClone(store.value.resources.plans.value);
+      const plan = catalog.plans[0];
+      const [first, second, third] = plan.rooms.map((room) => room.roomId);
+      const area = (id) => ({ kind: "area", area_id: id, cleaning_mode: "mop", coverage_setting: "quick" });
+      plan.entries = [area("rug"), { kind: "room", room_id: first }, { kind: "room", room_id: second }, area("mat"), { kind: "room", room_id: third }];
+      run.plans = async () => structuredClone(catalog);
+      run.service = () => {};
+      const steps = (data) => data.rooms.map((item) => item.area ?? item.room);
+      await effects.setPlanEnabled(false);
+      const switched = steps(run.calls[0][1]);
+      const rug = run.calls[0][1].rooms[0];
+      // Edit takes a room out: areas stay put and the rooms close up around them.
+      store.patch({ planView: "edit", planDraft: { ...m.draftForPlan(plan), rooms: m.draftForPlan(plan).rooms.slice(1), dirty: true } });
+      await effects.savePlan();
+      const edited = steps(run.calls[1][1]);
+      // A plan of areas alone keeps them when the switch saves it.
+      plan.rooms = [];
+      plan.entries = [area("rug")];
+      store.patch({ planView: "run", planDraft: { ...m.draftForPlan(plan), dirty: false } });
+      await effects.setPlanEnabled(true);
+      const areasOnly = steps(run.calls[2][1]);
+      // Edit saves a plan of areas alone: there are no rooms, and the areas are kept.
+      store.patch({ resources: { ...store.value.resources, plans: { ...store.value.resources.plans, value: structuredClone(catalog) } },
+        planView: "edit", planDraft: { ...m.draftForPlan(plan), name: "Spots", dirty: true } });
+      const saveAction = m.selectPrimaryAction(store.value);
+      await effects.savePlan();
+      const renamed = { name: run.calls[3]?.[1].name, steps: run.calls[3] && steps(run.calls[3][1]) };
+      effects.dispose();
+      return { switched, rug, edited, areasOnly, saveEnabled: saveAction.enabled, renamed, ids: [first, second, third] };
+    });
+    const [first, second, third] = result.ids;
+    expect(result.switched).toEqual(["rug", first, second, "mat", third]);
+    expect(result.rug).toEqual({ area: "rug", cleaning_mode: "mop", coverage_setting: "quick" });
+    expect(result.edited).toEqual(["rug", second, third, "mat"]);
+    expect(result.areasOnly).toEqual(["rug"]);
+    expect(result.saveEnabled).toBe(true);
+    expect(result.renamed).toEqual({ name: "Spots", steps: ["rug"] });
+  });
+
   for (const failure of ["reload", "send"]) {
     test(`the switch reverts after a failed ${failure === "reload" ? "pre-send reload" : "send"}`, async ({ page }) => {
       await loadPlanEffects(page);
@@ -9919,8 +10018,8 @@ test.describe("plan shell", () => {
     await panel.getByRole("textbox", { name: "Plan name" }).fill("Daily tidy");
     await panel.getByRole("button", { name: "Cancel", exact: true }).click();
     await panel.getByRole("dialog", { name: "Discard changes?" }).getByRole("button", { name: "Save", exact: true }).click();
-    await expect(panel.getByRole("heading", { level: 2 })).toHaveText("Daily tidy");
     await expect(panel.getByRole("dialog")).toHaveCount(0);
+    await expect(panel.getByRole("heading", { level: 2 })).toHaveText("Daily tidy");
     await expect(panel.locator("[data-notice-slot]")).toHaveText("Plan saved");
     expect(await page.evaluate(() => window.__panelFixture.serviceCalls.map(({ service, data }) => [service, data.name])))
       .toEqual([["save_plan", "Daily tidy"]]);

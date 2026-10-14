@@ -209,11 +209,32 @@ save_plan:
         - room: Kitchen
           cleaning_mode: vacuum_and_mop
           coverage_setting: standard
+        - area: Rug
+          coverage_setting: heavy_duty
         - room: Study
           cleaning_mode: vacuum
           coverage_setting: quick
       selector:
-        object: *room_list
+        object:
+          translation_key: plan_entry
+          multiple: true
+          fields: &plan_entry_fields
+            room:
+              selector:
+                text:
+            area:
+              selector:
+                text:
+            cleaning_mode:
+              selector:
+                select:
+                  translation_key: cleaning_mode
+                  options: [vacuum, mop, vacuum_and_mop]
+            coverage_setting:
+              selector:
+                select:
+                  translation_key: coverage_setting
+                  options: [quick, standard, heavy_duty]
     return_to_base:
       default: true
       selector:
@@ -290,9 +311,8 @@ save_plan_room:
         coverage_setting: standard
       selector:
         object:
-          translation_key: plan_room
-          label_field: room
-          fields: *room_fields
+          translation_key: plan_entry
+          fields: *plan_entry_fields
 
 delete_plan_room:
   target: *plan_target
@@ -303,8 +323,11 @@ delete_plan_room:
       selector:
         text:
     room:
-      required: true
       example: Kitchen
+      selector:
+        text:
+    area:
+      example: Rug
       selector:
         text:
 
@@ -317,8 +340,11 @@ move_plan_room:
       selector:
         text:
     room:
-      required: true
       example: Kitchen
+      selector:
+        text:
+    area:
+      example: Rug
       selector:
         text:
     new_position:
@@ -326,7 +352,7 @@ move_plan_room:
       selector:
         number:
           min: 1
-          max: 100
+          max: 200
           mode: box
 
 inspect_hermes_endpoint:

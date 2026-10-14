@@ -170,6 +170,13 @@ def saved_plan_preview_token(
         "execution": {key: preview.get(key) for key in execution_keys},
         "rooms": rooms if isinstance(rooms, list) else [],
     }
+    entries = preview.get("entries")
+    if isinstance(entries, list) and any(
+        isinstance(entry, Mapping) and entry.get("kind") == "area" for entry in entries
+    ):
+        # Each area's binding status and geometry fingerprint, and its place
+        # among the rooms, decide the run. Room-only plans keep their token.
+        payload["entries"] = entries
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
 

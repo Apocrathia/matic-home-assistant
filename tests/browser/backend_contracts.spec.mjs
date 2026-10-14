@@ -325,3 +325,77 @@ test("saved-plan preview parsing enforces the shared room-sequence limit", async
 
   expect(result).toEqual({ atLimit: null, overLimit: "invalid-plan-preview" });
 });
+
+test("saved-plan preview parsing accepts plans with custom areas", async ({ page }) => {
+  await load(page);
+  const result = await page.evaluate(async payload => {
+    const { parsePlansCatalog } = await import("/backend-contracts.js");
+    const room = {
+      room_id: "room-a",
+      name: "Kitchen",
+      cleaning_mode: "vacuum",
+      coverage_setting: "standard",
+      cadence_reasons: ["mop_due"],
+    };
+    const area = {
+      kind: "area",
+      area_id: "rug",
+      name: "Rug",
+      cleaning_mode: "mop",
+      coverage_setting: "quick",
+      cadence_reasons: [],
+    };
+    const parse = (preview) => {
+      const candidate = structuredClone(payload);
+      candidate.plans[0].entries = [
+        { kind: "area", area_id: "rug", cleaning_mode: "mop", coverage_setting: "quick" },
+        { kind: "room", room_id: "room-a" },
+      ];
+      candidate.plans[0].next_run_preview = preview;
+      try {
+        return parsePlansCatalog(candidate).plans[0].nextRunPreview;
+      } catch (error) {
+        return error.code ?? "unknown";
+      }
+    };
+    const ready = (overrides) => ({
+      rooms: [room],
+      entries: [area, { kind: "room", ...room }],
+      mission_boundaries: [1],
+      blocker: null,
+      preview_token: "a".repeat(64),
+      ...overrides,
+    });
+    return {
+      mixed: parse(ready({})),
+      areasOnly: parse(ready({ rooms: [], entries: [area], mission_boundaries: [] })),
+      blockers: ["area_map_changed", "area_missing"].map((blocker) =>
+        parse({ rooms: [], mission_boundaries: [], blocker }).blocker),
+      boundaryPastEntries: parse(ready({ mission_boundaries: [2] })),
+      boundariesWithoutEntries: parse(ready({ entries: undefined })),
+      emptyEntries: parse(ready({ rooms: [], entries: [], mission_boundaries: [] })),
+      entriesNotList: parse(ready({ entries: {} })),
+      tooMany: parse(ready({ entries: Array.from({ length: 201 }, () => area), mission_boundaries: [] })),
+      areaWithoutId: parse(ready({ entries: [{ ...area, area_id: "" }] })),
+    };
+  }, plansPayload());
+
+  const kitchen = { roomId: "room-a", name: "Kitchen", cleaningMode: "vacuum", coverageSetting: "standard", cadenceReasons: ["mop_due"] };
+  const rug = { areaId: "rug", name: "Rug", cleaningMode: "mop", coverageSetting: "quick", cadenceReasons: [] };
+  expect(result.mixed).toEqual({
+    rooms: [kitchen],
+    steps: [rug, kitchen],
+    missionBoundaries: [1],
+    blocker: null,
+    previewToken: "a".repeat(64),
+  });
+  expect(result.areasOnly.rooms).toEqual([]);
+  expect(result.areasOnly.steps).toEqual([rug]);
+  expect(result.areaWithoutId).toBe("invalid-plan-preview-room-id");
+  expect(result.blockers).toEqual(["area_map_changed", "area_missing"]);
+  expect(result.boundaryPastEntries).toBe("invalid-plan-preview-boundary");
+  expect(result.boundariesWithoutEntries).toBe("invalid-plan-preview-boundary");
+  expect(result.emptyEntries).toBe("empty-plan-preview");
+  expect(result.entriesNotList).toBe("invalid-plan-preview");
+  expect(result.tooMany).toBe("invalid-plan-preview");
+});

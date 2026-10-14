@@ -358,6 +358,7 @@
     "v4_plan_can_run": "Plan enabled",
     "v4_plan_can_run_on": "When it's on, this plan can run from here, from automations and from Home Assistant actions.",
     "v4_reason_run_plan_paused": "Can't run this plan until you turn it on.",
+    "v4_reason_run_plan_areas": "Can't run plans with custom areas in this version yet.",
     "v4_reason_live_map_required": "Can't edit until you show the live map.",
     "v4_zone_invalid": "Keep the outline from crossing itself.",
     "v4_zone_empty": "Make the outline wider and keep it on the mapped floor.",
@@ -399,6 +400,8 @@
     "v4_notice_area_save_failed": "Home Assistant can't confirm the area was saved, so try again.",
     "v4_notice_area_deleted": "Area deleted",
     "v4_notice_area_delete_failed": "Home Assistant can't confirm the area was deleted, so try again.",
+    "v4_notice_area_in_plans": "Can't delete this area because it's all that {plans} clean. Edit or delete those plans first.",
+    "v4_notice_area_in_plans_one": "Can't delete this area because it's all that {plans} cleans. Edit or delete that plan first.",
     "v4_notice_reset_mop": "Mopping progress reset",
     "v4_notice_reset_vacuum": "Vacuum rotation progress reset",
     "v4_notice_reset_mop_failed": "Mopping progress wasn't reset; try again.",
@@ -516,6 +519,9 @@
     "v4_plan_summary_rooms_one": "1 room",
     "v4_plan_summary_rooms_estimate": "{count} rooms · about {minutes} min",
     "v4_plan_summary_rooms_estimate_one": "1 room · about {minutes} min",
+    "v4_plan_summary_areas": "{count} custom areas",
+    "v4_plan_summary_areas_one": "1 custom area",
+    "v4_plan_edit_areas": "This plan also cleans {areas}. Saving keeps each custom area in its place.",
     "v4_plan_summary_finish": "When you press Stop, the robot finishes the current room if it's at least {percent}% done.",
     "v4_plan_summary_return": "Returns to the dock when finished",
     "v4_reason_plan_switch_busy": "Can't change this until the robot finishes.",
@@ -793,6 +799,26 @@
         "coverage_setting": {
           "name": "Vacuum coverage",
           "description": "How thoroughly the robot vacuums this room."
+        }
+      }
+    },
+    "plan_entry": {
+      "fields": {
+        "room": {
+          "name": "Room",
+          "description": "Room name or room ID from the robot's map. Leave empty for a custom area."
+        },
+        "area": {
+          "name": "Custom area",
+          "description": "Saved custom area name. Leave empty for a room."
+        },
+        "cleaning_mode": {
+          "name": "Cleaning mode",
+          "description": "How the robot cleans this room or area."
+        },
+        "coverage_setting": {
+          "name": "Vacuum coverage",
+          "description": "How thoroughly the robot vacuums this room or area."
         }
       }
     },
@@ -1319,6 +1345,21 @@
     "duplicate_room": {
       "message": "Each room can appear only once. Remove repeated rooms, then try again."
     },
+    "duplicate_area": {
+      "message": "Each custom area can appear only once in a plan. Remove repeated areas, then try again."
+    },
+    "area_not_in_plan": {
+      "message": "{area} isn't in this plan. Check the name, or choose an area from the plan."
+    },
+    "plan_area_missing": {
+      "message": "A custom area in this plan was deleted. Open the plan in Matic Map, save it again, then try again."
+    },
+    "plan_area_limit": {
+      "message": "A plan can include up to {limit} custom areas. Remove some areas and try again."
+    },
+    "plan_areas_not_supported_yet": {
+      "message": "Plans with custom areas can't run in this version yet. Remove the custom areas from this plan to run it, or clean each area on its own."
+    },
     "invalid_room_position": {
       "message": "Choose a position from 1 to {count}, then try again."
     },
@@ -1356,7 +1397,7 @@
       "message": "This plan is turned off. Turn it on in Matic Map, then try again."
     },
     "plan_empty": {
-      "message": "This plan has no rooms. Add rooms in Matic Map, then try again."
+      "message": "This plan has nothing to clean. Add rooms or custom areas in Matic Map, then try again."
     },
     "invalid_plan_command": {
       "message": "Home Assistant rejected an internal plan command. Start the plan again."
@@ -1603,8 +1644,8 @@
           "description": "Intelligent rotation cleans the rooms that have waited longest first; saved order breaks ties. Saved order cleans every selected room from top to bottom."
         },
         "rooms": {
-          "name": "Rooms and settings",
-          "description": "Rooms in cleaning order, each with its own cleaning mode and vacuum coverage."
+          "name": "Rooms, areas and settings",
+          "description": "Rooms and saved custom areas in cleaning order. Give each one a room or an area, not both, with its own cleaning mode and vacuum coverage. Custom areas run every time the plan runs."
         },
         "return_to_base": {
           "name": "Return to dock when finished",
@@ -1653,22 +1694,22 @@
       }
     },
     "save_plan_room": {
-      "name": "Add or update plan room",
-      "description": "Adds one mapped room or updates that room's individual settings.",
+      "name": "Add or update plan room or area",
+      "description": "Adds one mapped room or saved custom area to the end of a plan, or updates its settings where it is.",
       "fields": {
         "plan": {
           "name": "Cleaning plan",
           "description": "Plan name or ID. Find IDs with List cleaning plans."
         },
         "room": {
-          "name": "Room and settings",
-          "description": "Mapped room name or room ID, with its cleaning mode and vacuum coverage. If a value matches both an ID and a name, the ID wins."
+          "name": "Room or area and settings",
+          "description": "A mapped room name or room ID, or a saved custom area name, with its cleaning mode and vacuum coverage. If a value matches both an ID and a name, the ID wins."
         }
       }
     },
     "delete_plan_room": {
-      "name": "Remove room from plan",
-      "description": "Removes one mapped room and its settings from a plan.",
+      "name": "Remove room or area from plan",
+      "description": "Removes one mapped room or saved custom area, and its settings, from a plan.",
       "fields": {
         "plan": {
           "name": "Cleaning plan",
@@ -1676,13 +1717,17 @@
         },
         "room": {
           "name": "Room",
-          "description": "Mapped room name or room ID. If a value matches both an ID and a name, the ID wins."
+          "description": "Mapped room name or room ID. Fill in a room or an area, not both. If a value matches both an ID and a name, the ID wins."
+        },
+        "area": {
+          "name": "Custom area",
+          "description": "Saved custom area name. Fill in a room or an area, not both."
         }
       }
     },
     "move_plan_room": {
-      "name": "Move room in plan",
-      "description": "Changes one mapped room's saved position.",
+      "name": "Move room or area in plan",
+      "description": "Changes one mapped room's or saved custom area's position in a plan.",
       "fields": {
         "plan": {
           "name": "Cleaning plan",
@@ -1690,11 +1735,15 @@
         },
         "room": {
           "name": "Room",
-          "description": "Mapped room name or room ID. If a value matches both an ID and a name, the ID wins."
+          "description": "Mapped room name or room ID. Fill in a room or an area, not both. If a value matches both an ID and a name, the ID wins."
+        },
+        "area": {
+          "name": "Custom area",
+          "description": "Saved custom area name. Fill in a room or an area, not both."
         },
         "new_position": {
           "name": "New position",
-          "description": "New position in the room list, where 1 is the top."
+          "description": "New position in the plan's list of rooms and areas, where 1 is the top."
         }
       }
     },

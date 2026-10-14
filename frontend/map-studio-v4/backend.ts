@@ -532,15 +532,21 @@ export class MaticBackend {
     return (payload as { id: string }).id;
   }
 
-  async deleteArea(path: string, areaId: string, signal?: AbortSignal): Promise<void> {
-    await this.#request(
+  /**
+   * Deletes one area. A 409 deleted nothing: its untrusted body names the plans
+   * the area would leave empty, and the caller validates and reports them.
+   */
+  async deleteArea(path: string, areaId: string, signal?: AbortSignal): Promise<unknown> {
+    return this.#request(
       "areaDelete",
       `${path}?area_id=${encodeURIComponent(areaId)}`,
       { method: "DELETE", headers: { Accept: "application/json" } },
       REQUEST_TIMEOUTS.mutation,
       signal,
-      async (response) => {
+      async (response): Promise<unknown> => {
+        if (response.status === 409) return response.json();
         if (!response.ok) throw new BackendError("area-delete-failed", response.status);
+        return undefined;
       },
     );
   }

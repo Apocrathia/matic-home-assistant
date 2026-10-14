@@ -39,6 +39,7 @@ from custom_components.matic_robot.const import (
 )
 from custom_components.matic_robot.frontend import DATA_SLAM_SCENE_VIEW
 from custom_components.matic_robot.plans import (
+    AreaInUseError,
     CleaningPlanManager,
     MetadataAdmissionClosedError,
     RoomSequenceLimitError,
@@ -1468,12 +1469,23 @@ async def test_plan_workspace_lists_saved_plans_and_current_rooms() -> None:
                     }
                 ],
                 "room_order": ["room-1"],
+                "entries": [{"kind": "room", "room_id": "room-1"}],
                 "return_to_base": False,
                 "finish_current_room": True,
                 "finish_current_room_threshold": 60,
                 "next_run_preview": {
                     "rooms": [
                         {
+                            "room_id": "room-1",
+                            "name": "Kitchen",
+                            "cleaning_mode": "vacuum_and_mop",
+                            "coverage_setting": "standard",
+                            "cadence_reasons": [],
+                        }
+                    ],
+                    "entries": [
+                        {
+                            "kind": "room",
                             "room_id": "room-1",
                             "name": "Kitchen",
                             "cleaning_mode": "vacuum_and_mop",
@@ -1683,7 +1695,7 @@ async def test_plan_workspace_projects_read_only_policy_preview_and_boundaries(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
-        "custom_components.matic_robot.slam_scene.leg_groups",
+        "custom_components.matic_robot.plans.leg_groups",
         lambda rooms, mixed_settings=False: [[room] for room in rooms],
     )
     runtime = _runtime()
@@ -1756,23 +1768,25 @@ async def test_plan_workspace_projects_read_only_policy_preview_and_boundaries(
 
     projected = json.loads(first.body)["plans"][0]["next_run_preview"]
     assert projected == json.loads(second.body)["plans"][0]["next_run_preview"]
+    projected_rooms = [
+        {
+            "room_id": "room-2",
+            "name": "Study",
+            "cleaning_mode": "vacuum_and_mop",
+            "coverage_setting": "heavy_duty",
+            "cadence_reasons": ["mop_due", "coverage_due"],
+        },
+        {
+            "room_id": "room-1",
+            "name": "Kitchen",
+            "cleaning_mode": "vacuum",
+            "coverage_setting": "standard",
+            "cadence_reasons": [],
+        },
+    ]
     assert projected == {
-        "rooms": [
-            {
-                "room_id": "room-2",
-                "name": "Study",
-                "cleaning_mode": "vacuum_and_mop",
-                "coverage_setting": "heavy_duty",
-                "cadence_reasons": ["mop_due", "coverage_due"],
-            },
-            {
-                "room_id": "room-1",
-                "name": "Kitchen",
-                "cleaning_mode": "vacuum",
-                "coverage_setting": "standard",
-                "cadence_reasons": [],
-            },
-        ],
+        "rooms": projected_rooms,
+        "entries": [{"kind": "room", **room} for room in projected_rooms],
         "mission_boundaries": [1],
         "preview_token": preview_token,
         "blocker": None,
@@ -1794,6 +1808,7 @@ async def test_plan_workspace_projects_read_only_policy_preview_and_boundaries(
             room.id: room_cadence_identity(runtime.coordinator.data.floor_plan, room.id)
             for room in runtime.coordinator.data.floor_plan.rooms
         },
+        floor_plan=runtime.coordinator.data.floor_plan,
     )
     runtime.cleaning_plans.async_save_area.assert_not_awaited()
     runtime.cleaning_plans.async_delete_area.assert_not_awaited()
@@ -3031,3 +3046,210 @@ async def test_pose_waiter_rejects_revoked_floor_before_second_rpc():
     assert all(json.loads(r.body)["map_session_key"] is None for r in responses)
     runtime.client.async_get_pose.assert_awaited_once()
     assert view._cache == {}
+
+
+def _saved_area(floor_plan: FloorPlan, name: str) -> dict[str, object]:
+    return {
+        "schema_version": AREA_SCHEMA_VERSION,
+        "name": name,
+        "circles": [{"x": 0.1, "y": 0.1, "radius": 0.1}],
+        "cleaning_mode": "vacuum",
+        "coverage_setting": "standard",
+        "map_binding": binding_for_floor_plan(floor_plan),
+    }
+
+
+def _area_entry(area_id: str) -> dict[str, str]:
+    return {
+        "kind": "area",
+        "area_id": area_id,
+        "cleaning_mode": "vacuum",
+        "coverage_setting": "quick",
+    }
+
+
+async def test_plan_workspace_projects_area_entries_and_mission_boundaries(
+    hass,
+) -> None:
+    runtime = _runtime()
+    floor_plan = runtime.coordinator.data.floor_plan
+    manager = CleaningPlanManager(hass)
+    manager._store = SimpleNamespace(async_save=AsyncMock())
+    serial = "synthetic-serial"
+    await manager.async_save_area(serial, "rug", _saved_area(floor_plan, "Rug"))
+    await manager.async_save_area(serial, "mat", _saved_area(floor_plan, "Mat"))
+    await manager.async_save_plan(
+        serial,
+        "mixed",
+        {
+            "name": "Mixed",
+            "rooms": [
+                {
+                    "room_id": "room-1",
+                    "cleaning_mode": "vacuum",
+                    "coverage_setting": "standard",
+                }
+            ],
+            "entries": [
+                _area_entry("rug"),
+                {"kind": "room", "room_id": "room-1"},
+                _area_entry("mat"),
+            ],
+        },
+    )
+    await manager.async_save_plan(
+        serial,
+        "spots",
+        {"name": "Spots", "rooms": [], "entries": [_area_entry("rug")]},
+        select=False,
+    )
+    manager._robot(serial)["plans"]["corrupt"] = {
+        "name": "Corrupt",
+        "rooms": [
+            {
+                "room_id": "room-1",
+                "cleaning_mode": "vacuum",
+                "coverage_setting": "standard",
+            }
+        ],
+        "entries": [],
+    }
+    runtime.cleaning_plans = manager
+    hass_view = _hass(_entry(runtime))
+    token_inputs = {
+        "entry_id": "entry",
+        "floor_token": plan_floor_token(floor_plan),
+        "room_identities": {
+            room.id: room_cadence_identity(floor_plan, room.id)
+            for room in floor_plan.rooms
+        },
+    }
+
+    response = await MaticPlansView().get(_request(hass_view), "entry")
+
+    plans = {plan["id"]: plan for plan in json.loads(response.body)["plans"]}
+    mixed = plans["mixed"]
+    # Stored entries keep only area IDs; the editor model names each area.
+    assert mixed["entries"] == [
+        {**_area_entry("rug"), "name": "Rug"},
+        {"kind": "room", "room_id": "room-1"},
+        {**_area_entry("mat"), "name": "Mat"},
+    ]
+    assert "name" not in manager.plan(serial, "mixed")["entries"][0]
+    area_projection = {
+        "kind": "area",
+        "area_id": "rug",
+        "name": "Rug",
+        "cleaning_mode": "vacuum",
+        "coverage_setting": "quick",
+        "cadence_reasons": [],
+    }
+    room_projection = {
+        "room_id": "room-1",
+        "name": "Kitchen",
+        "cleaning_mode": "vacuum",
+        "coverage_setting": "standard",
+        "cadence_reasons": [],
+    }
+    assert mixed["next_run_preview"] == {
+        "rooms": [room_projection],
+        "entries": [
+            area_projection,
+            {"kind": "room", **room_projection},
+            {**area_projection, "area_id": "mat", "name": "Mat"},
+        ],
+        "mission_boundaries": [1, 2],
+        "preview_token": saved_plan_preview_token(
+            manager.preview(
+                serial,
+                {"room-1": "Kitchen"},
+                "mixed",
+                floor_token=token_inputs["floor_token"],
+                room_identities=token_inputs["room_identities"],
+                floor_plan=floor_plan,
+            ),
+            **token_inputs,
+        ),
+        "blocker": None,
+    }
+    assert mixed["next_run_estimate_seconds"] is None
+    spots = plans["spots"]["next_run_preview"]
+    assert spots["rooms"] == []
+    assert spots["entries"] == [area_projection]
+    assert spots["mission_boundaries"] == []
+    assert plans["spots"]["entries"] == [{**_area_entry("rug"), "name": "Rug"}]
+    assert plans["corrupt"]["entries"] == [{"kind": "room", "room_id": "room-1"}]
+    assert plans["corrupt"]["next_run_preview"]["blocker"] == "invalid_plan"
+
+    # A redrawn map or a missing area blocks the plan before anything runs.
+    manager._robot(serial)["areas"]["mat"]["map_binding"] = binding_for_floor_plan(
+        replace(floor_plan, mission_id=floor_plan.mission_id + 1)
+    )
+    manager._robot(serial)["areas"].pop("rug")
+    manager._robot(serial)["areas"]["mat"]["name"] = None
+    response = await MaticPlansView().get(_request(hass_view), "entry")
+    plans = {plan["id"]: plan for plan in json.loads(response.body)["plans"]}
+    # A deleted or unnamed area is still listed, under its ID.
+    assert [entry.get("name") for entry in plans["mixed"]["entries"]] == [
+        "rug",
+        None,
+        "mat",
+    ]
+    assert plans["mixed"]["next_run_preview"]["blocker"] == "area_missing"
+    assert plans["spots"]["next_run_preview"] == {
+        "rooms": [],
+        "mission_boundaries": [],
+        "blocker": "area_missing",
+    }
+    await manager.async_save_area(serial, "rug", _saved_area(floor_plan, "Rug"))
+    response = await MaticPlansView().get(_request(hass_view), "entry")
+    plans = {plan["id"]: plan for plan in json.loads(response.body)["plans"]}
+    assert plans["mixed"]["next_run_preview"]["blocker"] == "area_map_changed"
+    assert plans["spots"]["next_run_preview"]["blocker"] is None
+
+
+async def test_area_delete_keeps_the_area_and_plans_a_delete_would_empty(
+    hass,
+) -> None:
+    runtime = _runtime()
+    floor_plan = runtime.coordinator.data.floor_plan
+    manager = CleaningPlanManager(hass)
+    manager._store = SimpleNamespace(async_save=AsyncMock())
+    serial = "synthetic-serial"
+    await manager.async_save_area(serial, "rug", _saved_area(floor_plan, "Rug"))
+    for plan_id, name in (("spots", "Spots"), ("rug-only", "Rug only")):
+        await manager.async_save_plan(
+            serial,
+            plan_id,
+            {"name": name, "rooms": [], "entries": [_area_entry("rug")]},
+            select=False,
+        )
+    runtime.cleaning_plans = manager
+    saves = manager._store.async_save.await_count
+
+    response = await MaticAreasView().delete(
+        _request(_hass(_entry(runtime)), path="/?area_id=rug"), "entry"
+    )
+
+    assert response.status == HTTPStatus.CONFLICT
+    assert response.headers["X-Matic-Areas-Conflict"] == "plan-would-be-empty"
+    assert sorted(json.loads(response.body)["plans"]) == ["Rug only", "Spots"]
+    assert "rug" in manager.areas(serial)
+    plans = manager._robot(serial)["plans"]
+    assert all(plans[plan_id]["entries"] == [_area_entry("rug")] for plan_id in plans)
+    assert manager._store.async_save.await_count == saves
+
+
+async def test_area_delete_reports_the_plans_it_would_empty() -> None:
+    runtime = _runtime()
+    runtime.cleaning_plans.areas.return_value = {"rug": {"name": "Rug"}}
+    runtime.cleaning_plans.async_delete_area.side_effect = AreaInUseError(["Rug only"])
+    hass = _hass(_entry(runtime))
+
+    response = await MaticAreasView().delete(
+        _request(hass, path="/?area_id=rug"), "entry"
+    )
+
+    assert response.status == HTTPStatus.CONFLICT
+    assert response.headers["X-Matic-Areas-Conflict"] == "plan-would-be-empty"
+    assert json.loads(response.body) == {"plans": ["Rug only"]}

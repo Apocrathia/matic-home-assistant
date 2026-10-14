@@ -35,19 +35,46 @@ and dock, use Home Assistant's standard vacuum actions.
 | Action | Fields and behavior |
 | --- | --- |
 | List cleaning plans (`list_plans`) | Returns saved plans, rooms, IDs and the default plan. |
-| Preview next plan run (`preview_plan`) | Returns `plan`'s next room order and settings without running it. |
-| Create or replace cleaning plan (`save_plan`) | Saves `name` and `rooms`; pass `plan_id` to replace a plan. |
+| Preview next plan run (`preview_plan`) | Returns `plan`'s next room order and settings, and its `entries` (rooms and custom areas in run order), without running it. |
+| Create or replace cleaning plan (`save_plan`) | Saves `name` and `rooms` (rooms and custom areas); pass `plan_id` to replace a plan. |
 | Set default cleaning plan (`select_plan`) | Makes `plan` the default. |
 | Delete cleaning plan (`delete_plan`) | Deletes `plan`. |
-| Add or update plan room (`save_plan_room`) | Adds or updates `room` in `plan`. |
-| Move room in plan (`move_plan_room`) | Moves `room` in `plan` to `new_position` (1 is the top). |
-| Remove room from plan (`delete_plan_room`) | Removes `room` from `plan`. |
+| Add or update plan room or area (`save_plan_room`) | Adds or updates `room` (a room or an area entry) in `plan`. |
+| Move room or area in plan (`move_plan_room`) | Moves `room` or `area` in `plan` to `new_position` (1 is the top). |
+| Remove room or area from plan (`delete_plan_room`) | Removes `room` or `area` from `plan`. |
 | Reset room cleaning history (`reset_plan_history`) | Clears which rooms `plan` has cleaned, or every plan with `all_plans: true`. |
 | Reset room schedule progress (`reset_room_cadence`) | Resets mopping, vacuum rotation or both for one room or the whole plan. |
 
 `save_plan` also accepts `enabled`, `run_behavior` (`intelligent` for
 Intelligent rotation or `ordered` for Saved order), `return_to_base`,
 `finish_current_room`, `finish_current_room_threshold` and `select`.
+
+### Custom areas in plans
+
+Each item of `rooms` names either a `room` or a saved custom `area`, never
+both. An area item takes optional `cleaning_mode` and `coverage_setting`
+overrides, as Clean custom area does, and no room schedule: an area runs every
+time because the robot reports no per-area completion. A plan can hold only
+areas. Saving checks that each area exists and was drawn on the current map.
+
+```yaml
+data:
+  name: Pet spots
+  rooms:
+    - room: Kitchen
+    - area: Food bowls
+      coverage_setting: heavy_duty
+```
+
+Areas keep their saved positions; Intelligent rotation reorders only the rooms
+between two areas. A preview splits the run at every switch between rooms and
+an area, and is refused (`area_missing`, `area_map_changed`) when an area was
+deleted or the map changed. Deleting an area removes it from every plan; it
+is refused while it is a plan's only item, and Matic Map names those plans.
+Matic Map lists a plan's areas in their place, and saving the plan there
+keeps them. In this release a plan with an area cannot run yet: Run plan is
+unavailable in Matic Map, and the action answers "Plans with custom areas
+can't run in this version yet" and starts nothing.
 
 ## Advanced actions
 
