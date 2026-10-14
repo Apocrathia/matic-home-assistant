@@ -2191,6 +2191,11 @@ export class EffectController {
   #pinsEpoch = 0;
   #pinsToken = 0;
   #pinsWrite: Promise<unknown> = Promise.resolve();
+  // Each toggle's revision per pin: a failed write undoes its own toggle only
+  // while no newer toggle of that pin followed (Codex PRRT_kwDOTau7uM6sOOL7).
+  #pinRevisions = new Map<string, number>();
+  // An unseeded read (no record, plans not loaded) waits here for the plans.
+  #stopPinsSeedWait: (() => void) | null = null;
 
   #currentPinsOwner(): string | null {
     const { owner, selection } = this.#store.value;
@@ -2204,6 +2209,9 @@ export class EffectController {
     this.#pinsEpoch += 1;
     this.#pinsToken += 1;
     this.#pinsWrite = Promise.resolve();
+    this.#pinRevisions.clear();
+    this.#stopPinsSeedWait?.();
+    this.#stopPinsSeedWait = null;
     if (this.#store.value.homePins.status !== "idle" || this.#store.value.homePins.pins.length) {
       this.#store.patch({ homePins: { status: "idle", pins: [] } });
     }
@@ -2224,13 +2232,29 @@ export class EffectController {
     }
     this.#store.patch({ homePins: { status: "loading", pins: [] } });
     try {
-      const pins = await (await import("./home-pins")).loadPins(connection, this.#store, entryId, current);
+      const module = await import("./home-pins");
+      const pins = await module.loadPins(connection, this.#store, entryId, current);
       if (!current()) return;
-      this.#store.patch({ homePins: { status: "ready", pins } });
+      this.#store.patch({ homePins: { status: "ready", pins: pins ?? [] } });
+      if (!pins) this.#awaitPinsSeed(module, owner, token);
       this.#resumeAreaCatalog();
     } catch {
       if (current()) this.#store.patch({ homePins: { status: "error", pins: [] } });
     }
+  }
+
+  // With no record and no plan list, nothing was decided: once the plans
+  // load for the same owner, the read runs again and seeds the default plan
+  // (Codex PRRT_kwDOTau7uM6sOOMC). A pin set meanwhile writes a record, which
+  // that read then finds instead.
+  #awaitPinsSeed(module: typeof import("./home-pins"), owner: string, token: number): void {
+    this.#stopPinsSeedWait?.();
+    const live = (): boolean => !this.#disposed && owner === this.#pinsOwner && token === this.#pinsToken;
+    this.#stopPinsSeedWait = module.whenPlansReady(this.#store, live, () => {
+      this.#stopPinsSeedWait = null;
+      this.#pinsReadFor = null;
+      this.#resumeAreaCatalog();
+    });
   }
 
   /**
@@ -2248,6 +2272,9 @@ export class EffectController {
     if (!entryId || !connection || !owner || owner !== this.#currentPinsOwner()
       || this.#store.value.homePins.status !== "ready") return;
     const same = (candidate: HomePin): boolean => candidate.kind === pin.kind && candidate.id === pin.id;
+    const key = `${pin.kind}:${pin.id}`;
+    const revision = (this.#pinRevisions.get(key) ?? 0) + 1;
+    this.#pinRevisions.set(key, revision);
     const current = (): boolean => !this.#disposed && epoch === this.#pinsEpoch
       && this.#currentPinsOwner() === owner && this.#store.value.homePins.status === "ready";
     this.#pinsWrite = this.#pinsWrite.then(async () => {
@@ -2258,6 +2285,9 @@ export class EffectController {
         if (current()) this.#resumeAreaCatalog();
       } catch {
         if (!current()) return;
+        // A newer toggle of this pin stands: its own write sends the whole
+        // list again and reports its own failure.
+        if (this.#pinRevisions.get(key) !== revision) return;
         const pins = this.#store.value.homePins.pins.filter((candidate) => !same(candidate));
         if (!pinned) pins.splice(Math.min(Math.max(previous.findIndex(same), 0), pins.length), 0, pin);
         this.#store.patch({ homePins: { status: "ready", pins }, notice: module.PINS_SAVE_FAILED });
@@ -2668,6 +2698,7 @@ export class EffectController {
   dispose(): void {
     if (this.#disposed) return;
     this.#disposed = true;
+    this.#stopPinsSeedWait?.();
     this.#pageLifecycle.dispose();
     // The store survives a detached panel. Revoke its public action admission
     // before aborting requests so neither stale controls nor late results can

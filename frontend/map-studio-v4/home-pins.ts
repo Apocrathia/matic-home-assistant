@@ -70,21 +70,41 @@ const settledPlans = (store: WorkspaceStore, entryId: string): Promise<{ readonl
 });
 
 /**
+ * Calls `then` once, a microtask after the plan list is next ready, unless
+ * `live` turned false first. Returns a stop for the wait.
+ */
+export const whenPlansReady = (store: WorkspaceStore, live: () => boolean, then: () => void): () => void => {
+  let settled = false;
+  let unsubscribe: (() => void) | null = null;
+  const stop = (): void => { settled = true; unsubscribe?.(); };
+  unsubscribe = store.subscribe((state) => {
+    if (settled) return;
+    if (!live()) { stop(); return; }
+    if (state.resources.plans.status !== "ready") return;
+    stop();
+    queueMicrotask(() => { if (live()) then(); });
+  });
+  if (settled) unsubscribe();
+  return stop;
+};
+
+/**
  * Reads this robot's pins. With no record yet, the default plan becomes the
  * first pin and is written once. A plan list that failed to load decides
- * nothing: no pins now, no record, so the next load seeds. A seed whose write
- * fails still shows; the next load tries again.
+ * nothing: null (unseeded), no record, so a load once the plans recover seeds.
+ * A seed whose write fails still shows; the next load tries again.
  */
 export const loadPins = async (
   connection: WorkspaceConnection,
   store: WorkspaceStore,
   entryId: string,
   stillOwned: () => boolean = () => true,
-): Promise<HomePin[]> => {
+): Promise<HomePin[] | null> => {
   const pins = pinsOf(await readStored(connection), entryId);
   if (pins) return pins;
   const plans = await settledPlans(store, entryId);
-  if (!plans || !stillOwned()) return [];
+  if (!stillOwned()) return [];
+  if (!plans) return null;
   const seeded: HomePin[] = plans.selected ? [{ kind: "plan", id: plans.selected }] : [];
   try {
     await writePins(connection, entryId, seeded, stillOwned);

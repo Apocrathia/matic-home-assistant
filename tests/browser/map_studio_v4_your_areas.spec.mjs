@@ -652,7 +652,8 @@ test.describe("home-pins seeding", () => {
     });
     expect(result.ready.pins).toEqual([{ kind: "plan", id: "daily" }]);
     expect(result.ready.writes).toHaveLength(1);
-    expect(result.error).toEqual({ pins: [], writes: [] });
+    // Undecided, not empty: null keeps the robot unseeded until the plans load.
+    expect(result.error).toEqual({ pins: null, writes: [] });
     expect(result.failedWrite.pins).toEqual([{ kind: "plan", id: "daily" }]);
   });
 });

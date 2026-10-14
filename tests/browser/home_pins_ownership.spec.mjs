@@ -31,7 +31,7 @@ async function setup(page, stores) {
     const data = structuredClone(stores);
     const held = [];
     const log = [];
-    const h = { user: "u1", hold: new Set(), held, log, data };
+    const h = { user: "u1", hold: new Set(), held, log, data, failSetAt: 0, sets: 0, plansFail: 0 };
     const connection = {
       subscribeMessage: async () => () => undefined,
       sendMessagePromise: async (message) => {
@@ -40,6 +40,8 @@ async function setup(page, stores) {
         const answer = () => {
           if (message.type === "frontend/get_user_data") return { value: structuredClone(data[user]?.[KEY] ?? null) };
           if (message.type === "frontend/set_user_data") {
+            h.sets += 1;
+            if (h.sets === h.failSetAt) throw new Error("synthetic write failure");
             data[user] = { ...(data[user] ?? {}), [KEY]: structuredClone(message.value) };
             return null;
           }
@@ -55,7 +57,10 @@ async function setup(page, stores) {
     const entry = (entryId) => ({ ...syntheticEntry(), entryId, deltaUrl: null });
     const backend = {
       catalog: async () => [entry("synthetic-entry"), entry("entry-b")],
-      plans: async () => syntheticPlans(),
+      plans: async () => {
+        if (h.plansFail > 0) { h.plansFail -= 1; throw new Error("synthetic plans failure"); }
+        return syntheticPlans();
+      },
       areas: async () => syntheticAreas(),
       history: async () => syntheticHistory(),
       scene: async () => ({ scene: { revision: 7, source: "live", buffer: new ArrayBuffer(0), pointOffset: 0,
@@ -142,4 +147,44 @@ test("a write queued for one user is never sent after another user takes over", 
   expect(after.writes).toEqual([]);
   expect(after.data.u2[KEY]["synthetic-entry"].pins).toEqual([plan("u2-plan")]);
   expect(await pins(page)).toEqual({ entry: "synthetic-entry", status: "ready", pins: [plan("u2-plan")] });
+});
+
+test("a failed write undoes only its own toggle, never a newer one of the same pin", async ({ page }) => {
+  await setup(page, { u1: record([plan("daily")]) });
+  await sync(page, "u1", "synthetic-entry");
+  await expect.poll(() => pins(page)).toMatchObject({ status: "ready", pins: [plan("daily")] });
+  // Off, on, off, on in quick succession; the second write (the first "on") fails.
+  await page.evaluate(() => {
+    const h = window.pinsHarness;
+    h.failSetAt = 2;
+    const pin = { kind: "plan", id: "daily" };
+    for (const pinned of [false, true, false, true]) {
+      const before = h.store.value.homePins.pins;
+      h.store.dispatch({ type: "set-home-pin", pin, pinned });
+      h.controller.saveHomePin(pin, pinned, before);
+    }
+  });
+  await expect.poll(() => page.evaluate(() => window.pinsHarness.sets)).toBe(4);
+  await page.waitForTimeout(50);
+  expect(await pins(page)).toMatchObject({ status: "ready", pins: [plan("daily")] });
+  const stored = await page.evaluate((key) => window.pinsHarness.data.u1[key]["synthetic-entry"].pins, KEY);
+  expect(stored).toEqual([plan("daily")]);
+});
+
+test("with no record yet, a plan list that failed first seeds the default plan once it loads", async ({ page }) => {
+  await setup(page, { u1: {} });
+  await page.evaluate(() => { window.pinsHarness.plansFail = 1; });
+  await sync(page, "u1", "synthetic-entry");
+  await expect.poll(() => page.evaluate(() => window.pinsHarness.store.value.resources.plans.status)).toBe("error");
+  await expect.poll(() => pins(page)).toMatchObject({ status: "ready", pins: [] });
+  expect(await page.evaluate(() => window.pinsHarness.log.filter((call) => call.type === "frontend/set_user_data").length)).toBe(0);
+  // The plans come back: the default plan is seeded then, and written.
+  const selected = await page.evaluate(async () => {
+    const h = window.pinsHarness;
+    await h.controller.loadPlans({ force: true });
+    return h.store.value.resources.plans.value.selectedPlan;
+  });
+  expect(selected).toBeTruthy();
+  await expect.poll(() => pins(page)).toMatchObject({ status: "ready", pins: [plan(selected)] });
+  await expect.poll(() => page.evaluate((key) => window.pinsHarness.data.u1[key]?.["synthetic-entry"]?.pins ?? null, KEY)).toEqual([plan(selected)]);
 });
