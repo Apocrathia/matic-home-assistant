@@ -135,7 +135,9 @@ test.describe("Map Studio mobile sheet gesture ownership", () => {
   // control, so a swipe that starts inside one still steps the sheet.
   test("a swipe that starts inside a pinned top that is a tab stop steps the sheet down @mobile", async ({ page }) => {
     const sheet = await loadNarrowGallery(page, "paused");
-    await page.setViewportSize({ width: 844, height: 390 });
+    // A small phone: the regular sheet at half clips this pinned top. (A
+    // landscape phone gets the compact sheet, which has no half.)
+    await page.setViewportSize({ width: 360, height: 480 });
     await page.locator(`${GALLERY_TAG} .stage`).evaluate((stage) => {
       Object.assign(stage.style, { blockSize: "100dvh", minBlockSize: "0", maxInlineSize: "none" });
     });

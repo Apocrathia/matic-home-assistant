@@ -10107,7 +10107,10 @@ test.describe("Map Studio accessibility baselines", () => {
   // they overflow with nothing inside to Tab to; a pinned top that is a tab
   // stop is a group named by the h2 (a second region of that name would make
   // the landmark ambiguous). The stage fills the viewport, so a
-  // resize after the first layout must be caught too.
+  // resize after the first layout must be caught too. 360x480 is a small
+  // phone with the regular sheet at half; a landscape phone (under 480 px
+  // tall) gets the compact sheet, whose full height leaves these tops
+  // unclipped (compact_layout spec).
   const openScroller = async (page, scenario, width, height) => {
     await page.setViewportSize({ width, height });
     const gallery = await loadGallery(page, { scenario, narrow: width < 1024 });
@@ -10143,22 +10146,24 @@ test.describe("Map Studio accessibility baselines", () => {
     };
     // home-rooms.md §3: a held home has an empty body under its heading, so the
     // text-only body is the Rooms view's empty description (R9).
-    expect(await scroller("rooms-empty", 844, 390, "body"), "rooms-empty body on a landscape phone").toEqual({ overflows: true, focusableChild: false, tabindex: "0", role: "region", named: true });
-    expect(await scroller("plans", 844, 390, "body"), "plans body on a landscape phone").toEqual({ overflows: true, focusableChild: true, tabindex: null, role: "region", named: true });
+    expect(await scroller("rooms-empty", 360, 480, "body"), "rooms-empty body on a small phone").toEqual({ overflows: true, focusableChild: false, tabindex: "0", role: "region", named: true });
+    expect(await scroller("plans", 360, 480, "body"), "plans body on a small phone").toEqual({ overflows: true, focusableChild: true, tabindex: null, role: "region", named: true });
     expect(await scroller("access", 1440, 900, "body"), "access body on a desktop").toEqual({ overflows: false, focusableChild: false, tabindex: null, role: "region", named: true });
-    expect(await scroller("paused", 844, 390, "top"), "paused pinned top on a landscape phone").toEqual({ overflows: true, focusableChild: false, tabindex: "0", role: "group", named: true });
-    expect(await scroller("ready", 844, 390, "top"), "ready pinned top on a landscape phone").toEqual({ overflows: false, focusableChild: false, tabindex: null, role: null, named: false });
+    expect(await scroller("paused", 360, 480, "top"), "paused pinned top on a small phone").toEqual({ overflows: true, focusableChild: false, tabindex: "0", role: "group", named: true });
+    expect(await scroller("ready", 360, 480, "top"), "ready pinned top on a small phone").toEqual({ overflows: false, focusableChild: false, tabindex: null, role: null, named: false });
   });
 
   test("a focused tab-stop scroller shows a 2 px ring inset 2 px and stays a tab stop until it loses focus @mobile", async ({ page }) => {
-    const { gallery, body } = await openScroller(page, "rooms-empty", 844, 390);
+    const { gallery, body } = await openScroller(page, "rooms-empty", 360, 480);
     await expect(body).toHaveAttribute("tabindex", "0");
     await body.focus();
     expect(await body.evaluate((element) => {
       const style = getComputedStyle(element);
       return [style.outlineStyle, style.outlineWidth, style.outlineOffset, style.outlineColor];
     })).toEqual(["solid", "2px", "-2px", "rgb(6, 120, 206)"]);
-    await page.setViewportSize({ width: 1440, height: 900 });
+    // A taller phone keeps the narrow layout (and so this body) but stops it
+    // overflowing.
+    await page.setViewportSize({ width: 390, height: 844 });
     await settleWorkspace(gallery);
     await expect.poll(() => scrollerState(body, false), "no longer overflowing, but focused").toMatchObject({ overflows: false, tabindex: "0" });
     await gallery.getByRole("heading", { level: 2 }).first().focus();
@@ -10168,7 +10173,7 @@ test.describe("Map Studio accessibility baselines", () => {
   // The pinned top is re-checked when its content changes: a notice brings a
   // Close button, so it stops being a tab stop until the notice goes.
   test("the pinned top is a tab stop only while no notice gives it a control @mobile", async ({ page }) => {
-    const { gallery, heading } = await openScroller(page, "paused", 844, 390);
+    const { gallery, heading } = await openScroller(page, "paused", 360, 480);
     const notice = (value) => gallery.locator("matic-map-shell-v4").evaluate((shell, next) => shell.dispatchEvent(new CustomEvent("matic-workspace-intent", {
       detail: { type: "set-notice", notice: next }, bubbles: true, composed: true,
     })), value);

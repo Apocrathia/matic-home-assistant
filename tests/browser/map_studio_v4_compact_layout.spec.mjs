@@ -102,8 +102,11 @@ test.describe("compact sheet at 844×390 (MS-RESP-01, -02, -03)", () => {
     const gallery = await stage(page, "rooms", LANDSCAPE);
     const sheet = gallery.locator(".mobile-sheet");
     const grip = gallery.locator(".sheet-grip");
-    // One toggle: it expands, then collapses at full, and keeps focus as it flips.
-    await grip.getByRole("button", { name: "Expand panel", exact: true }).click();
+    // One toggle: it expands, then collapses at full, and keeps keyboard focus
+    // as it flips. (Desktop Safari does not focus a clicked button, so drive
+    // it from the keyboard.)
+    await grip.getByRole("button", { name: "Expand panel", exact: true }).focus();
+    await page.keyboard.press("Enter");
     await expect(sheet).toHaveAttribute("data-detent", "full");
     await expect(grip.getByRole("button", { name: "Expand panel", exact: true })).toBeHidden();
     await expect(grip.getByRole("button", { name: "Collapse panel", exact: true })).toBeFocused();
