@@ -97,9 +97,9 @@ Each room's **Last cleaned** and **Last clean duration** sensors are disabled
 by default. Enable them to retain room-specific history and duration statistics.
 The robot-wide **Last clean duration** is recorded by default.
 
-Room lists, SSID, schedules, detailed session results, and plan history remain
+Room lists, SSID, schedules, detailed run results, and plan history remain
 available to templates through `state_attr()` but are excluded from Recorder
-attributes. See [privacy](privacy.md) for stored data and event payloads.
+attributes. See [privacy](privacy.md) for stored data and event data.
 
 ## Matic Cues
 
@@ -112,7 +112,7 @@ switch also activates [Matic's voice processing](privacy.md#matic-cues).
 
 The one-time 0.2 migration renamed older numbered IDs where possible. 0.5
 removed four duplicate entities once, on its first start; see the
-[release notes](release-notes-0.5.0-rc23.md#entity-changes) for replacements.
+[release notes](release-notes-0.5.0-rc24.md#entity-changes) for replacements.
 User-assigned names and IDs are preserved.
 
 ## Assistant tools

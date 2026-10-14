@@ -8,8 +8,8 @@ settings from Home Assistant automations or Developer tools > Actions.
 All actions use the `matic_robot` domain and target the robot's vacuum entity.
 Room and plan fields accept a name or an ID; a name that matches more than one
 room is refused. ID fields (`preview_token`, `expected_run_id`, `plan_id`,
-`revision`) and timeouts are hidden until you turn on Advanced mode in your
-Home Assistant profile. The full schema is in
+`revision`) and timeouts are hidden until you turn on **Advanced mode** in
+your Home Assistant user settings. The full schema is in
 [services.yaml](../custom_components/matic_robot/services.yaml).
 
 ## Cleaning
@@ -55,7 +55,7 @@ Developer actions start with "Advanced:" so they list together.
 
 | Action | Fields and behavior |
 | --- | --- |
-| Advanced: Inspect robot data (`inspect_hermes_endpoint`) | Reads the size and a checksum of one `endpoint` item, never its contents. Optional `limit` is 1 to 256 (default 32). Items that hold credentials are blocked. |
+| Advanced: Inspect robot data (`inspect_hermes_endpoint`) | Reads the size and a checksum of one `endpoint` item, never its contents. Optional `limit` is 1 to 256 (default 32). Items that hold keys or passwords are blocked. |
 | Advanced: Record firmware snapshot (`firmware_snapshot`) | See [Firmware snapshot](#firmware-snapshot). |
 | Advanced: Choose firmware investigator (`firmware_investigator`) | Sets which connected agent researches firmware reports; `manual` stops automatic research. |
 | Advanced: Update firmware notification (`firmware_notification`) | Acknowledges, marks as delivered or checks again for one `report_id` and `revision`. Used by the Matic: Send firmware alerts blueprint. |
@@ -73,7 +73,7 @@ actions:
 
 ## Firmware snapshot
 
-`firmware_snapshot` reads all 40 non-credential robot data items and returns
+`firmware_snapshot` reads all 40 robot data items that hold no keys or passwords and returns
 firmware and protocol versions, item status and counts, checksums and shape
 changes since the last snapshot. Up to 52 snapshots are kept locally. See
 [firmware compatibility](firmware-compatibility.md).

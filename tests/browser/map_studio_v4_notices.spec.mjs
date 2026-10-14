@@ -674,8 +674,8 @@ test("Try again on a limited map rereads the catalog once and is disabled meanwh
     native_session_active: false,
   };
   const panel = await mountPanel(page, { initialCatalogEntries: [limited] });
-  // The fixture panel lays out narrow, so the strip is the sheet's status line.
-  const strip = panel.locator(".sheet-status");
+  // The fixture panel fills a 1280 px page, so the strip is the inspector's.
+  const strip = panel.locator(".status-copy");
   await expect(strip).toContainText("Map limited");
   await expect(strip).toContainText("Cleaning can't start");
   const retry = panel.locator(".home-actions").getByRole("button", { name: "Try again", exact: true });

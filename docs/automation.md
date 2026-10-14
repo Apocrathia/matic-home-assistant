@@ -90,7 +90,7 @@ Event types: `disabled`, `ready`, `wake_word_detected`, `intent_processing`,
 `gesture_facing_user`, `gesture_person_not_found`, `gesture_following`,
 `following_started` and `following_stopped`.
 
-Intents: `clean`, `clean_all`, `dock`, `go_away`, `navigate`, `pause`,
+Recognised requests: `clean`, `clean_all`, `dock`, `go_away`, `navigate`, `pause`,
 `redo_last_clean`, `resume`, `sink_summon`, `stop`, `follow_person`,
 `point_to_clean` and `unknown`. See [Cues data handling](privacy.md#matic-cues)
 before automating the switch.
@@ -140,5 +140,5 @@ Matic (Unofficial) > ⋮ on the robot's entry > Download diagnostics, then follo
 
 ## More reference
 
-[Entities, errors, and statistics](entities.md) · [Map controls](cleaning.md#map-studio) ·
+[Entities, errors, and statistics](entities.md) · [Map controls](cleaning.md#matic-map) ·
 [All action fields](actions.md) · [Firmware checks](firmware-compatibility.md)

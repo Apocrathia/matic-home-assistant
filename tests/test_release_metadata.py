@@ -552,6 +552,32 @@ def test_advanced_actions_are_exactly_the_four_named() -> None:
     }
 
 
+_HOUSEHOLD_DOCS = (
+    "README.md",
+    "docs/README.md",
+    "docs/actions.md",
+    "docs/automation.md",
+    "docs/cleaning.md",
+    "docs/entities.md",
+    "docs/features.md",
+    "docs/room-schedules.md",
+)
+# Code, link targets and HTML anchors name things; the prose around them is copy.
+_NOT_PROSE = re.compile(r"```.*?```|`[^`]*`|\]\([^)]*\)|<[^>]+>", re.DOTALL)
+
+
+@pytest.mark.parametrize("doc", _HOUSEHOLD_DOCS)
+def test_household_docs_use_the_copy_style(doc: str) -> None:
+    """Docs a household reads avoid the denylist and the retired editors.
+
+    "Configure" is Home Assistant's own button and may be named; the retired
+    Configure flow and editors may not.
+    """
+    prose = _NOT_PROSE.sub("", (ROOT / doc).read_text())
+    assert _DENIED.findall(prose) == []
+    assert not re.search(r"Configure (?:flow|editor)|0\.5 development|→", prose)
+
+
 def test_denylist_scanner_matches_plurals_and_verify_family() -> None:
     assert _DENIED.findall("Missions, verified tokens; Map Studio") == [
         "Missions",

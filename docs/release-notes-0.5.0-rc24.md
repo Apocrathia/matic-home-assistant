@@ -1,8 +1,60 @@
-# v0.5.0-rc23
+# v0.5.0-rc24
 
-RC23 makes the Home Assistant surfaces read as one plain thing about the robot.
+RC24 is the first release candidate with the 0.5 interface overhaul: Matic Map
+and the robot's Home Assistant surfaces are rebuilt around plain words, one
+action at a time and layouts that fit every screen. RC23 was prepared but never
+tagged, so its entity, setup and action changes ship here for the first time.
 Entity IDs and unique IDs stay the same, so dashboards and automations keep
-working; only names, defaults and four duplicate entities change.
+working.
+
+**Stable 0.5.0 waits until every cell of the
+[owner walkthrough](owner-walkthrough-0.5.md) is approved** (99 cells: 11
+journeys at 9 setups, staged live and approved one at a time), and until the
+rest of Gates E6 and F in [acceptance-0.5.md](acceptance-0.5.md) close: this
+RC installed through HACS and read back, restart recovery, Stop reachability,
+iPhone, iPad and Android walkthroughs with VoiceOver and NVDA, and physical
+acceptance of identity recovery.
+
+## Matic Map
+
+- **Words.** Every string follows one copy style and is translated through
+  Home Assistant; notices appear once under the heading and as a toast when
+  the panel is out of view.
+- **Home.** One status line, the default plan's card with what is due, **Your
+  plans**, **Clean rooms** and **Clean custom area**. Held controls say why.
+- **Plans.** A plan opens in **Run**, with a separate **Edit**. Save, Cancel
+  and Delete ask only when a change would be lost; Back and Escape return to
+  where you came from.
+- **Room schedules.** Two rows per room, mop and vacuum rotation, each with
+  − and +, a line that says when the work is next due and a switch to bring it
+  forward once. New schedules count across all plans.
+- **Rooms.** Map and list stay in step; whole-clean settings and per-room
+  settings; the line above Clean lists the rooms in run order.
+- **Custom areas, history, Full map, help.** One tool row and one hint in
+  Draw, Cancel beside the primary, review titles and Delete last; dated saved
+  maps that never start anything; Full map keeps the status, the main action,
+  Stop and Exit; **?** lists only the controls for your input.
+- **Status.** Stopping shows from the Stop press until the robot has stopped;
+  Cleaning names the room the robot reports.
+- **Screens.** On a phone held sideways (under 480 px of height) the panel
+  keeps the main action or Stop in the sheet's top row and the page never
+  scrolls; from 768 to 1023 px in landscape it keeps a 320 px side panel.
+  Colours that miss contrast on your theme are adjusted, and light or dark
+  follows Home Assistant's theme rather than the device.
+- **Android.** Touching the map no longer shows the keyboard focus ring, and
+  map canvases on touch devices are capped in resolution, bringing a tablet's
+  touch-to-screen p95 from about 86 ms to 73–75 ms.
+
+## Owner decisions
+
+- 2026-10-11: all 24 recommendations of the [0.5 UX spec](ux-spec-0.5.md)
+  accepted, including contrast-resolved colours, the unchanged 768 px
+  landscape row and dark mode from Home Assistant's theme. In Full map,
+  Locating keeps Stop and the exit control.
+- 2026-10-12: assistants can run plans, clean rooms, stop and reset a room
+  schedule through the same checks as Matic Map.
+- UX8 request: stable waits on the owner walkthrough above, staged by the
+  maintainer and approved or critiqued cell by cell.
 
 ## Entity changes
 
@@ -75,8 +127,8 @@ Home Assistant 2026.10 or later.
   Nothing is saved until the robot accepts the new pairing, and a different
   robot is never accepted in its place
   ([details](hermes-pairing.md#robot-was-reset)).
-- Configure: reset room cleaning history for one plan or for all plans, each
-  with its own confirmation; live updates move under **Advanced**.
+- **Matic settings**: reset room cleaning history for one plan or for all
+  plans, each with its own confirmation; live updates move under **Advanced**.
 
 ## Actions and automations
 

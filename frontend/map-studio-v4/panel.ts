@@ -5,6 +5,7 @@ import type { PropertyValues } from "lit";
 
 import type {
   HassLike,
+  ColorScheme,
   HassProjection,
   PanelLike,
   RouteLike,
@@ -46,7 +47,7 @@ const forgetFailedPair = (owner: object, language: string): void => {
 
 export class MaticMapPanelV4 extends LitElement {
   static override styles = [tokens, base, css`
-:host { display: block; block-size: 100%; }
+:host { display: block; block-size: 100%; color-scheme: light dark; }
 `];
 
   static override properties = {
@@ -193,7 +194,16 @@ export class MaticMapPanelV4 extends LitElement {
     this.#backend = null;
   }
 
+  // The colour scheme willUpdate picks; the shell and map re-read their
+  // theme colours when it changes (theme-probe.ts watches only the document).
+  #scheme: ColorScheme = "";
+
   protected override willUpdate(changed: PropertyValues<this>): void {
+    // Light or dark follows Home Assistant's theme; the device only when HA
+    // gives no answer (design-system.md Decision 3). Every shadow root inherits it.
+    const dark = this.hass?.themes?.darkMode;
+    this.#scheme = dark === true ? "dark" : dark === false ? "light" : "";
+    this.style.colorScheme = this.#scheme;
     if (changed.has("hass") || changed.has("panel")) {
       const previousHass = changed.get("hass") as HassLike | undefined;
       const connectionChanged = changed.has("hass")
@@ -290,6 +300,7 @@ export class MaticMapPanelV4 extends LitElement {
         .state=${this._workspace}
         .localize=${this.hass?.localize}
         .dates=${this.#projection?.dates}
+        .scheme=${this.#scheme}
         @matic-workspace-intent=${this.#intent}
         @matic-workspace-action=${this.#action}
       ></${shellTag}>

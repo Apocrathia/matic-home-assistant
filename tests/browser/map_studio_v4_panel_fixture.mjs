@@ -267,6 +267,9 @@ export async function installPanelFixture(page, {
     };
     const makePanel = () => {
       const panel = document.createElement(MATIC_MAP_PANEL_TAG);
+      // Home Assistant gives a panel the page's height; a panel in a bare
+      // body would be 0 px tall and lay out as a phone held sideways.
+      panel.style.blockSize = "100dvh";
       panel.panel = { config: {} };
       panel.hass = {
         connected: true,

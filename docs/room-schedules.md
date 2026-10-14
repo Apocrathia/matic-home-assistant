@@ -2,8 +2,8 @@
 
 [Cleaning guide](cleaning.md) · [Actions](actions.md)
 
-These optional schedules are part of the 0.5 development branch. Existing
-plans keep their fixed settings until you enable a room schedule.
+Room schedules are optional. Existing plans keep their fixed settings until
+you turn on a schedule for a room.
 
 ## Choose the work and how often
 
@@ -49,7 +49,7 @@ progress to it.
 Matic Map room cleans use an existing shared schedule by default and do not
 create a saved plan. When scheduled work is due, **Cleaning settings** shows
 **Include scheduled work that's due**; turn it off to use only your settings for
-that clean. Compatible verified work still counts; skipped work stays due for
+that clean. Compatible confirmed work still counts; skipped work stays due for
 the next clean.
 
 Each selected room shows what will run under its name, and lines above the
@@ -67,10 +67,10 @@ aliases are rejected because completion and recovery are recorded per room.
 
 ## Understand progress and results
 
-Only verified completed room work advances progress. Partial, failed, stopped,
-skipped, and unverified work does not. A due rule stays due until the requested
+Only confirmed completed room work advances progress. Partial, failed, stopped,
+skipped, and unconfirmed work does not. A due rule stays due until the requested
 mode and coverage are confirmed. When a vacuum rotation is due, it remains due
-until Matic can verify that a clean used the selected setting; it can therefore
+until Home Assistant can confirm that a clean used the selected setting; it can therefore
 be requested again on later cleans. Delayed results and restart recovery cannot
 count the same clean twice.
 
@@ -81,7 +81,7 @@ for Kitchen**). It asks
 before resetting and works while the robot is idle, the map is live and the
 plan has no unsaved changes; cleaning history is kept separately. A shared reset affects every
 participant in that room's shared schedule. Edits and resets wait while the
-affected room is queued, running, or its result is being verified.
+affected room is queued, running, or its result is still being confirmed.
 
 The current run keeps the settings accepted when it started. Review the next
 run separately; changing future preferences does not rewrite running work.

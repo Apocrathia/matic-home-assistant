@@ -16,6 +16,8 @@ export type CoherenceState =
   | "blocked"
   | "unavailable";
 
+/** The panel's colour scheme from Home Assistant's theme; "" lets the device decide. */
+export type ColorScheme = "light" | "dark" | "";
 export type DataMode = "live" | "history";
 export type MapView = "three" | "top";
 export type MapQuality = "auto" | "efficient" | "balanced" | "maximum";
@@ -299,6 +301,8 @@ export interface WorkspaceState {
   readonly cameras: Readonly<Partial<Record<MapView, CameraPreference>>>;
   readonly managedLock: boolean;
   readonly batteryPercent: number | null;
+  /** The vacuum's `current_area`: the room phrase the robot reports, if any. */
+  readonly currentArea: string | null;
   readonly floor: FloorPresentation;
   readonly map: MapSafetyState;
   readonly host: HostState;
@@ -448,6 +452,8 @@ export interface HassLike {
   /** The user's number and date formatting; `time_zone: "server"` means config.time_zone. */
   readonly locale?: { readonly language?: string; readonly time_zone?: string };
   readonly config?: { readonly time_zone?: string };
+  /** Home Assistant's theme state; `darkMode` is the mode its frontend shows. */
+  readonly themes?: { readonly darkMode?: boolean };
   readonly states?: Readonly<Record<string, HassEntityLike>>;
   readonly user?: {
     readonly id?: string;
@@ -488,6 +494,8 @@ export interface HassProjection {
   readonly host: HostState;
   readonly activity: RobotActivity;
   readonly batteryPercent: number | null;
+  /** The vacuum's `current_area`: the room phrase the robot reports, if any. */
+  readonly currentArea: string | null;
   readonly language: string;
   readonly dates: DateFormat;
   readonly userKey: string;

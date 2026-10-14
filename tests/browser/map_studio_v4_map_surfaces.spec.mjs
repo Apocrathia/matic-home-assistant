@@ -412,6 +412,11 @@ test.describe("Draw tools", () => {
 
   test("a landscape phone gets one icon-only row that scrolls sideways when the sheet is narrower @mobile", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "draw", viewport: { width: 844, height: 390 } });
+    // Fill the viewport, as the HA panel does: the stage's 36rem floor would
+    // make the host taller than the phone, and so a wide layout.
+    await gallery.locator(".stage").evaluate((stage) => {
+      Object.assign(stage.style, { blockSize: "100dvh", minBlockSize: "0", maxInlineSize: "none" });
+    });
     const toolbar = toolbarOf(gallery.locator(".sheet-tools"));
     const tools = toolbar.locator("button");
     await expect(tools).toHaveCount(8);

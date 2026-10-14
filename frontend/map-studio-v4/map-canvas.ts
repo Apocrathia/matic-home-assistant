@@ -7,7 +7,7 @@ import { readCanvasPalette, watchTheme } from "./theme-probe";
 import { base, tokens } from "./tokens";
 import type { PropertyValues, TemplateResult } from "lit";
 
-import type { DateFormat, Localize, NoticePlaceholders, WorkspaceIntent, WorkspaceState } from "./contracts";
+import type { ColorScheme, DateFormat, Localize, NoticePlaceholders, WorkspaceIntent, WorkspaceState } from "./contracts";
 import type { OutlineEditor } from "./outline-editor";
 import { MAP_CANVAS_TAG } from "./element-tags";
 import { GestureController, isNativeSelectControl } from "./gesture-controller";
@@ -72,6 +72,9 @@ export class MaticMapCanvasV4 extends LitElement {
     // Draw's screen-reader recipes (map-help.ts drawRecipes), with the help
     // rows in the views chunk Draw loads anyway.
     recipes: { attribute: false },
+    // The panel's light or dark scheme (shell.ts scheme); a change repaints
+    // with the palette read for it.
+    scheme: { attribute: false },
   };
 
   static override styles = [tokens, base, controls, css`
@@ -89,7 +92,6 @@ export class MaticMapCanvasV4 extends LitElement {
     .map-root {
       position: relative;
       overflow: hidden;
-      min-block-size: 22rem;
       block-size: 100%;
       outline: none;
       isolation: isolate;
@@ -142,6 +144,8 @@ export class MaticMapCanvasV4 extends LitElement {
        its popover keeps the top-right slot under Fit, above the camera steps. */
     :host([narrow]) .map-extras { inset-inline-end: auto; inset-inline-start: 0; inset-block-end: var(--map-sheet-offset, 0px); }
     :host([narrow]) .map-rail { --help-bottom: calc(var(--map-sheet-offset, 0px) + 44px + var(--ms-space-2)); }
+    /* A compact sheet at full leaves one rail row of map: the bottom clusters would cover the top one. */
+    :host([data-short]) :is(.map-extras, .camera-steps) { display: none; }
 
     .map-tools, .view-switch, .appearance-switch, .camera-steps { display: flex; }
 
@@ -284,6 +288,7 @@ export class MaticMapCanvasV4 extends LitElement {
   narrow = false;
   help: TemplateResult | typeof nothing | null = null;
   recipes: TemplateResult | null = null;
+  scheme: ColorScheme = "";
   #helpShown = false;
   #renderer: RendererController | null = null;
   #gestures: GestureController | null = null;
@@ -402,6 +407,7 @@ export class MaticMapCanvasV4 extends LitElement {
     const help = this.renderRoot.querySelector<HTMLElement>(".navigation-help button");
     if (help && !this.#helpShown) help.focus();
     this.#helpShown = Boolean(help);
+    if (changed.has("scheme") && changed.get("scheme") !== undefined) this.#schedulePalette();
     if (!changed.has("state")) return;
     this.#gestures?.observeState(this.state);
     this.outlineEditor?.observeState(this.state);
