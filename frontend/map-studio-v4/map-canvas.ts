@@ -7,7 +7,7 @@ import { readCanvasPalette, watchTheme } from "./theme-probe";
 import { base, tokens } from "./tokens";
 import type { PropertyValues, TemplateResult } from "lit";
 
-import type { DateFormat, Localize, NoticePlaceholders, WorkspaceIntent, WorkspaceState } from "./contracts";
+import type { ColorScheme, DateFormat, Localize, NoticePlaceholders, WorkspaceIntent, WorkspaceState } from "./contracts";
 import type { OutlineEditor } from "./outline-editor";
 import { MAP_CANVAS_TAG } from "./element-tags";
 import { GestureController, isNativeSelectControl } from "./gesture-controller";
@@ -72,6 +72,9 @@ export class MaticMapCanvasV4 extends LitElement {
     // Draw's screen-reader recipes (map-help.ts drawRecipes), with the help
     // rows in the views chunk Draw loads anyway.
     recipes: { attribute: false },
+    // The panel's light or dark scheme (shell.ts scheme); a change repaints
+    // with the palette read for it.
+    scheme: { attribute: false },
   };
 
   static override styles = [tokens, base, controls, css`
@@ -285,6 +288,7 @@ export class MaticMapCanvasV4 extends LitElement {
   narrow = false;
   help: TemplateResult | typeof nothing | null = null;
   recipes: TemplateResult | null = null;
+  scheme: ColorScheme = "";
   #helpShown = false;
   #renderer: RendererController | null = null;
   #gestures: GestureController | null = null;
@@ -403,6 +407,7 @@ export class MaticMapCanvasV4 extends LitElement {
     const help = this.renderRoot.querySelector<HTMLElement>(".navigation-help button");
     if (help && !this.#helpShown) help.focus();
     this.#helpShown = Boolean(help);
+    if (changed.has("scheme") && changed.get("scheme") !== undefined) this.#schedulePalette();
     if (!changed.has("state")) return;
     this.#gestures?.observeState(this.state);
     this.outlineEditor?.observeState(this.state);

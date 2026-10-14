@@ -42,11 +42,41 @@ test("without an answer from Home Assistant the device decides", async ({ page }
 });
 
 test("switching Home Assistant's theme switches the panel", async ({ page }) => {
+  // Every colour the map canvas paints with, from the canvases on the page
+  // (the theme probe's own canvases are never attached).
+  await page.addInitScript(() => {
+    window.__canvasColours = new Set();
+    for (const name of ["fillStyle", "strokeStyle"]) {
+      const native = Object.getOwnPropertyDescriptor(CanvasRenderingContext2D.prototype, name);
+      Object.defineProperty(CanvasRenderingContext2D.prototype, name, {
+        ...native,
+        set(value) {
+          if (this.canvas.isConnected) window.__canvasColours.add(value);
+          native.set.call(this, value);
+        },
+      });
+    }
+  });
   const app = await mount(page, "light", { darkMode: false });
   await expect.poll(() => background(app)).toBe(LIGHT_APP);
+  const shell = page.locator("matic-map-shell-v4");
+  // The contrast-resolved primary and Stop fills and the indicator, which
+  // the canvas strokes and fills its accent with (design-system.md §7).
+  const resolved = () => shell.evaluate((element) => Object.fromEntries(["accent-fill", "danger-fill", "indicator"]
+    .map((name) => [name, element.style.getPropertyValue(`--ms-resolved-${name}`)])));
+  const painted = () => page.evaluate(() => [...window.__canvasColours]);
+  await expect.poll(async () => (await resolved()).indicator).not.toBe("");
+  const light = await resolved();
+  await expect.poll(painted).toContain(light.indicator);
   await page.evaluate(() => {
+    window.__canvasColours.clear();
     const panel = window.__darkPanel;
     panel.hass = { ...panel.hass, themes: { darkMode: true } };
   });
   await expect.poll(() => background(app)).toBe(DARK_APP);
+  await expect.poll(async () => (await resolved())["accent-fill"], "primary resolved for the dark scheme").not.toBe(light["accent-fill"]);
+  const dark = await resolved();
+  expect(dark["danger-fill"], "Stop resolved for the dark scheme").not.toBe(light["danger-fill"]);
+  expect(dark.indicator).not.toBe(light.indicator);
+  await expect.poll(painted, "the canvas repaints with the dark palette").toContain(dark.indicator);
 });

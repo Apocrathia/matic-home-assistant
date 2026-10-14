@@ -11,6 +11,7 @@ import type {
   NoButtonAction,
   PrimaryAction,
   ResetCadenceAction,
+  ColorScheme,
   SaveSettled,
   WorkspaceIntent,
   WorkspaceNotice,
@@ -398,6 +399,7 @@ export class MaticMapShellV4 extends LitElement {
     state: { attribute: false },
     localize: { attribute: false },
     dates: { attribute: false },
+    scheme: { attribute: false },
     _measuredNarrow: { state: true },
     _compact: { state: true },
     _sheetOffset: { state: true },
@@ -414,6 +416,12 @@ export class MaticMapShellV4 extends LitElement {
   localize?: Localize;
   /** How the panel shows timestamps; set by the panel, not part of the snapshot. */
   dates?: DateFormat;
+  /**
+   * The light or dark scheme the panel picked from Home Assistant ("" for the
+   * device's). It changes no document attribute or media query, so watchTheme
+   * misses it: a change re-resolves the theme colours here and in the map.
+   */
+  scheme: ColorScheme = "";
 
   constructor() {
     super();
@@ -703,6 +711,7 @@ export class MaticMapShellV4 extends LitElement {
   }
 
   protected override updated(changed: PropertyValues<this>): void {
+    if (changed.has("scheme") && changed.get("scheme") !== undefined) this.#resolveTheme();
     const instant = this.renderRoot.querySelector<HTMLElement>(".mobile-sheet.instant");
     if (instant) {
       // Resolve the new height while transitions are off, so turning them
@@ -1864,6 +1873,7 @@ export class MaticMapShellV4 extends LitElement {
                 @matic-workspace-intent=${this.#mapIntent}
                 @matic-map-help=${this.#mapHelp}
                 .state=${state}
+                .scheme=${this.scheme}
                 .localize=${this.localize}
                 .dates=${this.dates}
                 .outlineEditor=${this.#outline.value}

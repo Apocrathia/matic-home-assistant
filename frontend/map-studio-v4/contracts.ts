@@ -16,6 +16,8 @@ export type CoherenceState =
   | "blocked"
   | "unavailable";
 
+/** The panel's colour scheme from Home Assistant's theme; "" lets the device decide. */
+export type ColorScheme = "light" | "dark" | "";
 export type DataMode = "live" | "history";
 export type MapView = "three" | "top";
 export type MapQuality = "auto" | "efficient" | "balanced" | "maximum";
