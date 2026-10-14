@@ -148,6 +148,8 @@ export async function mountStageFrame(doc: Document): Promise<void> {
   const { innerWidth: width, innerHeight: height } = view;
   gallery.narrow = height < 480 || width < 768 || (width < 1024 && width <= height);
   for (const [name, value] of Object.entries(theme)) gallery.style.setProperty(name, value);
+  // As the panel does from Home Assistant's theme (design-system.md Decision 3).
+  gallery.style.colorScheme = params.theme;
   if (params.lang === "xa") gallery.localize = pseudoLocalize(await loadCommon());
   gallery.scenario = current.scenario;
   doc.body.append(gallery);

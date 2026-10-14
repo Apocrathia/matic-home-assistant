@@ -30,6 +30,7 @@ export class MaticMapStudioGalleryV4 extends LitElement {
   static override styles = [tokens, base, css`
     :host {
       display: block;
+      color-scheme: light dark;
       color: #1f2933;
       background: #e8edef;
       font-family: Inter, ui-sans-serif, system-ui, sans-serif;

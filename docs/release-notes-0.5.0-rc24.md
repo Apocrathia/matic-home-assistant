@@ -39,7 +39,8 @@ acceptance of identity recovery.
 - **Screens.** On a phone held sideways (under 480 px of height) the panel
   keeps the main action or Stop in the sheet's top row and the page never
   scrolls; from 768 to 1023 px in landscape it keeps a 320 px side panel.
-  Colours that miss contrast on your theme are adjusted.
+  Colours that miss contrast on your theme are adjusted, and light or dark
+  follows Home Assistant's theme rather than the device.
 - **Android.** Touching the map no longer shows the keyboard focus ring, and
   map canvases on touch devices are capped in resolution, bringing a tablet's
   touch-to-screen p95 from about 86 ms to 73–75 ms.
@@ -47,10 +48,9 @@ acceptance of identity recovery.
 ## Owner decisions
 
 - 2026-10-11: all 24 recommendations of the [0.5 UX spec](ux-spec-0.5.md)
-  accepted, including contrast-resolved colours and the unchanged 768 px
-  landscape row. In Full map, Locating keeps Stop and the exit control. Dark
-  mode taken from Home Assistant's theme is accepted but not built yet: this
-  RC still follows the device's setting.
+  accepted, including contrast-resolved colours, the unchanged 768 px
+  landscape row and dark mode from Home Assistant's theme. In Full map,
+  Locating keeps Stop and the exit control.
 - 2026-10-12: assistants can run plans, clean rooms, stop and reset a room
   schedule through the same checks as Matic Map.
 - 2026-10-14: stable waits on the owner walkthrough above, staged by the

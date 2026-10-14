@@ -14,6 +14,10 @@ import { css } from "lit";
 //    value, and `--ms-local` is never `transparent`: the contrast test reads
 //    getComputedStyle(...).backgroundColor, and rgba(0,0,0,0) parses as black.
 //
+// 3. Light or dark is the inherited `color-scheme`: the panel sets it from
+//    Home Assistant's theme (design-system.md Decision 3), so tokens pick
+//    their value with light-dark(). Browsers without it follow the device.
+//
 // Authored compact on purpose. esbuild ships tagged-template contents
 // byte-for-byte -- --minify does not touch them -- so indentation is shipped
 // to every browser.
@@ -23,20 +27,20 @@ export const tokens = css`
 --ms-safe-right: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
 --ms-safe-bottom: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
 --ms-safe-left: var(--safe-area-inset-left, env(safe-area-inset-left, 0px));
---ms-accent: var(--primary-color, #0678ce);
---ms-on-accent: var(--text-primary-color, #fff);
---ms-danger: var(--error-color, #b3261e);
---ms-warning: var(--warning-color, #8a5b00);
---ms-success: var(--success-color, #2e7d4f);
---ms-surface-app: var(--primary-background-color, #f3f6f8);
---ms-surface-card: var(--card-background-color, #fff);
---ms-surface-sunken: var(--secondary-background-color, #eef2f4);
+--ms-accent: var(--primary-color, light-dark(#0678ce, #58a6e8));
+--ms-on-accent: var(--text-primary-color, light-dark(#fff, #102234));
+--ms-danger: var(--error-color, light-dark(#b3261e, #f2837b));
+--ms-warning: var(--warning-color, light-dark(#8a5b00, #e0a63a));
+--ms-success: var(--success-color, light-dark(#2e7d4f, #74c69d));
+--ms-surface-app: var(--primary-background-color, light-dark(#f3f6f8, #101a20));
+--ms-surface-card: var(--card-background-color, light-dark(#fff, #1a262d));
+--ms-surface-sunken: var(--secondary-background-color, light-dark(#eef2f4, #141e23));
 --ms-surface-bar: var(--app-header-background-color, var(--ms-surface-card));
 --ms-bar-text: var(--app-header-text-color, var(--ms-text));
---ms-local: var(--card-background-color, #fff);
---ms-text: var(--primary-text-color, #1f2933);
---ms-text-quiet: color-mix(in srgb, var(--secondary-text-color, #5b6b75) 90%, var(--ms-text));
---ms-text-disabled: var(--disabled-text-color, #8a959c);
+--ms-local: var(--card-background-color, light-dark(#fff, #1a262d));
+--ms-text: var(--primary-text-color, light-dark(#1f2933, #eef4f7));
+--ms-text-quiet: color-mix(in srgb, var(--secondary-text-color, light-dark(#5b6b75, #a4b3bc)) 90%, var(--ms-text));
+--ms-text-disabled: var(--disabled-text-color, light-dark(#8a959c, #7c8a92));
 --ms-line: var(--divider-color, color-mix(in srgb, var(--ms-text) 14%, transparent));
 --ms-line-strong: color-mix(in srgb, var(--ms-text) 26%, transparent);
 --ms-scrim: color-mix(in srgb, #000 46%, transparent);
@@ -67,12 +71,30 @@ export const tokens = css`
 --ms-lh-snug: 1.35;
 --ms-lh-normal: 1.5;
 --ms-track-tight: -0.01em;
---ms-shadow-1: 0 1px 2px rgb(0 0 0 / 10%);
---ms-shadow-2: 0 4px 12px rgb(0 0 0 / 14%);
---ms-shadow-3: 0 12px 32px rgb(0 0 0 / 22%);
+--ms-shadow-1: 0 1px 2px light-dark(rgb(0 0 0 / 10%), rgb(0 0 0 / 40%));
+--ms-shadow-2: 0 4px 12px light-dark(rgb(0 0 0 / 14%), rgb(0 0 0 / 48%));
+--ms-shadow-3: 0 12px 32px light-dark(rgb(0 0 0 / 22%), rgb(0 0 0 / 60%));
 --ms-fast: 120ms;
 --ms-base: 180ms;
 --ms-ease: cubic-bezier(0.2, 0, 0, 1);
+}
+@supports not (color: light-dark(#000, #fff)) {
+:host {
+--ms-accent: var(--primary-color, #0678ce);
+--ms-on-accent: var(--text-primary-color, #fff);
+--ms-danger: var(--error-color, #b3261e);
+--ms-warning: var(--warning-color, #8a5b00);
+--ms-success: var(--success-color, #2e7d4f);
+--ms-surface-app: var(--primary-background-color, #f3f6f8);
+--ms-surface-card: var(--card-background-color, #fff);
+--ms-surface-sunken: var(--secondary-background-color, #eef2f4);
+--ms-local: var(--card-background-color, #fff);
+--ms-text: var(--primary-text-color, #1f2933);
+--ms-text-quiet: color-mix(in srgb, var(--secondary-text-color, #5b6b75) 90%, var(--ms-text));
+--ms-text-disabled: var(--disabled-text-color, #8a959c);
+--ms-shadow-1: 0 1px 2px rgb(0 0 0 / 10%);
+--ms-shadow-2: 0 4px 12px rgb(0 0 0 / 14%);
+--ms-shadow-3: 0 12px 32px rgb(0 0 0 / 22%);
 }
 @media (prefers-color-scheme: dark) {
 :host {
@@ -91,6 +113,7 @@ export const tokens = css`
 --ms-shadow-1: 0 1px 2px rgb(0 0 0 / 40%);
 --ms-shadow-2: 0 4px 12px rgb(0 0 0 / 48%);
 --ms-shadow-3: 0 12px 32px rgb(0 0 0 / 60%);
+}
 }
 }
 @media (prefers-reduced-motion: reduce) {

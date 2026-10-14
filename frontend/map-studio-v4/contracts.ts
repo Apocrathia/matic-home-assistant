@@ -450,6 +450,8 @@ export interface HassLike {
   /** The user's number and date formatting; `time_zone: "server"` means config.time_zone. */
   readonly locale?: { readonly language?: string; readonly time_zone?: string };
   readonly config?: { readonly time_zone?: string };
+  /** Home Assistant's theme state; `darkMode` is the mode its frontend shows. */
+  readonly themes?: { readonly darkMode?: boolean };
   readonly states?: Readonly<Record<string, HassEntityLike>>;
   readonly user?: {
     readonly id?: string;
