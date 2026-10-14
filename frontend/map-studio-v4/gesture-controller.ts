@@ -3,6 +3,7 @@ import type { CoordinateEditCapture, WorkspaceIntent, WorkspaceState } from "./c
 import { canEditCoordinates, captureCoordinateEdit, hasCoordinateEditAdmission } from "./state";
 import {
   RendererController,
+  topView,
   type CameraState,
   type MapPoint,
 } from "./renderer-controller";
@@ -167,13 +168,18 @@ export class GestureController {
     }
     const state = this.#callbacks.state();
     const drawing = state.workflow === "draw" && state.map.available && !state.floor.readOnly;
+    // D1 (map-surfaces.md §10): a drag moves the map on every input; a
+    // Shift-, middle- or right-drag rotates in 3D and moves in 2D, where
+    // there is nothing to rotate. Space-drag moves while drawing. Draw and
+    // the area review look straight down whatever the saved view, so the
+    // effective view decides.
+    const modifier = event.shiftKey || event.button === 1 || event.button === 2;
     const navigation = this.#navigationUntilRelease
       || this.#spacePressed
-      || event.button === 1
-      || event.button === 2
+      || modifier
       || state.draw.tool === "pan";
     if (navigation) {
-      this.#mode = "pan";
+      this.#mode = modifier && topView(state) === "three" ? "orbit" : "pan";
       this.#dragCamera = this.#renderer.camera;
     } else if (drawing && state.draw.tool === "outline"
       && (this.#coordinateCapture = captureCoordinateEdit(state, "outline"))) {
@@ -199,7 +205,7 @@ export class GestureController {
         this.#applyBrush(event.clientX, event.clientY);
       }
     } else {
-      this.#mode = state.view === "three" && !event.shiftKey ? "orbit" : "pan";
+      this.#mode = "pan";
       this.#dragCamera = this.#renderer.camera;
     }
     if (this.#mode === "pan" || this.#mode === "orbit") this.#host.classList.add("navigating");
@@ -453,7 +459,7 @@ export class GestureController {
       );
       return;
     }
-    if (event.altKey && this.#callbacks.state().view === "three") {
+    if (event.altKey && topView(this.#callbacks.state()) === "three") {
       this.#renderer.orbitBy(0, clamp(deltaY, -80, 80) * 0.75);
       return;
     }
@@ -566,7 +572,7 @@ export class GestureController {
     else if (key === "d" && state.workflow === "draw") this.#dispatch({ type: "set-draw-tool", tool: "paint" });
     else if (key === "e" && state.workflow === "draw") this.#dispatch({ type: "set-draw-tool", tool: "erase" });
     else if (["arrowleft", "arrowright", "arrowup", "arrowdown"].includes(key)) {
-      if (state.view === "three" && !event.shiftKey) {
+      if (topView(state) === "three" && !event.shiftKey) {
         const horizontal = key === "arrowleft" ? -24 : key === "arrowright" ? 24 : 0;
         const vertical = key === "arrowup" ? -20 : key === "arrowdown" ? 20 : 0;
         this.#renderer.orbitBy(horizontal, vertical);

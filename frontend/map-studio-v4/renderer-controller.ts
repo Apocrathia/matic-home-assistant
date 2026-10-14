@@ -113,6 +113,14 @@ const rebaseCameraTarget = (
   };
 };
 
+/** Draw and the area review look straight down; every other workflow keeps the user's view. */
+const forcesTop = (state: WorkspaceState | null): boolean =>
+  state?.workflow === "draw" || state?.workflow === "areaReview";
+export const topView = (state: WorkspaceState): MapView => forcesTop(state) ? "top" : state.view;
+/** Room colors replace the photo wherever the map shows the top view. */
+const roomColours = (state: WorkspaceState | null): boolean =>
+  !!state && topView(state) === "top" && state.appearance === "rooms";
+
 const cameraPreferenceIsFit = (view: MapView, preference: CameraPreference | undefined): boolean => {
   if (!preference) return true;
   const top = view === "top";
@@ -542,7 +550,7 @@ export class RendererController {
               sameSceneContext && !this.#fitActive,
               previousScene,
               sameSceneContext,
-              previous ? previous.workflow === "draw" ? "top" : previous.view : null,
+              previous ? topView(previous) : null,
             );
             this.#startGpuUpload(scene, sceneContextKey, state, false, previousScene, false);
           }
@@ -554,7 +562,7 @@ export class RendererController {
             sameSceneContext && !this.#fitActive,
             previousScene,
             sameSceneContext,
-            previous ? previous.workflow === "draw" ? "top" : previous.view : null,
+            previous ? topView(previous) : null,
           );
         }
       }
@@ -571,12 +579,36 @@ export class RendererController {
       this.#qualityScale = qualityScale(state.quality);
       this.#slowFrames = 0;
     }
-    const enteredDraw = previous?.workflow !== "draw" && state.workflow === "draw";
-    const leftDraw = previous?.workflow === "draw" && state.workflow !== "draw";
-    if (!previous || previous.view !== state.view || enteredDraw || leftDraw) {
-      const view = state.workflow === "draw" ? "top" : state.view;
+    // Leaving the area review gives back the camera the user had before it
+    // framed the area (map-surfaces.md §5): live when Draw follows, else as
+    // the top view's saved preference, so the 3D view is untouched.
+    const leftReview = previous?.workflow === "areaReview" && state.workflow !== "areaReview";
+    let published = false;
+    if (leftReview && this.#beforeReview) {
+      const { camera, fit } = this.#beforeReview;
+      this.#beforeReview = null;
+      if (topView(state) === "top") {
+        this.#camera = camera;
+        this.#fitActive = fit;
+        this.#notifyCamera();
+        published = true;
+      } else {
+        this.#callbacks.onCameraPreferences?.({ top: this.#preferenceOf(camera, fit) });
+      }
+    }
+    const view = topView(state);
+    // Entering or leaving a workflow that looks straight down re-reads the
+    // view's preference, as a view change does.
+    const enteredTop = !forcesTop(previous) && forcesTop(state);
+    const leftTop = forcesTop(previous) && !forcesTop(state);
+    if (!previous || previous.view !== state.view || enteredTop || leftTop) {
       this.#camera = this.#preferredCamera(view, state, rebasedPreferences);
       this.#fitActive = this.#preferenceIsFit(view, state, rebasedPreferences);
+    }
+    if (previous?.workflow !== "areaReview" && state.workflow === "areaReview" && state.draw.circles.length) {
+      this.#beforeReview = { camera: this.#camera, fit: this.#fitActive };
+      this.frameCircles(state.draw.circles);
+      published = true;
     }
     if (state.workflow === "draw"
       && previous?.draw.zoomPercent !== state.draw.zoomPercent
@@ -594,8 +626,48 @@ export class RendererController {
     }
     // Publish only the final effective camera. Its percentage also updates the
     // draw control; echoing that rounded percentage must not move the camera.
-    if (rebasedPreferences || enteredDraw) this.#notifyCamera();
+    if (!published && (rebasedPreferences || enteredTop)) this.#notifyCamera();
     this.requestRender();
+  }
+
+  #beforeReview: { readonly camera: CameraState; readonly fit: boolean } | null = null;
+
+  #preferenceOf(camera: CameraState, fit: boolean, home = this.#homeTop): CameraPreference {
+    if (fit) return { yaw: 0, pitch: Math.PI / 2 - 0.018, zoom: 1, targetX: 0, targetZ: 0 };
+    return { yaw: camera.yaw, pitch: camera.pitch, zoom: home / Math.max(0.2, camera.distance), targetX: camera.targetX, targetZ: camera.targetZ };
+  }
+
+  /** The world position of a map point in metres (the overlay's coordinate space). */
+  #worldForMeters(x: number, y: number): readonly [number, number] | null {
+    const scene = this.#scene;
+    if (!scene) return null;
+    const world = this.#worldForCell(x / scene.metadata.metersPerCell - scene.metadata.origin[0], y / scene.metadata.metersPerCell - scene.metadata.origin[1]);
+    return world ? [world[0], world[2]] : null;
+  }
+
+  /** Frames the circles' bounds in the top view with a 12 % margin and publishes the camera. */
+  frameCircles(circles: readonly AreaCircle[]): void {
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const circle of circles) {
+      for (const [x, y] of [[circle.x - circle.radius, circle.y - circle.radius], [circle.x + circle.radius, circle.y + circle.radius]] as const) {
+        const world = this.#worldForMeters(x, y);
+        if (!world) return;
+        minX = Math.min(minX, world[0]); maxX = Math.max(maxX, world[0]);
+        minZ = Math.min(minZ, world[1]); maxZ = Math.max(maxZ, world[1]);
+      }
+    }
+    if (!Number.isFinite(minX)) return;
+    const bounds = this.#measureViewport();
+    const aspect = Math.max(0.2, bounds.width / Math.max(1, bounds.height));
+    const distance = Math.max((maxZ - minZ) / 2, (maxX - minX) / (2 * aspect)) * 1.12;
+    this.setCamera({
+      yaw: 0,
+      pitch: Math.PI / 2 - 0.018,
+      distance,
+      targetX: (minX + maxX) / 2,
+      targetZ: (minZ + maxZ) / 2,
+      orthographic: true,
+    });
   }
 
   setCirclePreview(circles: readonly AreaCircle[] | null, capture?: CoordinateEditCapture): void {
@@ -766,15 +838,9 @@ export class RendererController {
         nextHome,
       );
       const effectiveView = preferenceView
-        ?? (state.workflow === "draw" ? "top" : state.view);
+        ?? (topView(state));
       const home = effectiveView === "top" ? this.#homeTop : this.#homeThree;
-      preferences[effectiveView] = {
-        yaw: this.#camera.yaw,
-        pitch: this.#camera.pitch,
-        zoom: home / Math.max(0.2, this.#camera.distance),
-        targetX: this.#camera.targetX,
-        targetZ: this.#camera.targetZ,
-      };
+      preferences[effectiveView] = this.#preferenceOf(this.#camera, false, home);
       this.#callbacks.onCameraPreferences?.(preferences);
       return preferences;
     }
@@ -875,7 +941,7 @@ export class RendererController {
       seed,
       previousScene,
       preserveCamera,
-      preferenceView: state.workflow === "draw" ? "top" : state.view,
+      preferenceView: topView(state),
       frontierBytes: 0,
       dirtyBlocks: new Set(dirtyBlocks),
       transitionBlocks: new Set(dirtyBlocks),
@@ -958,7 +1024,7 @@ export class RendererController {
         this.#scene = scene;
         this.#sceneContext = context;
         this.#installScene(scene, sameContext && !this.#fitActive, previousScene, sameContext,
-          state.workflow === "draw" ? "top" : state.view);
+          topView(state));
       }
     } else if (!scene && previousScene) {
       this.#scene = null;
@@ -1082,7 +1148,7 @@ export class RendererController {
     if (upload.staging) {
       const currentState = this.#state;
       const currentView = currentState
-        ? currentState.workflow === "draw" ? "top" : currentState.view
+        ? topView(currentState)
         : upload.preferenceView;
       const previousBuffer = this.#buffer;
       this.#buffer = upload.buffer;
@@ -1101,7 +1167,7 @@ export class RendererController {
         currentView,
       );
       if (currentState && rebased) {
-        const view = currentState.workflow === "draw" ? "top" : currentState.view;
+        const view = topView(currentState);
         this.#camera = this.#preferredCamera(view, currentState, rebased);
         this.#fitActive = this.#preferenceIsFit(view, currentState, rebased);
         this.#notifyCamera();
@@ -1292,7 +1358,7 @@ export class RendererController {
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     if (!scene || !this.#program || !this.#vertexArray || !this.#buffer) return;
-    if (this.#state?.view === "top" && this.#state.appearance === "rooms") {
+    if (roomColours(this.#state)) {
       this.#renderedPoints = 0;
       return;
     }
@@ -1339,7 +1405,7 @@ export class RendererController {
   #renderFallback(): void {
     const scene = this.#scene;
     if (this.#mode !== "canvas2d" || !scene
-      || (this.#state?.view === "top" && this.#state.appearance === "rooms")) {
+      || roomColours(this.#state)) {
       this.#cancelFallback();
       this.#renderedPoints = 0;
       return;
@@ -1402,7 +1468,7 @@ export class RendererController {
     if (!scene || !state) return;
     const palette = this.#palette;
     if (this.#mode === "canvas2d" && this.#fallbackCanvas
-      && !(state.view === "top" && state.appearance === "rooms")) {
+      && !roomColours(state)) {
       // A WebGL canvas cannot acquire a 2D context after context loss.
       context.drawImage(this.#fallbackCanvas, 0, 0, bounds.width, bounds.height);
     }
@@ -1418,7 +1484,7 @@ export class RendererController {
       : null;
     // Every room draws with Room names on or in Room colors; otherwise only
     // the selected ones (home-rooms.md §5 Parity, R9).
-    const allRooms = state.labelsVisible || (state.view === "top" && state.appearance === "rooms");
+    const allRooms = state.labelsVisible || roomColours(state);
     if (allRooms || selectedNames.size) {
       context.lineWidth = 1.5;
       context.font = "600 12px system-ui, sans-serif";
@@ -1431,7 +1497,7 @@ export class RendererController {
         context.strokeStyle = selected ? rgba(palette.accent, 1) : rgba(palette.quiet, .7);
         context.fillStyle = selected
           ? rgba(palette.accent, .26)
-          : state.view === "top" && state.appearance === "rooms"
+          : roomColours(state)
             ? rgba(palette.roomFill, .94)
             : rgba(palette.plate, .04);
         context.beginPath();
@@ -1488,6 +1554,18 @@ export class RendererController {
     const circles = preview && hasCoordinateEditAdmission(state, preview.capture)
       ? preview.circles
       : state.draw.circles;
+    if (state.workflow === "areaReview" && circles.length && !palette.forced) {
+      // The review dims everything but the area (map-surfaces.md §5).
+      context.fillStyle = "rgba(0, 0, 0, 0.45)";
+      context.fillRect(0, 0, bounds.width, bounds.height);
+      context.save();
+      context.globalCompositeOperation = "destination-out";
+      context.fillStyle = "#000";
+      context.beginPath();
+      for (const circle of circles) this.#drawCircle(context, circle, false);
+      context.fill();
+      context.restore();
+    }
     if ((state.workflow === "draw" || state.workflow === "areaReview") && circles.length) {
       context.fillStyle = rgba(palette.accent, .22);
       context.strokeStyle = rgba(palette.accent, .92);
@@ -1656,7 +1734,7 @@ export class RendererController {
 
   fit(
     notify = true,
-    view: MapView = this.#state?.workflow === "draw" ? "top" : this.#state?.view ?? "three",
+    view: MapView = this.#state ? topView(this.#state) : "three",
   ): void {
     const top = view === "top";
     this.#camera = top
@@ -1777,12 +1855,12 @@ export class RendererController {
           sameContext && !this.#fitActive,
           previousScene,
           sameContext,
-          state.workflow === "draw" ? "top" : state.view,
+          topView(state),
         );
       }
       this.#startGpuUpload(scene, context, state, false, previousScene, sameContext && !this.#fitActive);
       if (rebased) {
-        const view = state.workflow === "draw" ? "top" : state.view;
+        const view = topView(state);
         this.#camera = this.#preferredCamera(view, state, rebased);
         this.#fitActive = this.#preferenceIsFit(view, state, rebased);
         this.#notifyCamera();

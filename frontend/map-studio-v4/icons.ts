@@ -18,8 +18,10 @@ import {
   mdiClose,
   mdiContentCopy,
   mdiCursorMove,
+  mdiDeleteSweepOutline,
   mdiDotsVertical,
-  mdiDockRight,
+  mdiFullscreen,
+  mdiFullscreenExit,
   mdiEraser,
   mdiFormatText,
   mdiHelpCircleOutline,
@@ -49,7 +51,8 @@ import {
 export const iconBack = mdiArrowLeft;
 export const iconOverflow = mdiDotsVertical;
 export const iconMenu = mdiMenu;
-export const iconWorkspace = mdiDockRight;
+export const iconFullMap = mdiFullscreen;
+export const iconExitFullMap = mdiFullscreenExit;
 export const iconChevronRight = mdiChevronRight;
 export const iconChevronUp = mdiChevronUp;
 export const iconChevronDown = mdiChevronDown;
@@ -65,6 +68,7 @@ export const iconRedo = mdiRedo;
 export const iconPaint = mdiBrush;
 export const iconBrush = mdiCircleOutline;
 export const iconErase = mdiEraser;
+export const iconClear = mdiDeleteSweepOutline;
 export const iconMoveMap = mdiCursorMove;
 export const iconDone = mdiCheck;
 export const iconPlus = mdiPlus;
@@ -92,8 +96,9 @@ export const iconNoticeError = mdiAlertCircle;
 // Sized by CSS (.ms-icon), never by width/height attributes -- an SVG geometry
 // attribute cannot take rem units. `d` is bound, so Lit prepares one template
 // and only swaps the attribute however many icons the tree contains.
-export const icon = (path: string): TemplateResult => html`<svg
-  class="ms-icon"
+// A directional icon (Undo, Redo, Back) mirrors under RTL (design-system.md §4).
+export const icon = (path: string, options?: { readonly directional?: boolean }): TemplateResult => html`<svg
+  class=${options?.directional ? "ms-icon ms-icon--dir" : "ms-icon"}
   viewBox="0 0 24 24"
   fill="currentColor"
   aria-hidden="true"

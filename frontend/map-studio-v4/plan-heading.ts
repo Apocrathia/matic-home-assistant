@@ -197,6 +197,28 @@ export const planCancel = (
   `;
 };
 
+// Draw's Cancel (map-surfaces.md §4 R11): home when Draw opened from home,
+// the area's review when it opened from Redraw, which also reloads the saved
+// outline. Dirty drafts ask first through the launcher's discardDraft.
+export const drawCancel = (
+  state: WorkspaceState,
+  t: Translate,
+  leave: (intent: WorkspaceIntent, launcher: EventTarget | null) => void,
+) => html`
+    <button
+      class="ms-btn ms-btn--block ms-btn--lg ms-btn--secondary"
+      type="button"
+      data-dialog-launcher="discardDraft"
+      @click=${(event: Event) => leave(drawExit(state), event.currentTarget)}
+    >${t("v4_cancel", "Cancel")}</button>
+  `;
+
+/** Where Draw's Back and Cancel go: the saved area's review, else home. */
+export const drawExit = (state: WorkspaceState): WorkspaceIntent =>
+  state.areaDraft.id !== null
+    ? { type: "select-area", areaId: state.areaDraft.id, workflow: "areaReview" }
+    : { type: "open-workflow", workflow: "none" };
+
 /**
  * Where focus goes after leaving a plan view (plan.md §5 Navigation and
  * focus): Review to the room it opened, a step back from Edit to Run's Edit
@@ -204,7 +226,14 @@ export const planCancel = (
  * launcher that is gone, leaves the shell to take the heading.
  */
 const planFocusTarget = (previous: WorkspaceState, state: WorkspaceState, root: ParentNode): HTMLElement | null | undefined => {
-  const views = root.querySelector(WORKFLOW_TAG)?.shadowRoot?.querySelector(PLAN_VIEWS_TAG)?.shadowRoot;
+  const panel = root.querySelector(WORKFLOW_TAG)?.shadowRoot;
+  // Done or Cancel from a redraw lands on the review's Redraw (map-surfaces.md §4).
+  if (previous.workflow === "draw") {
+    return state.workflow === "areaReview" && previous.areaDraft.id !== null
+      ? root.querySelector("[data-redraw]") ?? panel?.querySelector("[data-redraw]")
+      : null;
+  }
+  const views = panel?.querySelector(PLAN_VIEWS_TAG)?.shadowRoot;
   // Run's rows are never open, so an open row on entering Edit is Review's.
   if (state.workflow === "plan" && state.planView === "edit" && state.expandedRoom) {
     return views?.querySelector(`[data-room-disclosure="${CSS.escape(state.expandedRoom)}"]`);

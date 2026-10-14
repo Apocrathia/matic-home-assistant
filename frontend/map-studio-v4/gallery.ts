@@ -3,7 +3,7 @@ import { base, tokens } from "./tokens";
 import { html, unsafeStatic } from "lit/static-html.js";
 import type { PropertyValues } from "lit";
 
-import type { WorkspaceState } from "./contracts";
+import type { DateFormat, WorkspaceAction, WorkspaceState } from "./contracts";
 import { isWorkspaceIntent } from "./contracts";
 import { SHELL_TAG } from "./element-tags";
 import {
@@ -13,7 +13,7 @@ import {
   type GalleryScenario,
 } from "./gallery-state";
 import "./shell";
-import { WorkspaceStore } from "./state";
+import { WorkspaceStore, areaSelection } from "./state";
 
 const shellTag = unsafeStatic(SHELL_TAG);
 
@@ -23,6 +23,7 @@ export class MaticMapStudioGalleryV4 extends LitElement {
     narrow: { type: Boolean, reflect: true },
     controls: { type: Boolean, reflect: true },
     _workspace: { state: true },
+    dates: { attribute: false },
   };
 
   static override styles = [tokens, base, css`
@@ -74,6 +75,7 @@ export class MaticMapStudioGalleryV4 extends LitElement {
 
   scenario: GalleryScenario = "ready";
   narrow = false;
+  dates?: DateFormat;
   controls = true;
   protected _workspace: WorkspaceState = createGalleryState("ready");
 
@@ -121,9 +123,41 @@ export class MaticMapStudioGalleryV4 extends LitElement {
     if (!isWorkspaceIntent(event.detail)) return;
     event.stopPropagation();
     this.#store.dispatch(event.detail);
+    // The effects' share of an area selection, played on the synthetic catalog.
+    if (event.detail.type === "select-area") {
+      this.#store.replace({ ...this.#store.value, ...areaSelection(this.#store.value, event.detail.areaId) });
+    }
+    // The effects' share of a floor or saved-map choice (selectFloor,
+    // selectHistory): the floor's read-only flag and, on a saved floor, its
+    // newest map.
+    const intent = event.detail;
+    if (intent.type === "set-floor" || intent.type === "set-history") {
+      const value = this.#store.value;
+      const floors = value.resources.history.value?.floors ?? [];
+      const floor = intent.type === "set-history"
+        ? floors.find((candidate) => intent.historyId === null ? candidate.active : candidate.snapshots.some((snapshot) => snapshot.id === intent.historyId))
+        : floors.find((candidate) => intent.floorId === "current" ? candidate.active : candidate.id === intent.floorId);
+      if (floor) {
+        const newest = floor.active ? null : [...floor.snapshots].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0] ?? null;
+        const historyId = intent.type === "set-history" ? intent.historyId : newest?.id ?? null;
+        this.#store.replace({
+          ...value,
+          dataMode: historyId ? "history" : "live",
+          floor: { ...value.floor, readOnly: Boolean(historyId) },
+          selection: { ...value.selection, floorId: floor.id, historyId },
+        });
+      }
+    }
     if (this.#store.value.workflow === "rooms") {
       this.#store.replace(withGalleryRoomPreview(this.#store.value));
     }
+  }
+
+  // The one action with no write behind it: Name and save / Done opens the review.
+  #action(event: CustomEvent<WorkspaceAction>): void {
+    if (event.detail?.id !== "review-area") return;
+    event.stopPropagation();
+    this.#store.dispatch({ type: "open-workflow", workflow: "areaReview" });
   }
 
   protected override render() {
@@ -143,7 +177,9 @@ export class MaticMapStudioGalleryV4 extends LitElement {
         <${shellTag}
           class="shell"
           .state=${this._workspace}
+          .dates=${this.dates}
           @matic-workspace-intent=${this.#intent}
+          @matic-workspace-action=${this.#action}
         ></${shellTag}>
       </div>
     `;

@@ -783,7 +783,7 @@ test.describe("Map options and the rail (home-rooms.md §5 Display, §11 MS-HOME
     await expect(menu).toHaveId("map-options");
     await expect.poll(() => focusedText(page)).toBe("button Photo");
     expect(await rowNames(menu)).toEqual([
-      "Photo", "Room colors", "Room names", "Auto detail", "Efficient", "Balanced", "Maximum", "Map diagnostics", "Full screen",
+      "Photo", "Room colors", "Room names", "Auto detail", "Efficient", "Balanced", "Maximum", "Map diagnostics",
     ]);
     await expect(menu.getByRole("group", { name: "Map display" })).toBeVisible();
     await expect(menu.getByRole("group", { name: "Map detail" })).toBeVisible();
@@ -800,17 +800,17 @@ test.describe("Map options and the rail (home-rooms.md §5 Display, §11 MS-HOME
     const gallery = await loadGallery(page, { scenario: "ready", narrow: true });
     await openOptions(gallery);
     const names = [];
-    for (let step = 0; step < 9; step += 1) {
+    for (let step = 0; step < 8; step += 1) {
       await page.keyboard.press("ArrowDown");
       names.push((await focusedText(page)).replace(/^button /, ""));
     }
-    expect(names).toEqual(["Room colors", "Room names", "Auto detail", "Efficient", "Balanced", "Maximum", "Map diagnostics", "Full screen", "Photo"]);
+    expect(names).toEqual(["Room colors", "Room names", "Auto detail", "Efficient", "Balanced", "Maximum", "Map diagnostics", "Photo"]);
     await page.keyboard.press("ArrowUp");
-    await expect.poll(() => focusedText(page)).toBe("button Full screen");
+    await expect.poll(() => focusedText(page)).toBe("button Map diagnostics");
     await page.keyboard.press("Home");
     await expect.poll(() => focusedText(page)).toBe("button Photo");
     await page.keyboard.press("End");
-    await expect.poll(() => focusedText(page)).toBe("button Full screen");
+    await expect.poll(() => focusedText(page)).toBe("button Map diagnostics");
   });
 
   test("display and detail rows change the map and keep the menu open; action rows close it", async ({ page }) => {
@@ -857,12 +857,12 @@ test.describe("Map options and the rail (home-rooms.md §5 Display, §11 MS-HOME
     const gallery = await loadGallery(page, { scenario: "ready", narrow: true });
     await patchState(gallery, { view: "three" });
     const menu = await openOptions(gallery);
-    expect(await rowNames(menu)).toEqual(["Room names", "Auto detail", "Efficient", "Balanced", "Maximum", "Map diagnostics", "Full screen"]);
+    expect(await rowNames(menu)).toEqual(["Room names", "Auto detail", "Efficient", "Balanced", "Maximum", "Map diagnostics"]);
     await page.keyboard.press("Escape");
 
     const wide = await loadGallery(page, { scenario: "ready", viewport: { width: 1180, height: 760 } });
     const wideMenu = await openOptions(wide);
-    expect(await rowNames(wideMenu)).toEqual(["Auto detail", "Efficient", "Balanced", "Maximum", "Map diagnostics", "Full screen"]);
+    expect(await rowNames(wideMenu)).toEqual(["Auto detail", "Efficient", "Balanced", "Maximum", "Map diagnostics"]);
     await expect(wideMenu.getByRole("group", { name: "Map display" })).toHaveCount(0);
     await expect.poll(() => focusedText(page)).toBe("button Auto detail");
     await page.keyboard.press("Escape");
@@ -881,8 +881,9 @@ test.describe("Map options and the rail (home-rooms.md §5 Display, §11 MS-HOME
     await expect(gallery.locator("matic-map-canvas-v4").getByRole("button", { name: "Room names" })).toHaveCount(0);
     await help.click();
     const popover = gallery.getByRole("dialog", { name: "How to move the map" });
-    await expect(popover.locator("dt")).toHaveText(["Touch", "Trackpad", "Mouse", "Keyboard"]);
-    await expect(popover).toContainText("Drag to explore · pinch to zoom · twist two fingers to rotate");
+    // A coarse pointer reads the Touch row alone (map-surfaces.md §5 Help).
+    await expect(popover.locator("dt")).toHaveText(["Touch"]);
+    await expect(popover).toContainText("Drag to move the map · pinch to zoom · twist two fingers to rotate");
     await expect(popover.getByRole("button", { name: "Close" })).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(popover).toHaveCount(0);

@@ -1450,18 +1450,20 @@ test.describe("Map Studio v0.4 foundation", () => {
 
   test("area review holds its controls while a command runs, so Delete can't seem to run", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "area-review-rebind" });
-    const remove = gallery.getByRole("button", { name: "Delete area" });
+    const remove = gallery.getByRole("button", { name: "Delete", exact: true });
     const name = gallery.getByRole("textbox", { name: "Area name" });
     await expect(remove).toBeEnabled();
-    await expect(name).toBeEnabled();
+    await expect(name).toBeEditable();
     await gallery.evaluate((element) => element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), command: "pending" }));
-    await expect(remove).toBeDisabled();
-    await expect(name).toBeDisabled();
+    // Held with a reason (map-surfaces.md §5 R12): focusable, described, inert.
+    await expect(remove).toHaveAttribute("aria-disabled", "true");
+    await expect(name).toHaveAttribute("aria-disabled", "true");
+    await expect(name).toHaveAttribute("readonly", "");
     await remove.click({ force: true });
     await expect(gallery.getByRole("dialog")).toHaveCount(0);
     expect(await gallery.evaluate((element) => element.getWorkspaceSnapshot().dialog)).toBeNull();
     await gallery.evaluate((element) => element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), command: "idle" }));
-    await expect(remove).toBeEnabled();
+    await expect(remove).not.toHaveAttribute("aria-disabled", "true");
   });
 
   test("Delete shows and its dialog stands only while the catalog holds the saved item", async ({ page }) => {
@@ -1477,9 +1479,9 @@ test.describe("Map Studio v0.4 foundation", () => {
       return element.getWorkspaceSnapshot().dialog;
     }, { patch });
 
-    await expect(gallery.getByRole("button", { name: "Delete area" })).toBeVisible();
+    await expect(gallery.getByRole("button", { name: "Delete", exact: true })).toBeVisible();
     expect(await unresolved("area-loading"), "a delete dialog for an area the catalog has not loaded").toBeNull();
-    await expect(gallery.getByRole("button", { name: "Delete area" })).toHaveCount(0);
+    await expect(gallery.getByRole("button", { name: "Delete", exact: true })).toHaveCount(0);
     await expect(gallery.getByRole("dialog")).toHaveCount(0);
 
     await page.evaluate((tag) => document.querySelector(tag).setScenario("plan-saved-intelligent"), GALLERY_TAG);
@@ -2266,7 +2268,11 @@ test.describe("Map Studio v0.4 foundation", () => {
         gallery.replaceWorkspaceState(window.__pausedMapState);
       }, GALLERY_TAG);
       await expect(page.locator(GALLERY_TAG).locator(".scene-window")).toBeVisible();
-      if (!retained) await expect(page.locator(GALLERY_TAG).locator(".map-message")).toContainText("Showing the saved map from");
+      // The card names the state once; the sheet's slot carries the dated notice.
+      if (!retained) {
+        await expect(page.locator(GALLERY_TAG).locator(".map-message")).toHaveText("Saved map is read only");
+        await expect(page.locator(GALLERY_TAG).locator("[data-notice-slot]")).toContainText("Showing the saved map from");
+      }
       else await expect(page.locator(GALLERY_TAG).getByText("Locating the current map").first()).toBeVisible();
       await page.screenshot({ path: testInfo.outputPath(`${retained ? "retained" : "saved"}-map.png`) });
 
@@ -2959,10 +2965,10 @@ test.describe("Map Studio v0.4 foundation", () => {
   });
 
   test("history exposes keyboard navigation buttons and meaningful timeline values", async ({ page, browserName }) => {
-    const gallery = await loadGallery(page, { scenario: "history" });
+    const gallery = await loadGallery(page, { scenario: "history-floors" });
     const floors = gallery.getByRole("group", { name: "Mapped floors" });
-    const current = floors.getByRole("button", { name: "House Live" });
-    const saved = floors.getByRole("button", { name: "Shed Read only" });
+    const current = floors.getByRole("button", { name: "Current floor Live" });
+    const saved = floors.getByRole("button", { name: "Saved floor 1 Saved map" });
     await current.focus();
     // Safari's default keyboard preference uses Option-Tab for native buttons.
     await current.press(browserName === "webkit" ? "Alt+Tab" : "Tab");
@@ -2970,7 +2976,8 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(saved).toHaveAttribute("aria-current", "true");
     const timeline = gallery.getByRole("slider", { name: "Map timeline" });
     await expect(timeline).toHaveAttribute("aria-valuetext", /2026/);
-    await expect(gallery.getByRole("button", { name: "Return to current floor Current" })).toBeVisible();
+    // One way back: Show live map in the bar, no row (map-surfaces.md §5).
+    await expect(gallery.getByRole("button", { name: /Return to current floor/ })).toHaveCount(0);
     await saved.press("Enter");
     expect((await snapshot(page)).selection.floorId).toBe("saved-1");
   });
@@ -4275,7 +4282,6 @@ test.describe("Map Studio v0.4 foundation", () => {
       });
     }, GALLERY_TAG);
     await expect(gallery.locator(".map-message")).toContainText("Saved map unavailable");
-    await expect(gallery.locator(".map-message")).toContainText("Choose another snapshot or return to the live map.");
     await expect(scene).toHaveAttribute("aria-label", "This saved map is unavailable.");
   });
 
@@ -4396,11 +4402,11 @@ test.describe("Map Studio v0.4 foundation", () => {
       const module = window.__galleryModule;
       const galleryElement = document.querySelector(tag);
       galleryElement.replaceWorkspaceState({
-        ...module.createGalleryState("draw"),
+        ...module.createGalleryState("draw-saved"),
         workflow: "areaReview",
       });
     }, GALLERY_TAG);
-    const deleteArea = gallery.getByRole("button", { name: "Delete area" });
+    const deleteArea = gallery.getByRole("button", { name: "Delete", exact: true });
     await deleteArea.click();
     await gallery.getByRole("button", { name: "Cancel" }).click();
     await expect(deleteArea).toBeFocused();
@@ -4435,36 +4441,40 @@ test.describe("Map Studio v0.4 foundation", () => {
     // Precision is a brush popover opened from the dock's Brush button; the
     // zoom stepper and the "400% · 0.20 m" chip no longer exist. Zoom is a
     // view concern handled by the map itself.
-    const brushButton = gallery.getByRole("button", { name: /^Brush width, 0\.60 m/ });
+    const brushButton = gallery.getByRole("button", { name: /^Brush width, 60 cm/ });
     await expect(brushButton).toHaveAttribute("aria-haspopup", "dialog");
     await expect(brushButton).toHaveAttribute("aria-expanded", "false");
     await expect(gallery.getByLabel("Map zoom percent")).toHaveCount(0);
     await brushButton.click();
     await expect(brushButton).toHaveAttribute("aria-expanded", "true");
-    const brush = gallery.getByLabel("Brush width in meters");
+    const brush = gallery.getByLabel("Brush width in centimeters");
     await expect(brush).toBeVisible();
     await expect(gallery.getByRole("slider", { name: "Brush width slider" })).toBeVisible();
     await expect(gallery.getByRole("button", { name: /Zoom in|Zoom out/ })).toHaveCount(0);
-    await brush.fill("0.20");
+    await brush.fill("20");
     await brush.press("Tab");
     await expect.poll(async () => (await snapshot(page)).draw.brushMeters).toBe(0.2);
     await brush.press("Escape");
     await expect.poll(async () => (await snapshot(page)).precisionOpen).toBe(false);
-    await expect(gallery.getByRole("button", { name: /^Brush width, 0\.20 m/ })).toBeFocused();
+    await expect(gallery.getByRole("button", { name: /^Brush width, 20 cm/ })).toBeFocused();
 
     const workspaceToggle = gallery.locator(".workspace-toggle");
-    await expect(workspaceToggle).toHaveAccessibleName("Hide cleaning panel");
+    await expect(workspaceToggle).toHaveAccessibleName("Full map");
+    await expect(workspaceToggle).toHaveAttribute("aria-pressed", "false");
+    // Full map asks for browser full screen (D3), where the browser's own
+    // Escape would leave both at once; the panel-only order is tested here.
+    await page.evaluate(() => { Element.prototype.requestFullscreen = async () => undefined; });
     await workspaceToggle.click();
     await expect.poll(async () => (await snapshot(page)).fullMap).toBe(true);
     await expect(gallery.locator(".inspector")).toBeHidden();
-    await expect(workspaceToggle).toHaveAccessibleName("Show cleaning panel");
-    const precision = gallery.getByRole("button", { name: /^Brush width, 0\.20 m/ });
+    await expect(workspaceToggle).toHaveAttribute("aria-pressed", "true");
+    const precision = gallery.getByRole("button", { name: /^Brush width, 20 cm/ });
     await expect(precision).toBeVisible();
     await precision.click();
     await expect.poll(async () => (await snapshot(page)).precisionOpen).toBe(true);
 
     // Escape order: brush field -> Brush button -> expanded map.
-    await gallery.getByLabel("Brush width in meters").press("Escape");
+    await gallery.getByLabel("Brush width in centimeters").press("Escape");
     await expect.poll(async () => (await snapshot(page)).precisionOpen).toBe(false);
     await expect.poll(async () => (await snapshot(page)).fullMap).toBe(true);
     await expect(precision).toBeFocused();
@@ -4575,7 +4585,8 @@ test.describe("Map Studio v0.4 foundation", () => {
     expect(afterPitch.pitch).not.toBeCloseTo(afterPinch.pitch, 4);
   });
 
-  test("supports mouse orbit, modifier pan, double-click zoom, and keyboard flight", async ({ page }) => {
+  // D1 (map-surfaces.md §10): a plain drag moves the map; Shift-drag rotates.
+  test("supports a plain-drag move, a Shift-drag orbit, double-click zoom, and keyboard flight", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "ready" });
     await gallery.getByRole("button", { name: "3D", exact: true }).click();
     const map = gallery.locator(".map-root");
@@ -4589,9 +4600,9 @@ test.describe("Map Studio v0.4 foundation", () => {
     await page.mouse.move(centerX + 90, centerY + 45, { steps: 5 });
     await page.mouse.up();
     await expect.poll(async () => Boolean((await snapshot(page)).cameras.three)).toBe(true);
-    const afterOrbit = (await snapshot(page)).cameras.three;
-    expect(afterOrbit.yaw).not.toBeCloseTo(-Math.PI / 4, 3);
-    expect(afterOrbit.pitch).not.toBeCloseTo(0.82, 3);
+    const afterPan = (await snapshot(page)).cameras.three;
+    expect(afterPan.yaw).toBeCloseTo(-Math.PI / 4, 3);
+    expect(afterPan.pitch).toBeCloseTo(0.82, 3);
 
     await page.keyboard.down("Shift");
     await page.mouse.move(centerX, centerY);
@@ -4599,14 +4610,15 @@ test.describe("Map Studio v0.4 foundation", () => {
     await page.mouse.move(centerX + 70, centerY - 35, { steps: 4 });
     await page.mouse.up();
     await page.keyboard.up("Shift");
-    const afterPan = (await snapshot(page)).cameras.three;
+    const afterOrbit = (await snapshot(page)).cameras.three;
+    expect(afterOrbit.yaw).not.toBeCloseTo(afterPan.yaw, 3);
+    expect(afterOrbit.pitch).not.toBeCloseTo(afterPan.pitch, 3);
     expect(Math.hypot(
-      afterPan.targetX - afterOrbit.targetX,
-      afterPan.targetZ - afterOrbit.targetZ,
-    )).toBeGreaterThan(0.01);
-    expect(afterPan.yaw).toBeCloseTo(afterOrbit.yaw, 3);
+      afterOrbit.targetX - afterPan.targetX,
+      afterOrbit.targetZ - afterPan.targetZ,
+    )).toBeLessThan(0.001);
 
-    const zoomBeforeDoubleClick = afterPan.zoom;
+    const zoomBeforeDoubleClick = afterOrbit.zoom;
     await page.mouse.dblclick(centerX, centerY);
     await expect.poll(async () => (await snapshot(page)).cameras.three.zoom)
       .toBeGreaterThan(zoomBeforeDoubleClick);
@@ -4625,6 +4637,7 @@ test.describe("Map Studio v0.4 foundation", () => {
 
   test("makes every navigation model discoverable without covering the map permanently", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "ready" });
+    await gallery.getByRole("button", { name: "3D", exact: true }).click();
     // Help is a non-modal dialog anchored to the rail, not a second
     // complementary landmark: the workspace aside is the only one.
     await expect(gallery.getByRole("complementary")).toHaveCount(1);
@@ -4636,8 +4649,8 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(help).toHaveAttribute("aria-expanded", "true");
     const panel = gallery.getByRole("dialog", { name: "How to move the map" });
     await expect(panel).toHaveAttribute("aria-modal", "false");
-    await expect(panel).toContainText("Scroll to pan · pinch to zoom · twist to rotate");
-    await expect(panel).toContainText("Shift, middle, or right drag to pan");
+    await expect(panel).toContainText("Scroll to move the map · pinch to zoom · twist to rotate");
+    await expect(panel).toContainText("right-drag or Shift-drag to rotate");
     await expect(panel).toContainText("WASD to move · Q/E or arrows to orbit");
     await expect(gallery.getByRole("complementary")).toHaveCount(1);
     const close = panel.getByRole("button", { name: "Close" });
@@ -5014,13 +5027,14 @@ test.describe("Map Studio v0.4 foundation", () => {
       const state = element.getWorkspaceSnapshot();
       element.replaceWorkspaceState({ ...state, resources: { ...state.resources, areas: { ...state.resources.areas, value: { ...state.resources.areas.value, areas: [...state.resources.areas.value.areas, { ...state.resources.areas.value.areas[0], id: "other-area", name: "Other area" }] } } } });
     }, GALLERY_TAG);
-    const target = gallery.getByRole("button", { name: "Other area Ready", exact: true });
+    // A saved row reads its name alone (no "Ready" tag, map-surfaces.md §3).
+    const target = gallery.getByRole("button", { name: "Other area", exact: true });
     await target.click();
     const dialog = gallery.getByRole("dialog", { name: "Discard changes?" });
     await expect(dialog).toBeVisible();
-    expect(await snapshot(page)).toMatchObject({ workflow: "draw", selection: { areaId: "entryway" }, draw: { dirty: true } });
+    expect(await snapshot(page)).toMatchObject({ workflow: "draw", selection: { areaId: null }, draw: { dirty: true } });
     await dialog.getByRole("button", { name: "Keep editing" }).click();
-    expect(await snapshot(page)).toMatchObject({ workflow: "draw", selection: { areaId: "entryway" }, draw: { dirty: true } });
+    expect(await snapshot(page)).toMatchObject({ workflow: "draw", selection: { areaId: null }, draw: { dirty: true } });
     await target.click();
     await dialog.getByRole("button", { name: "Discard", exact: true }).click();
     await expect.poll(async () => {
@@ -5256,7 +5270,7 @@ test.describe("Map Studio v0.4 foundation", () => {
 
   test("keeps Stop reachable while paused and strips transition expanded map to safety controls @safety", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "paused" });
-    await gallery.getByRole("button", { name: "Hide cleaning panel" }).click();
+    await gallery.getByRole("button", { name: "Full map", exact: true }).click();
     await expect(gallery.getByRole("button", { name: "Resume cleaning" })).toBeVisible();
     await expect(gallery.getByRole("button", { name: "Stop cleaning" })).toBeVisible();
 
@@ -5270,9 +5284,10 @@ test.describe("Map Studio v0.4 foundation", () => {
     }, GALLERY_TAG);
     await expect.poll(async () => (await snapshot(page)).fullMap).toBe(true);
     await expect(gallery.locator(".map-tools button")).toHaveCount(0);
-    await expect(gallery.getByRole("button", { name: "Show cleaning panel" })).toBeVisible();
+    await expect(gallery.getByRole("button", { name: "Exit full map", exact: true })).toBeVisible();
     await expect(gallery.locator(".full-map-hud")).toContainText("Locating");
-    await expect(gallery.locator(".map-message")).toHaveCount(0);
+    // The canvas card stays while Locating (map-surfaces.md §4 Full map, Locating).
+    await expect(gallery.locator(".map-message")).toContainText("Locating");
   });
 
   test("uses identical map math for the brush cursor and scale", async ({ page }) => {
@@ -5308,11 +5323,11 @@ test.describe("Map Studio v0.4 foundation", () => {
     }
   });
 
-  const DRAW_TOOL_NAMES = ["Points", "Paint", "Erase", "Move map", "Undo", "Redo", /^Brush width, 0\.60 m/];
+  const DRAW_TOOL_NAMES = ["Points", "Paint", "Erase", "Move map", "Undo", "Redo", "Clear", /^Brush width, 60 cm/];
 
   async function expectDrawTools(gallery, tools) {
-    await expect(tools).toHaveCount(7);
-    for (let index = 0; index < 7; index += 1) {
+    await expect(tools).toHaveCount(8);
+    for (let index = 0; index < 8; index += 1) {
       const tool = tools.nth(index);
       await expect(tool).toHaveAccessibleName(DRAW_TOOL_NAMES[index]);
       const bounds = await tool.boundingBox();
@@ -5328,7 +5343,7 @@ test.describe("Map Studio v0.4 foundation", () => {
   }
 
   for (const width of [320, 390]) {
-    test(`fits all seven 44px Draw tools inside the sheet without horizontal overflow at ${width}px`, async ({ page }) => {
+    test(`fits all eight 44px Draw tools inside the sheet without horizontal overflow at ${width}px`, async ({ page }) => {
       await page.setViewportSize({ width, height: 740 });
       const gallery = await loadGallery(page, { scenario: "draw", narrow: true });
       const toolbar = gallery.locator(".draw-tools");
@@ -5349,7 +5364,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     });
   }
 
-  test("docks the seven Draw tools on the map without overlapping the inspector at desktop width", async ({ page }) => {
+  test("docks the eight Draw tools on the map without overlapping the inspector at desktop width", async ({ page }) => {
     await page.setViewportSize({ width: 1180, height: 760 });
     const gallery = await loadGallery(page, { scenario: "draw" });
     const dock = gallery.locator("matic-map-canvas-v4 .map-dock");
@@ -5696,7 +5711,8 @@ test.describe("Map Studio v0.4 foundation", () => {
       // The Rooms rows still on screen match the row selector, so wait for the
       // Draw list itself before measuring its rows.
       await expect(gallery.getByRole("group", { name: "Custom areas" })).toBeVisible();
-      await expectContrast(".list .ms-row small");
+      await expectContrast(".draw-hint");
+      await expectContrast(".ms-section-heading");
       await gallery.evaluate((element) => { element.narrow = true; element.setScenario("rooms"); });
       await expectContrast(".sheet-status");
       await gallery.evaluate((element) => { element.narrow = false; });
@@ -5895,13 +5911,14 @@ test.describe("Map Studio v0.4 foundation", () => {
     const before = await snapshot(page);
     expect(before.draw.circles.length).toBeGreaterThan(0);
 
-    // "Clear" is the draw workflow's secondary action in the action
-    // bar; the toolbar itself no longer carries a Clear button.
-    const clear = gallery.locator(".action-bar").getByRole("button", { name: "Clear", exact: true });
-    await expect(clear).not.toHaveAttribute("aria-disabled", "true");
+    // Clear is a tool in the toolbar (map-surfaces.md §5), undoable, so the
+    // action bar carries only Cancel and the primary.
+    await expect(gallery.locator(".action-bar").getByRole("button", { name: "Clear", exact: true })).toHaveCount(0);
+    const clear = gallery.getByRole("toolbar", { name: "Draw area tools" }).getByRole("button", { name: "Clear", exact: true });
+    await expect(clear).toBeEnabled();
     await clear.click();
     await expect.poll(async () => (await snapshot(page)).draw.circles.length).toBe(0);
-    await expect(clear).toHaveAttribute("aria-disabled", "true");
+    await expect(clear).toBeDisabled();
     await gallery.getByRole("button", { name: "Undo", exact: true }).click();
     await expect.poll(async () => (await snapshot(page)).draw.circles.length)
       .toBe(before.draw.circles.length);
@@ -6036,7 +6053,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       const strings = {
         map_studio_title: "Mapa Matic",
         v4_how_to_move: "Cómo mover el mapa",
-        v4_hide_workspace: "Ocultar espacio de trabajo",
+        v4_full_map: "Mapa completo",
         v4_trackpad: "Panel táctil",
         v4_trackpad_help: "Desplázate para mover · pellizca para ampliar · gira para rotar",
         v4_clean_rooms: "Limpiar habitaciones",
@@ -6050,7 +6067,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     });
     await expect(gallery.getByRole("heading", { name: "Mapa Matic" })).toBeVisible();
     await expect(gallery.getByRole("complementary", { name: "Espacio de trabajo del mapa", exact: true })).toBeVisible();
-    await expect(gallery.getByRole("button", { name: "Ocultar espacio de trabajo" })).toBeVisible();
+    await expect(gallery.getByRole("button", { name: "Mapa completo" })).toBeVisible();
     const help = gallery.getByRole("button", { name: "Cómo mover el mapa" });
     await help.click();
     await expect(gallery.getByRole("dialog", { name: "Cómo mover el mapa" }))
@@ -6114,84 +6131,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await page.evaluate(() => window.__modernPanel.remove());
   });
 
-  test("keeps native browser fullscreen as an optional secondary control @safety", async ({ page }) => {
-    const gallery = await loadGallery(page, { scenario: "ready" });
-    await page.evaluate(() => {
-      window.__v4FullscreenRequested = false;
-      const panel = document.querySelector("matic-map-studio-gallery-v0-4-0");
-      const shell = panel.shadowRoot.querySelector("matic-map-shell-v4");
-      const root = shell.shadowRoot;
-      const app = root.querySelector(".app");
-      let fullscreenElement = null;
-      let exposesScopedFullscreen = true;
-      Object.defineProperty(root, "fullscreenElement", {
-        configurable: true,
-        get: () => exposesScopedFullscreen ? fullscreenElement : null,
-      });
-      Object.defineProperty(document, "fullscreenElement", {
-        configurable: true,
-        get: () => fullscreenElement ? panel : null,
-      });
-      window.__v4ExposeScopedFullscreen = (expose) => {
-        exposesScopedFullscreen = expose;
-      };
-      Element.prototype.requestFullscreen = async function requestFullscreen() {
-        window.__v4FullscreenRequested = this === app;
-        fullscreenElement = this;
-        document.dispatchEvent(new Event("fullscreenchange"));
-      };
-      document.exitFullscreen = async () => {
-        fullscreenElement = null;
-        document.dispatchEvent(new Event("fullscreenchange"));
-      };
-    });
-    await gallery.getByRole("button", { name: "Map options" }).click();
-    // Map options is an ARIA menu (design-system.md §5 Menus); the two
-    // actions are its plain menuitems after the detail radios.
-    const menu = gallery.locator("#map-options");
-    await expect(menu).toHaveAttribute("role", "menu");
-    await expect(menu.getByRole("menuitem")).toHaveText(["Map diagnostics", "Full screen"]);
-    await expect(menu.getByRole("menuitem", { name: /classic/i })).toHaveCount(0);
-    await menu.getByRole("menuitem", { name: "Full screen", exact: true }).click();
-    expect(await page.evaluate(() => window.__v4FullscreenRequested)).toBe(true);
-
-    await gallery.getByRole("button", { name: "Map options" }).click();
-    await expect(gallery.locator("#map-options").getByRole("menuitem", {
-      name: "Leave full screen",
-      exact: true,
-    })).toBeVisible();
-    await gallery.locator("#map-options").getByRole("menuitem", {
-      name: "Leave full screen",
-      exact: true,
-    }).click();
-
-    await gallery.getByRole("button", { name: "Map options" }).click();
-    await expect(gallery.locator("#map-options").getByRole("menuitem", {
-      name: "Full screen",
-      exact: true,
-    })).toBeVisible();
-
-    await page.evaluate(() => window.__v4ExposeScopedFullscreen(false));
-    await gallery.locator("#map-options").getByRole("menuitem", {
-      name: "Full screen",
-      exact: true,
-    }).click();
-    await gallery.getByRole("button", { name: "Map options" }).click();
-    await expect(gallery.locator("#map-options").getByRole("menuitem", {
-      name: "Leave full screen",
-      exact: true,
-    })).toBeVisible();
-    await gallery.locator("#map-options").getByRole("menuitem", {
-      name: "Leave full screen",
-      exact: true,
-    }).click();
-
-    await gallery.getByRole("button", { name: "Map options" }).click();
-    await expect(gallery.locator("#map-options").getByRole("menuitem", {
-      name: "Full screen",
-      exact: true,
-    })).toBeVisible();
-  });
+  // Browser full screen folded into Full map (D3): map_studio_v4_map_surfaces.spec.mjs.
 
   test("coalesces 100 unrelated Home Assistant updates without workspace churn", async ({ page }) => {
     let catalogRequests = 0;
@@ -7494,8 +7434,8 @@ test.describe("Map Studio v0.4 on touch @mobile", () => {
 
     await gallery.evaluate((element) => element.setScenario("draw"));
     const tools = gallery.locator(".sheet-tools .draw-tools button");
-    await expect(tools).toHaveCount(7);
-    for (let index = 0; index < 7; index += 1) await reach(tools.nth(index), `draw tool ${index}`);
+    await expect(tools).toHaveCount(8);
+    for (let index = 0; index < 8; index += 1) await reach(tools.nth(index), `draw tool ${index}`);
   });
 
   for (const width of [320, 390]) {
@@ -8029,7 +7969,9 @@ test("zone perimeter closes automatically and supports extending dragging insert
   }, GALLERY_TAG);
   await gallery.getByRole("button", { name: "Points", exact: true }).click();
   const canvas = gallery.locator(".scene-canvas");
-  await expect(gallery.locator(".zone-help")).toBeVisible();
+  // The canvas carries no Points guidance; the panel's one hint does (map-surfaces.md §6, R10).
+  await expect(gallery.locator(".zone-guidance")).toHaveCount(0);
+  await expect(gallery.locator(".draw-hint")).toHaveText("Click to add points · right-drag to move the map");
   const box = await canvas.boundingBox();
   await page.mouse.click(box.x + box.width * .3 - 45, box.y + box.height * .25 - 40);
   const clear = gallery.getByRole("button", { name: "Clear", exact: true });
@@ -10033,6 +9975,8 @@ test.describe("Map Studio accessibility baselines", () => {
   for (const scenario of ["ready", "rooms", "plans", "plan-saved-intelligent", "plan-saved-ordered", "plan-edit-ordered", "plan-run-paused", "plan-run-blocked", "plan-new", "plan-dirty",
     "plan-cadence-shared", "plan-cadence-blocked", "plan-schedule-available", "plan-schedule-joining", "plan-schedule-conflict",
     "draw", "history", "cleaning", "access",
+    // map-surfaces.md §4: the Draw, area review, history and Full map states (UX5).
+    "draw-points", "draw-redraw", "area-review-saved", "area-review-stale", "history-floors", "full-map-cleaning",
     // home-rooms.md §4: home by state and the Rooms states (UX4).
     "rooms-ready", "rooms-busy", "rooms-failed", "rooms-empty", "room-limit", "home-plan-due", "home-plan-paused",
     "problem", "map-unavailable", "empty", "robot-offline"]) {
@@ -10080,14 +10024,18 @@ test.describe("Map Studio accessibility baselines", () => {
   // home-rooms.md §8 Forced colors, RTL; MS-HOME-11 dark tints.
   for (const [label, setup] of [
     ["dark", (page) => page.emulateMedia({ colorScheme: "dark" })],
-    ["RTL", (page) => page.addInitScript(() => { document.documentElement.dir = "rtl"; })],
+    // The parsed <html> replaces the one an init script would set dir on, so
+    // the direction is set once the page is up.
+    ["RTL", (page) => page.evaluate(() => { document.documentElement.dir = "rtl"; })],
     ["forced colors", (page) => page.emulateMedia({ forcedColors: "active" })],
   ]) {
     test(`rooms-ready at 390 in ${label} has no serious axe finding and keeps Settings in its row @mobile`, async ({ page }) => {
-      await setup(page);
+      if (label !== "RTL") await setup(page);
       await page.setViewportSize({ width: 390, height: 844 });
       const gallery = await loadGallery(page, { scenario: "rooms-ready", narrow: true });
+      if (label === "RTL") await setup(page);
       await settleWorkspace(gallery);
+      await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).direction)).toBe(label === "RTL" ? "rtl" : "ltr");
       await gallery.getByRole("button", { name: "Expand panel" }).click();
       const kitchen = gallery.getByRole("button", { name: "Settings for Kitchen", exact: true });
       await expect(kitchen).toBeVisible();

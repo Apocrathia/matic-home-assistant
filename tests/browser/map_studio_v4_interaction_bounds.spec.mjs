@@ -171,7 +171,8 @@ test("history slider previews on input and loads only on settled change, includi
   await page.evaluate(async (path) => {
     const { createGalleryState } = await import(path);
     const element = document.createElement("matic-map-workflow-v4");
-    element.state = createGalleryState("history");
+    // The scrubber renders from three saved maps (map-surfaces.md §5).
+    element.state = createGalleryState("history-floors");
     element.addEventListener("matic-workspace-intent", (event) => {
       window.__historyIntents.push(event.detail);
     });
@@ -219,7 +220,7 @@ test("keeps keyboard dismissal on the shell after unfocused Full map activation"
   }, module);
   const shell = page.locator("matic-map-shell-v4");
   const toggle = shell.locator(".workspace-toggle");
-  await expect(toggle).toHaveAccessibleName("Hide cleaning panel");
+  await expect(toggle).toHaveAccessibleName("Full map");
   await toggle.evaluate((button) => {
     document.activeElement instanceof HTMLElement && document.activeElement.blur();
     button.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));

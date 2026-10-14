@@ -25,7 +25,7 @@ import {
   WORKFLOW_TAG,
 } from "./element-tags";
 import { edgeDistance, validOutline } from "./area-outline";
-import { renderDrawTools } from "./draw-tools";
+import { heldReasonKey, renderDrawTools } from "./draw-tools";
 import { LazyChunk, chunkStatus, reloadInto, takeResume, type ChunkStatus } from "./lazy-chunk";
 import type { MapOptions } from "./map-options";
 import { isNativeSelectControl } from "./gesture-controller";
@@ -53,7 +53,8 @@ import {
   iconOverflow,
   iconPaused,
   iconRobot,
-  iconWorkspace,
+  iconExitFullMap,
+  iconFullMap,
 } from "./icons";
 import {
   WORKSPACE_ACTION_EVENT,
@@ -70,6 +71,7 @@ import {
   isSelectedRobotUnavailable,
   selectStopSecondaryAction,
   selectPrimaryAction,
+  savedMapPosition,
 } from "./state";
 import type { DialogPresentation } from "./dialog-copy";
 
@@ -90,9 +92,9 @@ interface StatusPresentation {
   readonly recheck?: boolean;
 }
 
-const statusCopy = (state: WorkspaceState, localize?: Localize): StatusPresentation => {
-  const t = (key: string, fallback: string, placeholders?: Record<string, string | number>): string =>
-    translate(localize, key, fallback, placeholders);
+const statusCopy = (state: WorkspaceState, localize?: Localize, dates?: DateFormat): StatusPresentation => {
+  const t = (key: string, fallback: string, placeholders?: NoticePlaceholders): string =>
+    translate(localize, key, fallback, placeholders, dates);
   if (!state.host.connected) return { title: t("v4_reconnecting", "Reconnecting"), detail: t("v4_ha_offline", "Home Assistant is offline"), icon: iconOffline, notable: true };
   if (!state.host.administrator) return { title: t("v4_access_required", "Access required"), detail: t("v4_admin_only", "Administrator only"), icon: iconOffline, notable: true };
   if (state.host.robotCount === 0) return { title: t("v4_no_robot_short", "No robot"), detail: t("v4_set_up_robot", "Set up a robot"), icon: iconOffline, notable: true };
@@ -100,18 +102,11 @@ const statusCopy = (state: WorkspaceState, localize?: Localize): StatusPresentat
   if (!state.host.robotConnected) return { title: t("v4_robot_offline", "Robot offline"), detail: t("v4_last_map_read_only", "Last known map · read only"), icon: iconOffline, notable: true };
   if (state.activity === "problem") return { title: t("v4_needs_attention", "Needs attention"), detail: t("v4_check_robot", "Check the robot"), icon: iconOffline, notable: true };
   if (state.dataMode === "history") {
-    const floor = state.resources.history.value?.floors.find(
-      (candidate) => candidate.id === state.selection.floorId,
-    );
-    const position = floor?.snapshots.findIndex(
-      (snapshot) => snapshot.id === state.selection.historyId,
-    ) ?? -1;
-    const count = floor?.snapshots.length ?? 0;
+    // shell.md §4 row 7: the date and place of the saved map, as the chip says.
+    const saved = savedMapPosition(state);
     return {
       title: t("v4_saved_map", "Saved map"),
-      detail: position >= 0
-        ? t("v4_read_only_position", "Read only · {position} of {count}", { position: position + 1, count })
-        : t("v4_read_only", "Read only"),
+      detail: saved ? t("v4_saved_map_position", "{date} · {position} of {count}", { date: { date: saved.date }, position: saved.position, count: saved.count }) : "",
       icon: iconHistory,
       notable: false,
     };
@@ -252,7 +247,7 @@ const workflowCopy = (state: WorkspaceState, localize?: Localize): {
   readonly title: string;
   readonly description: string;
 } => {
-  const t = (key: string, fallback: string): string => translate(localize, key, fallback);
+  const t = (key: string, fallback: string, placeholders?: NoticePlaceholders): string => translate(localize, key, fallback, placeholders);
   switch (state.workflow) {
     case "rooms":
       // The view renders its own description, so the rows can be described by it (R6).
@@ -268,8 +263,12 @@ const workflowCopy = (state: WorkspaceState, localize?: Localize): {
         title: state.planView === "run" ? state.planDraft.name : state.planDraft.id ? t("v4_edit_plan", "Edit plan") : t("v4_new_plan", "New plan"),
         description: "",
       };
-    case "areaReview":
-      return { title: t("v4_name_this_area", "Name this area"), description: t("area_details_hint", "Name the area and choose cleaning settings.") };
+    case "areaReview": {
+      // New: a name to give. Saved: its name; after a map change, a check (map-surfaces.md §4).
+      const draft = state.areaDraft;
+      if (draft.id === null) return { title: t("v4_name_this_area", "Name this area"), description: t("area_details_hint", "Name the area and choose cleaning settings.") };
+      return { title: draft.canRebind || draft.status === "review" ? t("v4_check_area", "Check {name}", { name: draft.name }) : draft.name, description: "" };
+    }
     case "history":
       return { title: t("v4_map_history", "Map history"), description: t("v4_map_history_detail", "Saved maps show one floor each. They can't be edited and never show where the robot is now.") };
     case "support":
@@ -390,7 +389,7 @@ export class MaticMapShellV4 extends LitElement {
     dates: { attribute: false },
     _measuredNarrow: { state: true },
     _sheetOffset: { state: true },
-    _browserFullscreen: { state: true },
+    _helpOpen: { state: true },
     _sheetDetent: { state: true },
     _polite: { state: true },
     _alert: { state: true },
@@ -417,7 +416,13 @@ export class MaticMapShellV4 extends LitElement {
   }
   protected _measuredNarrow = false;
   protected _sheetOffset = 0;
-  protected _browserFullscreen = false;
+  // The help popover (map-help.ts, in the views chunk) is the shell's: it
+  // opens from the rail "?" and closes from Close, Escape (after the menu,
+  // shell.md §5) or a change of workflow or Full map. The canvas renders it
+  // beside its "?".
+  protected _helpOpen = false;
+  #helpLauncher: HTMLElement | null = null;
+  #helpCoarse = false;
   protected _sheetDetent: SheetDetent = "half";
   // The two live regions (shell.md §4 rule 6). Each holds only its newest
   // message: the polite one for detent, status title and non-error notices,
@@ -481,31 +486,13 @@ export class MaticMapShellV4 extends LitElement {
   #drag: SheetDrag | null = null;
   #bodySwipe: BodySwipe | null = null;
 
-  #fullscreenElement(): Element | null {
-    const root = this.renderRoot;
-    return root instanceof ShadowRoot
-      ? root.fullscreenElement ?? document.fullscreenElement
-      : document.fullscreenElement;
-  }
-
+  // D3 (map-surfaces.md §10): Full map asks the browser for full screen
+  // and leaves it on exit; leaving the browser's full screen (its own
+  // Escape, say) leaves Full map with the same focus return. A browser
+  // that refuses keeps the panel-only Full map.
   readonly #fullscreenChange = (): void => {
-    this._browserFullscreen = this.#isAppFullscreen();
+    if (!document.fullscreenElement && this.state.fullMap) this.#intent({ type: "exit-full-map" });
   };
-
-  #isAppFullscreen(): boolean {
-    const root = this.renderRoot;
-    const app = root.querySelector(".app");
-    const scopedFullscreenElement = root instanceof ShadowRoot ? root.fullscreenElement : null;
-    if (scopedFullscreenElement) return scopedFullscreenElement === app;
-
-    const documentFullscreenElement = document.fullscreenElement;
-    for (let current: Node | null = this; current;) {
-      if (current === documentFullscreenElement) return true;
-      const tree = current.getRootNode();
-      current = tree instanceof ShadowRoot ? tree.host : null;
-    }
-    return false;
-  }
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -718,7 +705,11 @@ export class MaticMapShellV4 extends LitElement {
       if (previous?.precisionOpen && !this.state.precisionOpen) {
         this.#brushLauncher()?.focus();
       }
+      if (this._helpOpen && previous && (previous.workflow !== this.state.workflow || previous.fullMap !== this.state.fullMap)) {
+        this.#closeHelp(false);
+      }
       if (previous?.fullMap && !this.state.fullMap) {
+        if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
         const launcher = this.#workspaceLauncher;
         this.#workspaceLauncher = null;
         void this.updateComplete.then(() => {
@@ -816,7 +807,7 @@ export class MaticMapShellV4 extends LitElement {
         // so a key pressed straight away still reaches the shell.
         void this.updateComplete.then(() => {
           if (state.workflow === "none") return this.#focusHomeLauncher();
-          if (previous.workflow !== "plan") return this.#focusPanel();
+          if (previous.workflow !== "plan" && previous.workflow !== "draw") return this.#focusPanel();
           requestAnimationFrame(() => {
             if (!this.#views.value?.focusPlanTarget(previous, state, this.renderRoot, isVisible)) this.#focusPanel();
           });
@@ -884,8 +875,8 @@ export class MaticMapShellV4 extends LitElement {
       this.#intent({ type: "set-history", historyId: null });
       return;
     }
-    if (action.id === "clear-draft") {
-      this.#intent({ type: "clear-draft" });
+    if (action.id === "redraw") {
+      this.#intent({ type: "open-workflow", workflow: "draw" });
       return;
     }
     this.#dispatchAction(action.id);
@@ -1194,8 +1185,18 @@ export class MaticMapShellV4 extends LitElement {
 
   #toggleWorkspace(event: Event): void {
     this.#workspaceLauncher = event.currentTarget as HTMLElement;
-    this.#intent({ type: this.state.fullMap ? "exit-full-map" : "enter-full-map" });
+    if (this.state.fullMap) {
+      this.#intent({ type: "exit-full-map" });
+      return;
+    }
+    this.#intent({ type: "enter-full-map" });
+    // The root, not .app: its dialogs and toasts are .app's siblings.
+    Promise.resolve(this.renderRoot.querySelector<HTMLElement>(".root")?.requestFullscreen?.()).catch(() => undefined);
   }
+
+  readonly #exitFullMap = (): void => {
+    this.#intent({ type: "exit-full-map" });
+  };
 
   // A failed menu load gets the chunk recovery every other chunk has.
   readonly #toggleOptions = (event: Event): void => {
@@ -1216,11 +1217,25 @@ export class MaticMapShellV4 extends LitElement {
     this.#workflow("support");
   };
 
-  readonly #toggleFullscreen = (): void => {
-    const app = this.renderRoot.querySelector<HTMLElement>(".app");
-    if (this.#fullscreenElement()) void document.exitFullscreen();
-    else void app?.requestFullscreen();
+  // The rail "?" toggles; Escape in the canvas while help shows closes.
+  readonly #mapHelp = (event: Event): void => {
+    if (this._helpOpen) this.#closeHelp(true);
+    else this.#openHelp(event.composedPath()[0] as HTMLElement);
   };
+
+  // A press before the views chunk is ready shows its status in the rail
+  // and opens once it settles; a failed load has the chunk's Try again.
+  #openHelp(launcher: HTMLElement | null): void {
+    this.#helpLauncher = launcher;
+    this.#helpCoarse = window.matchMedia("(any-pointer: coarse)").matches;
+    this.#views.request();
+    this._helpOpen = true;
+  }
+
+  #closeHelp(restoreFocus: boolean): void {
+    this._helpOpen = false;
+    if (restoreFocus) this.#helpLauncher?.focus();
+  }
 
   #openBrush(): void {
     this.#intent({
@@ -1282,6 +1297,10 @@ export class MaticMapShellV4 extends LitElement {
       this.#options.value.menu.close(true);
       return;
     }
+    if (this._helpOpen) {
+      this.#closeHelp(true);
+      return;
+    }
     if (this.state.dialog === "discardDraft") {
       this.#keepDraft();
       return;
@@ -1336,6 +1355,7 @@ export class MaticMapShellV4 extends LitElement {
         type="button"
         aria-disabled=${action.enabled ? nothing : "true"}
         aria-describedby=${reason ? reasonId : nothing}
+        data-redraw=${action.id === "redraw" ? "" : nothing}
         aria-label=${action.id === "stop" ? this.#t("v4_stop_cleaning_label", "Stop cleaning")
           : action.id === "run-plan" ? this.#t("v4_action_run_plan_named", "Run plan {plan}", { plan: this.state.planDraft.name })
           : nothing}
@@ -1353,15 +1373,22 @@ export class MaticMapShellV4 extends LitElement {
       ? this.#views.value?.roomsSummary(this.#tr, state) ?? ""
       : "";
     const editing = state.workflow === "plan" && state.planView === "edit";
+    // Draw pairs Cancel with its primary too, unless Stop holds the bar's
+    // second place (shell.md §3); Back in the heading then keeps the exit.
+    const drawing = state.workflow === "draw" && !secondary;
+    // The area review pairs Redraw, first, with its primary (map-surfaces.md §4).
+    const reviewing = secondary?.id === "redraw";
     // No bar when it would be empty: idle home has none (home-rooms.md §3).
-    if (!summary && !editing && !(primary && "label" in primary) && !secondary) return nothing;
-    // Edit pairs Cancel with the primary.
+    if (!summary && !editing && !drawing && !(primary && "label" in primary) && !secondary) return nothing;
+    const leave = (intent: WorkspaceIntent, launcher: EventTarget | null) => this.#leave(intent, launcher);
+    const second = secondary ? this.#actionButton(secondary, "ms-btn ms-btn--block ms-btn--lg ms-btn--secondary", "secondary-reason") : nothing;
     return html`
-      <div class=${editing ? "action-bar paired" : "action-bar"}>
+      <div class=${editing || drawing || reviewing ? "action-bar paired" : "action-bar"}>
         ${summary ? html`<p class="action-summary">${summary}</p>` : nothing}
-        ${editing ? this.#views.value?.planCancel(state, primary, this.#tr, (intent, launcher) => this.#leave(intent, launcher)) : nothing}
+        ${editing ? this.#views.value?.planCancel(state, primary, this.#tr, leave) : drawing ? this.#views.value?.drawCancel(state, this.#tr, leave) : nothing}
+        ${reviewing ? second : nothing}
         ${primary ? this.#actionButton(primary, "ms-btn ms-btn--block ms-btn--lg ms-btn--primary", "primary-reason") : nothing}
-        ${secondary ? this.#actionButton(secondary, "ms-btn ms-btn--block ms-btn--lg ms-btn--secondary", "secondary-reason") : nothing}
+        ${reviewing ? nothing : second}
       </div>
     `;
   }
@@ -1598,6 +1625,7 @@ export class MaticMapShellV4 extends LitElement {
       .localize=${this.localize}
       .dates=${this.dates}
       .retry=${this.#retry}
+      .narrow=${narrow}
       @matic-workspace-intent=${this.#captureDialogLauncher}
     ></${workflowTag}>`;
   }
@@ -1612,7 +1640,10 @@ export class MaticMapShellV4 extends LitElement {
   #back(state: WorkspaceState, grip: boolean) {
     if (state.workflow === "none" || (state.workflow === "plan" && state.planView === "edit")) return nothing;
     const plan = state.workflow === "plan" && state.planOrigin !== "home";
-    const name = plan ? this.#t("v4_back_to_plans", "Back to plans") : this.#t("v4_back_to_all_tasks", "Back to all tasks");
+    const area = state.workflow === "draw" && state.areaDraft.id !== null ? state.areaDraft.name : null;
+    const name = plan ? this.#t("v4_back_to_plans", "Back to plans")
+      : area !== null ? this.#t("v4_back_to_area", "Back to {name}", { name: area })
+        : this.#t("v4_back_to_all_tasks", "Back to all tasks");
     return html`
       <button
         class=${grip ? "sheet-back ms-btn ms-btn--icon ms-btn--sm" : "panel-back ms-btn ms-btn--secondary"}
@@ -1620,8 +1651,13 @@ export class MaticMapShellV4 extends LitElement {
         aria-label=${name}
         title=${grip ? name : nothing}
         data-dialog-launcher="discardDraft"
-        @click=${(event: Event) => this.#leave({ type: "open-workflow", workflow: plan ? "plans" : "none" }, event.currentTarget)}
-      >${icon(iconBack)}${grip ? nothing : html`<span class="ms-btn__label">${plan ? this.#t("v4_your_plans", "Your plans") : this.#t("v4_all_tasks", "All tasks")}</span>`}</button>
+        @click=${(event: Event) => this.#leave(
+          plan ? { type: "open-workflow", workflow: "plans" }
+            : area !== null ? { type: "select-area", areaId: state.areaDraft.id, workflow: "areaReview" }
+              : { type: "open-workflow", workflow: "none" },
+          event.currentTarget,
+        )}
+      >${icon(iconBack, { directional: true })}${grip ? nothing : html`<span class="ms-btn__label">${plan ? this.#t("v4_your_plans", "Your plans") : area !== null ? html`<bdi>${area}</bdi>` : this.#t("v4_all_tasks", "All tasks")}</span>`}</button>
     `;
   }
 
@@ -1632,7 +1668,7 @@ export class MaticMapShellV4 extends LitElement {
       <div class="panel-top">
         <div class="panel-heading">
           ${this.#back(state, false)}
-          <h2 id="workspace-title" tabindex="-1">${(plan && this.#views.value?.planTitle(state, title, this.#tr)) || title}</h2>
+          <h2 id="workspace-title" tabindex="-1">${(plan && this.#views.value?.planTitle(state, title, this.#tr)) || (state.workflow === "areaReview" && state.areaDraft.id !== null ? html`<bdi>${title}</bdi>` : title)}</h2>
           ${plan ? this.#views.value?.planTools(state, this.localize, this.#captureDialogLauncher) : nothing}
         </div>
         ${state.notice ? html`<div class="notice" data-notice-slot data-tone=${state.notice.tone}>${this.#noticeBody(state.notice, this.#closeNotice, this.#t("v4_close", "Close"))}</div>` : nothing}
@@ -1662,26 +1698,27 @@ export class MaticMapShellV4 extends LitElement {
     const state = this.state;
     const narrow = state.narrowHint || this._measuredNarrow;
     const options = this.#options.value;
-    const status = statusCopy(state, this.localize);
+    const status = statusCopy(state, this.localize, this.dates);
     const selectedRobotUnavailable = isSelectedRobotUnavailable(state);
     const primary = selectPrimaryAction({ ...state, narrowHint: narrow });
-    const secondary = selectStopSecondaryAction(state);
+    // Stop takes the bar when work is stoppable (shell.md §3) and Redraw moves
+    // into the body; else the area review pairs Redraw with its primary, held
+    // with the R12 reason (map-surfaces.md §4).
+    const held = heldReasonKey(state);
+    const redraw: PrimaryAction | null = state.workflow === "areaReview" && !hasStoppableWork(state)
+      ? { id: "redraw", label: "Redraw", labelKey: "v4_edit_outline", kind: "neutral", enabled: !held, ...(held ?? {}) }
+      : null;
+    const secondary = selectStopSecondaryAction(state) ?? redraw;
     const statusAction = !narrow && primary.id === "stop"
       ? primary
       : !narrow && secondary?.id === "stop" ? secondary : null;
     const footerPrimary = statusAction && statusAction === primary ? null : primary;
-    const clearDrawing: PrimaryAction | null = state.workflow === "draw" && state.dataMode === "live"
-      ? {
-        id: "clear-draft",
-        label: "Clear",
-        labelKey: "v4_clear_drawing",
-        kind: "neutral",
-        enabled: state.draw.circles.length > 0 || Boolean(state.draw.outline?.points.length),
-      }
-      : null;
-    const footerSecondary = statusAction && statusAction === secondary ? null : (secondary ?? clearDrawing);
+    const footerSecondary = statusAction && statusAction === secondary ? null : secondary;
     const locatingInFullMap = state.fullMap
       && (state.coherence === "verifying" || state.coherence === "booting");
+    // The one Draw hint, above the sheet's tool rows so it reads at peek. The
+    // sheet grows upwards, so its arrival with the views chunk moves no tool.
+    const sheetHint = narrow && state.workflow === "draw" && this.#views.value?.drawHint(this.#tr, state);
     const canToggleWorkspace = state.fullMap || (
       state.host.administrator && state.host.robotCount > 0 && state.map.available
     );
@@ -1709,37 +1746,32 @@ export class MaticMapShellV4 extends LitElement {
     // button while that save is in flight.
     const busy = discard && (state.command === "pending" || this.#dialogSave !== null);
     const save = discard && (primary.id === "save-plan" || primary.id === "save-area") && (primary.enabled || busy) ? primary.id : null;
-    const sheetOffset = narrow && !state.fullMap ? `--map-sheet-offset:${this._sheetOffset}px` : "--map-sheet-offset:0px";
+    // The HUD takes the sheet's band in Full map, so the rail, dock and
+    // scale lift above it as they do above the sheet (nothing is covered).
+    const sheetOffset = state.fullMap ? "--map-sheet-offset:calc(var(--ms-control-lg) + 3 * var(--ms-space-3))"
+      : narrow ? `--map-sheet-offset:${this._sheetOffset}px` : "--map-sheet-offset:0px";
     const showDrawTools = narrow && state.workflow === "draw";
+    const help = !this._helpOpen ? null : this.#views.value
+      ? this.#views.value.renderMapHelp({ state, coarse: this.#helpCoarse, t: (key, fallback) => this.#t(key, fallback), close: () => this.#closeHelp(true) })
+      : chunkStatus(this.#views.status, this.localize, this.#retry);
     const precisionOpen = state.precisionOpen && state.workflow === "draw";
     // Success and error always toast; info and warning only while the slot is
     // off-screen (sheet at peek, or Full map).
     const toast = this._toast && (this._toast.tone === "success" || this._toast.tone === "error"
       || state.fullMap || (narrow && this._sheetDetent === "peek")) ? this._toast : null;
     return html`
-      <div class=${`root ${narrow ? "narrow" : "wide"}`} @keydown=${this.#keyboard}>
+      <div class=${`root ${narrow ? "narrow" : "wide"}`} ?data-dock=${!narrow && state.workflow === "draw"} @keydown=${this.#keyboard}>
         <button class="skip-link ms-btn ms-btn--primary" type="button" @click=${this.#skipToMap}>${this.#t("v4_skip_to_map", "Skip to the map")}</button>
         <button class="skip-link ms-btn ms-btn--primary" type="button" @click=${this.#skipToWorkspace}>${this.#t("v4_skip_to_workspace", "Skip to the panel")}</button>
         <div class="app" ?inert=${Boolean(dialog)}>
           <header class="app-bar">
-            ${!state.precisionOpen ? html`
-              <button
-                class="nav nav--menu ms-btn ms-btn--icon"
-                type="button"
-                aria-label=${this.#t("v4_open_navigation", "Open Home Assistant sidebar")}
-                title=${this.#t("v4_open_navigation", "Open Home Assistant sidebar")}
-                @click=${this.#toggleNavigation}
-              >${icon(iconMenu)}</button>
-            ` : nothing}
-
-            ${state.precisionOpen ? html`
-              <button
-                class="nav ms-btn ms-btn--icon"
-                type="button"
-                aria-label=${this.#t("v4_back", "Back")}
-                @click=${() => this.#intent({ type: "dismiss-top-layer" })}
-              >${icon(iconBack)}</button>
-            ` : nothing}
+            <button
+              class="nav nav--menu ms-btn ms-btn--icon"
+              type="button"
+              aria-label=${this.#t("v4_open_navigation", "Open Home Assistant sidebar")}
+              title=${this.#t("v4_open_navigation", "Open Home Assistant sidebar")}
+              @click=${this.#toggleNavigation}
+            >${icon(iconMenu)}</button>
             <h1 class="title">${this.#t("map_studio_title", "Matic Map")}</h1>
             ${state.robots.length > 1 || selectedRobotUnavailable ? html`
               <select
@@ -1763,16 +1795,11 @@ export class MaticMapShellV4 extends LitElement {
               <button
                 class="workspace-toggle ms-btn ms-btn--icon"
                 type="button"
-                aria-label=${state.fullMap
-                  ? this.#t("v4_show_workspace", "Show cleaning panel")
-                  : this.#t("v4_hide_workspace", "Hide cleaning panel")}
-                aria-controls="map-workspace"
-                aria-expanded=${String(!state.fullMap)}
-                title=${state.fullMap
-                  ? this.#t("v4_show_workspace", "Show cleaning panel")
-                  : this.#t("v4_hide_workspace", "Hide cleaning panel")}
+                aria-label=${this.#t("v4_full_map", "Full map")}
+                aria-pressed=${String(state.fullMap)}
+                title=${this.#t("v4_full_map", "Full map")}
                 @click=${this.#toggleWorkspace}
-              >${icon(iconWorkspace)}</button>
+              >${icon(iconFullMap)}</button>
             ` : nothing}
             <div class="overflow-wrap" @keydown=${options?.menu.keydown} @focusout=${options?.menu.focusout}>
               <button
@@ -1787,11 +1814,9 @@ export class MaticMapShellV4 extends LitElement {
               ${options?.menu.open ? options.render({
                 state,
                 narrow,
-                browserFullscreen: this._browserFullscreen,
                 t: (key, fallback) => this.#t(key, fallback),
                 intent: (intent) => this.#intent(intent),
                 diagnostics: this.#openDiagnostics,
-                fullscreen: this.#toggleFullscreen,
               }) : nothing}
             </div>
           </header>
@@ -1802,11 +1827,14 @@ export class MaticMapShellV4 extends LitElement {
                 class="map-canvas"
                 style=${sheetOffset}
                 @matic-workspace-intent=${this.#mapIntent}
+                @matic-map-help=${this.#mapHelp}
                 .state=${state}
                 .localize=${this.localize}
                 .dates=${this.dates}
                 .outlineEditor=${this.#outline.value}
                 .narrow=${narrow}
+                .help=${help}
+                .recipes=${state.workflow === "draw" ? this.#views.value?.drawRecipes(this.#tr) ?? null : null}
               >${this.#floorSwitcher(state)}
                 ${narrow && !state.fullMap && this._sheetDetent === "full" ? html`
                   <button
@@ -1819,11 +1847,6 @@ export class MaticMapShellV4 extends LitElement {
                   ></button>
                 ` : nothing}
               </${mapCanvasTag}>
-              ${!narrow && precisionOpen ? html`
-                <div class="precision-popover">
-                  <${precisionControlsTag} compact .state=${state} .localize=${this.localize}></${precisionControlsTag}>
-                </div>
-              ` : nothing}
             </div>
 
             <!--
@@ -1873,12 +1896,9 @@ export class MaticMapShellV4 extends LitElement {
                 ${showDrawTools ? html`
                   <div class="sheet-tools">
                     ${chunkStatus(this.#tools("draw"), this.localize, this.#retry)}
+                    ${sheetHint ? html`<p class="draw-hint sheet-hint">${sheetHint}</p>` : nothing}
+                    ${precisionOpen ? html`<${precisionControlsTag} class="sheet-precision" .state=${state} .localize=${this.localize}></${precisionControlsTag}>` : nothing}
                     ${renderDrawTools(state, { intent: (intent) => this.#intent(intent), openBrush: () => this.#openBrush(), t: (key, fallback, placeholders) => this.#t(key, fallback, placeholders) }, "grid")}
-                    ${precisionOpen ? html`
-                      <div class="precision-popover">
-                        <${precisionControlsTag} compact inline .state=${state} .localize=${this.localize}></${precisionControlsTag}>
-                      </div>
-                    ` : nothing}
                   </div>
                 ` : nothing}
                 <div
@@ -1911,14 +1931,20 @@ export class MaticMapShellV4 extends LitElement {
 
             ${state.fullMap ? html`
               <section
-                class=${`full-map-hud ms-surface ms-surface--floating ${secondary ? "has-secondary" : ""} ${!narrow && (state.workflow === "draw" || (state.workflow === "rooms" && state.selection.roomIds.length > 0)) ? "above-dock" : ""}`}
+                class="full-map-hud ms-surface ms-surface--floating"
                 aria-label=${this.#t("v4_robot_status_and_action", "Robot status and action")}
               >
                 <span class="hud-copy"><strong>${status.title}</strong><small>${status.detail}</small></span>
                 ${locatingInFullMap && primary.id !== "stop" ? nothing : this.#actionButton(primary, "ms-btn ms-btn--lg ms-btn--primary", "hud-reason")}
-                ${secondary && (!locatingInFullMap || secondary.id === "stop")
+                ${secondary?.id === "stop"
                   ? this.#actionButton(secondary, "ms-btn ms-btn--lg ms-btn--secondary", "hud-secondary-reason")
                   : nothing}
+                <button
+                  class="hud-exit ms-btn ms-btn--lg ms-btn--secondary"
+                  type="button"
+                  title=${this.#t("v4_exit_full_map", "Exit full map")}
+                  @click=${this.#exitFullMap}
+                >${icon(iconExitFullMap)}<span class="ms-btn__label">${this.#t("v4_exit_full_map", "Exit full map")}</span></button>
               </section>
             ` : nothing}
           </main>

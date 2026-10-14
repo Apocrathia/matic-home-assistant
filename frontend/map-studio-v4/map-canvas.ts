@@ -5,24 +5,27 @@ import { icon, iconFit, iconHelp, iconOrbitLeft, iconOrbitRight, iconRoomNames, 
 import { RovingFocusController } from "./roving-focus";
 import { readCanvasPalette, watchTheme } from "./theme-probe";
 import { base, tokens } from "./tokens";
-import type { PropertyValues } from "lit";
+import type { PropertyValues, TemplateResult } from "lit";
 
 import type { DateFormat, Localize, NoticePlaceholders, WorkspaceIntent, WorkspaceState } from "./contracts";
 import type { OutlineEditor } from "./outline-editor";
 import { MAP_CANVAS_TAG } from "./element-tags";
 import { GestureController, isNativeSelectControl } from "./gesture-controller";
-import { RendererController, type RendererDiagnostics } from "./renderer-controller";
+import { RendererController, topView, type RendererDiagnostics } from "./renderer-controller";
 import {
   canSelectRooms,
   canShowExactPose,
   canShowLiveMap,
   initialWorkspaceState,
   mapScale,
+  savedMapPosition,
 } from "./state";
 import { translate } from "./localize";
 
 export const WORKSPACE_INTENT_EVENT = "matic-workspace-intent";
 export const WORKSPACE_ACTION_EVENT = "matic-workspace-action";
+/** The "?" press, and Escape while help shows: the shell owns the popover. */
+export const MAP_HELP_EVENT = "matic-map-help";
 
 const NAVIGATION_HELP_ID = "navigation-help";
 
@@ -60,9 +63,15 @@ export class MaticMapCanvasV4 extends LitElement {
     // Draw's point editor, loaded and built by the shell (shell.ts #outline).
     outlineEditor: { attribute: false },
     // Reflected so the stylesheet can anchor the rail with :host([narrow]).
-    // On a phone the sheet owns the drawing tools, appearance switch, room
-    // names and help; the map keeps only view and fit.
+    // On a phone the sheet owns the drawing tools, appearance switch and
+    // room names; the map keeps view, fit and help.
     narrow: { type: Boolean, reflect: true },
+    // The help popover (map-help.ts), rendered by the shell into the rail
+    // so the "?" and its aria-controls share this root; null while closed.
+    help: { attribute: false },
+    // Draw's screen-reader recipes (map-help.ts drawRecipes), with the help
+    // rows in the views chunk Draw loads anyway.
+    recipes: { attribute: false },
   };
 
   static override styles = [tokens, base, controls, css`
@@ -109,7 +118,7 @@ export class MaticMapCanvasV4 extends LitElement {
     }
 
     /* Navigation has stable corners; only orbit controls follow the sheet. */
-    .map-rail { --help-top: calc(44px + 2 * var(--ms-space-2)); --help-bottom: 116px; position: absolute; inset: 0.75rem; inset-inline: max(0.75rem, var(--ms-safe-left)) max(0.75rem, var(--ms-safe-right)); z-index: 4; pointer-events: none; }
+    .map-rail { --row: calc(44px + 2 * var(--ms-space-2)); --help-top: var(--row); --help-bottom: 116px; position: absolute; inset: 0.75rem; inset-inline: max(0.75rem, var(--ms-safe-left)) max(0.75rem, var(--ms-safe-right)); z-index: 4; pointer-events: none; }
     .map-rail > * { pointer-events: auto; }
     slot[name="scrim"] { display: contents; pointer-events: none; }
     ::slotted(.sheet-scrim) { pointer-events: auto; }
@@ -118,11 +127,11 @@ export class MaticMapCanvasV4 extends LitElement {
     .view-switch { flex: none; }
     .map-tools { position: absolute; inset-block-start: 0; inset-inline-end: 0; }
     .map-extras { position: absolute; inset-block-end: calc(var(--map-sheet-offset, 0px) + 52px); inset-inline-end: 0; display: flex; }
-    .appearance-switch { position: absolute; inset-block-start: calc(44px + 2 * var(--ms-space-2)); inset-inline-start: 0; }
+    .appearance-switch { position: absolute; inset-block-start: var(--row); inset-inline-start: 0; }
     .camera-steps { position: absolute; inset-block-end: var(--map-sheet-offset, 0px); inset-inline-end: 0; }
     .map-root:has(.selection-chip) .camera-steps { inset-block-end: calc(var(--map-sheet-offset, 0px) + 4rem); }
     .map-root:has(.selection-chip) .map-extras { inset-block-end: calc(var(--map-sheet-offset, 0px) + 4rem + 52px); }
-    .map-rail:has(.appearance-switch) { --help-top: calc(88px + 4 * var(--ms-space-2)); }
+    .map-rail:has(.appearance-switch) { --help-top: calc(2 * var(--row)); }
     .map-root:has(.selection-chip) .map-rail { --help-bottom: calc(116px + 4rem); }
     .navigation-help { position: absolute; inset-block-start: var(--help-top); inset-inline-end: 0; max-block-size: calc(100% - var(--help-top) - var(--help-bottom)); overflow: auto; box-sizing: border-box; }
     :host([narrow]) .map-context { max-inline-size: calc(100% - 52px); gap: var(--ms-space-1); }
@@ -137,16 +146,25 @@ export class MaticMapCanvasV4 extends LitElement {
     .map-tools, .view-switch, .appearance-switch, .camera-steps { display: flex; }
 
     .map-dock, .map-scale, .map-message { position: absolute; z-index: 4; }
+    /* The saved-map chip sits top centre under the rail's first row; the
+       appearance switch steps down to make room (map-surfaces.md §4). */
+    .map-chip { position: absolute; inset-block-start: var(--row); inset-inline: 0; margin-inline: auto; inline-size: fit-content; max-inline-size: 100%; padding: var(--ms-space-1) var(--ms-space-3); font-size: var(--ms-t-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+    .map-chip :last-child::before { content: " · "; }
+    .map-rail:has(.map-chip) { --help-top: calc(2 * var(--row)); }
+    .map-rail:has(.map-chip) .appearance-switch { inset-block-start: calc(2 * var(--row)); }
+    .map-rail:has(.map-chip):has(.appearance-switch) { --help-top: calc(3 * var(--row)); }
+    .map-root:has(.map-chip) .scene-canvas { filter: saturate(0.35); }
 
     .map-dock {
-      inset-inline-start: 50%;
+      inset-inline: 0;
       inset-block-end: calc(0.75rem + var(--map-sheet-offset, 0px));
-      translate: -50% 0;
+      margin-inline: auto;
+      inline-size: fit-content;
       max-inline-size: calc(100% - 1rem);
     }
     .map-dock .draw-tools--row { flex-direction: row; gap: var(--ms-space-1); }
     .map-dock .draw-tools button { padding-inline: var(--ms-space-2); }
-    @media (any-pointer: coarse) { .selection-chip .ms-btn--sm { min-inline-size: var(--ms-control); min-block-size: var(--ms-control); } }
+    @media (any-pointer: coarse) { .selection-chip .ms-btn--sm, .navigation-help .ms-btn--sm { min-inline-size: var(--ms-control); min-block-size: var(--ms-control); } }
     .selection-chip {
       display: flex;
       align-items: center;
@@ -224,8 +242,6 @@ export class MaticMapCanvasV4 extends LitElement {
       text-align: center;
     }
 
-    .map-message strong { display: block; margin-block-end: 0.35rem; }
-    .map-message span { color: var(--ms-text-quiet); font-size: 0.82rem; }
 
     .sr-only {
       position: absolute;
@@ -240,11 +256,14 @@ export class MaticMapCanvasV4 extends LitElement {
 /* Four labelled buttons span most of the map at desktop width; icons with tooltips keep the rail a narrow column. */
 .map-tools .ms-btn__label { position: absolute; overflow: hidden; inline-size: 1px; block-size: 1px; margin: -1px; padding: 0; border: 0; clip-path: inset(50%); white-space: nowrap; }
 @container (max-width: 29rem) {
-.map-tools button, .map-dock .draw-tools button { padding-inline: 0; inline-size: var(--ms-control); }
-/* Collapse the label to assistive text, never display:none. Hiding it would
+.map-tools button { padding-inline: 0; inline-size: var(--ms-control); }
+}
+/* Eight labelled tools need 49rem. Collapse the label to assistive text, never display:none. Hiding it would
    delete the accessible name and break every getByRole({ name }) query at
    narrow widths -- which is what the previous font-size:0 plus ::first-letter
    trick did, while also rendering the toolbar as "P E M U R D". */
+@container (max-width: 49rem) {
+.map-dock .draw-tools button { padding-inline: 0; inline-size: var(--ms-control); }
 .map-dock .draw-tools .ms-btn__label { position: absolute; overflow: hidden; inline-size: 1px; block-size: 1px; margin: -1px; padding: 0; border: 0; clip-path: inset(50%); white-space: nowrap; }
 }
 @media (forced-colors: active) {
@@ -252,7 +271,7 @@ export class MaticMapCanvasV4 extends LitElement {
    previous block here targeted the mock-map layer that the renderer replaced,
    which meant the map had no forced-colors treatment at all. */
 .scene-canvas, .overlay-canvas { forced-color-adjust: none; }
-.map-root { border: 1px solid CanvasText; }
+.map-root, .map-chip { border: 1px solid CanvasText; }
 .map-root:focus-visible::after { border-color: Highlight; }
 }
   `];
@@ -263,11 +282,11 @@ export class MaticMapCanvasV4 extends LitElement {
   outlineEditor?: OutlineEditor;
   #zoneStyled = false;
   narrow = false;
-  #helpLauncher: HTMLElement | null = null;
+  help: TemplateResult | typeof nothing | null = null;
+  recipes: TemplateResult | null = null;
+  #helpShown = false;
   #renderer: RendererController | null = null;
   #gestures: GestureController | null = null;
-  #navigationHelp = false;
-  #focusHelpOnUpdate = false;
   #unwatchTheme: (() => void) | null = null;
   #paletteFrame: number | null = null;
   #paletteTimer: number | null = null;
@@ -313,7 +332,7 @@ export class MaticMapCanvasV4 extends LitElement {
       onCamera: (camera, zoomPercent, origin) => {
         this.#intent({
           type: "set-camera",
-          view: this.state.workflow === "draw" ? "top" : this.state.view,
+          view: topView(this.state),
           camera: {
             yaw: camera.yaw,
             pitch: camera.pitch,
@@ -379,10 +398,10 @@ export class MaticMapCanvasV4 extends LitElement {
   }
 
   protected override updated(changed: PropertyValues<this>): void {
-    if (this.#focusHelpOnUpdate) {
-      this.#focusHelpOnUpdate = false;
-      this.renderRoot.querySelector<HTMLElement>(".navigation-help button")?.focus();
-    }
+    // Help focuses its Close as it appears; the shell returns focus on close.
+    const help = this.renderRoot.querySelector<HTMLElement>(".navigation-help button");
+    if (help && !this.#helpShown) help.focus();
+    this.#helpShown = Boolean(help);
     if (!changed.has("state")) return;
     this.#gestures?.observeState(this.state);
     this.outlineEditor?.observeState(this.state);
@@ -436,18 +455,7 @@ export class MaticMapCanvasV4 extends LitElement {
   }
 
   #toggleHelp(event: Event): void {
-    this.#helpLauncher = event.currentTarget as HTMLElement;
-    this.#navigationHelp = !this.#navigationHelp;
-    this.#focusHelpOnUpdate = this.#navigationHelp;
-    this.requestUpdate();
-  }
-
-  #closeHelp(): void {
-    if (!this.#navigationHelp) return;
-    this.#navigationHelp = false;
-    this.requestUpdate();
-    const launcher = this.#helpLauncher;
-    if (launcher?.isConnected) launcher.focus();
+    (event.currentTarget as HTMLElement).dispatchEvent(new CustomEvent(MAP_HELP_EVENT, { bubbles: true, composed: true }));
   }
 
   #clearSelection(): void {
@@ -463,8 +471,8 @@ export class MaticMapCanvasV4 extends LitElement {
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     if (event.key === "Escape") {
       event.preventDefault();
-      if (this.#navigationHelp) {
-        this.#closeHelp();
+      if (this.help !== null) {
+        this.#toggleHelp(event);
         return;
       }
       this.#intent({ type: "dismiss-top-layer" });
@@ -483,48 +491,26 @@ export class MaticMapCanvasV4 extends LitElement {
     };
   }
 
-  #message(): { readonly title: string; readonly detail: string } | null {
-    if (!this.state.host.connected) {
-      return { title: this.#t("v4_reconnecting", "Reconnecting"), detail: this.#t("v4_reconnecting_detail", "The map is read only until Home Assistant reconnects.") };
+  // The card names the state once (shell.md §4 MS-HOST-01/05); the sheet
+  // carries the sentence, the date and the next step.
+  #message(): string | null {
+    const state = this.state;
+    if (!state.host.connected) return this.#t("v4_reconnecting", "Reconnecting");
+    if (!state.host.administrator) return this.#t("v4_admin_required", "Administrator access required");
+    if (state.host.robotCount === 0) return this.#t("v4_no_robot", "No robot set up");
+    if (state.dataMode === "live" && state.floor.readOnly && state.map.available && state.notice?.key === "v4_notice_saved_map") {
+      return this.#t("v4_saved_map_read_only_title", "Saved map is read only");
     }
-    if (!this.state.host.administrator) {
-      return { title: this.#t("v4_admin_required", "Administrator access required"), detail: this.#t("v4_private_map_hidden", "Private map data is hidden.") };
-    }
-    if (this.state.host.robotCount === 0) {
-      return { title: this.#t("v4_no_robot", "No robot set up"), detail: this.#t("v4_no_robot_detail", "Set up a robot before opening its map.") };
-    }
-    const notice = this.state.notice;
-    if (this.state.dataMode === "live" && this.state.floor.readOnly
-      && this.state.map.available && notice?.key === "v4_notice_saved_map") {
-      return {
-        title: this.#t("v4_saved_map_read_only_title", "Saved map is read only"),
-        detail: this.#t(notice.key, notice.fallback, notice.placeholders),
-      };
-    }
-    if (this.state.dataMode === "history") {
-      if (!this.state.map.available && this.state.resources.scene.status === "loading") {
-        return { title: this.#t("v4_loading_saved_map", "Loading saved map"), detail: this.#t("v4_loading_saved_map_detail", "This read-only snapshot is still preparing.") };
-      }
-      if (!this.state.map.available) {
-        return { title: this.#t("v4_saved_map_unavailable", "Saved map unavailable"), detail: this.#t("v4_saved_map_unavailable_detail", "Choose another snapshot or return to the live map.") };
-      }
+    if (state.dataMode === "history") {
+      if (!state.map.available && state.resources.scene.status === "loading") return this.#t("v4_loading_saved_map", "Loading saved map");
+      if (!state.map.available) return this.#t("v4_saved_map_unavailable", "Saved map unavailable");
       return null;
     }
-    if (!this.state.host.robotConnected) {
-      return { title: this.#t("v4_robot_offline", "Robot offline"), detail: this.#t("v4_robot_offline_detail", "The last known map stays read only and has no live position.") };
-    }
-    if (this.state.coherence === "verifying" || this.state.coherence === "booting") {
-      return { title: this.#t("v4_locating_map", "Locating the current map"), detail: this.#t("v4_locating_map_detail", "Map controls come back once the robot confirms which floor it is on.") };
-    }
-    if (!this.state.map.available && this.state.resources.scene.status === "loading") {
-      return { title: this.#t("v4_loading_verified_map", "Loading the current map"), detail: this.#t("v4_loading_verified_map_detail", "The map is almost ready.") };
-    }
-    if (!this.state.map.available) {
-      return { title: this.#t("v4_map_unavailable", "Map unavailable"), detail: this.#t("v4_map_unavailable_detail", "The map isn't ready yet. Nothing is shown until it is.") };
-    }
-    if (this.state.activity === "problem") {
-      return { title: this.#t("v4_robot_attention", "Robot needs attention"), detail: this.#t("v4_robot_attention_detail", "Check the robot before starting another task.") };
-    }
+    if (!state.host.robotConnected) return this.#t("v4_robot_offline", "Robot offline");
+    if (state.coherence === "verifying" || state.coherence === "booting") return this.#t("v4_locating_map", "Locating the current map");
+    if (!state.map.available && state.resources.scene.status === "loading") return this.#t("v4_loading_verified_map", "Loading the current map");
+    if (!state.map.available) return this.#t("v4_map_unavailable", "Map unavailable");
+    if (state.activity === "problem") return this.#t("v4_robot_attention", "Robot needs attention");
     return null;
   }
 
@@ -532,22 +518,30 @@ export class MaticMapCanvasV4 extends LitElement {
     const state = this.state;
     const narrow = this.narrow;
     const draw = state.workflow === "draw";
+    const saved = showScene ? savedMapPosition(state) : null;
     const helpTitle = this.#t("v4_how_to_move", "How to move the map");
-    // Draw forces the top view, so the view, appearance and camera groups are
-    // noise there; the sheet owns the tools on a phone. Both leave only Fit
-    // in the map rail because workspace visibility belongs to the app bar.
-    // Without a scene there is nothing to fit, switch or explain
+    // Draw and the area review force the top view, so the view, appearance
+    // and camera groups are noise there; the sheet owns the tools on a phone. Both leave Fit and
+    // help in the map rail because workspace visibility belongs to the app
+    // bar. Without a scene there is nothing to fit, switch or explain
     // (home-rooms.md §11 MS-HOME-04), so the rail keeps nothing. A phone's
     // Room names row is in Map options; its rail keeps the help "?".
-    const showView = showScene && !draw;
+    const showView = showScene && !draw && state.workflow !== "areaReview";
     const showAppearance = showView && !narrow && state.view === "top";
     const showCamera = showView && state.view === "three";
     const showTools = showScene && !locating;
-    const showExtras = showScene && !locating && !draw;
-    const showLabels = showExtras && !narrow;
+    const showExtras = showScene && !locating;
+    const showLabels = showExtras && !narrow && !draw;
 
     return html`
       <div class="map-rail" data-map-control>
+        ${saved ? html`
+          <div class="map-chip ms-surface ms-surface--floating">
+            <span class="sr-only">${this.#t("v4_history_chip_label", "Saved map, read only, {date}, {position} of {count}", { date: { date: saved.date }, position: saved.position, count: saved.count })}</span>
+            <span aria-hidden="true">${this.#t("v4_saved_map", "Saved map")}</span>
+            <span aria-hidden="true">${this.#t("v4_saved_map_position", "{date} · {position} of {count}", { date: { date: saved.date }, position: saved.position, count: saved.count })}</span>
+          </div>
+        ` : nothing}
         ${showScene ? html`<div class="map-context"><slot name="floor"></slot>
         ${showView ? html`
           <div class="view-switch ms-surface ms-surface--floating ms-segment" role="group" aria-label=${this.#t("map_view_label", "Map view")}>
@@ -623,7 +617,7 @@ export class MaticMapCanvasV4 extends LitElement {
                 class="help ms-btn ms-btn--icon"
                 type="button"
                 aria-label=${helpTitle}
-                aria-expanded=${String(this.#navigationHelp)}
+                aria-expanded=${String(this.help !== null)}
                 aria-controls=${NAVIGATION_HELP_ID}
                 @click=${this.#toggleHelp}
                 title=${helpTitle}
@@ -631,30 +625,7 @@ export class MaticMapCanvasV4 extends LitElement {
           </div>
         ` : nothing}
 
-        ${this.#navigationHelp && showExtras ? html`
-          <div
-            id=${NAVIGATION_HELP_ID}
-            class="navigation-help ms-surface ms-surface--floating"
-            role="dialog"
-            aria-modal="false"
-            aria-label=${helpTitle}
-          >
-            <header>
-              <h2>${helpTitle}</h2>
-              <button class="ms-btn ms-btn--sm" type="button" @click=${() => this.#closeHelp()}>${this.#t("v4_close", "Close")}</button>
-            </header>
-            <dl>
-              <dt>${this.#t("v4_touch", "Touch")}</dt>
-              <dd>${this.#t("v4_touch_help", "Drag to explore · pinch to zoom · twist two fingers to rotate")}</dd>
-              <dt>${this.#t("v4_trackpad", "Trackpad")}</dt>
-              <dd>${this.#t("v4_trackpad_help", "Scroll to pan · pinch to zoom · twist to rotate")}</dd>
-              <dt>${this.#t("v4_mouse", "Mouse")}</dt>
-              <dd>${this.#t("v4_mouse_help", "Drag to orbit · Shift, middle, or right drag to pan · wheel to zoom")}</dd>
-              <dt>${this.#t("v4_keyboard", "Keyboard")}</dt>
-              <dd>${this.#t("v4_keyboard_help", "WASD to move · Q/E or arrows to orbit · +/− to zoom · 0 to fit")}</dd>
-            </dl>
-          </div>
-        ` : nothing}
+        ${showExtras ? this.help ?? nothing : nothing}
       </div>
     `;
   }
@@ -729,8 +700,7 @@ export class MaticMapCanvasV4 extends LitElement {
         </div>
 
         ${showDraw ? html`
-          <p id="zone-keyboard-help" class="sr-only">${this.#t("v4_zone_keyboard_help", "Focus the map, aim with arrow keys, and press Enter to place points. The edges join automatically after three points. Keep adding points or Tab to a point; arrows move it, Delete removes it, and Escape cancels a drag.")}</p>
-          <p id="keyboard-draw-help" class="sr-only">${this.#t("v4_keyboard_draw_help", "Keyboard: focus the map, use arrow keys to aim, then Enter to paint or erase at the crosshair. D selects Paint; E selects Erase.")}</p>
+          ${this.recipes ?? nothing}
           <div class="map-scale" role="img" aria-label=${this.#t("v4_map_scale", "Scale {distance}", { distance: scale.label })}>
             <span class="scale-line" style=${`--scale-width:${scale.pixels}px`}></span>
             <span>${scale.label}</span>
@@ -739,11 +709,8 @@ export class MaticMapCanvasV4 extends LitElement {
 
         ${this.#renderDock(showScene)}
 
-        ${message && !(state.fullMap && (locating || !state.host.administrator)) ? html`
-          <div class="map-message ms-surface ms-surface--floating">
-            <strong>${message.title}</strong>
-            <span>${message.detail}</span>
-          </div>
+        ${message ? html`
+          <div class="map-message ms-surface ms-surface--floating"><strong>${message}</strong></div>
         ` : nothing}
         <div class="sr-only" aria-live="polite" aria-atomic="true">
           ${describeMap(state, this.localize)}

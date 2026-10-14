@@ -86,21 +86,6 @@ export const shellStyles = [tokens, base, controls, css`
     .spacer { flex: 1; }
 
     .overflow-wrap { position: relative; }
-    .overflow-menu {
-      position: absolute;
-      z-index: 18;
-      inset-block-start: calc(100% + var(--ms-space-1));
-      inset-inline-end: 0;
-      display: grid;
-      gap: var(--ms-space-1);
-      min-inline-size: 14rem;
-      padding: var(--ms-space-1);
-    }
-    .overflow-menu .ms-row { justify-content: flex-start; }
-    .overflow-menu [role="menuitemcheckbox"] { justify-content: space-between; gap: var(--ms-space-3); }
-    .overflow-menu [role="group"] { display: grid; gap: var(--ms-space-1); }
-    .overflow-menu [role="group"] + * { border-block-start: 1px solid var(--ms-line); padding-block-start: var(--ms-space-1); }
-    .menu-heading { margin: 0; padding: var(--ms-space-2) var(--ms-space-3) var(--ms-space-1); color: var(--ms-text-quiet); font-size: var(--ms-t-sm); font-weight: var(--ms-w-bold); }
 
     .workspace {
       position: relative;
@@ -210,14 +195,14 @@ export const shellStyles = [tokens, base, controls, css`
     .notice-toast[hidden] { display: none; }
     /* Narrow: the sheet's top edge. */
     .narrow > .notice-toast { inset-inline: 0; inset-block-end: calc(var(--map-sheet-offset, 0px) + var(--ms-space-2)); max-inline-size: calc(100% - 2 * var(--ms-space-3)); }
-    /* Full map: above the HUD, in its column. */
+    /* Full map: above the HUD band and the Draw dock, clear of "?". */
     .root:has(.full-map-hud) > .notice-toast {
       inset-inline: auto var(--ms-space-3);
-      inset-block-end: calc(max(var(--ms-space-3), var(--ms-safe-bottom)) + var(--ms-control-lg) + 3 * var(--ms-space-3));
-      inline-size: min(24rem, calc(100% - 1.5rem));
-      max-inline-size: none;
+      inset-block-end: calc(var(--map-sheet-offset, 0px) + max(var(--ms-space-3), var(--ms-safe-bottom)));
+      max-inline-size: min(24rem, calc(100% - 1.5rem));
     }
-    .wide:has(.full-map-hud.above-dock) > .notice-toast { inset-block-end: calc(max(var(--ms-space-3), var(--ms-safe-bottom)) + var(--ms-control-lg) + 4 * var(--ms-space-3) + 3.5rem + var(--ms-space-2)); }
+    .narrow:has(.full-map-hud) > .notice-toast { inset-inline: 0; max-inline-size: calc(100% - 7.5rem); }
+    .root[data-dock] > .notice-toast { inset-block-end: calc(var(--map-sheet-offset, 0px) + 5.25rem); }
 
     /* minmax(0, 1fr): a card's one-line name must not widen the column. */
     .quick-actions, .shelf { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--ms-space-2); }
@@ -258,18 +243,17 @@ export const shellStyles = [tokens, base, controls, css`
       inset-inline-end: var(--ms-space-3);
       inset-block-end: max(var(--ms-space-3), var(--ms-safe-bottom));
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-columns: minmax(0, 1fr);
+      grid-auto-flow: column;
+      grid-auto-columns: auto;
       gap: var(--ms-space-3);
       align-items: center;
-      inline-size: min(24rem, calc(100% - 1.5rem));
+      inline-size: fit-content;
+      max-inline-size: calc(100% - 1.5rem);
       padding: var(--ms-space-3);
       background: var(--ms-local);
     }
-    .full-map-hud.has-secondary { grid-template-columns: minmax(0, 1fr) auto auto; }
-    /* The map dock (the Draw tools, or the rooms selection chip -- one 44px
-       row) sits bottom-centre; on a wide layout the HUD is bottom-right and
-       the two collide below about 1400px. Lift the HUD clear of the dock. */
-    .wide .full-map-hud.above-dock { inset-block-end: calc(var(--ms-space-3) + 3.5rem + var(--ms-space-2)); }
+    .hud-exit { gap: var(--ms-space-1); }
     .hud-copy { min-inline-size: 0; }
     .hud-copy strong, .hud-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .hud-copy strong { font-size: var(--ms-t-sm); }
@@ -368,34 +352,32 @@ export const shellStyles = [tokens, base, controls, css`
     }
     .narrow .sheet-tools { display: block; padding-block: var(--ms-space-1) var(--ms-space-2); }
     .sheet-tools > :is(.loading, .problem) { margin-block-end: var(--ms-space-2); }
-    .narrow .draw-tools--grid {
-      display: grid;
-      grid-template-columns: repeat(12, minmax(0, 1fr));
-      gap: var(--ms-space-1);
-      padding: 0;
-    }
+    /* Two rows: Points to Move map, Undo to Brush; the last column takes its
+       content so "Brush · 60 cm" never wraps. Points has no Brush, so its
+       second row splits three ways (map-surfaces.md §5 collapse rule). */
+    .narrow .draw-tools--grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: var(--ms-space-1); padding: 0; }
+    .narrow .draw-tools--grid[data-zone="true"] { grid-template-columns: repeat(12, minmax(0, 1fr)); }
     .narrow .draw-tools--grid .ms-btn {
-      grid-column: span 4;
       flex-direction: column;
       gap: var(--ms-space-1);
-      min-inline-size: 0;
+      min-inline-size: var(--ms-control);
       min-block-size: var(--ms-control);
-      padding: var(--ms-space-1) var(--ms-space-2);
+      padding: var(--ms-space-1);
       border-color: var(--ms-line);
       font-size: var(--ms-t-xs);
-      white-space: normal;
     }
-    .narrow .draw-tools--grid .ms-btn[data-tool] { grid-column: span 3; padding-inline: 3px; }
-    .narrow .draw-tools--grid[data-zone="true"] .ms-btn:not([data-tool]) { grid-column: span 6; }
-    .narrow .draw-tools--grid .ms-btn__label {
-      position: static;
-      overflow: visible;
-      inline-size: auto;
-      block-size: auto;
-      margin: 0;
-      clip-path: none;
-      white-space: nowrap;
+    .narrow .draw-tools--grid[data-zone="true"] .ms-btn { grid-column: span 4; }
+    .narrow .draw-tools--grid[data-zone="true"] .ms-btn[data-tool] { grid-column: span 3; }
+    /* Labels drop first (under 360 px), rows second (a landscape phone keeps
+       one 44 px row that scrolls sideways when the sheet is narrower). */
+    @media (max-width: 359px), (max-height: 479px) {
+      .narrow .draw-tools--grid .ms-btn__label { position: absolute; overflow: hidden; inline-size: 1px; block-size: 1px; clip-path: inset(50%); }
     }
+    @media (max-height: 479px) {
+      .narrow .draw-tools--grid, .narrow .draw-tools--grid[data-zone="true"] { display: flex; overflow-x: auto; }
+      .narrow .draw-tools--grid .ms-btn { flex: none; inline-size: var(--ms-control); padding-inline: 0; }
+    }
+    .sr-only { position: absolute; overflow: hidden; inline-size: 1px; block-size: 1px; clip-path: inset(50%); white-space: nowrap; }
     .narrow .sheet-panel { display: flex; flex: 1; flex-direction: column; min-block-size: 0; }
     /* On a short sheet the pinned heading and notice give the body at least half. */
     .narrow .panel-top { max-block-size: 50%; padding-block-start: var(--ms-space-1); overflow: auto; overscroll-behavior: contain; }
@@ -404,7 +386,9 @@ export const shellStyles = [tokens, base, controls, css`
     .narrow .title { font-size: var(--ms-t-md); }
     .narrow .context-switcher { max-inline-size: 7rem; }
     .narrow .robot-switcher { flex: 1 1 auto; min-inline-size: 0; max-inline-size: none; }
-    .narrow .full-map-hud { inset-block-end: max(var(--ms-space-3), var(--ms-safe-bottom)); }
+    .narrow .full-map-hud { inset-inline-start: var(--ms-space-3); inset-block-end: max(var(--ms-space-3), var(--ms-safe-bottom)); inline-size: auto; max-inline-size: none; }
+    .narrow .hud-exit { min-inline-size: var(--ms-control); padding-inline: var(--ms-space-2); }
+    .narrow .hud-exit .ms-btn__label { position: absolute; overflow: hidden; inline-size: 1px; block-size: 1px; margin: -1px; clip-path: inset(50%); white-space: nowrap; }
     .narrow .workspace.full-map .mobile-sheet { display: none; }
     .narrow .sheet-scrim {
       position: absolute;

@@ -351,7 +351,7 @@ export const reduceWorkspace = (
       return state.host.administrator
         && state.host.robotCount > 0
         && state.map.available
-        ? { ...state, fullMap: true }
+        ? { ...state, fullMap: true, precisionOpen: false }
         : state;
     case "exit-full-map":
       return { ...state, fullMap: false, precisionOpen: false };
@@ -709,6 +709,29 @@ export const deleteSubject = (
     : { name: item.name });
 };
 
+// Selecting a saved area loads its draft and outline; null starts a fresh
+// one. Pure, so the review gallery can play it without the effects.
+export const areaSelection = (state: WorkspaceState, areaId: string | null): Pick<WorkspaceState, "selection" | "areaDraft" | "draw"> => {
+  const area = state.resources.areas.value?.areas.find((candidate) => candidate.id === areaId);
+  return {
+    selection: { ...state.selection, areaId },
+    areaDraft: area
+      ? { id: area.id, name: area.name, cleaningMode: area.cleaningMode, coverageSetting: area.coverageSetting, status: area.status, canRebind: area.canRebind, dirty: false }
+      : initialWorkspaceState().areaDraft,
+    draw: {
+      ...state.draw,
+      circles: area?.circles || [],
+      outline: area?.outline ?? null,
+      outlineUndo: [], outlineRedo: [],
+      tool: !area || area.outline ? "outline" : "paint",
+      undo: [],
+      redo: [],
+      dirty: false,
+      strokeCount: 0,
+    },
+  };
+};
+
 export class WorkspaceStore {
   readonly #listeners = new Set<(state: WorkspaceState) => void>();
   #state: WorkspaceState;
@@ -920,6 +943,15 @@ export const canStartMotion = (state: WorkspaceState): boolean =>
   && (state.activity === "idle" || state.activity === "docked");
 
 type Reason = { readonly reason: string; readonly reasonKey: string };
+
+// While a command runs, the edits that would race it are held and say why
+// (shell.md §5); choosing a tool stays open, since painting is refused anyway.
+export const heldReasonKey = (state: WorkspaceState): Reason | null =>
+  state.command === "pending" ? { reason: "Waiting for the current change to finish.", reasonKey: "v4_reason_stop_busy" }
+    : state.command === "starting" ? { reason: "Waiting for the robot to begin.", reasonKey: "v4_reason_starting" }
+      : state.command === "settling" ? { reason: "Waiting for the robot to stop.", reasonKey: "v4_reason_stop" }
+        : null;
+
 const PLAN_SAVING: Reason = { reason: "Waiting for Home Assistant to save the plan.", reasonKey: "v4_reason_plan_saving" };
 
 const motionBlockReason = (state: WorkspaceState): Reason => {
@@ -1175,8 +1207,10 @@ export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction | NoBu
     const editable = canEditCoordinates(state);
     return {
       id: "review-area",
-      label: "Name and save",
-      labelKey: "v4_action_review_area",
+      // A saved area's redraw is Done; a new one is named next (R11).
+      ...(state.areaDraft.id !== null
+        ? { label: "Done", labelKey: "v4_action_done_outline" }
+        : { label: "Name and save", labelKey: "v4_action_review_area" }),
       kind: "primary",
       enabled: hasCoverage && editable,
       ...(!hasCoverage ? drawFirst : editable ? {} : mapLimited),
@@ -1284,12 +1318,24 @@ export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction | NoBu
       labelKey: "v4_action_run_area",
       kind: "primary",
       enabled: current && canStartMotion(state),
-      ...(current
-        ? {}
-        : { reason: "Can't clean this area until you save it on the current map.", reasonKey: "v4_reason_run_area" }),
+      // Save is never offered here (that is the branch above), so the fix for
+      // a changed or unusable map is Redraw; a running command says it waits.
+      ...(!current
+        ? { reason: "Can't clean this area until you redraw it.", reasonKey: "v4_reason_run_area" }
+        : canStartMotion(state)
+          ? {}
+          : heldReasonKey(state) ?? motionBlockReason(state)),
     };
   }
   return noButton("choose-cleaning");
+};
+
+/** The saved map on show: its time and place among the floor's snapshots (map-surfaces.md §4). */
+export const savedMapPosition = (state: WorkspaceState): { readonly date: string; readonly position: number; readonly count: number } | null => {
+  if (state.dataMode !== "history") return null;
+  const snapshots = state.resources.history.value?.floors.find((floor) => floor.id === state.selection.floorId)?.snapshots ?? [];
+  const index = snapshots.findIndex((snapshot) => snapshot.id === state.selection.historyId);
+  return index < 0 ? null : { date: snapshots[index]!.createdAt, position: index + 1, count: snapshots.length };
 };
 
 export const selectStopSecondaryAction = (

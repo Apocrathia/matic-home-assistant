@@ -28,7 +28,11 @@ export type GalleryScenario =
   | "recharging"
   | "rooms"
   | "draw"
+  | "draw-points"
+  | "draw-saved"
+  | "draw-redraw"
   | "history"
+  | "history-floors"
   | "transition"
   | "problem"
   | "ha-offline"
@@ -53,9 +57,12 @@ export type GalleryScenario =
   | "plan-schedule-joining"
   | "plan-legacy-oversized"
   | "area-review-new"
+  | "area-review-saved"
   | "area-review-rebind"
+  | "area-review-stale"
   | "support"
   | "full-map"
+  | "full-map-cleaning"
   | "full-map-locating"
   | "starting"
   | "starting-command"
@@ -240,13 +247,10 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
       return {
         ...state,
         workflow: "draw",
-        areaDraft: {
-          ...state.areaDraft,
-          id: "entryway",
-          name: "Entryway",
-          status: "current",
-        },
-        selection: { ...state.selection, areaId: "entryway" },
+        // A fresh draw from home with three strokes down; a redraw is reached
+        // from area-review-rebind's Redraw.
+        areaDraft: { ...state.areaDraft, id: null, name: "", status: "new", canRebind: false, dirty: false },
+        selection: { ...state.selection, areaId: null },
         draw: {
           ...state.draw,
           dirty: true,
@@ -254,6 +258,26 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
           circles: syntheticAreas().areas[0]?.circles || [],
         },
       };
+    case "draw-points": {
+      // The same fresh draw with the Points tool chosen.
+      const fresh = createGalleryState("draw");
+      return { ...fresh, draw: { ...fresh.draw, tool: "outline" } };
+    }
+    case "draw-saved":
+      // Redrawing the saved Entryway, dirty: the effects tests' subject.
+      return {
+        ...state,
+        workflow: "draw",
+        areaDraft: { ...state.areaDraft, id: "entryway", name: "Entryway", status: "current" },
+        selection: { ...state.selection, areaId: "entryway" },
+        draw: { ...state.draw, dirty: true, strokeCount: 3, circles: syntheticAreas().areas[0]?.circles || [] },
+      };
+    case "draw-redraw": {
+      // Just after Redraw from the saved Entryway's review: its outline is on
+      // the map and nothing has changed yet (Done, not Save area).
+      const redraw = createGalleryState("draw-saved");
+      return { ...redraw, draw: { ...redraw.draw, dirty: false, strokeCount: 0 } };
+    }
     case "history":
       return {
         ...state,
@@ -266,6 +290,28 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
           floorId: "saved-1",
           historyId: "saved-one",
         },
+      };
+    case "history-floors":
+      // Two unlabelled floors; four saved maps on the saved one, the second
+      // on show (the scrubber needs three or more).
+      return {
+        ...createGalleryState("history"),
+        resources: {
+          ...state.resources,
+          history: { status: "ready", problem: null, value: {
+            ...syntheticHistory(),
+            floors: [
+              { ...requireFixture(syntheticHistory().floors[0], "floor"), label: null },
+              { ...requireFixture(syntheticHistory().floors[1], "floor"), label: null, ordinal: 1, snapshots: [
+                { id: "saved-one", createdAt: "2026-08-25T09:00:00Z", revision: 3, pointCount: 3_100, sceneUrl: "/synthetic-history-saved" },
+                { id: "saved-two", createdAt: "2026-08-26T10:15:00Z", revision: 4, pointCount: 3_100, sceneUrl: "/synthetic-history-saved" },
+                { id: "saved-three", createdAt: "2026-08-27T18:40:00Z", revision: 5, pointCount: 3_100, sceneUrl: "/synthetic-history-saved" },
+                { id: "saved-four", createdAt: "2026-08-28T11:30:00Z", revision: 6, pointCount: 3_100, sceneUrl: "/synthetic-history-saved" },
+              ] },
+            ],
+          } },
+        },
+        selection: { ...state.selection, floorId: "saved-1", historyId: "saved-two" },
       };
     case "transition":
       return {
@@ -497,6 +543,42 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
           circles: syntheticAreas().areas[0]?.circles || [],
         },
       };
+    case "area-review-saved": {
+      // The saved Entryway reopened from Custom areas: nothing to fix.
+      const area = requireFixture(syntheticAreas().areas[0], "area");
+      return {
+        ...state,
+        workflow: "areaReview",
+        areaDraft: {
+          ...state.areaDraft,
+          id: area.id,
+          name: area.name,
+          cleaningMode: area.cleaningMode,
+          coverageSetting: area.coverageSetting,
+          status: "current",
+          canRebind: false,
+          dirty: false,
+        },
+        selection: { ...state.selection, areaId: area.id },
+        draw: { ...state.draw, dirty: false, strokeCount: 0, circles: area.circles },
+      };
+    }
+    case "area-review-stale": {
+      // The saved Entryway can't be used on this map: redraw is the one fix.
+      const review = createGalleryState("area-review-rebind");
+      const areas = review.resources.areas.value;
+      return {
+        ...review,
+        resources: {
+          ...review.resources,
+          areas: {
+            ...review.resources.areas,
+            value: areas ? { ...areas, areas: areas.areas.map((area) => ({ ...area, status: "stale", canRebind: false })) } : null,
+          },
+        },
+        areaDraft: { ...review.areaDraft, status: "stale", canRebind: false },
+      };
+    }
     case "area-review-rebind": {
       const areas = syntheticAreas();
       const area = requireFixture(areas.areas[0], "area");
@@ -529,6 +611,9 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
       return { ...state, workflow: "support" };
     case "full-map":
       return { ...state, fullMap: true };
+    case "full-map-cleaning":
+      // Full map while the robot works: Stop stays in the HUD.
+      return { ...state, activity: "cleaning", fullMap: true };
     case "full-map-locating":
       return { ...createGalleryState("transition"), fullMap: true };
     // The Home Assistant adapter never reports activity "starting" or
@@ -727,6 +812,7 @@ export const GALLERY_SCENARIOS: readonly GalleryScenario[] = [
   "rooms",
   "draw",
   "history",
+  "history-floors",
   "transition",
   "problem",
   "ha-offline",
@@ -750,10 +836,16 @@ export const GALLERY_SCENARIOS: readonly GalleryScenario[] = [
   "plan-schedule-available",
   "plan-schedule-joining",
   "plan-legacy-oversized",
+  "draw-points",
+  "draw-saved",
+  "draw-redraw",
   "area-review-new",
+  "area-review-saved",
   "area-review-rebind",
+  "area-review-stale",
   "support",
   "full-map",
+  "full-map-cleaning",
   "full-map-locating",
   "starting",
   "starting-command",

@@ -1,4 +1,4 @@
-import{R as e}from"./chunk-6FC35FD6.js";var i=e`
+import{U as e}from"./chunk-KQQJQ4OM.js";var s=e`
 .ms-switch {
 position: relative;
 flex: none;
@@ -46,15 +46,25 @@ transition: translate var(--ms-fast) var(--ms-ease);
 .ms-switch[aria-checked="true"]::after { background: HighlightText; }
 }
 .ms-field { display: grid; gap: var(--ms-space-1); color: var(--ms-text-quiet); font-size: var(--ms-t-xs); font-weight: var(--ms-w-medium); }
-`;var t=e`
-    .precision-popover {
+.ms-range { display: block; inline-size: 100%; min-block-size: var(--ms-control); margin: 0; accent-color: var(--ms-resolved-indicator, var(--ms-accent)); }
+.ms-range:focus-visible { outline: 2px solid var(--ms-resolved-indicator, var(--ms-accent)); outline-offset: 2px; }
+`;var i=e`
+
+    .overflow-menu {
       position: absolute;
-      z-index: 9;
-      inset-inline-end: var(--ms-space-3);
-      inset-block-end: 5.5rem;
-      inline-size: 0;
-      block-size: 0;
+      z-index: 18;
+      inset-block-start: calc(100% + var(--ms-space-1));
+      inset-inline-end: 0;
+      display: grid;
+      gap: var(--ms-space-1);
+      min-inline-size: 14rem;
+      padding: var(--ms-space-1);
     }
+    .overflow-menu .ms-row { justify-content: flex-start; }
+    .overflow-menu [role="menuitemcheckbox"] { justify-content: space-between; gap: var(--ms-space-3); }
+    .overflow-menu [role="group"] { display: grid; gap: var(--ms-space-1); }
+    .overflow-menu [role="group"] + * { border-block-start: 1px solid var(--ms-line); padding-block-start: var(--ms-space-1); }
+    .menu-heading { margin: 0; padding: var(--ms-space-2) var(--ms-space-3) var(--ms-space-1); color: var(--ms-text-quiet); font-size: var(--ms-t-sm); font-weight: var(--ms-w-bold); }
 
     .panel-back { flex: none; }
 
@@ -76,6 +86,7 @@ transition: translate var(--ms-fast) var(--ms-ease);
     }
 
     .narrow .sheet-grip:has(.sheet-back) { grid-template-columns: auto minmax(0, 1fr) auto auto; }
-    .narrow .precision-popover { position: static; inline-size: auto; block-size: auto; }
+    .narrow .sheet-precision { display: block; margin-block-end: var(--ms-space-2); }
+    .narrow .sheet-hint { margin: 0 0 var(--ms-space-2); color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
 
-`;export{i as a,t as b};
+`;export{s as a,i as b};

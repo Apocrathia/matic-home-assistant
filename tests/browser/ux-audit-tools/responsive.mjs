@@ -6,7 +6,7 @@ const VIEWPORTS = [
   [320, 844], [360, 844], [390, 844], [844, 390], [600, 1024], [768, 1024],
   [768, 600], [768, 432], [1024, 768], [1024, 900], [1440, 900], [1920, 1080],
 ];
-const SCENARIOS = (process.argv[2] ?? "ready,rooms,draw,plan-saved-intelligent").split(",");
+const SCENARIOS = (process.argv[2] ?? "ready,rooms,draw,plan-saved-intelligent,draw-points,draw-redraw,area-review-saved,area-review-stale,history-floors,full-map-cleaning").split(",");
 
 const { browser, context } = await launch();
 const page = await context.newPage();

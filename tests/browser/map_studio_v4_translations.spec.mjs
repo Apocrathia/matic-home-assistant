@@ -112,12 +112,13 @@ test("the brush label and its accessible name take the width from placeholders",
 
   // Found by class: its accessible name is the translated text under test.
   const brush = panel.locator(".draw-brush").first();
-  await expect(brush).toHaveAttribute("aria-label", /^Pinselbreite \d+\.\d{2} m, Einstellungen$/);
-  await expect(brush).toContainText(/^Pinsel \d+\.\d{2} m$/);
+  // The width is an Intl centimetre unit in the host locale (map-surfaces.md §5).
+  await expect(brush).toHaveAttribute("aria-label", /^Pinselbreite \d+ cm, Einstellungen$/);
+  await expect(brush).toContainText(/^Pinsel \d+ cm$/);
   for (const key of ["v4_brush_button", "v4_brush"]) {
     const calls = await localizeCalls(page, key);
     expect(calls.length, key).toBeGreaterThan(0);
-    expect(calls.every((call) => /^\d+\.\d{2} m$/.test(call.placeholders?.brush)), key).toBe(true);
+    expect(calls.every((call) => /^\d+ cm$/.test(call.placeholders?.brush)), key).toBe(true);
   }
 });
 
@@ -268,8 +269,8 @@ test("a Home Assistant translation error string falls back to English", async ({
 
   // Found by class: its accessible name is the translated text under test.
   const brush = panel.locator(".draw-brush").first();
-  await expect(brush).toHaveAttribute("aria-label", /^Brush width, \d+\.\d{2} m\. Opens brush settings\.$/);
-  await expect(brush).toContainText(/^\d+\.\d{2} m$/);
+  await expect(brush).toHaveAttribute("aria-label", /^Brush width, \d+ cm\. Opens brush settings\.$/);
+  await expect(brush).toContainText(/^Brush · \d+ cm$/);
 });
 
 test("a localize that throws falls back to English", async ({ page }) => {
@@ -288,8 +289,8 @@ test("a localize that throws falls back to English", async ({ page }) => {
 
   // Found by class: its accessible name is the translated text under test.
   const brush = panel.locator(".draw-brush").first();
-  await expect(brush).toHaveAttribute("aria-label", /^Brush width, \d+\.\d{2} m\. Opens brush settings\.$/);
-  await expect(brush).toContainText(/^\d+\.\d{2} m$/);
+  await expect(brush).toHaveAttribute("aria-label", /^Brush width, \d+ cm\. Opens brush settings\.$/);
+  await expect(brush).toContainText(/^Brush · \d+ cm$/);
   expect(errors).toEqual([]);
 });
 
@@ -580,7 +581,9 @@ test("the saved-map notice and the history list show one snapshot's time alike",
   await expect(panel.getByText(savedMapSentence(expected)).first()).toBeVisible();
   await showSnapshotInHistory(page);
   await expect(panel.locator('.snapshot[aria-current="true"] > span')).toHaveText(expected);
-  await expect(panel.locator('.timeline input[type="range"]')).toHaveAttribute("aria-valuetext", expected);
+  // One saved map: no scrubber (map-surfaces.md §4 asks for three). The
+  // scrubber's dated aria-valuetext is pinned in map_studio_v4_map_surfaces.
+  await expect(panel.locator('.timeline input[type="range"]')).toHaveCount(0);
 });
 
 test("a language or time zone change reformats the saved-map date where it shows", async ({ page }) => {

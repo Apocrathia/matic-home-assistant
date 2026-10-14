@@ -128,4 +128,5 @@ export const base = css`
 *, *::before, *::after { box-sizing: border-box; }
 button, input, select, textarea { font: inherit; }
 .ms-icon { display: block; flex: none; inline-size: var(--ms-icon); block-size: var(--ms-icon); }
+.ms-icon--dir:dir(rtl) { scale: -1 1; }
 `;

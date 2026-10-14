@@ -13,12 +13,14 @@ import {
   type WorkspaceIntent,
   type WorkspaceState,
 } from "./contracts";
-import { PLAN_VIEWS_TAG, ROOMS_VIEW_TAG, WORKFLOW_TAG } from "./element-tags";
+import { PLAN_VIEWS_TAG, PRECISION_CONTROLS_TAG, ROOMS_VIEW_TAG, WORKFLOW_TAG } from "./element-tags";
 import { WORKSPACE_INTENT_EVENT } from "./map-canvas";
-import { deleteSubject, initialWorkspaceState } from "./state";
+import { deleteSubject, hasStoppableWork, initialWorkspaceState } from "./state";
+import { heldReasonKey } from "./draw-tools";
 import { formatDateTime, translate } from "./localize";
 import { LazyChunk, chunkStatus } from "./lazy-chunk";
 import { COVERAGES, MODES, coverageLabel, modeLabel } from "./plan-cadence";
+import type { Translate } from "./plan-copy";
 // The plan picker, Run and Edit, and the Rooms view.
 import "./plan-views";
 import "./rooms-view";
@@ -27,18 +29,38 @@ import "./rooms-view";
 import "./precision-controls";
 // The plan heading's tools, which the shell renders once these views load,
 // and the shell's other plan-only pieces.
-export { actionReason, focusPlanTarget, planCancel, planTitle, planTools } from "./plan-heading";
+export { actionReason, drawCancel, drawExit, focusPlanTarget, planCancel, planTitle, planTools } from "./plan-heading";
 
 // Dialogs that only these views' controls open carry their copy, launcher and
 // confirm here.
 export { confirmDialog, dialogCopy, dialogLauncher, dialogReturnTarget } from "./dialog-copy";
 export { MapOptions } from "./map-options";
+export { drawRecipes, renderMapHelp } from "./map-help";
 export { roomTapAnnouncement, roomsGripLine, roomsSummary } from "./rooms-view";
 export { shellWorkflowStyles } from "./workflow-styles";
+
+// One hint for the tool in hand, chosen by the pointer that will use it;
+// Move map needs none (map-surfaces.md §6). The keyboard recipes are
+// assistive text on the map (map-help.ts). The shell renders it under the
+// phone sheet's tool rows; the panel renders it in the wide body.
+export const drawHint = (t: Translate, state: WorkspaceState): string | null => {
+  const { tool } = state.draw;
+  if (tool === "pan") return null;
+  const coarse = window.matchMedia("(any-pointer: coarse)").matches;
+  if (tool === "outline") {
+    return coarse
+      ? t("v4_points_hint_touch", "Tap to add points · two fingers to move the map")
+      : t("v4_points_hint_pointer", "Click to add points · right-drag to move the map");
+  }
+  return coarse
+    ? t("v4_draw_hint_touch", "Drag to paint · two fingers to move the map")
+    : t("v4_draw_hint_pointer", "Drag to paint · right-drag or Space-drag to move the map");
+};
 export { formControls } from "./form-controls";
 
 const planViewsTag = unsafeStatic(PLAN_VIEWS_TAG);
 const roomsViewTag = unsafeStatic(ROOMS_VIEW_TAG);
+const precisionControlsTag = unsafeStatic(PRECISION_CONTROLS_TAG);
 
 const eventValue = (event: Event): string => (event.currentTarget as HTMLInputElement).value;
 
@@ -48,11 +70,13 @@ export class MaticMapWorkflowV4 extends LitElement {
     localize: { attribute: false },
     dates: { attribute: false },
     _historyPreviewPosition: { state: true },
+    narrow: { type: Boolean },
   };
 
   static override styles = [tokens, base, controls, formControls, css`
 :host { display: block; min-inline-size: 0; container-type: inline-size; }
-.workflow-fields { border: 0; margin: 0; padding: 0; min-inline-size: 0; }
+.ms-row--danger { color: var(--ms-danger); }
+.sr-only { position: absolute; overflow: hidden; inline-size: 1px; block-size: 1px; margin: -1px; clip-path: inset(50%); white-space: nowrap; }
 button, select, input[type="checkbox"] { cursor: pointer; }
 .stack { display: grid; gap: var(--ms-space-3); }
 .subtle { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
@@ -72,7 +96,6 @@ line-height: var(--ms-lh-snug);
 .split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--ms-space-2); }
 .list { display: grid; gap: var(--ms-space-2); }
 .group { display: grid; gap: var(--ms-space-2); }
-.group-heading { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); font-weight: var(--ms-w-medium); letter-spacing: 0.04em; line-height: var(--ms-lh-snug); text-transform: uppercase; }
 .floor[aria-current="true"] { border-color: var(--ms-resolved-indicator, var(--ms-accent)); background: color-mix(in srgb, var(--ms-accent) 12%, var(--ms-local)); }
 .problem p { margin: 0; }
 @media (forced-colors: active) { .floor[aria-current="true"] { forced-color-adjust: none; color: HighlightText; background: Highlight; border-color: Highlight; } }
@@ -81,12 +104,14 @@ line-height: var(--ms-lh-snug);
 .checkbox input { inline-size: 1.2rem; block-size: 1.2rem; }
 .floor small, .snapshot small, .list-button small { margin-inline-start: auto; color: color-mix(in srgb, var(--ms-text) 78%, var(--ms-local)); font-weight: var(--ms-w-regular); }
 .timeline { display: grid; gap: var(--ms-space-2); }
-.timeline input[type="range"] { inline-size: 100%; min-block-size: var(--ms-control); }
+.timeline-ends { display: flex; justify-content: space-between; margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
 @media (max-width: 25rem) { .split { grid-template-columns: 1fr; } }
 `];
 
   state: WorkspaceState = initialWorkspaceState();
   localize?: Localize;
+  // The phone sheet holds the brush settings itself, above the tool row.
+  narrow = false;
   dates?: DateFormat;
   /** The shell's Try again (shell.ts #retry), for the diagnostics chunk. */
   retry!: (event: Event) => void;
@@ -110,6 +135,12 @@ line-height: var(--ms-lh-snug);
 
   #t(key: string, fallback: string, placeholders?: Readonly<Record<string, string | number>>): string {
     return translate(this.localize, key, fallback, placeholders);
+  }
+
+  // Why the rows wait while a command runs (R12), in the host's words.
+  #heldReason(): string | null {
+    const held = heldReasonKey(this.state);
+    return held ? this.#t(held.reasonKey, held.reason) : null;
   }
 
   #modeLabel(mode: CleaningMode): string {
@@ -196,24 +227,35 @@ line-height: var(--ms-lh-snug);
 
   #draw() {
     const areas = this.state.resources.areas;
+    // On a phone the sheet shows the hint under its tool rows, where it is
+    // read at peek; here it would hide until the sheet opens.
+    const hint = this.narrow ? null : drawHint(this.#tr, this.state);
+    // Rows are held while a command runs, with the toolbar's reason (R12).
+    const held = this.#heldReason();
+    const row = (content: unknown, intent: WorkspaceIntent) => html`
+      <button
+        class="list-button ms-row"
+        type="button"
+        aria-disabled=${held ? "true" : nothing}
+        aria-describedby=${held ? "areas-held-reason" : nothing}
+        @click=${() => { if (!held) this.#intent(intent); }}
+      >${content}</button>
+    `;
     return html`
       <div class="stack">
-        <p class="subtle">${this.state.draw.tool === "outline" ? this.#t("v4_zone_coverage", "Place points around the area. Shading shows where the robot cleans inside the outline; narrow edges may stay uncovered.") : this.#t("v4_draw_floor_hint", "Paint only on the mapped floor. Zooming and panning never change the area.")}</p>
-        ${this.state.draw.tool !== "outline" ? html`<p class="subtle">${this.#t("v4_keyboard_draw_help", "Keyboard: focus the map, use arrow keys to aim, then Enter to paint or erase at the crosshair. D selects Paint; E selects Erase.")}</p>` : nothing}
+        ${hint ? html`<p class="subtle draw-hint">${hint}</p>` : nothing}
+        ${this.state.precisionOpen && !this.narrow ? staticHtml`<${precisionControlsTag} .state=${this.state} .localize=${this.localize}></${precisionControlsTag}>` : nothing}
         ${this.#resource(areas, html`
           <div class="group">
-            <h3 class="group-heading" id="areas-heading">${this.#t("area_workspace_title", "Custom areas")}</h3>
+            <h3 class="ms-section-heading" id="areas-heading">${this.#t("area_workspace_title", "Custom areas")}</h3>
             <div class="list" role="group" aria-labelledby="areas-heading">
-            <button class="list-button ms-row ms-row" type="button" @click=${() => this.#intent({ type: "select-area", areaId: null })}>${this.#t("area_new", "New area")}</button>
-            ${(areas.value?.areas || []).map((area) => html`
-              <button class="list-button ms-row ms-row" type="button" @click=${() => {
-                this.#intent({ type: "select-area", areaId: area.id, workflow: "areaReview" });
-              }}>
-                <span>${area.name}</span>
-                <small>${area.status === "current" ? this.#t("area_workspace_ready", "Ready") : this.#t("v4_review", "Review")}</small>
-              </button>
-            `)}
+              ${row(this.#t("area_new", "New area"), { type: "select-area", areaId: null })}
+              ${(areas.value?.areas || []).map((area) => row(
+                html`<bdi>${area.name}</bdi> ${area.status === "current" ? nothing : html`<small>${this.#t("v4_review", "Review")}</small>`}`,
+                { type: "select-area", areaId: area.id, workflow: "areaReview" },
+              ))}
             </div>
+            ${held ? html`<p class="sr-only" id="areas-held-reason">${held}</p>` : nothing}
           </div>
         `, "draw")}
       </div>
@@ -225,40 +267,58 @@ line-height: var(--ms-lh-snug);
     const areas = this.state.resources.areas;
     const needsReview = draft.canRebind || draft.status === "review";
     const stale = !needsReview && (draft.status === "stale" || draft.status === "unknown");
+    // Held while a command runs (R12): fields stay focusable and say why.
+    const held = this.#heldReason();
+    const heldBy = held ? "review-held-reason" : nothing;
+    const disabled = held ? "true" : nothing;
+    // While Stop holds the bar, as primary or secondary, Redraw is a body
+    // button (shell.md §3): Stop never shares its place with an edit.
+    const bodyRedraw = hasStoppableWork(this.state);
+    const canDelete = deleteSubject(this.state, "confirmDeleteArea") !== undefined;
     return html`
       <div class="stack">
+        ${needsReview ? html`<div class="notice" data-tone="warning" role="status">${this.#t("area_review_required", "The map changed since you saved this area, so save it again or redraw it.")}</div>` : nothing}
+        ${stale ? html`<div class="problem" role="alert">${this.#t("area_redraw_required", "Home Assistant can't use this area as it was saved, so redraw it.")}</div>` : nothing}
         ${areas.status === "error" ? html`
           <div class="stack">
             <div class="problem" role="alert">${this.#resourceCopy("areaReview").unavailable}</div>
             <div class="toolbar"><button class="ms-btn ms-btn--secondary" type="button" @click=${() => this.#intent({ type: "open-workflow", workflow: "areaReview" })}>${this.#t("v4_retry", "Try again")}</button></div>
           </div>
         ` : nothing}
-        ${needsReview ? html`<div class="notice" data-tone="warning" role="status">${this.#t("area_review_required", "The map changed since you saved this area, so save it again or redraw it.")}</div>` : nothing}
-        ${stale ? html`<div class="problem" role="alert">${this.#t("area_redraw_required", "Home Assistant can't use this area as it was saved, so redraw it.")}</div>` : nothing}
         <label class="field ms-field">${this.#t("area_name", "Area name")}
-          <input maxlength="128" autocomplete="off" .value=${draft.name} @input=${(event: Event) => this.#intent({ type: "patch-area-draft", patch: { name: eventValue(event) } })}>
+          <input maxlength="128" autocomplete="off" .value=${draft.name} ?readonly=${Boolean(held)} aria-disabled=${disabled} aria-describedby=${heldBy} @input=${(event: Event) => { if (!held) this.#intent({ type: "patch-area-draft", patch: { name: eventValue(event) } }); }}>
         </label>
         <div class="split">
           <label class="field ms-field">${this.#t("v4_cleaning_system", "Cleaning mode")}
-            <select .value=${draft.cleaningMode} @change=${(event: Event) => this.#intent({ type: "patch-area-draft", patch: { cleaningMode: eventValue(event) as CleaningMode } })}>${MODES.map((mode) => html`<option value=${mode} ?selected=${mode === draft.cleaningMode}>${this.#modeLabel(mode)}</option>`)}</select>
+            <select .value=${draft.cleaningMode} aria-disabled=${disabled} aria-describedby=${heldBy} @change=${(event: Event) => {
+              if (held) { (event.currentTarget as HTMLSelectElement).value = draft.cleaningMode; return; }
+              this.#intent({ type: "patch-area-draft", patch: { cleaningMode: eventValue(event) as CleaningMode } });
+            }}>${MODES.map((mode) => html`<option value=${mode} ?selected=${mode === draft.cleaningMode}>${this.#modeLabel(mode)}</option>`)}</select>
           </label>
           <label class="field ms-field">${this.#t("vacuum_coverage", "Vacuum coverage")}
-            <select ?disabled=${draft.cleaningMode === "mop"} .value=${draft.coverageSetting} @change=${(event: Event) => this.#intent({ type: "patch-area-draft", patch: { coverageSetting: eventValue(event) as CoverageSetting } })}>${COVERAGES.map((option) => html`<option value=${option} ?selected=${option === draft.coverageSetting}>${this.#coverageLabel(option)}</option>`)}</select>
+            <select ?disabled=${draft.cleaningMode === "mop"} .value=${draft.coverageSetting} aria-disabled=${disabled} aria-describedby=${heldBy} @change=${(event: Event) => {
+              if (held) { (event.currentTarget as HTMLSelectElement).value = draft.coverageSetting; return; }
+              this.#intent({ type: "patch-area-draft", patch: { coverageSetting: eventValue(event) as CoverageSetting } });
+            }}>${COVERAGES.map((option) => html`<option value=${option} ?selected=${option === draft.coverageSetting}>${this.#coverageLabel(option)}</option>`)}</select>
           </label>
         </div>
         ${this.#mopCoverageHint(draft.cleaningMode)}
-        <div class="toolbar">
-          <button class="ms-btn ms-btn--secondary" type="button" @click=${() => this.#intent({ type: "open-workflow", workflow: "draw" })}>${this.#t("v4_edit_outline", "Redraw")}</button>
-          ${deleteSubject(this.state, "confirmDeleteArea") ? html`
-            <button
-              class="danger ms-btn ms-btn--secondary ms-btn--danger"
-              type="button"
-              aria-label=${this.#t("v4_delete_area_label", "Delete area")}
-              data-dialog-launcher="confirmDeleteArea"
-              @click=${() => this.#intent({ type: "open-dialog", dialog: "confirmDeleteArea" })}
-            >${this.#t("area_delete", "Delete")}</button>
-          ` : nothing}
-        </div>
+        ${bodyRedraw ? html`
+          <div class="toolbar">
+            <button class="ms-btn ms-btn--secondary" type="button" data-redraw aria-disabled=${disabled} aria-describedby=${heldBy} @click=${() => { if (!held) this.#intent({ type: "open-workflow", workflow: "draw" }); }}>${this.#t("v4_edit_outline", "Redraw")}</button>
+          </div>
+        ` : nothing}
+        ${held ? html`<p class="sr-only" id="review-held-reason">${held}</p>` : nothing}
+        ${canDelete ? html`
+          <button
+            class="list-button ms-row ms-row--danger"
+            type="button"
+            data-dialog-launcher="confirmDeleteArea"
+            aria-disabled=${disabled}
+            aria-describedby=${heldBy}
+            @click=${() => { if (!held) this.#intent({ type: "open-dialog", dialog: "confirmDeleteArea" }); }}
+          >${this.#t("area_delete", "Delete")}</button>
+        ` : nothing}
       </div>
     `;
   }
@@ -273,63 +333,81 @@ line-height: var(--ms-lh-snug);
     const position = this.state.selection.historyId
       ? Math.max(0, snapshots.findIndex((snapshot) => snapshot.id === this.state.selection.historyId))
       : snapshots.length;
-    const liveLabel = floor?.active
-      ? this.#t("map_timeline_live_action", "Live")
-      : this.#t("v4_return_current_floor", "Return to current floor");
-    const displayPosition = this._historyPreviewPosition ?? position;
+    const live = this.#t("map_timeline_live_action", "Live");
+    // Only the live floor has a live map, so only its scrubber ends at Live; a
+    // saved floor's ends at its newest map and never changes floor under the thumb.
+    const liveEnd = Boolean(floor?.active);
+    const last = liveEnd ? snapshots.length : snapshots.length - 1;
+    const displayPosition = Math.min(this._historyPreviewPosition ?? position, last);
     const selectedSnapshot = snapshots[displayPosition];
+    // Held while a command runs (R12): rows and scrubber say why and change nothing.
+    const held = this.#heldReason();
+    const disabled = held ? "true" : nothing;
+    const heldBy = held ? "history-held-reason" : nothing;
+    // The live map could not be shown, so the last saved one is: the selectors
+    // leave history without a branch, so the body carries the reason once.
+    const readOnlyLive = this.state.dataMode === "live" && this.state.floor.readOnly;
     return this.#resource(resource, html`
       <div class="stack">
+        ${readOnlyLive ? html`<p class="subtle">${this.#t("v4_reason_live_map_required", "Can't edit until you show the live map.")}</p>` : nothing}
         ${(catalog?.floors.length || 0) > 1 ? html`
           <div class="group">
-            <h3 class="group-heading" id="floors-heading">${this.#t("v4_mapped_floors", "Mapped floors")}</h3>
+            <h3 class="ms-section-heading" id="floors-heading">${this.#t("v4_mapped_floors", "Mapped floors")}</h3>
             <div class="list" role="group" aria-labelledby="floors-heading">
             ${(catalog?.floors || []).map((candidate, index) => html`
               <button
-                class="floor ms-row ms-row"
+                class="floor ms-row"
                 type="button"
                 aria-current=${String(candidate.id === floor?.id)}
-                @click=${() => this.#intent({ type: "set-floor", floorId: candidate.id })}
+                aria-disabled=${disabled}
+                aria-describedby=${heldBy}
+                @click=${() => { if (!held) this.#intent({ type: "set-floor", floorId: candidate.id }); }}
               >
                 <span>${candidate.label || (candidate.active
                   ? this.#t("v4_current_floor", "Current floor")
                   : this.#t("v4_saved_floor", "Saved floor {number}", { number: candidate.ordinal ?? index }))}</span>
-                <small>${candidate.active ? this.#t("map_timeline_live_action", "Live") : this.#t("v4_read_only", "Read only")}</small>
+                <small>${candidate.active ? live : this.#t("v4_saved_map", "Saved map")}</small>
               </button>
             `)}
             </div>
           </div>
         ` : nothing}
         <div class="timeline">
-          <label class="field ms-field">${this.#t("map_timeline_label", "Map timeline")}
-            <input
-              type="range"
-              min="0"
-              max=${String(snapshots.length)}
-              step="1"
-              .value=${String(displayPosition)}
-              aria-valuetext=${selectedSnapshot ? formatDateTime(selectedSnapshot.createdAt, this.dates) : liveLabel}
-              ?disabled=${!snapshots.length}
-              @input=${(event: Event) => {
-                this._historyPreviewPosition = Number(eventValue(event));
-              }}
-              @change=${(event: Event) => {
-                const index = Number(eventValue(event));
-                this._historyPreviewPosition = null;
-                this.#intent({ type: "set-history", historyId: index === snapshots.length ? null : snapshots[index]?.id || null });
-              }}
-            >
-          </label>
+          ${snapshots.length >= 3 ? html`
+            <label class="field ms-field">${this.#t("map_timeline_label", "Map timeline")}
+              <input
+                type="range"
+                class="ms-range"
+                min="0"
+                max=${String(last)}
+                step="1"
+                .value=${String(displayPosition)}
+                aria-valuetext=${selectedSnapshot ? formatDateTime(selectedSnapshot.createdAt, this.dates) : live}
+                aria-disabled=${disabled}
+                aria-describedby=${heldBy}
+                @input=${(event: Event) => {
+                  if (held) { (event.currentTarget as HTMLInputElement).value = String(position); return; }
+                  this._historyPreviewPosition = Number(eventValue(event));
+                }}
+                @change=${(event: Event) => {
+                  if (held) { (event.currentTarget as HTMLInputElement).value = String(position); return; }
+                  const index = Number(eventValue(event));
+                  this._historyPreviewPosition = null;
+                  this.#intent({ type: "set-history", historyId: index === snapshots.length ? null : snapshots[index]?.id || null });
+                }}
+              >
+            </label>
+            <p class="timeline-ends" aria-hidden="true"><span>${this.#t("map_timeline_oldest", "Oldest")}</span><span>${liveEnd ? live : this.#t("map_timeline_newest", "Newest")}</span></p>
+          ` : nothing}
           <div class="list">
-            <button class="snapshot ms-row ms-row" type="button" aria-current=${String(!this.state.selection.historyId && Boolean(floor?.active))} @click=${() => this.#intent({ type: "set-history", historyId: null })}><span>${liveLabel}</span><small>${this.#t("v4_current", "Current")}</small></button>
             ${snapshots.map((snapshot, index) => html`
-              <button class="snapshot ms-row ms-row" type="button" aria-current=${String(snapshot.id === this.state.selection.historyId)} @click=${() => this.#intent({ type: "set-history", historyId: snapshot.id })}>
+              <button class="snapshot ms-row" type="button" aria-current=${String(snapshot.id === this.state.selection.historyId)} aria-disabled=${disabled} aria-describedby=${heldBy} @click=${() => { if (!held) this.#intent({ type: "set-history", historyId: snapshot.id }); }}>
                 <span>${formatDateTime(snapshot.createdAt, this.dates)}</span><small>${this.#t("v4_history_position", "{position} of {count}", { position: index + 1, count: snapshots.length })}</small>
               </button>
             `)}
           </div>
         </div>
-        <p class="subtle">${this.#t("v4_history_privacy", "Saved maps show one floor each and never show where the robot is now.")}</p>
+        ${held ? html`<p class="sr-only" id="history-held-reason">${held}</p>` : nothing}
       </div>
     `, "history");
   }
@@ -344,22 +422,14 @@ line-height: var(--ms-lh-snug);
     ></matic-map-diagnostics-v4>`;
   }
 
-  // Draw, area review and history keep the hold they had before plan Edit
-  // and Rooms gained their own: every control waits while a command runs
-  // until map-surfaces.md gives each its reason. A Delete confirmed then would
-  // be refused while its dialog closed as if it had been sent.
-  #held(content: unknown) {
-    return html`<fieldset class="workflow-fields" ?disabled=${this.state.command !== "idle" && this.state.command !== "failed"}>${content}</fieldset>`;
-  }
-
   protected override render() {
     switch (this.state.workflow) {
       case "rooms": return this.#rooms();
       case "plans":
       case "plan": return this.#planViews();
-      case "draw": return this.#held(this.#draw());
-      case "areaReview": return this.#held(this.#areaReview());
-      case "history": return this.#held(this.#history());
+      case "draw": return this.#draw();
+      case "areaReview": return this.#areaReview();
+      case "history": return this.#history();
       case "support": return this.#support();
       case "none": return nothing;
     }
