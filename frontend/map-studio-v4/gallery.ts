@@ -3,7 +3,7 @@ import { base, tokens } from "./tokens";
 import { html, unsafeStatic } from "lit/static-html.js";
 import type { PropertyValues } from "lit";
 
-import type { DateFormat, WorkspaceAction, WorkspaceState } from "./contracts";
+import type { DateFormat, Localize, WorkspaceAction, WorkspaceState } from "./contracts";
 import { isWorkspaceIntent } from "./contracts";
 import { SHELL_TAG } from "./element-tags";
 import {
@@ -24,6 +24,7 @@ export class MaticMapStudioGalleryV4 extends LitElement {
     controls: { type: Boolean, reflect: true },
     _workspace: { state: true },
     dates: { attribute: false },
+    localize: { attribute: false },
   };
 
   static override styles = [tokens, base, css`
@@ -76,6 +77,8 @@ export class MaticMapStudioGalleryV4 extends LitElement {
   scenario: GalleryScenario = "ready";
   narrow = false;
   dates?: DateFormat;
+  /** Home Assistant's `localize`; the walkthrough stage passes a synthetic language. */
+  localize?: Localize;
   controls = true;
   protected _workspace: WorkspaceState = createGalleryState("ready");
 
@@ -178,6 +181,7 @@ export class MaticMapStudioGalleryV4 extends LitElement {
           class="shell"
           .state=${this._workspace}
           .dates=${this.dates}
+          .localize=${this.localize}
           @matic-workspace-intent=${this.#intent}
           @matic-workspace-action=${this.#action}
         ></${shellTag}>

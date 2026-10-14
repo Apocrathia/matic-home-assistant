@@ -1,0 +1,81 @@
+{
+  "rows": [
+    {
+      "id": "R01",
+      "journey": "Home, default plan card and Your plans",
+      "steps": ["home-plan-due", "home-plan-paused", "home-plan-blocked", "ready"],
+      "check": "The three task cards, the plan card's due lines and the Your plans row under it"
+    },
+    {
+      "id": "R02",
+      "journey": "Plan pick, run, edit, save and delete",
+      "steps": ["plans", "plan-saved-intelligent", "plan-saved-ordered", "plan-run-parts", "plan-run-paused", "plan-run-blocked", "plan-edit-ordered", "plan-dirty", "plan-dirty:discardDraft", "plan-new", "plan-saved-intelligent:confirmDeletePlan"],
+      "check": "Picker to Run to Edit; numbers only in Saved order; Save, Cancel and Delete ask only when data would be lost"
+    },
+    {
+      "id": "R03",
+      "journey": "Room schedules and cadence",
+      "steps": ["plan-cadence-shared", "plan-schedule-available", "plan-schedule-joining", "plan-schedule-conflict", "plan-cadence-blocked", "plan-cadence-shared:confirmResetCadence"],
+      "check": "Each schedule row says when work is due; sharing, joining and Reset read plainly"
+    },
+    {
+      "id": "R04",
+      "journey": "Rooms view",
+      "steps": ["rooms", "rooms-ready", "rooms-busy", "rooms-failed", "rooms-empty", "room-limit"],
+      "check": "Map and list stay in step; each disabled Clean says why"
+    },
+    {
+      "id": "R05",
+      "journey": "Custom areas: draw, review, redraw, delete",
+      "steps": ["draw", "draw-points", "draw-saved", "area-review-new", "area-review-saved", "draw-redraw", "area-review-rebind", "area-review-stale", "area-review-rebind:confirmDeleteArea"],
+      "check": "One tool row, one hint, Cancel beside the primary; review titles and Delete last"
+    },
+    {
+      "id": "R06",
+      "journey": "Map history",
+      "steps": ["history", "history-floors"],
+      "check": "Saved maps are dated, show no robot and never start anything; Show live map returns"
+    },
+    {
+      "id": "R07",
+      "journey": "Full map",
+      "steps": ["full-map", "full-map-cleaning", "full-map-locating"],
+      "check": "The bar keeps the status, the main action, Stop when it applies and Exit full map"
+    },
+    {
+      "id": "R08",
+      "journey": "Help popover",
+      "steps": ["ready", "plan-saved-intelligent", "draw"],
+      "check": "Press ? on the map in each step; rows match the input you use, Draw adds its rows"
+    },
+    {
+      "id": "R09",
+      "journey": "Stop, pending and held states",
+      "steps": ["cleaning", "starting-command", "starting", "stopping-command", "stopping", "paused", "returning", "recharging", "task-in-progress"],
+      "check": "Stop is always reachable when it applies; held controls say why"
+    },
+    {
+      "id": "R10",
+      "journey": "Offline, locating, error and access states",
+      "steps": ["ha-offline", "robot-offline", "transition", "problem", "map-unavailable", "map-limited", "access", "unsupported"],
+      "check": "Each state says what is true, what it stops and one next action"
+    },
+    {
+      "id": "R11",
+      "journey": "Setup and first clean",
+      "steps": ["empty", "multi-robot", "rooms", "rooms-ready"],
+      "check": "No robot leads to Open integration; the first clean reads as one obvious path"
+    }
+  ],
+  "columns": [
+    {"id": "C01", "setup": "Phone 390 portrait", "hash": "w=390&h=844", "stage": "safari"},
+    {"id": "C02", "setup": "Phone landscape", "hash": "w=844&h=390", "stage": "safari"},
+    {"id": "C03", "setup": "Tablet 1024", "hash": "w=1024&h=768", "stage": "safari"},
+    {"id": "C04", "setup": "Desktop 1440", "hash": "w=1440&h=900", "stage": "safari"},
+    {"id": "C05", "setup": "Touch / mouse+keyboard", "hash": "input=touch", "stage": "touch"},
+    {"id": "C06", "setup": "Light/dark", "hash": "w=390&h=844&theme=dark", "stage": "safari"},
+    {"id": "C07", "setup": "RTL + one non-English language", "hash": "w=390&h=844&dir=rtl&lang=xa", "stage": "safari"},
+    {"id": "C08", "setup": "Forced colours", "hash": "w=1024&h=768&contrast=forced&motion=reduce", "stage": "chromium"},
+    {"id": "C09", "setup": "Screen-reader name/role read-out", "hash": "w=390&h=844&readout=tree", "stage": "readout"}
+  ]
+}
