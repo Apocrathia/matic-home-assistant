@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import math
 import struct
@@ -110,7 +111,7 @@ class _MetadataLockLease:
 
 
 STORAGE_VERSION = 1
-STORAGE_MINOR_VERSION = 10
+STORAGE_MINOR_VERSION = 11
 STORAGE_KEY = f"{DOMAIN}.plans"
 PLAN_MOTION_TOKEN = "_matic_plan_run"
 PLAN_FLOOR_TOKEN = "_matic_plan_floor"
@@ -201,6 +202,30 @@ class CadenceBindingError(ValueError):
     """Raised when active shared cadence lacks a verified map binding."""
 
 
+class PlanAreaMissingError(ValueError):
+    """Raised when a plan names a saved custom area that no longer exists."""
+
+
+class PlanAreaMapChangedError(ValueError):
+    """Raised when a plan's custom area is not bound to the current map."""
+
+
+class DuplicatePlanAreaError(ValueError):
+    """Raised when one plan names the same custom area twice."""
+
+
+class PlanAreaLimitError(RoomSequenceLimitError):
+    """Raised when a plan names more custom areas than it can hold."""
+
+
+class AreaInUseError(ValueError):
+    """Raised when deleting an area would leave a plan with nothing to clean."""
+
+    def __init__(self, plan_names: Sequence[str]) -> None:
+        super().__init__("custom area is the only entry of a plan")
+        self.plan_names = tuple(plan_names)
+
+
 @dataclass(frozen=True, slots=True)
 class _StopFence:
     """One live native STOP fence and the identity of its accepted command."""
@@ -254,6 +279,126 @@ def effective_room_settings(room: CleaningRoom) -> tuple[str, str]:
         if room.cleaning_mode == CleaningMode.MOP.value
         else room.coverage_setting,
     )
+
+
+_ROOM_ENTRY_KEYS = frozenset({"kind", "room_id"})
+_AREA_ENTRY_KEYS = frozenset({"kind", "area_id", "cleaning_mode", "coverage_setting"})
+_CLEANING_MODES = frozenset(mode.value for mode in CleaningMode)
+_COVERAGE_SETTINGS = frozenset(setting.value for setting in CoverageSetting)
+
+
+def _plan_room_ids(rooms: object) -> list[str]:
+    """Return the stable IDs of a stored plan's well-formed room settings."""
+    if not isinstance(rooms, list):
+        return []
+    return [
+        str(room["room_id"])
+        for room in rooms
+        if isinstance(room, Mapping) and room.get("room_id")
+    ]
+
+
+def _validated_entries(raw: object) -> list[dict[str, Any]]:
+    """Copy typed plan entries, rejecting unknown kinds and stray fields."""
+    if not isinstance(raw, list):
+        raise ValueError("plan entries are invalid")
+    entries: list[dict[str, Any]] = []
+    for item in raw:
+        kind = item.get("kind") if isinstance(item, Mapping) else None
+        if kind == "room" and set(item) == _ROOM_ENTRY_KEYS:
+            room_id = item["room_id"]
+            if isinstance(room_id, str) and room_id:
+                entries.append({"kind": "room", "room_id": room_id})
+                continue
+        if kind == "area" and set(item) == _AREA_ENTRY_KEYS:
+            area_id = item["area_id"]
+            if (
+                isinstance(area_id, str)
+                and area_id
+                and item["cleaning_mode"] in _CLEANING_MODES
+                and item["coverage_setting"] in _COVERAGE_SETTINGS
+            ):
+                entries.append(
+                    {
+                        "kind": "area",
+                        "area_id": area_id,
+                        "cleaning_mode": item["cleaning_mode"],
+                        "coverage_setting": item["coverage_setting"],
+                    }
+                )
+                continue
+        raise ValueError("plan entries are invalid")
+    return entries
+
+
+def plan_entries(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Return a plan's ordered room and custom-area entries.
+
+    ``rooms`` keeps every room's settings and cadence exactly as before areas
+    existed; ``entries`` owns the order and each area's settings. The room
+    references in ``entries`` must name the stored rooms in the same order.
+    """
+    room_ids = _plan_room_ids(plan.get("rooms", []))
+    raw = plan.get("entries")
+    if raw is None:
+        return [{"kind": "room", "room_id": room_id} for room_id in room_ids]
+    entries = _validated_entries(raw)
+    if [entry["room_id"] for entry in entries if entry["kind"] == "room"] != room_ids:
+        raise ValueError("plan entries do not match its rooms")
+    return entries
+
+
+def _stored_entries(plan: object) -> list[Mapping[str, Any]]:
+    """Read stored entries leniently for cleanup that must never fail."""
+    entries = plan.get("entries") if isinstance(plan, Mapping) else None
+    if not isinstance(entries, list):
+        return []
+    return [entry for entry in entries if isinstance(entry, Mapping)]
+
+
+def plan_area_fingerprint(area: Mapping[str, Any]) -> str:
+    """Fingerprint the saved geometry and map binding one area entry runs."""
+    payload = {
+        "circles": area.get("circles"),
+        "map_binding": area.get("map_binding"),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(b"matic-plan-area-v1\0" + encoded).hexdigest()
+
+
+def entry_mission_boundaries(entries: Sequence[Mapping[str, Any]]) -> list[int]:
+    """Return entry offsets where a run must start a new robot mission.
+
+    Rooms and drawn areas cannot share one native mission: each area is its
+    own leg, and contiguous rooms keep today's mixed-settings grouping.
+    """
+    boundaries: list[int] = []
+    offset = 0
+    rooms: list[CleaningRoom] = []
+
+    def close_rooms() -> None:
+        nonlocal offset
+        for group in leg_groups(rooms, mixed_settings=True):
+            offset += len(group)
+            boundaries.append(offset)
+        rooms.clear()
+
+    for entry in entries:
+        if entry.get("kind") == "area":
+            close_rooms()
+            offset += 1
+            boundaries.append(offset)
+            continue
+        rooms.append(
+            CleaningRoom(
+                str(entry["room_id"]),
+                str(entry["name"]),
+                str(entry["cleaning_mode"]),
+                str(entry["coverage_setting"]),
+            )
+        )
+    close_rooms()
+    return boundaries[:-1]
 
 
 @dataclass(frozen=True, slots=True)
@@ -648,6 +793,23 @@ def _migrate_legacy_manual_room_run(robot: dict[str, Any]) -> bool:
     return True
 
 
+def _stamp_plan_entries(robot: dict[str, Any]) -> None:
+    """Record every existing plan's rooms as its ordered room entries.
+
+    One-way: an older build fails closed on this minor version instead of
+    running a plan whose custom areas it cannot see.
+    """
+    plans = robot.get("plans")
+    if not isinstance(plans, dict):
+        return
+    for plan in plans.values():
+        if isinstance(plan, dict) and "entries" not in plan:
+            plan["entries"] = [
+                {"kind": "room", "room_id": room_id}
+                for room_id in _plan_room_ids(plan.get("rooms"))
+            ]
+
+
 class _CleaningPlanStore(Store[dict[str, Any]]):
     """Private plan storage with fail-closed schema migrations."""
 
@@ -723,6 +885,8 @@ class _CleaningPlanStore(Store[dict[str, Any]]):
                         _move_legacy_manual_rotation(
                             robot, run["run_id"], run["plan_id"]
                         )
+                if old_minor_version < 11:
+                    _stamp_plan_entries(robot)
         return old_data
 
 
@@ -2164,14 +2328,50 @@ class CleaningPlanManager:
         await self._async_mutate_area_metadata(serial_number, save)
 
     async def async_delete_area(self, serial_number: str, area_id: str) -> None:
-        """Delete one local drawn area."""
+        """Delete one local drawn area and every plan entry that names it.
 
-        def delete(robot: dict[str, Any]) -> None:
-            robot["areas"].pop(area_id, None)
-            if robot.get("selected_area") == area_id:
-                robot["selected_area"] = next(iter(robot["areas"]), None)
+        The area and its plan entries leave in one store commit. A plan that
+        would be left with nothing to clean refuses the whole deletion.
+        """
 
-        await self._async_mutate_area_metadata(serial_number, delete)
+        async def commit(_lease: _MetadataLockLease) -> None:
+            async with self._user_metadata_store_transaction(serial_number):
+                robot = self._robot(serial_number)
+                using = self.plans_using_area(serial_number, area_id)
+                emptied = [
+                    str(robot["plans"][plan_id].get("name", plan_id))
+                    for plan_id in using
+                    if all(
+                        entry.get("kind") == "area" and entry.get("area_id") == area_id
+                        for entry in _stored_entries(robot["plans"][plan_id])
+                    )
+                ]
+                if emptied:
+                    raise AreaInUseError(emptied)
+                before = deepcopy(robot)
+                for plan_id in using:
+                    plan = robot["plans"][plan_id]
+                    plan["entries"] = [
+                        entry
+                        for entry in plan["entries"]
+                        if not (
+                            isinstance(entry, Mapping)
+                            and entry.get("kind") == "area"
+                            and entry.get("area_id") == area_id
+                        )
+                    ]
+                robot["areas"].pop(area_id, None)
+                if robot.get("selected_area") == area_id:
+                    robot["selected_area"] = next(iter(robot["areas"]), None)
+                await self._async_save_with_rollback(serial_number, before)
+
+        await self._async_run_owned_metadata(
+            serial_number,
+            commit,
+            domain_locks=(self.plan_write_lock(serial_number),),
+            notify=True,
+            reject_on_admission_close=True,
+        )
 
     async def async_select_area(self, serial_number: str, area_id: str) -> None:
         """Persist the custom area used by native entities."""
@@ -2492,6 +2692,9 @@ class CleaningPlanManager:
                         shared_updates.append((room_id, policy))
             normalized_rooms.append(room)
         saved_plan["rooms"] = normalized_rooms
+        saved_plan["entries"] = self._normalized_plan_entries(
+            robot, saved_plan.get("entries"), normalized_rooms
+        )
         retained_room_ids = {room["room_id"] for room in normalized_rooms}
         reset_private_progress.update(set(prior_rooms) - retained_room_ids)
         changed_plan_rooms = {
@@ -2583,6 +2786,36 @@ class CleaningPlanManager:
             await self._async_save_with_rollback(serial_number, before)
         finally:
             self._end_cadence_mutation(serial_number, mutation_token)
+
+    @staticmethod
+    def _normalized_plan_entries(
+        robot: Mapping[str, Any],
+        raw_entries: object,
+        rooms: Sequence[Mapping[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Validate the entry order against the saved rooms and areas."""
+        entries = plan_entries({"rooms": list(rooms), "entries": raw_entries})
+        area_ids = [entry["area_id"] for entry in entries if entry["kind"] == "area"]
+        if len(area_ids) > MAX_ROOM_SEQUENCE_SIZE:
+            raise PlanAreaLimitError(
+                f"A plan can include at most {MAX_ROOM_SEQUENCE_SIZE} custom areas"
+            )
+        if len(set(area_ids)) != len(area_ids):
+            raise DuplicatePlanAreaError("a custom area appears more than once")
+        if any(area_id not in robot["areas"] for area_id in area_ids):
+            raise PlanAreaMissingError("plan custom area is missing")
+        return entries
+
+    def plans_using_area(self, serial_number: str, area_id: str) -> list[str]:
+        """Return the IDs of saved plans that clean one custom area."""
+        return sorted(
+            plan_id
+            for plan_id, plan in self._robot(serial_number)["plans"].items()
+            if any(
+                entry.get("kind") == "area" and entry.get("area_id") == area_id
+                for entry in _stored_entries(plan)
+            )
+        )
 
     async def async_delete_plan(self, serial_number: str, plan_id: str) -> None:
         """Delete one saved plan without deleting unrelated history."""
@@ -2726,9 +2959,33 @@ class CleaningPlanManager:
         floor_token: str | None = None,
         room_identities: Mapping[str, str] | None = None,
         intelligent: bool | None = None,
+        floor_plan: FloorPlan | None = None,
     ) -> dict[str, Any]:
-        """Return the next complete execution order without changing state."""
-        plan, rooms = self.rooms_for_plan(serial_number, room_map, plan_id)
+        """Return the next complete execution order without changing state.
+
+        Custom areas keep their saved positions and are checked against
+        ``floor_plan``; intelligent order moves rooms only within the run of
+        rooms between two areas.
+        """
+        plan = self.plan(serial_number, plan_id)
+        entries = plan_entries(plan)
+        areas = [entry for entry in entries if entry["kind"] == "area"]
+        area_projections: dict[str, dict[str, Any]] = {}
+        if not areas:
+            plan, rooms = self.rooms_for_plan(serial_number, room_map, plan["id"])
+        else:
+            if not plan.get("enabled", True):
+                raise PlanDisabledError("plan is disabled")
+            raw = plan.get("rooms", [])
+            if not isinstance(raw, list) or any(
+                not isinstance(room, Mapping) for room in raw
+            ):
+                raise ValueError("plan contains an invalid room")
+            rooms = resolve_rooms(raw, dict(room_map))
+            area_projections = {
+                entry["area_id"]: self._preview_area(serial_number, entry, floor_plan)
+                for entry in areas
+            }
         use_intelligent = (
             plan.get("run_behavior", "intelligent") == "intelligent"
             if intelligent is None
@@ -2737,6 +2994,21 @@ class CleaningPlanManager:
         chosen = (
             self.choose(serial_number, plan["id"], rooms) if use_intelligent else rooms
         )
+        if areas:
+            # Rank rooms globally, then keep each one inside its own group.
+            rank = {room.room_id: index for index, room in enumerate(chosen)}
+            groups: list[list[CleaningRoom]] = [[]]
+            saved_rooms = iter(rooms)
+            for entry in entries:
+                if entry["kind"] == "area":
+                    groups.append([])
+                else:
+                    groups[-1].append(next(saved_rooms))
+            chosen = [
+                room
+                for group in groups
+                for room in sorted(group, key=lambda room: rank[room.room_id])
+            ]
         effective, cadence = self.resolve_cadence(
             serial_number,
             plan["id"],
@@ -2744,6 +3016,16 @@ class CleaningPlanManager:
             floor_token=floor_token,
             room_identities=room_identities,
         )
+        preview_rooms = [
+            {**asdict(room), "cadence": cadence[room.room_id]} for room in effective
+        ]
+        effective_rooms = iter(preview_rooms)
+        preview_entries = [
+            area_projections[entry["area_id"]]
+            if entry["kind"] == "area"
+            else {"kind": "room", **next(effective_rooms)}
+            for entry in entries
+        ]
         return {
             "valid": True,
             "plan_id": plan["id"],
@@ -2753,9 +3035,9 @@ class CleaningPlanManager:
             "rotation_basis": (
                 "least_recent_opportunity" if use_intelligent else "saved_order"
             ),
-            "rooms": [
-                {**asdict(room), "cadence": cadence[room.room_id]} for room in effective
-            ],
+            "rooms": preview_rooms,
+            "entries": preview_entries,
+            **({"area_count": len(areas)} if areas else {}),
             "rotation": (
                 self.rotation_details(serial_number, plan["id"], rooms)
                 if use_intelligent
@@ -2777,6 +3059,33 @@ class CleaningPlanManager:
             ),
             "start_timeout": int(plan.get("start_timeout", 120)),
             "completion_timeout": int(plan.get("completion_timeout", 21600)),
+        }
+
+    def _preview_area(
+        self,
+        serial_number: str,
+        entry: Mapping[str, Any],
+        floor_plan: FloorPlan | None,
+    ) -> dict[str, Any]:
+        """Project one area entry, failing closed unless it fits this map."""
+        area = self._robot(serial_number)["areas"].get(entry["area_id"])
+        if not isinstance(area, Mapping):
+            raise PlanAreaMissingError("plan custom area is missing")
+        status = (
+            area_binding_status(area, floor_plan)
+            if floor_plan is not None
+            else AreaBindingStatus.INVALID
+        )
+        if status is not AreaBindingStatus.CURRENT:
+            raise PlanAreaMapChangedError("plan custom area is not on this map")
+        return {
+            "kind": "area",
+            "area_id": entry["area_id"],
+            "name": str(area.get("name", entry["area_id"])),
+            "cleaning_mode": entry["cleaning_mode"],
+            "coverage_setting": entry["coverage_setting"],
+            "binding_status": status.value,
+            "binding_fingerprint": plan_area_fingerprint(area),
         }
 
     def resolve_cadence(

@@ -81,18 +81,32 @@ def test_room_objects_declare_their_fields() -> None:
     for key, field in (
         ("clean_room_sequence", "rooms"),
         ("preview_room_sequence", "rooms"),
-        ("save_plan", "rooms"),
-        ("save_plan_room", "room"),
     ):
         selector = SERVICES[key]["fields"][field]["selector"]["object"]
         assert list(selector["fields"]) == ["room", "cleaning_mode", "coverage_setting"]
-        assert selector.get("multiple", False) is (field == "rooms")
+        assert selector["multiple"] is True
         assert selector["translation_key"] == "plan_room"
     assert set(STRINGS["selector"]["plan_room"]["fields"]) == {
         "room",
         "cleaning_mode",
         "coverage_setting",
     }
+
+
+def test_plan_entry_objects_offer_a_room_or_an_area() -> None:
+    entry_fields = ["room", "area", "cleaning_mode", "coverage_setting"]
+    for key, field in (("save_plan", "rooms"), ("save_plan_room", "room")):
+        selector = SERVICES[key]["fields"][field]["selector"]["object"]
+        assert list(selector["fields"]) == entry_fields
+        assert not any(item.get("required") for item in selector["fields"].values())
+        assert selector.get("multiple", False) is (field == "rooms")
+        assert selector["translation_key"] == "plan_entry"
+    assert list(STRINGS["selector"]["plan_entry"]["fields"]) == entry_fields
+    for key in ("delete_plan_room", "move_plan_room"):
+        fields = SERVICES[key]["fields"]
+        assert "required" not in fields["room"]
+        assert "required" not in fields["area"]
+        assert set(STRINGS["services"][key]["fields"]) == set(fields)
 
 
 def _selects() -> list[dict]:

@@ -5,7 +5,7 @@ and the robot's Home Assistant surfaces are rebuilt around plain words, one
 action at a time and layouts that fit every screen. RC23 was prepared but never
 tagged, so its entity, setup and action changes ship here for the first time.
 Entity IDs and unique IDs stay the same, so dashboards and automations keep
-working.
+working. Requires Home Assistant 2026.10 or later.
 
 **Stable 0.5.0 waits until every cell of the
 [owner walkthrough](owner-walkthrough-0.5.md) is approved** (99 cells: 11
@@ -53,6 +53,7 @@ acceptance of identity recovery.
   Locating keeps Stop and the exit control.
 - 2026-10-12: assistants can run plans, clean rooms, stop and reset a room
   schedule through the same checks as Matic Map.
+- 2026-10-14: custom areas join plans in 0.5 and run every time.
 - UX8 request: stable waits on the owner walkthrough above, staged by the
   maintainer and approved or critiqued cell by cell.
 
@@ -106,15 +107,9 @@ To restore them, downgrade to RC22.
 - Disabled by default for new installs: Paused, Returning to dock and Fully
   charged (they repeat Activity), Update channel and Protocol version.
   Scheduled cleanings, Robot cleaning runs and the Cues statuses move to
-  Diagnostic.
+  Diagnostic. Existing installs keep their enabled or disabled choices.
 - While the robot reports a pending update, the Firmware entity says the robot
   installs it itself.
-
-Existing installs keep their current enabled or disabled choices.
-
-## Requirements
-
-Home Assistant 2026.10 or later.
 
 ## Setup, Reconfigure and Repairs
 
@@ -136,6 +131,10 @@ Home Assistant 2026.10 or later.
   developer actions start with "Advanced:". Run and preview IDs are Advanced
   fields. Action errors are plain translated messages.
 - New device triggers: Room finished, Plan finished and Cleaning finished.
+- **Custom areas in plans**, step 1 of 3: plan actions take saved custom
+  areas beside rooms, or areas alone ([details](actions.md#custom-areas-in-plans)).
+  A plan with an area previews but doesn't run yet. Earlier RCs can't open the
+  updated plan storage.
 - The five blueprints are renamed "Matic: …", describe every input, count a
   named zone as away, and run only when the robot is docked or idle. Re-import
   them to pick up the changes.

@@ -2120,7 +2120,7 @@ async def test_plan_store_migrates_legacy_areas_without_fabricating_map_binding(
 ) -> None:
     manager = CleaningPlanManager(hass)
     assert manager._store.version == 1
-    assert manager._store.minor_version == 10
+    assert manager._store.minor_version == 11
     assert manager._store._private is True
     stored = {
         "robots": {
@@ -2189,7 +2189,7 @@ async def test_plan_store_migrates_legacy_areas_without_fabricating_map_binding(
     with pytest.raises(ValueError, match="storage version"):
         await manager._store._async_migrate_func(2, 1, stored)
     with pytest.raises(ValueError, match="minor version"):
-        await manager._store._async_migrate_func(1, 11, stored)
+        await manager._store._async_migrate_func(1, 12, stored)
 
 
 async def test_plan_store_migrates_interrupted_manual_run_without_private_credit(
