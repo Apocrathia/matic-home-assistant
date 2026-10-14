@@ -1456,6 +1456,17 @@ class MaticPlansView(HomeAssistantView):
                 ),
             )
 
+        saved_areas: Mapping[str, object] | None = None
+
+        def area_entry_name(area_id: str) -> str:
+            """Name an area entry, falling back to its ID once it is gone."""
+            nonlocal saved_areas
+            if saved_areas is None:
+                saved_areas = runtime.cleaning_plans.areas(serial_number)
+            area = saved_areas.get(area_id)
+            name = area.get("name") if isinstance(area, Mapping) else None
+            return name if isinstance(name, str) else area_id
+
         plans = []
         for plan_id, plan in runtime.cleaning_plans.plans(serial_number).items():
             raw_rooms = plan.get("rooms", [])
@@ -1493,6 +1504,13 @@ class MaticPlansView(HomeAssistantView):
             except ValueError:
                 # The preview names the problem; list the rooms that remain.
                 entries = plan_entries({"rooms": raw_rooms})
+            # Stored area entries carry only an ID; name them for the editor.
+            entries = [
+                {**entry, "name": area_entry_name(entry["area_id"])}
+                if entry["kind"] == "area"
+                else entry
+                for entry in entries
+            ]
             preview = next_run_preview(plan_id)
             plans.append(
                 {

@@ -3129,11 +3129,13 @@ async def test_plan_workspace_projects_area_entries_and_mission_boundaries(
 
     plans = {plan["id"]: plan for plan in json.loads(response.body)["plans"]}
     mixed = plans["mixed"]
+    # Stored entries keep only area IDs; the editor model names each area.
     assert mixed["entries"] == [
-        _area_entry("rug"),
+        {**_area_entry("rug"), "name": "Rug"},
         {"kind": "room", "room_id": "room-1"},
-        _area_entry("mat"),
+        {**_area_entry("mat"), "name": "Mat"},
     ]
+    assert "name" not in manager.plan(serial, "mixed")["entries"][0]
     area_projection = {
         "kind": "area",
         "area_id": "rug",
@@ -3175,6 +3177,7 @@ async def test_plan_workspace_projects_area_entries_and_mission_boundaries(
     assert spots["rooms"] == []
     assert spots["entries"] == [area_projection]
     assert spots["mission_boundaries"] == []
+    assert plans["spots"]["entries"] == [{**_area_entry("rug"), "name": "Rug"}]
     assert plans["corrupt"]["entries"] == [{"kind": "room", "room_id": "room-1"}]
     assert plans["corrupt"]["next_run_preview"]["blocker"] == "invalid_plan"
 
@@ -3183,8 +3186,15 @@ async def test_plan_workspace_projects_area_entries_and_mission_boundaries(
         replace(floor_plan, mission_id=floor_plan.mission_id + 1)
     )
     manager._robot(serial)["areas"].pop("rug")
+    manager._robot(serial)["areas"]["mat"]["name"] = None
     response = await MaticPlansView().get(_request(hass_view), "entry")
     plans = {plan["id"]: plan for plan in json.loads(response.body)["plans"]}
+    # A deleted or unnamed area is still listed, under its ID.
+    assert [entry.get("name") for entry in plans["mixed"]["entries"]] == [
+        "rug",
+        None,
+        "mat",
+    ]
     assert plans["mixed"]["next_run_preview"]["blocker"] == "area_missing"
     assert plans["spots"]["next_run_preview"] == {
         "rooms": [],
