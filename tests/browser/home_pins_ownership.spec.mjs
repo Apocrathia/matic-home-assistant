@@ -32,6 +32,14 @@ async function setup(page, stores) {
     const held = [];
     const log = [];
     const h = { user: "u1", hold: new Set(), held, log, data, failSetAt: 0, sets: 0, plansFail: 0 };
+    // Every plan id these tests pin exists, unless a test narrows the catalog.
+    h.planIds = ["daily", "weekend", "u1-plan", "u2-plan", "fresh", "stale", "b-plan", "b-weekend"];
+    h.selectedPlan = "daily";
+    h.planCatalog = (base) => {
+      const [template] = base.plans;
+      const plans = h.planIds.map((id) => base.plans.find((plan) => plan.id === id) ?? { ...template, id, name: id });
+      return { ...base, plans, selectedPlan: h.selectedPlan };
+    };
     const connection = {
       subscribeMessage: async () => () => undefined,
       sendMessagePromise: async (message) => {
@@ -59,7 +67,7 @@ async function setup(page, stores) {
       catalog: async () => [entry("synthetic-entry"), entry("entry-b")],
       plans: async () => {
         if (h.plansFail > 0) { h.plansFail -= 1; throw new Error("synthetic plans failure"); }
-        return syntheticPlans();
+        return h.planCatalog(syntheticPlans());
       },
       areas: async () => syntheticAreas(),
       history: async () => syntheticHistory(),
@@ -233,4 +241,81 @@ test("two tabs writing different robots at once keep both robots' shortcuts", as
   await page.waitForTimeout(100);
   expect(await storedPins(page, "u1", "synthetic-entry")).toEqual([plan("daily"), plan("weekend")]);
   expect(await storedPins(page, "u1", "entry-b")).toEqual([plan("b-plan"), plan("b-weekend")]);
+});
+
+const setUserDataWrites = (page) => page.evaluate(() => window.pinsHarness.log.filter((call) => call.type === "frontend/set_user_data").length);
+const reloadPlans = (page, ids, selected) => page.evaluate(async ([ids, selected]) => {
+  const h = window.pinsHarness;
+  h.planIds = ids;
+  h.selectedPlan = selected;
+  await h.controller.loadPlans({ force: true });
+}, [ids, selected]);
+
+test("a user with no plans yet gets the default shortcut once they save their first plan, and after a reload", async ({ page }) => {
+  await setup(page, { u1: {} });
+  await page.evaluate(() => { window.pinsHarness.planIds = []; window.pinsHarness.selectedPlan = null; });
+  await sync(page, "u1", "synthetic-entry");
+  await expect.poll(() => pins(page)).toMatchObject({ status: "ready", pins: [] });
+  await page.waitForTimeout(50);
+  // No plan, no default: nothing is decided, so no record is written.
+  expect(await setUserDataWrites(page)).toBe(0);
+  // The first saved plan becomes the default, and with it the first shortcut.
+  await reloadPlans(page, ["first"], "first");
+  await expect.poll(() => pins(page)).toMatchObject({ status: "ready", pins: [plan("first")] });
+  await expect.poll(() => storedPins(page, "u1", "synthetic-entry")).toEqual([plan("first")]);
+  // A reload reads that record.
+  const reloaded = await page.evaluate(async () => {
+    const h = window.pinsHarness;
+    const tab = h.make();
+    tab.sync("u1", "synthetic-entry");
+    for (let i = 0; i < 100 && tab.store.value.homePins.status !== "ready"; i += 1) await new Promise((r) => setTimeout(r, 10));
+    return tab.store.value.homePins.pins;
+  });
+  expect(reloaded).toEqual([plan("first")]);
+});
+
+test("with no plans, a reload after the first plan was saved elsewhere seeds it then", async ({ page }) => {
+  await setup(page, { u1: {} });
+  await page.evaluate(() => { window.pinsHarness.planIds = ["first"]; window.pinsHarness.selectedPlan = "first"; });
+  await sync(page, "u1", "synthetic-entry");
+  await expect.poll(() => pins(page)).toMatchObject({ status: "ready", pins: [plan("first")] });
+  await expect.poll(() => storedPins(page, "u1", "synthetic-entry")).toEqual([plan("first")]);
+});
+
+test("a pin whose plan was deleted leaves home and the record, and the same id coming back is not pinned", async ({ page }) => {
+  await setup(page, { u1: { [keyOf("synthetic-entry")]: { pins: [plan("daily"), plan("weekend"), plan("ghost")] } } });
+  await sync(page, "u1", "synthetic-entry");
+  // "ghost" was deleted before this session (another dashboard, a service call).
+  await expect.poll(() => storedPins(page, "u1", "synthetic-entry")).toEqual([plan("daily"), plan("weekend")]);
+  await expect.poll(() => pins(page)).toMatchObject({ status: "ready", pins: [plan("daily"), plan("weekend")] });
+  // The default plan is deleted now; another becomes the default, unpinned.
+  await reloadPlans(page, ["weekend"], "weekend");
+  await expect.poll(() => storedPins(page, "u1", "synthetic-entry")).toEqual([plan("weekend")]);
+  await expect.poll(() => pins(page)).toMatchObject({ status: "ready", pins: [plan("weekend")] });
+  // A new plan saved under the same name gets the same id; it was never pinned.
+  await reloadPlans(page, ["weekend", "daily", "ghost"], "weekend");
+  await page.waitForTimeout(50);
+  expect(await pins(page)).toMatchObject({ status: "ready", pins: [plan("weekend")] });
+  expect(await storedPins(page, "u1", "synthetic-entry")).toEqual([plan("weekend")]);
+});
+
+test("a cleanup write that fails is tried once, not on every plan reload", async ({ page }) => {
+  await setup(page, { u1: { [keyOf("synthetic-entry")]: { pins: [plan("daily"), plan("ghost")] } } });
+  await page.evaluate(() => { window.pinsHarness.failSetAt = 1; });
+  await sync(page, "u1", "synthetic-entry");
+  await expect.poll(() => page.evaluate(() => window.pinsHarness.sets)).toBe(1);
+  await reloadPlans(page, ["daily", "weekend"], "daily");
+  await reloadPlans(page, ["daily", "weekend"], "daily");
+  await page.waitForTimeout(50);
+  expect(await page.evaluate(() => window.pinsHarness.sets)).toBe(1);
+  // Hidden either way: a pin with no plan shows nothing on home.
+  expect(await storedPins(page, "u1", "synthetic-entry")).toEqual([plan("daily"), plan("ghost")]);
+});
+
+test("a pin whose area was deleted leaves home and the record once the areas load", async ({ page }) => {
+  const area = (id) => ({ kind: "area", id });
+  await setup(page, { u1: { [keyOf("synthetic-entry")]: { pins: [area("entryway"), area("ghost-area"), plan("daily")] } } });
+  await sync(page, "u1", "synthetic-entry");
+  await expect.poll(() => storedPins(page, "u1", "synthetic-entry")).toEqual([area("entryway"), plan("daily")]);
+  await expect.poll(() => pins(page)).toMatchObject({ status: "ready", pins: [area("entryway"), plan("daily")] });
 });

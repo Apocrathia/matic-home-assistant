@@ -593,7 +593,10 @@ test.describe("home shortcuts in Home Assistant's user data", () => {
 
   test("a failed write puts an unpinned shortcut back in its place", async ({ page }) => {
     const pins = [{ kind: "plan", id: "x" }, { kind: "plan", id: "daily" }, { kind: "plan", id: "y" }];
-    const panel = await mountPanel(page, { userData: { [KEY]: { pins } } });
+    // Every pinned plan exists: a pin whose plan is gone is cleaned up (followPins).
+    const [daily] = PLAN_CATALOG.plans;
+    const initialPlanCatalog = { ...PLAN_CATALOG, plans: [daily, { ...daily, id: "x", name: "Plan X" }, { ...daily, id: "y", name: "Plan Y" }] };
+    const panel = await mountPanel(page, { initialPlanCatalog, userData: { [KEY]: { pins } } });
     await expect.poll(() => page.evaluate(() => window.__pinPanel.getWorkspaceSnapshot().homePins.status)).toBe("ready");
     await page.evaluate(() => window.__panelFixture.failNextUserData("frontend/set_user_data"));
     await panel.getByRole("button", { name: "Open Daily clean" }).click();

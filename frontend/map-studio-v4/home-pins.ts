@@ -1,4 +1,5 @@
 import type { HomePin, WorkspaceNotice, WorkspaceState } from "./contracts";
+import type { EffectController } from "./effects";
 import type { WorkspaceStore } from "./state";
 import type { WorkspaceConnection } from "./workspace-transport";
 
@@ -67,28 +68,63 @@ const settledPlans = (store: WorkspaceStore, entryId: string): Promise<{ readonl
 });
 
 /**
- * Calls `then` once, a microtask after the plan list is next ready, unless
- * `live` turned false first. Returns a stop for the wait.
+ * Keeps one read's pins true to the catalogs while that read stands (`live`:
+ * same owner, same token, shortcuts ready). Through the same queued toggle a
+ * person makes, so it never races their own:
+ * - Unseeded (no record, no default plan yet): the first default plan that
+ *   appears is pinned and written, unless the person pinned or unpinned
+ *   something first (Codex PRRT_kwDOTau7uM6sQAVO).
+ * - A pinned plan or area missing from a ready catalog was deleted (catalogs
+ *   list every saved plan and area for the robot): it is unpinned, once per
+ *   pin, so a new plan or area saved under the same name, and so the same
+ *   id, never comes back pinned.
  */
-export const whenPlansReady = (store: WorkspaceStore, live: () => boolean, then: () => void): () => void => {
-  let settled = false;
+export const followPins = (
+  store: WorkspaceStore,
+  host: Pick<EffectController, "saveHomePin">,
+  entryId: string,
+  live: () => boolean,
+  unseeded: boolean,
+): void => {
+  const initial = store.value.homePins;
+  const tried = new Set<string>();
+  let seeding = unseeded;
+  let done = false;
   let unsubscribe: (() => void) | null = null;
-  const stop = (): void => { settled = true; unsubscribe?.(); };
+  const toggle = (pin: HomePin, pinned: boolean): void => {
+    const before = store.value.homePins.pins;
+    store.dispatch({ type: "set-home-pin", pin, pinned });
+    host.saveHomePin(pin, pinned, before);
+  };
+  const ok = (state: WorkspaceState): boolean => live() && state.selection.entryId === entryId && state.homePins.status === "ready";
   unsubscribe = store.subscribe((state) => {
-    if (settled) return;
-    if (!live()) { stop(); return; }
-    if (state.resources.plans.status !== "ready") return;
-    stop();
-    queueMicrotask(() => { if (live()) then(); });
+    if (done) return;
+    if (!ok(state)) { done = true; unsubscribe?.(); return; }
+    if (state.homePins !== initial) seeding = false;
+    const plans = state.resources.plans.status === "ready" ? state.resources.plans.value : null;
+    const areas = state.resources.areas.status === "ready" ? state.resources.areas.value : null;
+    const gone = state.homePins.pins.filter((pin) => !tried.has(`${pin.kind}:${pin.id}`) && (pin.kind === "plan"
+      ? plans && !plans.plans.some((candidate) => candidate.id === pin.id)
+      : areas && !areas.areas.some((candidate) => candidate.id === pin.id)));
+    const selected = seeding && plans?.plans.some((candidate) => candidate.id === plans.selectedPlan) ? plans.selectedPlan : null;
+    if (selected) seeding = false;
+    if (!gone.length && !selected) return;
+    for (const pin of gone) tried.add(`${pin.kind}:${pin.id}`);
+    // Never from inside the store's own notification.
+    queueMicrotask(() => {
+      if (!ok(store.value)) return;
+      for (const pin of gone) toggle(pin, false);
+      if (selected && !store.value.homePins.pins.length) toggle({ kind: "plan", id: selected }, true);
+    });
   });
-  if (settled) unsubscribe();
-  return stop;
+  if (done) unsubscribe();
 };
 
 /**
  * Reads this robot's pins. With no record yet, the default plan becomes the
- * first pin and is written once. A plan list that failed to load decides
- * nothing: null (unseeded), no record, so a load once the plans recover seeds.
+ * first pin and is written once. A plan list that failed to load, or that has
+ * no default plan yet, decides nothing: null (unseeded) and no record, so
+ * followPins seeds the first default plan that appears, and a reload does.
  * A seed whose write fails still shows; the next load tries again.
  */
 export const loadPins = async (
@@ -101,8 +137,8 @@ export const loadPins = async (
   if (pins) return pins;
   const plans = await settledPlans(store, entryId);
   if (!stillOwned()) return [];
-  if (!plans) return null;
-  const seeded: HomePin[] = plans.selected ? [{ kind: "plan", id: plans.selected }] : [];
+  if (!plans?.selected) return null;
+  const seeded: HomePin[] = [{ kind: "plan", id: plans.selected }];
   try {
     await writePins(connection, entryId, seeded, stillOwned);
   } catch {
