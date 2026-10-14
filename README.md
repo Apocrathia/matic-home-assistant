@@ -2,8 +2,8 @@
 
 # Matic for Home Assistant
 
-Make Matic part of your home routines: rotate fairly through rooms, save each
-room's cleaning preferences, and start or stop plans as your household comes and goes.
+Make Matic part of your home: rotate fairly through rooms, save each room's
+cleaning preferences, and start or stop plans as your household comes and goes.
 Pair once over Bluetooth; everyday control, maps, and state use your local network.
 
 **[Install](#install) · [Cleaning guide](docs/cleaning.md) · [Automations](docs/automation.md) · [All docs](docs/README.md)**
@@ -12,20 +12,20 @@ Pair once over Bluetooth; everyday control, maps, and state use your local netwo
 
 - **Give every room a turn.** Intelligent rotation starts with rooms that have waited longest. Short trips away won't keep restarting the same first rooms; cleaning from the Matic app also informs the order.
 - **Build a plan around each room.** Save room order, vacuum/mop mode, and Quick, Optimal, or Heavy duty vacuum coverage per room. Preview the next run before starting it.
-- **Clean around your life.** Run plans when everyone leaves, schedule quiet-hours routines, or clean a named area after a litter-box cycle. Ready-to-import blueprints get you started.
+- **Clean around your life.** Run plans when everyone leaves, clean during quiet hours, or clean a named area after a litter-box cycle. Ready-to-import blueprints get you started.
 - **Choose how to stop.** Stop immediately or let the active room finish based on a configurable progress estimate, then dock without starting another room.
-- **Use cleaning results in your smart home.** Trigger actions on verified room completion, track last-cleaned times and durations, and distinguish completed, partial, and unattempted vacuum/mop work.
+- **Use cleaning results in your smart home.** Trigger actions on confirmed room completion, track last-cleaned times and durations, and distinguish completed, partial, and unattempted vacuum/mop work.
 
 [Explore plans and rotation](docs/cleaning.md#saved-plans) ·
 [Use the automation blueprints](docs/automation.md#ready-to-import-blueprints)
 
-## Everything in one Home Assistant workspace
+## Maps, areas and controls in Home Assistant
 
-- **Map Studio:** interactive 3D and 2D maps, robot position, room selection, and saved map history.
+- **Matic Map:** a sidebar page with interactive 3D and 2D maps, robot position, room selection, plans, and saved map history.
 - **Named custom areas:** draw and edit reusable areas, including across room boundaries, then run them from a dashboard or automation.
 - **Controls and dashboards:** start, pause, stop, dock, adjust robot settings, and use map cameras, sensors, and switches.
 - **Run insight:** inspect plan outcomes, command activity, and per-mode history through local diagnostics and administrator-only assistant tools for Assist and MCP.
-- **Firmware tracking:** compare local protocol snapshots and see compatibility changes in Home Assistant.
+- **Firmware tracking:** see in Home Assistant when a firmware update changes what the robot reports.
 
 Home Assistant schedules and automations can run saved named areas or room
 plans. This integration also provides per-room plan settings and intelligent
@@ -41,10 +41,11 @@ to the Home Assistant host for pairing. Bluetooth proxies cannot complete setup.
 
 1. In HACS, add [this repository](https://github.com/ProspectOre/matic-home-assistant) as a custom **Integration** repository.
 2. Download **Matic (Unofficial)** and restart Home Assistant.
-3. Open **Settings → Devices & services** and configure the discovered Matic.
+3. Open **Settings > Devices & services** and add the discovered Matic. Setup
+   shows its progress and asks you to turn on Pairing mode.
 
-If Matic is not discovered, add the integration manually and enter the robot's
-address and port when offered.
+If no robot is found, add the integration manually; setup then asks for the
+robot's address (IP address or hostname, and port).
 
 For a manual install, copy `custom_components/matic_robot` into Home Assistant's
 `custom_components` directory and restart.
@@ -52,16 +53,17 @@ For a manual install, copy `custom_components/matic_robot` into Home Assistant's
 ### Local pairing
 
 1. Place Matic near Home Assistant's local Bluetooth adapter.
-2. In the Matic app, open **Settings → Connectivity → Add another user** and turn on Pairing mode.
+2. In the Matic app, open **Settings > Connectivity > Add another user** and turn on Pairing mode.
 3. Continue in Home Assistant and enter the six-digit code shown on the robot.
 
-Enter the code promptly. If it expires, turn Pairing mode off and on before
-retrying. [Pairing and recovery guide](docs/hermes-pairing.md).
+The code expires after about 20 seconds. If it does, turn Pairing mode off and
+on, then try again. If the robot was reset, a Repair offers to pair it again
+and keeps your plans and areas. [Pairing and recovery guide](docs/hermes-pairing.md).
 
 ### Updating
 
 Back up Home Assistant, let the robot dock, update through HACS, and restart.
-Saved plans, areas, and credentials are preserved. Check the map before cleaning;
+Saved plans, areas, and the robot's pairing are kept. Check the map before cleaning;
 areas affected by a changed map may need confirmation.
 
 <a id="cleaning-ux-and-automation"></a>

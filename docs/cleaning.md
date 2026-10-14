@@ -25,19 +25,20 @@ Choose **Save** to keep changes, or **Done** when an unchanged plan is open.
 **Cancel** leaves Edit and asks before discarding unsaved changes.
 **More actions > Delete** removes the plan.
 The robot handles battery and water servicing as needed.
-[Mixed room missions](mixed-room-missions.md).
+[Rooms with different settings in one run](mixed-room-missions.md).
 
 A plan defines what to clean. Home Assistant automations decide when it runs.
-Create and edit plans and custom areas in Matic Map. The integration's
-**Configure** flow keeps integration preferences and plan maintenance: choose
-an existing default plan or explicitly reset cleaning history.
+Create and edit plans and custom areas in Matic Map. **Matic settings**, the
+integration's options in Settings > Devices & services > Matic, chooses the
+default plan and resets room cleaning history for one plan or for all plans.
 
-The 0.5 development branch adds optional [room schedules](room-schedules.md)
-for periodic mopping and vacuum rotation, with private or shared progress.
+Rooms in a plan can also have [room schedules](room-schedules.md): mop every
+few cleans, or a vacuum rotation at a chosen level, counted in one plan or
+across all plans.
 
 ### Intelligent rotation
 
-Rotation starts with the room that has waited longest for a cleaning opportunity;
+Rotation starts with the room that has waited longest to be cleaned;
 saved order breaks ties. Rooms that actually start move behind waiting rooms,
 even if cleaning later stops. Rejected commands do not change their priority.
 Cleaning started in the Matic app also contributes to this ordering.
@@ -65,7 +66,9 @@ active cleaning time. Wait for the stop to settle before starting another run.
 Pause/resume preserves the plan. A separate clean, Stop, or Dock replaces it.
 Avoid controlling the robot from multiple integrations or apps at once.
 
-## Map Studio
+<a id="map-studio"></a>
+
+## Matic Map
 
 Open **Matic Map** from Home Assistant's sidebar. Choose **3D** for the photographic
 map or **2D** for a top-down view. The 2D appearance can show the photo or room map.

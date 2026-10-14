@@ -20,7 +20,7 @@
 [Compatibility](acceptance-0.4.md) · [Privacy](privacy.md)
 
 For unexpected stops or docking, start with [activity diagnostics](activity-diagnostics.md).
-For an interrupted Home Assistant session, see [restart recovery](restart-recovery.md).
+For a Home Assistant restart during a clean, see [restart recovery](restart-recovery.md).
 
 [Report a bug](https://github.com/ProspectOre/matic-home-assistant/issues/new?template=bug_report.yml) ·
 [Request a feature](https://github.com/ProspectOre/matic-home-assistant/issues/new?template=feature_request.yml) ·
@@ -28,7 +28,7 @@ For an interrupted Home Assistant session, see [restart recovery](restart-recove
 
 ## Technical reference
 
-[Actions](actions.md) · [Mixed room missions](mixed-room-missions.md) ·
-[Managed-run contract](e2e-contract.md) · [Firmware compatibility](firmware-compatibility.md) ·
-[Protocol endpoints](firmware-endpoint-map.md) · [Recording protocol](recording-protocol.md) ·
+[Actions](actions.md) · [Rooms with different settings in one run](mixed-room-missions.md) ·
+[Plan run contract](e2e-contract.md) · [Firmware compatibility](firmware-compatibility.md) ·
+[Robot protocol map](firmware-endpoint-map.md) · [Recording protocol](recording-protocol.md) ·
 [Contributing](../CONTRIBUTING.md) · [Security](../SECURITY.md)
