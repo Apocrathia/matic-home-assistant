@@ -93,21 +93,24 @@ const areaShortcut = (host: ShortcutHost, pin: HomePin, area: SavedArea) => {
   );
 };
 
-/** The pinned shortcuts in the order they were added, and a quiet line when they could not be read. */
+/** The pinned shortcuts in the order they were added, and a quiet line when they could not be read; `nothing` when neither shows. */
 export const homeShortcuts = (host: ShortcutHost) => {
   const { state, t } = host;
   // A catalog being reread or that failed to reread keeps its last list, as
   // the plan's own Run view does; the gate below is that view's.
   const plans = state.resources.plans.value?.plans ?? [];
   const areas = state.resources.areas.value?.areas ?? [];
-  return html`${state.homePins.pins.map((pin) => {
+  const rows = state.homePins.pins.flatMap((pin) => {
     if (pin.kind === "plan") {
       const plan = plans.find((candidate) => candidate.id === pin.id);
-      return plan ? planShortcut(host, pin, plan) : nothing;
+      return plan ? [planShortcut(host, pin, plan)] : [];
     }
     const area = areas.find((candidate) => candidate.id === pin.id);
-    return area ? areaShortcut(host, pin, area) : nothing;
-  })}${state.homePins.status === "error" ? html`<p class="pins-error">${t("v4_shortcuts_unavailable", "Home Assistant couldn't load your home shortcuts.")} <button
+    return area ? [areaShortcut(host, pin, area)] : [];
+  });
+  // Nothing to show leaves home without a Shortcuts section.
+  if (!rows.length && state.homePins.status !== "error") return nothing;
+  return html`${rows}${state.homePins.status === "error" ? html`<p class="pins-error">${t("v4_shortcuts_unavailable", "Home Assistant couldn't load your home shortcuts.")} <button
     class="ms-btn ms-btn--secondary"
     type="button"
     @click=${() => host.emit({ type: "reload-home-pins" })}

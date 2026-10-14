@@ -140,8 +140,8 @@ automations need only the saved name.
 
 ## Home shortcuts
 
-A plan or area with **Show on home** turned on appears on the home screen,
-after **Clean rooms**, in the order you added it. One tap runs it, exactly as
+A plan or area with **Show on home** turned on appears on the home screen
+under **Shortcuts**, above the other choices, in the order you added it. One tap runs it, exactly as
 **Run plan** or **Clean this area** would; a shortcut that can't run says why,
 and **Stop** shows while it runs. To change one, use **Your plans** or
 **Clean custom area**.

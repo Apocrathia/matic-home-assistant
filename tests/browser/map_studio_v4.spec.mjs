@@ -5430,15 +5430,15 @@ test.describe("Map Studio v0.4 foundation", () => {
       .toBeDisabled();
     // Three task cards, then the Maps group (home-rooms.md §3). The entry never offers a
     // phantom "Run plan" before a plan has been chosen.
-    const quick = gallery.locator(".quick-actions").getByRole("button");
-    await expect(quick).toHaveCount(4);
+    const quick = gallery.getByRole("group", { name: "Cleaning choices" }).getByRole("button");
+    await expect(quick).toHaveCount(3);
     await expect(quick.nth(0)).toHaveAccessibleName(/^Clean rooms Pick rooms and clean them now\./);
     await expect(quick.nth(0)).toHaveClass(/ms-row--featured/);
-    // The default plan pinned as a one-tap shortcut, the custom-area card,
-    // then the Your plans row (UX9 owner ruling).
-    await expect(quick.nth(1)).toHaveAccessibleName(/^Run Daily clean 3 rooms/);
-    await expect(quick.nth(2)).toHaveAccessibleName(/^Clean custom area Draw or choose a custom area/);
-    await expect(quick.nth(3)).toHaveAccessibleName("Your plans");
+    // The default plan pinned as a one-tap shortcut under Shortcuts, then the
+    // custom-area card and the Your plans row (UX9 owner ruling).
+    await expect(gallery.getByRole("group", { name: "Shortcuts" }).getByRole("button")).toHaveAccessibleName(/^Run Daily clean 3 rooms/);
+    await expect(quick.nth(1)).toHaveAccessibleName(/^Clean custom area Draw or choose a custom area/);
+    await expect(quick.nth(2)).toHaveAccessibleName("Your plans");
     await expect(gallery.getByRole("heading", { name: "Maps", level: 3 })).toBeVisible();
     await expect(gallery.locator(".maps").getByRole("button", { name: /^Map history Browse earlier floor maps\./ })).toBeVisible();
     await expect(gallery.getByRole("button", { name: /^Run plan/ })).toHaveCount(0);
@@ -5827,7 +5827,7 @@ test.describe("Map Studio v0.4 foundation", () => {
 
     const response = await gallery.evaluate(async (element) => {
       const shell = element.shadowRoot.querySelector("matic-map-shell-v4");
-      const rooms = shell.shadowRoot.querySelector(".quick-actions button");
+      const rooms = shell.shadowRoot.querySelector(".quick-actions button.ms-row--featured");
       const started = performance.now();
       rooms.click();
       await shell.updateComplete;
