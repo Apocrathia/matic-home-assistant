@@ -11,7 +11,7 @@ A release candidate can ship before that; stable cannot.
 
 The stage runs the shipped Matic Map shell from the review bundle with synthetic fixtures. It never talks to Home
 Assistant or a robot, and the page says so in a banner above the frame. Each cell is one journey (a row) at one setup
-(a column): 11 journeys × 9 setups = 99 cells. A row lists the states of its journey as steps; the banner shows a
+(a column): 13 journeys × 9 setups = 117 cells. A row lists the states of its journey as steps; the banner shows a
 button per step, so the owner can walk the journey inside the one cell.
 
 The frame is sized to the setup's width and height, so the layout is the one a phone, tablet or desktop of that
@@ -22,7 +22,7 @@ size gets. Without a size the frame fills the window.
 1. Build the review bundle once per change: `npm run build:map-studio-v4`.
 2. Stage the cell: `npm run stage:walkthrough -- R01-C01`. The script serves the bundle on
    `http://127.0.0.1:4180`, prints the cell, what to try and its URL, and opens it in Safari.
-3. Post one short message: "Cell 29 of 99: Rooms view at phone landscape. Try: map and list stay in step; each
+3. Post one short message: "Cell 29 of 117: Rooms view at phone landscape. Try: map and list stay in step; each
    disabled Clean says why. Approve or critique?"
 4. Wait for the answer, record it in the ledger, then stage the next cell. Ctrl-C stops the server.
 
@@ -43,7 +43,7 @@ state. A cell ID with settings other than its own is an error too, and the banne
 
 | ID | Journey | Row part | What to check |
 |---|---|---|---|
-| R01 | Home, default plan card and Your plans | `steps=home-plan-due,home-plan-paused,home-plan-blocked,ready` | The three task cards, the plan card's due lines and the Your plans row under it. |
+| R01 | Home, default plan card and Your plans | `steps=home-plan-due,home-plan-paused,home-plan-blocked,ready` | The task cards, the pinned plan's due lines in full and the Your plans row last. |
 | R02 | Plan pick, run, edit, save and delete | `steps=plans,plan-saved-intelligent,plan-saved-ordered,plan-run-parts,plan-run-paused,plan-run-blocked,plan-edit-ordered,plan-dirty,plan-dirty:discardDraft,plan-new,plan-saved-intelligent:confirmDeletePlan` | Picker to Run to Edit; numbers only in Saved order; Save, Cancel and Delete ask only when data would be lost. |
 | R03 | Room schedules | `steps=plan-cadence-shared,plan-schedule-available,plan-schedule-joining,plan-schedule-conflict,plan-cadence-blocked,plan-cadence-shared:confirmResetCadence` | Each schedule row says when work is due; sharing, joining and Reset read plainly. |
 | R04 | Rooms view | `steps=rooms,rooms-ready,rooms-busy,rooms-failed,rooms-empty,room-limit` | Map and list stay in step; each disabled Clean says why. |
@@ -54,6 +54,8 @@ state. A cell ID with settings other than its own is an error too, and the banne
 | R09 | Stop, pending and held states | `steps=cleaning,starting-command,starting,stopping-command,stopping,paused,returning,recharging,task-in-progress` | Stop is always reachable when it applies; held controls say why. |
 | R10 | Offline, locating, error and access states | `steps=ha-offline,robot-offline,transition,problem,map-unavailable,map-limited,access,unsupported` | Each state says what is true, what it stops and one next action. |
 | R11 | Setup and first clean | `steps=empty,multi-robot,rooms,rooms-ready` | No robot leads to Open integration; the first clean reads as one obvious path. |
+| R12 | Your areas | `steps=areas-list,areas-stale,areas-empty,area-review-saved,draw` | Each row shows its setting and what a changed map needs; New area, last, is the one way into Draw; Back returns to the list. |
+| R13 | Home shortcuts | `steps=home-shortcuts,home-plan-due-full,home-unpinned,home-shortcut-blocked,home-shortcut-running,home-pins-error,plan-saved-intelligent` | One tap runs a pinned plan or area; a held one says why; Open goes to it; Show on home pins and unpins. |
 
 ## Setups (columns)
 

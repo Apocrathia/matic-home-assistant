@@ -73,11 +73,12 @@ for (const [w, h] of [[390, 844], [1440, 900]]) {
   console.log(`\n--- K3 plan editor @${w}x${h}`);
   await openScenario(page, "ready", { width: w, height: h });
   await inject(page);
-  let t = await tabTo((x) => /Run a plan/.test(x.name));
+  // UX9: the picker opens from the Your plans row.
+  let t = await tabTo((x) => /^(Your plans|Run a plan)/.test(x.name));
   await page.keyboard.press("Enter");
   await settleAll();
   let a = await active();
-  log(`K3a Run a plan -> Plans heading focus @${w}`, a.tag === "h2" && /Your plans/.test(a.name), `focus = ${fmt(a)}`);
+  log(`K3a Your plans -> Plans heading focus @${w}`, a.tag === "h2" && /Your plans/.test(a.name), `focus = ${fmt(a)}`);
   t = await tabTo((x) => x.tag === "button" && !/Back|workspace|sidebar|Map options|Show|Fit|3D|2D/.test(x.name) && x.name.length > 3, 12);
   console.log("   first plan-list control after heading:", fmt(t.a));
   await page.keyboard.press("Enter");

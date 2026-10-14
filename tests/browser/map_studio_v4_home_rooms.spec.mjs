@@ -248,8 +248,9 @@ test.describe("home by state", () => {
       await expect(gallery.getByRole("heading", { name: "Choose what to clean", level: 2 })).toBeVisible();
       await expect(panelOf(gallery).locator(".panel-description")).toHaveCount(0);
       const group = gallery.getByRole("group", { name: "Cleaning choices" });
-      // Three cards and, under the plan card, the Your plans row (R4 amended).
-      await expect(group.getByRole("button")).toHaveCount(4);
+      // Three cards (the default plan pinned as a shortcut, with its Open
+      // button) and, last, the Your plans row (UX9 owner ruling).
+      await expect(group.getByRole("button")).toHaveCount(5);
       await expect(cards(gallery)).toHaveCount(3);
       await expect(cards(gallery).nth(0)).toHaveAccessibleName(/^Clean rooms Pick rooms and clean them now\./);
       await expect(cards(gallery).nth(0)).toHaveClass(/ms-row--featured/);
@@ -279,8 +280,10 @@ test.describe("home by state", () => {
     const rooms = cards(gallery).nth(0);
     await expect(rooms).toHaveAttribute("aria-disabled", "true");
     await expect(rooms).toHaveAccessibleName(/^Clean rooms Can't clean rooms until you name them in the Matic app\./);
+    // No plans, so no shortcut: the custom-area card and the Your plans row stay live.
+    await expect(cards(gallery)).toHaveCount(2);
     await expect(cards(gallery).nth(1)).not.toHaveAttribute("aria-disabled", "true");
-    await expect(cards(gallery).nth(2)).not.toHaveAttribute("aria-disabled", "true");
+    await expect(plansRow(gallery)).not.toHaveAttribute("aria-disabled", "true");
     await expect(panelOf(gallery).locator(".panel-description")).toHaveCount(0);
   });
 
@@ -477,49 +480,53 @@ test.describe("the plan card", () => {
     await expect(planCard(gallery).locator(".line")).toHaveCount(0);
   });
 
-  test("shows due work on a third line, clamped to two lines, all of it in the name", async ({ page }) => {
+  // UX9 owner ruling: every due line shows in full (no clamp).
+  test("shows due work below, every line in full, all of it in the name", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "home-plan-due" });
     const lines = planCard(gallery).locator(".line");
     await expect(lines).toHaveText(["Mop due in Kitchen and Living room", "Heavy duty vacuum due in Living room"]);
     await expect(lines.first().locator("svg")).toHaveCount(1);
-    expect(await planCard(gallery).locator(".card-lines").evaluate((element) => getComputedStyle(element).webkitLineClamp)).toBe("2");
+    expect(await planCard(gallery).locator(".card-lines").evaluate((element) => getComputedStyle(element).webkitLineClamp)).toBe("none");
     await expect(planCard(gallery)).toHaveAccessibleName(/Mop due in Kitchen and Living room Heavy duty vacuum due in Living room$/);
   });
 
+  // A shortcut that can't run gives Run plan's own reason (UX9).
   test("shows a blocked plan's one line with the warning glyph", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "home-plan-blocked" });
     const line = planCard(gallery).locator(".line");
-    await expect(line).toHaveText(["Needs attention before it can run"]);
+    await expect(line).toHaveText([/^Can't run this plan until/]);
     await expect(line).toHaveAttribute("data-tone", "warning");
+    await expect(line.locator("svg")).toHaveCount(1);
+    await expect(planCard(gallery)).toHaveAttribute("aria-disabled", "true");
   });
 
-  test("shows a paused plan's chip and no third line", async ({ page }) => {
+  test("shows a paused plan's chip, no due work and why it can't run", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "home-plan-paused" });
     await expect(planCard(gallery).locator(".ms-chip")).toHaveText("Paused");
-    await expect(planCard(gallery).locator(".line")).toHaveCount(0);
+    await expect(planCard(gallery).locator(".line")).toHaveText(["Can't run this plan until you turn it on."]);
     await expect(planCard(gallery)).toHaveAccessibleName(/^Run Daily clean Paused 3 rooms/);
   });
 
-  test("opens Run from home and comes back to the card by Back and by Escape", async ({ page }) => {
+  test("Open goes to Run from home and comes back to Open by Back and by Escape", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "ready" });
-    await planCard(gallery).click();
+    await gallery.getByRole("button", { name: "Open Daily clean" }).click();
     expect(await snapshot(page)).toMatchObject({ workflow: "plan", planView: "run", planOrigin: "home" });
     await expect(gallery.getByRole("heading", { level: 2, name: "Daily clean" })).toBeFocused();
     await gallery.getByRole("button", { name: "Back to all tasks" }).click();
     expect((await snapshot(page)).workflow).toBe("none");
-    await expect.poll(() => focusedText(page)).toMatch(/^button Run Daily clean/);
+    await expect.poll(() => focusedText(page)).toBe("button Open Daily clean");
 
     await page.keyboard.press("Enter");
     await expect(gallery.getByRole("heading", { level: 2, name: "Daily clean" })).toBeFocused();
     await page.keyboard.press("Escape");
     expect((await snapshot(page)).workflow).toBe("none");
-    await expect.poll(() => focusedText(page)).toMatch(/^button Run Daily clean/);
+    await expect.poll(() => focusedText(page)).toBe("button Open Daily clean");
   });
 
   // The installed panel routes select-plan through EffectController, so the
   // origin has to survive that path too (Codex, #254): Back from Run lands on
-  // home with the card focused, not in the picker.
-  test("the installed panel keeps the card's home origin: Back from Run returns home and refocuses the card", async ({ page }) => {
+  // home with the shortcut's Open focused, not in the picker.
+  test("the installed panel keeps the shortcut's home origin: Back from Run returns home and refocuses Open", async ({ page }) => {
     const rooms = ["kitchen", "hall"].map((id, index) => ({
       room_id: id, name: id === "kitchen" ? "Kitchen" : "Hall",
       boundary: [[index * 6, 0], [index * 6 + 6, 0], [index * 6 + 6, 5], [index * 6, 5]],
@@ -532,7 +539,7 @@ test.describe("the plan card", () => {
         room_order: planRooms.map((room) => room.room_id), return_to_base: true,
         finish_current_room: false, finish_current_room_threshold: 50,
       }],
-    } });
+    }, userData: { matic_robot_home_shortcuts: { "synthetic-entry": { pins: [{ kind: "plan", id: "daily" }] } } } });
     const panel = page.locator(fixture.panelTag);
     const state = () => page.evaluate((tag) => {
       const { workflow, planView, planOrigin } = document.querySelector(tag).getWorkspaceSnapshot();
@@ -540,49 +547,40 @@ test.describe("the plan card", () => {
     }, fixture.panelTag);
     await page.setViewportSize({ width: 1024, height: 768 });
     await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
-    const card = panel.getByRole("button", { name: /^Run Daily/ });
-    await expect(card).toBeVisible();
-    await card.click();
+    const open = panel.getByRole("button", { name: "Open Daily" });
+    await expect(open).toBeVisible();
+    await open.click();
     await expect.poll(state).toEqual({ workflow: "plan", planView: "run", planOrigin: "home" });
     await panel.getByRole("button", { name: "Back to all tasks" }).click();
     await expect.poll(state).toMatchObject({ workflow: "none" });
-    await expect.poll(() => focusedText(page)).toMatch(/^button Run Daily/);
+    await expect.poll(() => focusedText(page)).toBe("button Open Daily");
   });
 
-  // home-rooms.md §4 H2: a catalog being read or failed reads as such on the
-  // card even when the last catalog is retained (loadPlans keeps it), as the
-  // picker's own loading and unavailable lines do.
-  for (const [status, title, hint] of [
-    ["loading", "Checking saved plans", "Reading plans for this floor"],
-    ["error", "Plans unavailable", "Try again to load your plans."],
-  ]) {
-    test(`a retained catalog while ${status} shows the card as ${title} and no Your plans row`, async ({ page }) => {
+  // UX9: a catalog being reread or that failed keeps its last list, so the
+  // shortcut stays, gated as its Run view is; the picker reports the status.
+  for (const status of ["loading", "error"]) {
+    test(`a retained catalog while ${status} keeps the shortcut and the Your plans row`, async ({ page }) => {
       const gallery = await loadGallery(page, { scenario: "ready" });
-      await expect(planCard(gallery)).toHaveAccessibleName(/^Run Daily clean/);
-      await expect(plansRow(gallery)).toHaveCount(1);
-      const setStatus = (next) => gallery.evaluate((element, applied) => {
+      await gallery.evaluate((element, next) => {
         const state = element.getWorkspaceSnapshot();
-        element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...state.resources.plans, ...applied } } });
-      }, next);
-      await setStatus({ status, problem: status === "error" ? "plans-unavailable" : null });
-      await expect(planCard(gallery)).toHaveAccessibleName(`${title} ${hint}`);
-      await expect(plansRow(gallery)).toHaveCount(0);
-      await expect(cards(gallery).nth(0)).not.toHaveAttribute("aria-disabled", "true");
-      await setStatus({ status: "ready", problem: null });
+        element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...state.resources.plans, status: next, problem: next === "error" ? "plans-unavailable" : null } } });
+      }, status);
       await expect(planCard(gallery)).toHaveAccessibleName(/^Run Daily clean/);
       await expect(plansRow(gallery)).toHaveCount(1);
+      await expect(cards(gallery).nth(0)).not.toHaveAttribute("aria-disabled", "true");
     });
   }
 
   for (const narrow of [true, false]) {
-    test(`a Your plans row under the card opens the picker and takes focus back (R4 amended, narrow: ${narrow})${narrow ? " @mobile" : ""}`, async ({ page }) => {
+    test(`a Your plans row, last on home, opens the picker and takes focus back (UX9, narrow: ${narrow})${narrow ? " @mobile" : ""}`, async ({ page }) => {
       const gallery = await loadGallery(page, { scenario: "ready", narrow });
       const row = plansRow(gallery);
       await expect(row).toBeVisible();
       await expect(row).toHaveAccessibleName("Your plans");
       await expect(row).not.toHaveClass(/ms-row--card/);
-      // Directly under the plan card, before the custom-area card.
-      expect(await planCard(gallery).evaluate((card) => card.nextElementSibling?.textContent.replace(/\s+/g, " ").trim())).toBe("Your plans");
+      // After the custom-area card, last in the group.
+      expect(await row.evaluate((element) => element.nextElementSibling)).toBe(null);
+      expect(await cards(gallery).nth(2).evaluate((card) => card.nextElementSibling?.textContent.replace(/\s+/g, " ").trim())).toBe("Your plans");
       await expect(cards(gallery)).toHaveCount(3);
       await row.click();
       expect((await snapshot(page)).workflow).toBe("plans");
@@ -603,7 +601,7 @@ test.describe("the plan card", () => {
     });
   }
 
-  test("the Your plans row is held with the cards and absent when the card itself opens the picker", async ({ page }) => {
+  test("the Your plans row is held with the cards and stays when nothing is pinned", async ({ page }) => {
     const busy = await loadGallery(page, { scenario: "cleaning" });
     await expect(plansRow(busy)).toHaveAttribute("aria-disabled", "true");
     await expect(plansRow(busy)).toHaveAccessibleDescription(BUSY);
@@ -612,11 +610,10 @@ test.describe("the plan card", () => {
     const picker = await loadGallery(page, { scenario: "ready" });
     await picker.evaluate((element) => {
       const state = element.getWorkspaceSnapshot();
-      const plans = state.resources.plans;
-      element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...plans, value: { ...plans.value, selectedPlan: null } } } });
+      element.replaceWorkspaceState({ ...state, homePins: { status: "ready", pins: [] } });
     });
-    await expect(planCard(picker)).toHaveAccessibleName(/^Run a plan/);
-    await expect(plansRow(picker)).toHaveCount(0);
+    await expect(cards(picker)).toHaveCount(2);
+    await expect(plansRow(picker)).toHaveCount(1);
   });
 
   test("the picker still returns to its row (plan.md §5)", async ({ page }) => {
@@ -630,21 +627,18 @@ test.describe("the plan card", () => {
     await expect.poll(() => focusedText(page)).toMatch(/^button Daily clean/);
   });
 
-  test("falls back to the picker when the default plan is missing or on another floor", async ({ page }) => {
+  // A pinned plan that is gone or on another floor shows no shortcut (UX9).
+  test("a pinned plan that is missing shows nothing, and Your plans still opens the picker", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "ready" });
-    for (const selectedPlan of ["gone", null]) {
-      await gallery.evaluate((element, selected) => {
-        const state = element.getWorkspaceSnapshot();
-        const plans = state.resources.plans;
-        element.replaceWorkspaceState({ ...state, workflow: "none", resources: { ...state.resources, plans: { ...plans, value: { ...plans.value, selectedPlan: selected } } } });
-      }, selectedPlan);
-      await expect(planCard(gallery)).toHaveAccessibleName(/^Run a plan 1 saved plan$/);
-      await planCard(gallery).click();
-      expect((await snapshot(page)).workflow).toBe("plans");
-      // Back from the picker lands on the card (R18 / MS-KEY-01).
-      await gallery.getByRole("button", { name: "Back to all tasks" }).click();
-      await expect.poll(() => focusedText(page)).toMatch(/^button Run a plan/);
-    }
+    await gallery.evaluate((element) => {
+      const state = element.getWorkspaceSnapshot();
+      element.replaceWorkspaceState({ ...state, homePins: { status: "ready", pins: [{ kind: "plan", id: "gone" }] } });
+    });
+    await expect(cards(gallery)).toHaveCount(2);
+    await plansRow(gallery).click();
+    expect((await snapshot(page)).workflow).toBe("plans");
+    await gallery.getByRole("button", { name: "Back to all tasks" }).click();
+    await expect.poll(() => focusedText(page)).toBe("button Your plans");
   });
 
   // The host moves a Run whose plan was deleted to the picker itself
@@ -652,7 +646,7 @@ test.describe("the plan card", () => {
   // plan is already gone.
   test("Escape from a Run whose plan is gone returns home with focus on the card or heading", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "ready" });
-    await planCard(gallery).click();
+    await gallery.getByRole("button", { name: "Open Daily clean" }).click();
     await expect(gallery.getByRole("heading", { level: 2, name: "Daily clean" })).toBeFocused();
     await gallery.evaluate((element) => {
       const state = element.getWorkspaceSnapshot();
@@ -661,8 +655,8 @@ test.describe("the plan card", () => {
     });
     await page.keyboard.press("Escape");
     expect((await snapshot(page)).workflow).toBe("none");
-    // The card now reads "Create a plan"; it is still the launcher, so it or the heading takes focus.
-    await expect.poll(() => focusedText(page)).toMatch(/^(button Create a plan|h2 Choose what to clean)/);
+    // The shortcut is gone with its plan, so the heading takes focus.
+    await expect.poll(() => focusedText(page)).toBe("h2 Choose what to clean");
   });
 
   test("a long plan name stays on one line and keeps its full name", async ({ page }) => {
@@ -699,7 +693,7 @@ test.describe("the plan card", () => {
     await expect.poll(() => focusedText(page)).toMatch(/^button Clean rooms/);
 
     await cards(gallery).nth(2).click();
-    await expect(gallery.getByRole("heading", { level: 2, name: "Draw an area" })).toBeVisible();
+    await expect(gallery.getByRole("heading", { level: 2, name: "Your areas" })).toBeVisible();
     await back();
     await expect.poll(() => focusedText(page)).toMatch(/^button Clean custom area/);
 
@@ -736,26 +730,26 @@ test.describe("the plan card", () => {
     await expect.poll(() => focusedText(page)).toMatch(/^button Open map diagnostics/);
   });
 
-  // With the Your plans row under the plan card (R4 amended), the half sheet
-  // at 390 shows two cards and the row whole and the third card's top edge
-  // (the §7 320 rule); at 320, where titles wrap, the row's top edge stays
-  // visible and the third card is reached by scrolling (ruling in the ledger).
-  test("two cards and the Your plans row fit the half sheet at 390 with the third card's top edge; at 320 the row's top edge (§7) @mobile", async ({ page }) => {
-    const gallery = await loadGallery(page, { scenario: "home-plan-due", narrow: true });
-    const body = await panelOf(gallery).locator(".sheet-body").boundingBox();
-    for (const [label, locator] of [["card 0", cards(gallery).nth(0)], ["card 1", cards(gallery).nth(1)], ["row", plansRow(gallery)]]) {
-      const box = await locator.boundingBox();
-      expect(box.y, `${label} top`).toBeGreaterThanOrEqual(body.y);
-      expect(box.y + box.height, `${label} bottom`).toBeLessThanOrEqual(body.y + body.height + 0.5);
+  // UX9 owner ruling: due lines show in full, so on a phone the half sheet
+  // shows Clean rooms and the plan shortcut whole and the custom-area card's
+  // top edge; the Your plans row is reached by a small scroll (accepted).
+  test("Clean rooms and the shortcut fit the half sheet at 390, and Your plans scrolls into reach; at 320 too @mobile", async ({ page }) => {
+    for (const viewport of [{ width: 390, height: 844 }, { width: 320, height: 844 }]) {
+      const gallery = await loadGallery(page, { scenario: "home-plan-due", viewport });
+      const body = panelOf(gallery).locator(".sheet-body");
+      const box = await body.boundingBox();
+      const rooms = await cards(gallery).nth(0).boundingBox();
+      expect(rooms.y).toBeGreaterThanOrEqual(box.y);
+      expect(rooms.y + rooms.height).toBeLessThanOrEqual(box.y + box.height + 0.5);
+      const shortcut = await cards(gallery).nth(1).boundingBox();
+      expect(shortcut.y).toBeGreaterThanOrEqual(box.y);
+      expect(shortcut.y).toBeLessThan(box.y + box.height);
+      await plansRow(gallery).scrollIntoViewIfNeeded();
+      const row = await plansRow(gallery).boundingBox();
+      const after = await body.boundingBox();
+      expect(row.y).toBeGreaterThanOrEqual(after.y);
+      expect(row.y + row.height).toBeLessThanOrEqual(after.y + after.height + 0.5);
     }
-    const last = await cards(gallery).nth(2).boundingBox();
-    expect(last.y).toBeGreaterThanOrEqual(body.y);
-    expect(last.y).toBeLessThan(body.y + body.height);
-    const small = await loadGallery(page, { scenario: "home-plan-due", viewport: { width: 320, height: 844 } });
-    const smallBody = await panelOf(small).locator(".sheet-body").boundingBox();
-    const row = await plansRow(small).boundingBox();
-    expect(row.y).toBeGreaterThanOrEqual(smallBody.y);
-    expect(row.y).toBeLessThan(smallBody.y + smallBody.height);
   });
 });
 

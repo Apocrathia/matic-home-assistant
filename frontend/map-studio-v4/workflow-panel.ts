@@ -19,7 +19,9 @@ import { deleteSubject, hasStoppableWork, initialWorkspaceState } from "./state"
 import { heldReasonKey } from "./draw-tools";
 import { formatDateTime, translate } from "./localize";
 import { LazyChunk, chunkStatus } from "./lazy-chunk";
-import { COVERAGES, MODES, coverageLabel, modeLabel } from "./plan-cadence";
+import { COVERAGES, MODES, coverageLabel, modeLabel, settingLabel } from "./plan-cadence";
+import { homePinSwitch } from "./home-shortcuts";
+import { icon, iconChevronRight, iconNoticeWarning, iconPlus } from "./icons";
 import type { Translate } from "./plan-copy";
 // The plan picker, Run and Edit, and the Rooms view.
 import "./plan-views";
@@ -38,6 +40,7 @@ export { MapOptions } from "./map-options";
 export { drawRecipes, renderMapHelp } from "./map-help";
 export { roomTapAnnouncement, roomsGripLine, roomsSummary } from "./rooms-view";
 export { shellWorkflowStyles } from "./workflow-styles";
+export { homeShortcuts } from "./home-shortcuts";
 
 // One hint for the tool in hand, chosen by the pointer that will use it;
 // Move map needs none (map-surfaces.md §6). The keyboard recipes are
@@ -106,6 +109,21 @@ line-height: var(--ms-lh-snug);
 .timeline { display: grid; gap: var(--ms-space-2); }
 .timeline-ends { display: flex; justify-content: space-between; margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
 @media (max-width: 25rem) { .split { grid-template-columns: 1fr; } }
+/* Your areas mirrors the plan picker (plan-views.ts): name, setting, a tone line. */
+.area-row .ms-row__body { display: grid; gap: 0.125rem; }
+.area-row bdi { overflow: hidden; min-inline-size: 0; text-overflow: ellipsis; white-space: nowrap; }
+.area-row small { color: var(--ms-text-quiet); }
+.area-row .ms-row__trail:dir(rtl) .ms-icon { scale: -1 1; }
+.lines { display: grid; gap: 0.125rem; color: var(--ms-text); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
+.line { display: flex; gap: var(--ms-space-1); align-items: flex-start; }
+.line .ms-icon { flex: none; inline-size: 1rem; block-size: 1rem; color: var(--ms-warning); }
+.empty-card { display: grid; gap: var(--ms-space-2); padding: var(--ms-space-4); border: 1px solid var(--ms-line); border-radius: var(--ms-radius-md); }
+.empty-card h3 { margin: 0; font-size: var(--ms-t-md); }
+.empty-card p { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-md); line-height: var(--ms-lh-normal); }
+.empty-card .ms-btn { justify-self: start; }
+.switch-row { display: flex; gap: var(--ms-space-3); align-items: center; min-block-size: var(--ms-control); }
+.switch-copy { display: grid; flex: 1; gap: 0.125rem; min-inline-size: 0; font-size: var(--ms-t-md); }
+.switch-copy small, .reason { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
 `];
 
   state: WorkspaceState = initialWorkspaceState();
@@ -166,7 +184,7 @@ line-height: var(--ms-lh-snug);
     }));
   }
 
-  #resourceCopy(workflow: "rooms" | "plans" | "plan" | "draw" | "areaReview" | "history"): { readonly loading: string; readonly unavailable: string; readonly empty: string } {
+  #resourceCopy(workflow: "rooms" | "plans" | "plan" | "areas" | "draw" | "areaReview" | "history"): { readonly loading: string; readonly unavailable: string; readonly empty: string } {
     switch (workflow) {
       case "rooms":
       case "plans":
@@ -176,12 +194,13 @@ line-height: var(--ms-lh-snug);
           unavailable: this.#t("v4_rooms_plans_unavailable", "Home Assistant couldn't load rooms and plans."),
           empty: this.#t("v4_no_rooms_plans", "This floor has no rooms yet. Name rooms in the Matic app to see them here."),
         };
+      case "areas":
       case "draw":
       case "areaReview":
         return {
           loading: this.#t("v4_loading_areas", "Loading saved areas…"),
-          unavailable: this.#t("v4_areas_unavailable", "Saved areas are unavailable right now."),
-          empty: this.#t("v4_no_saved_areas", "No saved areas yet. Draw one on the map."),
+          unavailable: this.#t("v4_areas_unavailable", "Home Assistant couldn't load your saved areas."),
+          empty: "",
         };
       case "history":
         return {
@@ -226,40 +245,82 @@ line-height: var(--ms-lh-snug);
   }
 
   #draw() {
-    const areas = this.state.resources.areas;
     // On a phone the sheet shows the hint under its tool rows, where it is
     // read at peek; here it would hide until the sheet opens.
     const hint = this.narrow ? null : drawHint(this.#tr, this.state);
-    // Rows are held while a command runs, with the toolbar's reason (R12).
-    const held = this.#heldReason();
-    const row = (content: unknown, intent: WorkspaceIntent) => html`
-      <button
-        class="list-button ms-row"
-        type="button"
-        aria-disabled=${held ? "true" : nothing}
-        aria-describedby=${held ? "areas-held-reason" : nothing}
-        @click=${() => { if (!held) this.#intent(intent); }}
-      >${content}</button>
-    `;
+    // Draw only draws: the saved areas live in Your areas (owner, 2026-10-13).
     return html`
       <div class="stack">
         ${hint ? html`<p class="subtle draw-hint">${hint}</p>` : nothing}
         ${this.state.precisionOpen && !this.narrow ? staticHtml`<${precisionControlsTag} .state=${this.state} .localize=${this.localize}></${precisionControlsTag}>` : nothing}
-        ${this.#resource(areas, html`
-          <div class="group">
-            <h3 class="ms-section-heading" id="areas-heading">${this.#t("area_workspace_title", "Custom areas")}</h3>
-            <div class="list" role="group" aria-labelledby="areas-heading">
-              ${row(this.#t("area_new", "New area"), { type: "select-area", areaId: null })}
-              ${(areas.value?.areas || []).map((area) => row(
-                html`<bdi>${area.name}</bdi> ${area.status === "current" ? nothing : html`<small>${this.#t("v4_review", "Review")}</small>`}`,
-                { type: "select-area", areaId: area.id, workflow: "areaReview" },
-              ))}
-            </div>
-            ${held ? html`<p class="sr-only" id="areas-held-reason">${held}</p>` : nothing}
-          </div>
-        `, "draw")}
       </div>
     `;
+  }
+
+  /**
+   * Your areas (owner, 2026-10-13), as the plan picker: one row per saved
+   * custom area on this floor with its setting and, when the map moved under
+   * it, what it needs; New area last, the one way into Draw. Rows are held
+   * while a command runs, with the toolbar's reason (R12).
+   */
+  #areas() {
+    const { status, value } = this.state.resources.areas;
+    const copy = this.#resourceCopy("areas");
+    if (value === null && (status === "idle" || status === "loading")) return html`<div class="loading" role="status">${copy.loading}</div>`;
+    const held = this.#heldReason();
+    const heldBy = held ? "areas-held-reason" : nothing;
+    const disabled = held ? "true" : nothing;
+    const go = (intent: WorkspaceIntent) => () => { if (!held) this.#intent(intent); };
+    const newArea = this.#t("area_new", "New area");
+    const problem = status === "error" ? html`
+      <div class="problem" role="alert">${copy.unavailable}</div>
+      <div class="toolbar"><button class="ms-btn ms-btn--secondary" type="button" @click=${() => this.#intent({ type: "open-workflow", workflow: "areas" })}>${this.#t("v4_retry", "Try again")}</button></div>
+    ` : nothing;
+    const areas = value?.areas ?? [];
+    if (!areas.length) {
+      return html`<div class="stack">
+        ${problem}
+        ${value === null && status === "error" ? nothing : html`<div class="empty-card">
+          <h3>${this.#t("v4_no_areas", "No custom areas yet")}</h3>
+          <p>${this.#t("v4_no_areas_hint", "Draw an area on the map to clean just that spot.")}</p>
+          <button class="ms-btn ms-btn--primary" type="button" data-area-new aria-disabled=${disabled} aria-describedby=${heldBy} @click=${go({ type: "open-workflow", workflow: "draw" })}>${newArea}</button>
+        </div>`}
+        ${held ? html`<p class="sr-only" id="areas-held-reason">${held}</p>` : nothing}
+      </div>`;
+    }
+    return html`<div class="stack">
+      ${problem}
+      <p class="subtle">${this.#t("v4_choose_area_detail", "Tap an area to clean it or change it.")}</p>
+      <div class="list" role="list">
+        ${areas.map((area) => {
+          // As the area's screen reads it (map-surfaces.md §4): changed, or unusable.
+          const check = area.canRebind || area.status === "review";
+          const redraw = !check && area.status !== "current";
+          return html`<div role="listitem"><button
+            class="ms-row ms-row--card area-row"
+            type="button"
+            data-area-row=${area.id}
+            aria-disabled=${disabled}
+            aria-describedby=${heldBy}
+            @click=${go({ type: "select-area", areaId: area.id, workflow: "areaReview" })}
+          >
+            <span class="ms-row__body">
+              <strong><bdi>${area.name}</bdi></strong>
+              <small>${settingLabel(this.#tr, area)}</small>
+              ${check || redraw ? html`<span class="lines"><span class="line" data-tone="warning">${icon(iconNoticeWarning)}<span>${check
+                ? this.#t("v4_area_row_check", "Map changed · Check it before cleaning")
+                : this.#t("v4_area_row_redraw", "Needs redrawing before it can clean")}</span></span></span>` : nothing}
+            </span>
+            <span class="ms-row__trail">${icon(iconChevronRight)}</span>
+          </button></div>`;
+        })}
+        <div role="listitem"><button class="ms-row ms-row--card" type="button" data-area-new aria-disabled=${disabled} aria-describedby=${heldBy} @click=${go({ type: "open-workflow", workflow: "draw" })}>
+          <span class="ms-row__lead">${icon(iconPlus)}</span>
+          <span class="ms-row__body"><strong>${newArea}</strong></span>
+        </button></div>
+      </div>
+      ${held ? html`<p class="sr-only" id="areas-held-reason">${held}</p>` : nothing}
+    </div>`;
   }
 
   #areaReview() {
@@ -309,6 +370,7 @@ line-height: var(--ms-lh-snug);
           </div>
         ` : nothing}
         ${held ? html`<p class="sr-only" id="review-held-reason">${held}</p>` : nothing}
+        ${draft.id === null ? nothing : homePinSwitch(this.#tr, this.state, { kind: "area", id: draft.id }, (intent) => this.#intent(intent))}
         ${canDelete ? html`
           <button
             class="list-button ms-row ms-row--danger"
@@ -427,6 +489,7 @@ line-height: var(--ms-lh-snug);
       case "rooms": return this.#rooms();
       case "plans":
       case "plan": return this.#planViews();
+      case "areas": return this.#areas();
       case "draw": return this.#draw();
       case "areaReview": return this.#areaReview();
       case "history": return this.#history();

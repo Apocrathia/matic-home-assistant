@@ -24,10 +24,11 @@ def _table_rows(heading: str) -> list[list[str]]:
     return [[cell.strip() for cell in line.strip("|").split("|")] for line in lines[2:]]
 
 
-def test_matrix_is_eleven_journeys_by_nine_setups() -> None:
-    assert [row["id"] for row in CELLS["rows"]] == [f"R{n:02}" for n in range(1, 12)]
+def test_matrix_is_thirteen_journeys_by_nine_setups() -> None:
+    # UX9 appended R12 (Your areas) and R13 (Home shortcuts); earlier IDs stay.
+    assert [row["id"] for row in CELLS["rows"]] == [f"R{n:02}" for n in range(1, 14)]
     assert [col["id"] for col in CELLS["columns"]] == [f"C{n:02}" for n in range(1, 10)]
-    assert "99 cells" in DOC
+    assert "117 cells" in DOC
 
 
 def test_every_step_names_a_gallery_scenario_and_dialog() -> None:

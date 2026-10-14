@@ -259,6 +259,15 @@ export class MaticMapPanelV4 extends LitElement {
       void this.#effects?.setPlanEnabled(intent.enabled);
       return;
     }
+    if (intent.type === "set-home-pin") {
+      const before = this.#store.value;
+      if (this.#store.dispatch(intent) !== before) this.#effects?.saveHomePin(intent.pin, intent.pinned);
+      return;
+    }
+    if (intent.type === "reload-home-pins") {
+      void this.#effects?.loadHomePins();
+      return;
+    }
     if (intent.type === "select-area") {
       this.#effects?.selectArea(intent.areaId);
       if (intent.workflow === "areaReview") void this.#effects?.openWorkflow("areaReview");

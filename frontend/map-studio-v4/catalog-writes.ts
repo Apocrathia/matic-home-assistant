@@ -117,6 +117,12 @@ export const deleteArea = async (context: CatalogWriteContext): Promise<void> =>
     await context.backend.deleteArea(entry.areasUrl, areaId, signal);
     if (!current()) return;
     store.patch({ command: "idle", notice: notice("success", "v4_notice_area_deleted", "Area deleted") });
+    // As a deleted plan returns to the picker, a deleted area returns to Your areas.
+    const latest = store.value;
+    if (latest.workflow === "areaReview" && latest.selection.areaId === areaId && latest.selection.entryId === state.selection.entryId) {
+      context.effects.selectArea(null);
+      store.patch({ workflow: "areas" });
+    }
     await context.effects.loadAreas();
   } catch (error) {
     if (!isAbort(error) && current()) store.patch({ command: "idle", notice: context.failure });

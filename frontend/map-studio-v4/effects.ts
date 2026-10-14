@@ -1,6 +1,7 @@
 import {
   notice,
   type HassProjection,
+  type HomePin,
   type PlanOrigin,
   type ResourceStamp,
   type ResourceState,
@@ -154,7 +155,7 @@ const sameCoherenceGeneration = (left: ResourceStamp, right: ResourceStamp): boo
 
 const POSE_POLL_INTERVAL_MS = 1_000;
 const SPATIAL_READ_RECOVERY_INTERVAL_MS = 5_000;
-const READ_ONLY_WORKFLOWS: readonly Workflow[] = ["rooms", "plans", "plan", "draw", "areaReview"];
+const READ_ONLY_WORKFLOWS: readonly Workflow[] = ["rooms", "plans", "plan", "areas", "draw", "areaReview"];
 const MUTATION_RESOURCES = ["plan-mutation", "area-mutation"] as const;
 
 interface ManualPreviewCapture {
@@ -2058,7 +2059,7 @@ export class EffectController {
       }
     }
     if (workflow === "plans" || workflow === "plan" || workflow === "rooms") await this.loadPlans();
-    if (workflow === "draw" || workflow === "areaReview") await this.loadAreas();
+    if (workflow === "areas" || workflow === "draw" || workflow === "areaReview") await this.loadAreas();
   }
 
   // `inPlace` keeps a ready catalog on screen: the read never shows loading
@@ -2166,10 +2167,56 @@ export class EffectController {
 
   #resumeAreaCatalog(): void {
     const state = this.#store.value;
-    if ((state.workflow === "draw" || state.workflow === "areaReview")
+    if ((state.workflow === "areas" || state.workflow === "draw" || state.workflow === "areaReview"
+      || state.homePins.pins.some((pin) => pin.kind === "area"))
       && state.resources.areas.status === "idle") {
       void this.loadAreas();
     }
+    if (state.selection.entryId && state.selection.entryId !== this.#pinsEntry) void this.loadHomePins();
+  }
+
+  // Home shortcuts (home-pins.ts): read once per robot, written in order.
+  #pinsEntry: string | null = null;
+  #pinsWrite: Promise<unknown> = Promise.resolve();
+
+  async loadHomePins(): Promise<void> {
+    const entryId = this.#store.value.selection.entryId;
+    this.#pinsEntry = entryId;
+    const connection = this.#workspaceConnection;
+    if (!entryId || !connection?.sendMessagePromise) {
+      this.#store.patch({ homePins: { status: "unavailable", pins: [] } });
+      return;
+    }
+    this.#store.patch({ homePins: { status: "loading", pins: [] } });
+    try {
+      const pins = await (await import("./home-pins")).loadPins(connection, this.#store, entryId);
+      if (this.#disposed || this.#store.value.selection.entryId !== entryId) return;
+      this.#store.patch({ homePins: { status: "ready", pins } });
+      this.#resumeAreaCatalog();
+    } catch {
+      if (!this.#disposed && this.#store.value.selection.entryId === entryId) {
+        this.#store.patch({ homePins: { status: "error", pins: [] } });
+      }
+    }
+  }
+
+  /** Writes the pins the reducer already shows; a failed write puts the change back. */
+  saveHomePin(pin: HomePin, pinned: boolean): void {
+    const entryId = this.#store.value.selection.entryId;
+    const connection = this.#workspaceConnection;
+    if (!entryId || !connection || this.#store.value.homePins.status !== "ready") return;
+    const pins = this.#store.value.homePins.pins;
+    this.#pinsWrite = this.#pinsWrite.then(async () => {
+      const module = await import("./home-pins");
+      try {
+        await module.writePins(connection, entryId, pins);
+        this.#resumeAreaCatalog();
+      } catch {
+        if (this.#disposed || this.#store.value.selection.entryId !== entryId) return;
+        this.#store.dispatch({ type: "set-home-pin", pin, pinned: !pinned });
+        this.#store.patch({ notice: module.PINS_SAVE_FAILED });
+      }
+    }).catch(() => undefined);
   }
 
   async loadAreas({ reconcileDraft = true }: { reconcileDraft?: boolean } = {}): Promise<AreasCatalog | null> {

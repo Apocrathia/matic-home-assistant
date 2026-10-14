@@ -102,7 +102,7 @@ test("forced colours are flagged unless the browser has them on", async ({ page,
 test("every walkthrough cell's hash parses without an error", async ({ page }) => {
   await page.goto("/");
   const ids = cellIds();
-  expect(ids).toHaveLength(99);
+  expect(ids).toHaveLength(117);
   const errors = await page.evaluate(async (hashes) => {
     const { parseStageHash } = await import("/map_studio_v4-review/stage.js");
     return hashes.flatMap((hash) => parseStageHash(hash).errors.map((error) => `${hash}: ${error}`));

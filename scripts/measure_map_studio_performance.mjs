@@ -177,7 +177,10 @@ try {
         // (home-rooms.md D1), so Edit is one step away and every hop is
         // measured.
         const planJourney = async () => {
-          await step(/^(Run a plan|Plans|Run Daily clean)/, "plan:open");
+          // From UX9 the plan is a home shortcut whose main button runs it;
+          // its Open control is the journey's way in.
+          const opener = await button("Open Daily clean").count() > 0 ? "Open Daily clean" : /^(Run a plan|Plans|Run Daily clean)/;
+          await step(opener, "plan:open");
           // The first open loads the lazy views; choose the branch once the
           // plan's row or Run view has rendered, not while it is loading.
           await button(/Daily clean/).first().waitFor();

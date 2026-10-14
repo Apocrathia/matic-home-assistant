@@ -73,9 +73,10 @@ areas affected by a changed map may need confirmation.
 Open **Matic Map** from the sidebar:
 
 - **Clean rooms** selects rooms for a single run.
-- **Run {plan}** opens your selected plan; **Your plans** and **Create a plan**
-  manage saved room plans.
-- **Clean custom area** creates or selects a saved custom area.
+- **Home shortcuts** run a saved plan or custom area in one tap; turn on
+  **Show on home** in a plan or area to add one.
+- **Clean custom area** opens **Your areas**: clean, change, or draw an area.
+- **Your plans** lists, runs, and creates saved room plans.
 - **Map history** shows saved maps by date; they are read-only and never
   show the robot's position.
 - **Full map** hides the panel; **?** on the map explains how to move it.

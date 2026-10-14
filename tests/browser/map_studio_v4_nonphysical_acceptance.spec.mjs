@@ -136,7 +136,7 @@ test("keyboard dismissal keeps an edited plan draft and restores its launcher fo
     window.__panelFixture.planReads > 0
       && window.__acceptancePanel.getWorkspaceSnapshot().resources.plans.status)).toBe("ready");
 
-  await panel.getByRole("button", { name: /^Create a plan/ }).click();
+  await panel.getByRole("button", { name: "Your plans", exact: true }).click();
   await panel.getByRole("button", { name: "Create a plan", exact: true }).click();
   const name = panel.getByRole("textbox", { name: "Plan name" });
   await name.fill("Evening kitchen");

@@ -31,6 +31,7 @@ const readOnlyWorkflows = new Set<WorkspaceState["workflow"]>([
   "rooms",
   "plan",
   "plans",
+  "areas",
   "draw",
   "areaReview",
 ]);
@@ -169,6 +170,7 @@ export const initialWorkspaceState = (): WorkspaceState => ({
     canRebind: false,
     dirty: false,
   },
+  homePins: { status: "idle", pins: [] },
   notice: null,
   robotLabel: "Robot",
   robots: [],
@@ -442,6 +444,10 @@ export const reduceWorkspace = (
     }
     case "discard-draft":
       if (state.workflow === "plan") return discardPlanDraft(state);
+      // A redraw's discard keeps the saved area and returns to its screen.
+      if (state.workflow === "draw" && state.areaDraft.id !== null) {
+        return { ...state, ...areaSelection(state, state.areaDraft.id), dialog: null, workflow: "areaReview", precisionOpen: false };
+      }
       return {
         ...updateDraw(state, {
           dirty: false,
@@ -454,7 +460,8 @@ export const reduceWorkspace = (
         areaDraft: initialWorkspaceState().areaDraft,
         selection: { ...state.selection, areaId: null },
         dialog: null,
-        workflow: "none",
+        // A discarded area draft returns to the saved areas (owner, 2026-10-13).
+        workflow: "areas",
         precisionOpen: false,
       };
     case "toggle-room": {
@@ -660,14 +667,25 @@ export const reduceWorkspace = (
       if (state.workflow === "plan" && state.planView === "edit" && state.planDraft.id !== null) {
         return { ...state, planView: "run", expandedRoom: null };
       }
+      // A custom area steps back as a plan does: a redraw to its screen, a
+      // new drawing and an area's screen to Your areas, Your areas to home.
       if (state.workflow !== "none") {
         return {
           ...state,
-          workflow: state.workflow === "plan" && state.planOrigin !== "home" ? "plans" : "none",
+          workflow: state.workflow === "plan" && state.planOrigin !== "home" ? "plans"
+            : state.workflow === "draw" ? state.areaDraft.id === null ? "areas" : "areaReview"
+              : state.workflow === "areaReview" ? "areas" : "none",
           precisionOpen: false,
         };
       }
       return state;
+    case "set-home-pin": {
+      // Shown at once; the effects write it and put it back if the write fails.
+      if (state.homePins.status !== "ready") return state;
+      const { kind, id } = intent.pin;
+      const pins = state.homePins.pins.filter((pin) => pin.kind !== kind || pin.id !== id);
+      return { ...state, homePins: { ...state.homePins, pins: intent.pinned ? [...pins, { kind, id }] : pins } };
+    }
     case "return-live":
       return {
         ...state,

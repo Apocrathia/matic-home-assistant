@@ -24,6 +24,7 @@ import {
 import { translate } from "./localize";
 import { dueLines, formatNumber, planRowLine2, planRowLine3 } from "./plan-copy";
 import { scheduleLine, settingLabel } from "./plan-cadence";
+import { homePinSwitch } from "./home-shortcuts";
 
 /** The saved schedule reasons that keep a room's run from starting (plan.md R3). */
 const BLOCKING: readonly CadenceReason[] = [
@@ -341,6 +342,7 @@ export class MaticPlanViewsV4 extends LitElement {
         <button class="ms-btn ms-btn--secondary" type="button" @click=${() => this.#intent({ type: "open-workflow", workflow: "plan" })}>${this.#t("v4_retry", "Try again")}</button>` : nothing}
       ${ready && ordered ? html`<ol class="run-list" role="list">${rows}</ol>` : html`<ul class="run-list" role="list">${rows}</ul>`}
       ${this.#switch()}
+      ${homePinSwitch(this.#t, state, { kind: "plan", id: plan.id }, (intent) => this.#intent(intent))}
       ${end ? html`<p class="quiet">${end}</p>` : nothing}
     `;
   }

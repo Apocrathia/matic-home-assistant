@@ -528,9 +528,11 @@ test.describe("Draw bar and Custom areas", () => {
     await expect(redraw).toBeFocused();
   });
 
-  test("Cancel from a dirty fresh Draw asks, then lands on the home card that opened it", async ({ page }) => {
+  // UX9: a new area starts from Your areas' New area, and Cancel returns there.
+  test("Cancel from a dirty fresh Draw asks, then lands on the New area that opened it", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "ready" });
-    const card = gallery.getByRole("button", { name: /^Clean custom area/ });
+    await gallery.getByRole("button", { name: /^Clean custom area/ }).click();
+    const card = gallery.getByRole("button", { name: "New area", exact: true });
     await card.click();
     await expect.poll(async () => (await snapshot(page)).workflow).toBe("draw");
     const state = await snapshot(page);
@@ -545,7 +547,7 @@ test.describe("Draw bar and Custom areas", () => {
     expect((await snapshot(page)).workflow).toBe("draw");
     await cancel.click();
     await dialog.getByRole("button", { name: "Discard", exact: true }).click();
-    await expect.poll(async () => (await snapshot(page)).workflow).toBe("none");
+    await expect.poll(async () => (await snapshot(page)).workflow).toBe("areas");
     await expect(card).toBeFocused();
   });
 
@@ -593,42 +595,26 @@ test.describe("Draw bar and Custom areas", () => {
         await expect(tool).toBeEnabled();
         await expect(tool).not.toHaveAttribute("aria-disabled", "true");
       }
-      const row = panel.getByRole("button", { name: "New area", exact: true });
-      await expect(row).toHaveAttribute("aria-disabled", "true");
-      expect(await describedBy(row)).toBe("Waiting for the current change to finish.");
-      await row.click({ force: true });
-      expect((await snapshot(page)).workflow).toBe("draw");
-      expect((await snapshot(page)).draw).toEqual(before);
+      // UX9: Draw no longer lists saved areas or New area (Your areas does).
+      await expect(panel.getByRole("button", { name: "New area", exact: true })).toHaveCount(0);
       await patchState(gallery, { command: "starting" });
       expect(await describedBy(toolbar.getByRole("button", { name: "Undo", exact: true }))).toBe("Waiting for the robot to begin.");
       await patchState(gallery, { command: "settling" });
       expect(await describedBy(toolbar.getByRole("button", { name: "Undo", exact: true }))).toBe("Waiting for the robot to stop.");
       await patchState(gallery, { command: "idle" });
       await expect(toolbar.getByRole("button", { name: "Undo", exact: true })).not.toHaveAttribute("aria-disabled", "true");
-      await expect(row).not.toHaveAttribute("aria-disabled", "true");
       await expect(panel.locator("fieldset")).toHaveCount(0);
     });
   }
 
-  test("Custom areas is a section with New area first, names in bdi and a Review trail only when the map changed", async ({ page }) => {
+  // UX9 owner ruling: saved areas live in Your areas; Draw only draws.
+  test("Draw lists no saved areas: no Custom areas section and no area rows", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "draw" });
     const panel = panelOf(gallery);
-    const heading = panel.getByRole("heading", { level: 3, name: "Custom areas" });
-    await expect(heading).toHaveClass(/ms-section-heading/);
-    const list = panel.getByRole("group", { name: "Custom areas" });
-    await expect(list.getByRole("button")).toHaveText(["New area", "Entryway"]);
-    await expect(list.locator("bdi")).toHaveText(["Entryway"]);
-    await expect(panel.getByText("Ready", { exact: true })).toHaveCount(0);
-    await expect(list.getByRole("button", { name: "Entryway", exact: true })).toHaveCount(1);
-    const state = await snapshot(page);
-    const areas = state.resources.areas.value;
-    await patchState(gallery, { resources: { ...state.resources, areas: { ...state.resources.areas, value: { ...areas, areas: areas.areas.map((area) => ({ ...area, status: "review", canRebind: true })) } } } });
-    await expect(list.getByRole("button")).toHaveText(["New area", "Entryway Review"]);
-    // A dirty draft would ask first; a clean one opens the review at once.
-    await patchState(gallery, { draw: { ...(await snapshot(page)).draw, dirty: false } });
-    await list.getByRole("button", { name: /^Entryway/ }).click();
-    await expect.poll(async () => (await snapshot(page)).workflow).toBe("areaReview");
-    expect((await snapshot(page)).areaDraft.id).toBe("entryway");
+    await expect(panel.getByRole("heading", { level: 3, name: "Custom areas" })).toHaveCount(0);
+    await expect(panel.getByRole("group", { name: "Custom areas" })).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: /^Entryway/ })).toHaveCount(0);
+    await expect(panel.locator(".draw-hint")).toBeVisible();
   });
 });
 
@@ -638,7 +624,7 @@ const precisionOf = (scope) => scope.getByRole("group", { name: "Drawing precisi
 const brushField = (scope) => scope.getByRole("spinbutton", { name: "Brush width in centimeters" });
 
 test.describe("Precision", () => {
-  test("the Brush button docks the settings in the Draw body above Custom areas, and Escape returns to it", async ({ page }) => {
+  test("the Brush button docks the settings in the Draw body below the hint, and Escape returns to it", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "draw", viewport: { width: 1024, height: 768 } });
     const brush = brushOf(canvasOf(gallery));
     await expect(brush).toHaveAttribute("aria-expanded", "false");
@@ -649,10 +635,7 @@ test.describe("Precision", () => {
     const group = precisionOf(panel);
     await expect(group).toBeVisible();
     await expect(precisionOf(canvasOf(gallery))).toHaveCount(0);
-    const heading = panel.getByRole("heading", { level: 3, name: "Custom areas" });
     const groupBox = await group.boundingBox();
-    const headingBox = await heading.boundingBox();
-    expect(groupBox.y + groupBox.height).toBeLessThanOrEqual(headingBox.y + 1);
     const hint = panel.locator(".draw-hint");
     expect((await hint.boundingBox()).y).toBeLessThan(groupBox.y);
     await expect(group).toContainText("Strokes follow the map's resolution. Zooming changes the view, not the area.");
@@ -774,13 +757,10 @@ test.describe("Area review", () => {
   });
 
   test("a saved area is titled by its name, cleans from the bar and deletes from the last body row", async ({ page }) => {
-    const gallery = await loadGallery(page, { scenario: "draw" });
+    // UX9: a saved area opens from its row in Your areas.
+    const gallery = await loadGallery(page, { scenario: "areas-list" });
     const panel = panelOf(gallery);
-    await panel.getByRole("button", { name: "Entryway", exact: true }).click();
-    // The fresh draw is dirty, so opening a saved area asks first (shell.md §5).
-    const discard = gallery.getByRole("dialog", { name: "Discard changes?" });
-    await expect(discard).toBeVisible();
-    await discard.getByRole("button", { name: "Discard", exact: true }).click();
+    await panel.getByRole("button", { name: /^Entryway/ }).click();
     await expect.poll(async () => (await snapshot(page)).workflow).toBe("areaReview");
     const heading = panel.getByRole("heading", { level: 2 });
     await expect(heading).toHaveText("Entryway");

@@ -7,8 +7,8 @@ should stop. Open **Matic Map** in the Home Assistant sidebar to get started.
 
 ## Saved plans
 
-Choose **Create a plan**. On the home screen, **Run {plan}** opens your
-selected plan, and **Your plans** under it lists every plan. Each plan saves:
+Choose **Your plans** on the home screen, then **Create a plan**. Your plans
+lists every plan. Each plan saves:
 
 - Included rooms and their order.
 - Cleaning mode and vacuum coverage for each room.
@@ -17,7 +17,8 @@ selected plan, and **Your plans** under it lists every plan. Each plan saves:
 
 <a id="run-and-edit"></a>
 The **Run** view previews the next run. Use **Plan enabled** to pause or
-resume it; choose **Run plan** to start. Open **Edit** to change the plan:
+resume it; choose **Run plan** to start. **Show on home** adds the plan to the
+home screen as a [shortcut](#home-shortcuts). Open **Edit** to change the plan:
 tick the rooms to include, open a room for its settings and schedule, and, in
 **Saved order**, use its arrows to move it. Each room keeps its mode and
 coverage within one ordered run, including mixed settings.
@@ -114,7 +115,8 @@ Mapped room names must be unique.
 
 ## Custom areas
 
-Choose **Clean custom area** to create an area or select one already saved.
+Choose **Clean custom area** to open **Your areas**, which lists the areas
+saved on this floor with their settings, and choose **New area** to draw one.
 
 1. Pick a tool: **Points** places corners, **Paint** and **Erase** brush the
    map (**Brush** sets the width), and **Move map** pans without drawing.
@@ -123,13 +125,24 @@ Choose **Clean custom area** to create an area or select one already saved.
 3. Choose **Name and save**, then give the area a name, cleaning mode, and
    coverage, and choose **Save area**. **Redraw** returns to the map; **Done**
    brings you back.
-4. Reopen the area from the **Custom areas** list to clean it, redraw it, or
-   delete it with **Delete** at the end of its details.
+4. Choose the area in **Your areas** to clean it, change its settings, redraw
+   it, or delete it with **Delete** at the end of its details. **Show on
+   home** adds it to the home screen as a shortcut.
 
 Areas may cross room boundaries. They remain saved for future runs and can be
 selected from the robot's **Custom cleaning area** entity or called by name in
 an [automation](automation.md#custom-areas).
 
-If the map changes, the area opens as **Check {name}** and asks for **Save
-area** or **Redraw**; an area the map can't place any more needs **Redraw**.
-Coordinates stay in Home Assistant; automations need only the saved name.
+If the map changes, its row says **Map changed** and the area opens as
+**Check {name}**, asking for **Save area** or **Redraw**; an area the map can't
+place any more says **Needs redrawing**. Coordinates stay in Home Assistant;
+automations need only the saved name.
+
+## Home shortcuts
+
+A plan or area with **Show on home** turned on appears on the home screen,
+after **Clean rooms**, in the order you added it. One tap runs it, exactly as
+**Run plan** or **Clean this area** would; a shortcut that can't run says why,
+and **Stop** shows while it runs. The arrow beside it opens the plan or area.
+Your default plan starts as a shortcut until you change the list. Each Home
+Assistant user has their own shortcuts.

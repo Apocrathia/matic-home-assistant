@@ -45,6 +45,9 @@ export async function installPanelFixture(page, {
   scenePoint = null,
   initialCatalogEntries = null,
   initialRobotStates = null,
+  // Home Assistant's per-user frontend data (frontend/get_user_data), keyed by
+  // key. Null leaves the fixture without a websocket connection, as before.
+  userData = null,
 } = {}) {
   const modulePath = moduleSource === "packaged" ? "/map_studio_v4/index.js" : PANEL_MODULE;
   const bundle = moduleSource === "typescript" ? await build({
@@ -103,7 +106,7 @@ export async function installPanelFixture(page, {
   await page.goto("/");
   // Home Assistant mounts the panel again on every page load; `remount` does
   // the same after a test reloads the page.
-  const remount = () => page.evaluate(async ({ module, scenes, plans, sceneDeltaPayload, posePosition, initialCatalogEntries, initialRobotStates }) => {
+  const remount = () => page.evaluate(async ({ module, scenes, plans, sceneDeltaPayload, posePosition, initialCatalogEntries, initialRobotStates, userData }) => {
     const { MATIC_MAP_PANEL_TAG } = await import(module);
     const json = (body, headers = {}) => new Response(JSON.stringify(body), {
       headers: { "Content-Type": "application/json", ...headers },
@@ -265,6 +268,27 @@ export async function installPanelFixture(page, {
       });
       throw new Error(`unexpected synthetic request: ${path}`);
     };
+    // Only the frontend user data messages; anything else is not served here.
+    const userStore = userData ? structuredClone(userData) : null;
+    const userDataCalls = [];
+    const userDataFailures = [];
+    const connection = userStore ? {
+      sendMessagePromise: async (message) => {
+        userDataCalls.push(structuredClone(message));
+        const failure = userDataFailures.findIndex((type) => type === message.type);
+        if (failure >= 0) {
+          userDataFailures.splice(failure, 1);
+          throw new Error("synthetic user data failure");
+        }
+        if (message.type === "frontend/get_user_data") return { value: structuredClone(userStore[message.key] ?? null) };
+        if (message.type === "frontend/set_user_data") {
+          userStore[message.key] = structuredClone(message.value);
+          return null;
+        }
+        throw new Error(`unexpected synthetic message: ${message.type}`);
+      },
+      subscribeMessage: async () => () => undefined,
+    } : null;
     const makePanel = () => {
       const panel = document.createElement(MATIC_MAP_PANEL_TAG);
       // Home Assistant gives a panel the page's height; a panel in a bare
@@ -275,6 +299,7 @@ export async function installPanelFixture(page, {
         connected: true,
         user: { id: "synthetic-admin", is_admin: true },
         states: robotStates,
+        ...(connection ? { connection } : {}),
         fetchWithAuth,
         callService: async (domain, service, data, target) => {
           serviceCalls.push({ domain, service, data: structuredClone(data), target: structuredClone(target) });
@@ -343,6 +368,10 @@ export async function installPanelFixture(page, {
       },
       pendingHistoryScenes,
       get planReads() { return planReads; },
+      userData: () => structuredClone(userStore),
+      userDataCalls,
+      // Reject the next frontend user data message of `type` once.
+      failNextUserData: (type) => { userDataFailures.push(type); },
       stats: () => ({
         ...window.__panelFixtureResources,
         activePopstateListeners: window.__panelFixturePopstateCount(),
@@ -360,6 +389,7 @@ export async function installPanelFixture(page, {
     posePosition,
     initialCatalogEntries,
     initialRobotStates,
+    userData,
   });
   await remount();
   return {
