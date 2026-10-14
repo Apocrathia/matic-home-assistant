@@ -9919,8 +9919,8 @@ test.describe("plan shell", () => {
     await panel.getByRole("textbox", { name: "Plan name" }).fill("Daily tidy");
     await panel.getByRole("button", { name: "Cancel", exact: true }).click();
     await panel.getByRole("dialog", { name: "Discard changes?" }).getByRole("button", { name: "Save", exact: true }).click();
-    await expect(panel.getByRole("heading", { level: 2 })).toHaveText("Daily tidy");
     await expect(panel.getByRole("dialog")).toHaveCount(0);
+    await expect(panel.getByRole("heading", { level: 2 })).toHaveText("Daily tidy");
     await expect(panel.locator("[data-notice-slot]")).toHaveText("Plan saved");
     expect(await page.evaluate(() => window.__panelFixture.serviceCalls.map(({ service, data }) => [service, data.name])))
       .toEqual([["save_plan", "Daily tidy"]]);
