@@ -496,6 +496,8 @@ export class MaticMapShellV4 extends LitElement {
   /** The home launcher last pressed; it takes focus back when its workflow closes (home-rooms.md §5 Keyboard). */
   #homeLauncher: string | null = null;
   // A plan shortcut's run, until it starts (then home) or its view is left.
+  // Home stays on screen meanwhile (owner, 2026-10-14): Run plan needs the
+  // plan's Run view in the store (effects.ts run-plan), never on screen.
   #pinRun: string | null = null;
   #workflowStyled = false;
 
@@ -747,17 +749,14 @@ export class MaticMapShellV4 extends LitElement {
     if (changed.has("state")) {
       this.#resumeWorkflow();
       const previous = changed.get("state") as WorkspaceState | undefined;
-      // A shortcut's run returns home once it starts; a run that was refused
-      // (its check went back to idle, or a notice says why) stays on Run with
-      // its reason, and a later Run plan there no longer jumps home.
+      // A shortcut's run returns home once it starts; one that is idle (its
+      // check was refused, or nothing took the action) shows its Run view
+      // with the reason, and a later Run plan there no longer jumps home.
       if (this.#pinRun && (this.state.workflow !== "plan" || this.state.selection.planId !== this.#pinRun)) this.#pinRun = null;
       else if (this.#pinRun && (this.state.command === "starting" || hasStoppableWork(this.state))) {
         this.#pinRun = null;
         this.#emit({ type: "open-workflow", workflow: "none" });
-      } else if (this.#pinRun && this.state.command === "idle"
-        && (previous?.command === "pending" || (this.state.notice !== null && previous?.notice !== this.state.notice))) {
-        this.#pinRun = null;
-      }
+      } else if (this.#pinRun && this.state.command === "idle") this.#revealRun();
       if (previous?.precisionOpen && !this.state.precisionOpen) {
         this.#brushLauncher()?.focus();
       }
@@ -846,7 +845,7 @@ export class MaticMapShellV4 extends LitElement {
       }
       if (!previous) {
         this._sheetDetent = startingDetent(this.state, this._compact);
-      } else if (previous.workflow !== this.state.workflow || previous.planView !== this.state.planView) {
+      } else if (!this.#pinRun && (previous.workflow !== this.state.workflow || previous.planView !== this.state.planView)) {
         // Only on a workflow or view CHANGE: a state tick inside a view must
         // not yank the sheet back to its default while the user is reading.
         const detent = startingDetent(this.state, this._compact);
@@ -870,6 +869,14 @@ export class MaticMapShellV4 extends LitElement {
         });
       }
     }
+  }
+
+  // A refused shortcut run: the Run view home was standing in for takes the
+  // panel (home and Run share a sheet height) and its heading takes focus.
+  #revealRun(): void {
+    this.#pinRun = null;
+    this.requestUpdate();
+    void this.updateComplete.then(() => this.#focusPanel());
   }
 
   // MS-AXE-02: a scroller that overflows with nothing inside to Tab to is
@@ -1626,11 +1633,11 @@ export class MaticMapShellV4 extends LitElement {
       held,
       emit: (intent: WorkspaceIntent) => this.#intent(intent),
       run: (pin: HomePin) => {
-        // Run plan needs its Run view (effects.ts run-plan); the shell
-        // returns home once the run starts. Clean this area runs from here.
+        // Run plan needs its Run view (effects.ts run-plan), which home
+        // stands in for until the run starts. Clean this area runs from here.
         if (pin.kind === "plan") {
-          this.#intent({ type: "select-plan", planId: pin.id, origin: "home" });
           this.#pinRun = pin.id;
+          this.#intent({ type: "select-plan", planId: pin.id, origin: "home" });
         } else this.#intent({ type: "select-area", areaId: pin.id });
         this.#homeLauncher = `run:${pin.kind}:${pin.id}`;
         this.#dispatchAction(pin.kind === "plan" ? "run-plan" : "run-area");
@@ -1727,7 +1734,8 @@ export class MaticMapShellV4 extends LitElement {
   }
 
   protected override render() {
-    const state = this.state;
+    // Home stands in for the Run view while a shortcut's run starts (#pinRun).
+    const state: WorkspaceState = this.#pinRun ? { ...this.state, workflow: "none" } : this.state;
     const narrow = this._measuredNarrow ?? state.narrowHint;
     const compact = narrow && this._compact;
     const options = this.#options.value;

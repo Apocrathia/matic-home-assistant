@@ -159,15 +159,49 @@ test.describe("home shortcuts", () => {
     await expect(gallery.getByRole("button", { name: "Run plan Daily clean" })).toBeEnabled();
   });
 
-  test("once the run starts the shell returns home, where Stop shows", async ({ page }) => {
+  // Owner, 2026-10-14: a tap starts the clean and home never gives way to the
+  // plan's Run view, which Run plan needs behind it while the start is checked.
+  test("a tap keeps home on screen while the run starts, then Stop shows", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "home-shortcuts" });
+    await gallery.evaluate((element) => { element.simulateMotion = true; });
+    const headings = [];
+    await page.exposeFunction("__heading", (text) => headings.push(text));
+    await gallery.evaluate((element) => {
+      const shell = element.shadowRoot.querySelector("matic-map-shell-v4");
+      new MutationObserver(() => window.__heading(shell.shadowRoot.querySelector("#workspace-title")?.textContent.trim()))
+        .observe(shell.shadowRoot, { subtree: true, childList: true, characterData: true });
+    });
     await runButton(gallery, "Daily clean").click();
-    await expect(heading(gallery, "Daily clean")).toBeVisible();
-    await patchState(gallery, { command: "starting" });
+    expect((await snapshot(page)).workflow).toBe("plan");
+    await expect(heading(gallery, "Choose what to clean")).toBeVisible();
     await expect.poll(async () => (await snapshot(page)).workflow).toBe("none");
-    await patchState(gallery, { command: "idle", activity: "cleaning" });
     await expect(gallery.getByRole("button", { name: "Stop cleaning", exact: true }).first()).toBeVisible();
     await expect(runButton(gallery, "Daily clean")).toHaveAttribute("aria-disabled", "true");
+    expect(headings).not.toContain("Daily clean");
+    await expect.poll(() => focusedText(page)).toMatch(/^button Run Daily clean/);
+  });
+
+  test("on the walkthrough stage, Stop during a start cancels it for good", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "home-shortcuts" });
+    await gallery.evaluate((element) => { element.simulateMotion = true; });
+    await runButton(gallery, "Daily clean").click();
+    await expect.poll(async () => (await snapshot(page)).command).toBe("starting");
+    await gallery.getByRole("button", { name: /^Stop/ }).first().click();
+    // Stop plays settling, returning, docked; the start's cleaning never lands.
+    const seen = new Set();
+    for (const deadline = Date.now() + 4_000; Date.now() < deadline;) {
+      seen.add((await snapshot(page)).activity);
+      await page.waitForTimeout(100);
+    }
+    expect(seen.has("cleaning")).toBe(false);
+    expect((await snapshot(page)).activity).toBe("docked");
+  });
+
+  test("a run refused before it starts shows its Run view with the heading focused", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "home-shortcuts" });
+    await runButton(gallery, "Daily clean").click();
+    await expect(heading(gallery, "Daily clean")).toBeFocused();
+    expect((await snapshot(page)).workflow).toBe("plan");
   });
 
   test("a shortcut that can't run is held, says why, and a tap does nothing", async ({ page }) => {
