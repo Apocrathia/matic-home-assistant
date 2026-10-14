@@ -81,6 +81,13 @@ export class MaticMapStudioGalleryV4 extends LitElement {
   /** Home Assistant's `localize`; the walkthrough stage passes a synthetic language. */
   localize?: Localize;
   controls = true;
+  /**
+   * The walkthrough stage plays starts and stops as a robot would (pending,
+   * starting, cleaning; settling, docked), so a run reads end to end with no
+   * robot behind it. Tests leave it off and drive the state themselves.
+   */
+  simulateMotion = false;
+  #motion: ReturnType<typeof setTimeout>[] = [];
   protected _workspace: WorkspaceState = createGalleryState("ready");
 
   readonly #store = new WorkspaceStore(this._workspace);
@@ -94,6 +101,7 @@ export class MaticMapStudioGalleryV4 extends LitElement {
   }
 
   override disconnectedCallback(): void {
+    for (const timer of this.#motion.splice(0)) clearTimeout(timer);
     this.#unsubscribe?.();
     this.#unsubscribe = null;
     super.disconnectedCallback();
@@ -163,11 +171,38 @@ export class MaticMapStudioGalleryV4 extends LitElement {
     }
   }
 
-  // The one action with no write behind it: Name and save / Done opens the review.
+  // The one action with no write behind it: Name and save / Done opens the
+  // review. With simulateMotion, starts and Stop play out too.
   #action(event: CustomEvent<WorkspaceAction>): void {
-    if (event.detail?.id !== "review-area") return;
+    const id = event.detail?.id;
+    if (this.simulateMotion && (id === "run-plan" || id === "run-area" || id === "clean-rooms" || id === "stop")) {
+      event.stopPropagation();
+      this.#simulate(id);
+      return;
+    }
+    if (id !== "review-area") return;
     event.stopPropagation();
     this.#store.dispatch({ type: "open-workflow", workflow: "areaReview" });
+  }
+
+  #simulate(id: string): void {
+    const value = this.#store.value;
+    const later = (delay: number, patch: Partial<WorkspaceState>) => {
+      this.#motion.push(setTimeout(() => this.#store.replace({ ...this.#store.value, ...patch }), delay));
+    };
+    if (id === "stop") {
+      this.#store.replace({ ...value, command: "settling", notice: null });
+      later(900, { command: "idle", activity: "returning", currentArea: null });
+      later(2400, { activity: "docked" });
+      return;
+    }
+    if (value.command !== "idle") return;
+    // Run plan checks its preview first (pending), then every start settles.
+    this.#store.replace(id === "run-plan"
+      ? { ...value, command: "pending", pendingAction: "run-plan", notice: null }
+      : { ...value, command: "starting", notice: null });
+    if (id === "run-plan") later(500, { command: "starting", pendingAction: null });
+    later(1500, { command: "idle", activity: "cleaning", currentArea: "Kitchen" });
   }
 
   protected override render() {

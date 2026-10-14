@@ -183,6 +183,7 @@ export async function mountStageFrame(doc: Document): Promise<void> {
   const current = params.steps[params.step]!;
   const gallery = doc.createElement(GALLERY_TAG) as MaticMapStudioGalleryV4;
   gallery.controls = false;
+  gallery.simulateMotion = true;
   // The first paint's hint; the shell then measures itself (design-system.md §7).
   const { innerWidth: width, innerHeight: height } = view;
   gallery.narrow = height < 480 || width < 768 || (width < 1024 && width <= height);
