@@ -1070,3 +1070,12 @@ async def test_preview_plan_service_returns_typed_entries(hass) -> None:
         "room",
     ]
     assert len(preview["preview_token"]) == 64
+
+
+def test_move_reaches_every_position_of_a_full_mixed_plan() -> None:
+    # The room limit and as many custom areas again.
+    full = 2 * MAX_ROOM_SEQUENCE_SIZE
+    move = {"entity_id": "vacuum.matic", "plan": "Home", "area": "rug"}
+    assert MOVE_PLAN_ROOM_SCHEMA({**move, "new_position": full})["new_position"] == full
+    with pytest.raises(probatio.Invalid):
+        MOVE_PLAN_ROOM_SCHEMA({**move, "new_position": full + 1})

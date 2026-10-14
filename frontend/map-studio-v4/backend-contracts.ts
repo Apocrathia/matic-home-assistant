@@ -264,6 +264,11 @@ export interface SavedPlan {
   readonly finishCurrentRoomThreshold: number;
   readonly nextRunPreview?: NextRunPreview;
   readonly nextRunEstimateSeconds: number | null;
+  /**
+   * The backend's ordered entries exactly as sent. The editor shows rooms
+   * only, so a full-plan save reads its custom areas from here to keep them.
+   */
+  readonly entries?: unknown;
 }
 
 export interface PlansCatalog {
@@ -839,6 +844,7 @@ export const parsePlansCatalog = (value: unknown): PlansCatalog => {
         ),
         ...(nextRunPreview === undefined ? {} : { nextRunPreview }),
         nextRunEstimateSeconds: estimateSeconds(plan.next_run_estimate_seconds),
+        entries: plan.entries,
       } satisfies SavedPlan;
     }),
   };

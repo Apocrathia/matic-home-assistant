@@ -371,8 +371,10 @@ MOVE_PLAN_ROOM_SCHEMA = probatio.All(
                 cv.string, probatio.Length(min=1, max=128)
             ),
             **_PLAN_ENTRY_TARGET,
+            # A plan holds up to the room limit and as many custom areas again.
             probatio.Required("new_position"): probatio.All(
-                probatio.Coerce(int), probatio.Range(min=1, max=100)
+                probatio.Coerce(int),
+                probatio.Range(min=1, max=2 * MAX_ROOM_SEQUENCE_SIZE),
             ),
         }
     ),

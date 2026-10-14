@@ -352,7 +352,7 @@ move_plan_room:
       selector:
         number:
           min: 1
-          max: 100
+          max: 200
           mode: box
 
 inspect_hermes_endpoint:

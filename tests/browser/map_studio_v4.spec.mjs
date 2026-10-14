@@ -9309,6 +9309,42 @@ test.describe("plan effects", () => {
     });
   });
 
+  test("full-plan saves keep a plan's custom areas in their saved places", async ({ page }) => {
+    await loadPlanEffects(page);
+    const result = await page.evaluate(async () => {
+      const run = await window.planEffects("plan-saved-intelligent");
+      const { m, store, effects } = run;
+      const catalog = structuredClone(store.value.resources.plans.value);
+      const plan = catalog.plans[0];
+      const [first, second, third] = plan.rooms.map((room) => room.roomId);
+      const area = (id) => ({ kind: "area", area_id: id, cleaning_mode: "mop", coverage_setting: "quick" });
+      plan.entries = [area("rug"), { kind: "room", room_id: first }, { kind: "room", room_id: second }, area("mat"), { kind: "room", room_id: third }];
+      run.plans = async () => structuredClone(catalog);
+      run.service = () => {};
+      const steps = (data) => data.rooms.map((item) => item.area ?? item.room);
+      await effects.setPlanEnabled(false);
+      const switched = steps(run.calls[0][1]);
+      const rug = run.calls[0][1].rooms[0];
+      // Edit takes a room out: areas stay put and the rooms close up around them.
+      store.patch({ planView: "edit", planDraft: { ...m.draftForPlan(plan), rooms: m.draftForPlan(plan).rooms.slice(1), dirty: true } });
+      await effects.savePlan();
+      const edited = steps(run.calls[1][1]);
+      // A plan of areas alone keeps them when the switch saves it.
+      plan.rooms = [];
+      plan.entries = [area("rug")];
+      store.patch({ planView: "run", planDraft: { ...m.draftForPlan(plan), dirty: false } });
+      await effects.setPlanEnabled(true);
+      const areasOnly = steps(run.calls[2][1]);
+      effects.dispose();
+      return { switched, rug, edited, areasOnly, ids: [first, second, third] };
+    });
+    const [first, second, third] = result.ids;
+    expect(result.switched).toEqual(["rug", first, second, "mat", third]);
+    expect(result.rug).toEqual({ area: "rug", cleaning_mode: "mop", coverage_setting: "quick" });
+    expect(result.edited).toEqual(["rug", second, third, "mat"]);
+    expect(result.areasOnly).toEqual(["rug"]);
+  });
+
   for (const failure of ["reload", "send"]) {
     test(`the switch reverts after a failed ${failure === "reload" ? "pre-send reload" : "send"}`, async ({ page }) => {
       await loadPlanEffects(page);
