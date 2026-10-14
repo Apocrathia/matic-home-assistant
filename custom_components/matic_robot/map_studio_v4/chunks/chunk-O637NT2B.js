@@ -211,7 +211,7 @@ import{A as ns,B as is,C as os,D as ws,E as Ie,F as $e,G as ks,H as Oe,I as _s,J
                 .dates=${this.dates}
                 .outlineEditor=${this.#r.value}
                 .narrow=${s}
-                ?data-short=${n&&this._sheetDetent==="full"}
+                ?data-short=${n&&!e.fullMap&&this._sheetDetent==="full"}
                 .help=${D}
                 .recipes=${e.workflow==="draw"?this.#n.value?.drawRecipes(this.#G)??null:null}
               >${this.#Xe(e)}

@@ -1878,7 +1878,7 @@ export class MaticMapShellV4 extends LitElement {
                 .dates=${this.dates}
                 .outlineEditor=${this.#outline.value}
                 .narrow=${narrow}
-                ?data-short=${compact && this._sheetDetent === "full"}
+                ?data-short=${compact && !state.fullMap && this._sheetDetent === "full"}
                 .help=${help}
                 .recipes=${state.workflow === "draw" ? this.#views.value?.drawRecipes(this.#tr) ?? null : null}
               >${this.#floorSwitcher(state)}

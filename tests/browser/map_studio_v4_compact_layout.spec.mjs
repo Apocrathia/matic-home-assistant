@@ -142,6 +142,16 @@ test.describe("compact sheet at 844×390 (MS-RESP-01, -02, -03)", () => {
     }
   });
 
+  test("Full map keeps help and the 3D camera steps while the hidden sheet sits at full", async ({ page }) => {
+    const gallery = await stage(page, "ready", LANDSCAPE);
+    await expect(gallery.locator(".mobile-sheet")).toHaveAttribute("data-detent", "full");
+    await patch(gallery, { view: "three", fullMap: true });
+    const canvas = gallery.locator("matic-map-canvas-v4");
+    await expect(canvas).not.toHaveAttribute("data-short", /.*/u);
+    await expect(canvas.locator(".camera-steps")).toBeVisible();
+    await expect(canvas.locator(".map-extras")).toBeVisible();
+  });
+
   test("a disabled primary keeps its reason under the grip row", async ({ page }) => {
     const gallery = await stage(page, "rooms", LANDSCAPE);
     const clean = gallery.locator(".sheet-grip").getByRole("button", { name: /^Clean rooms$/u });
