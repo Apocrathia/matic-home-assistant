@@ -2195,7 +2195,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       element.replaceWorkspaceState({ ...state, activity: "cleaning", coherence: "unavailable" });
     });
     await expect(gallery.locator(".status-copy strong")).toHaveText("Cleaning");
-    await expect(gallery.locator(".status-copy small")).toContainText(/new cleaning is disabled/i);
+    await expect(gallery.locator(".status-copy small")).toHaveText("Live map unavailable");
     await expect(gallery.getByRole("button", { name: "Stop cleaning", exact: true }).first()).toBeEnabled();
   });
   for (const retained of [false, true]) {

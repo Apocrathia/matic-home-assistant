@@ -89,6 +89,7 @@ export const initialWorkspaceState = (): WorkspaceState => ({
   cameras: {},
   managedLock: false,
   batteryPercent: null,
+  currentArea: null,
   floor: {
     classifiedCount: 1,
     displayName: "Current floor",

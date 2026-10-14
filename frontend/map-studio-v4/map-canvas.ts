@@ -89,7 +89,6 @@ export class MaticMapCanvasV4 extends LitElement {
     .map-root {
       position: relative;
       overflow: hidden;
-      min-block-size: 22rem;
       block-size: 100%;
       outline: none;
       isolation: isolate;

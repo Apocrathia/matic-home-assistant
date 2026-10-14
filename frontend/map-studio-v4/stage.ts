@@ -144,8 +144,9 @@ export async function mountStageFrame(doc: Document): Promise<void> {
   const current = params.steps[params.step]!;
   const gallery = doc.createElement(GALLERY_TAG) as MaticMapStudioGalleryV4;
   gallery.controls = false;
-  // The audit's rule: the sheet layout below 1024 wide or 480 tall.
-  gallery.narrow = view.innerWidth < 1024 || view.innerHeight < 480;
+  // The first paint's hint; the shell then measures itself (design-system.md §7).
+  const { innerWidth: width, innerHeight: height } = view;
+  gallery.narrow = height < 480 || width < 768 || (width < 1024 && width <= height);
   for (const [name, value] of Object.entries(theme)) gallery.style.setProperty(name, value);
   if (params.lang === "xa") gallery.localize = pseudoLocalize(await loadCommon());
   gallery.scenario = current.scenario;

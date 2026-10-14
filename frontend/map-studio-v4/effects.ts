@@ -493,6 +493,7 @@ export class EffectController {
       host: projection.host,
       activity: projection.activity,
       batteryPercent: projection.batteryPercent,
+      currentArea: projection.currentArea,
       robotLabel: projection.robotLabel,
       robots: projection.robots,
       locale: projection.language,

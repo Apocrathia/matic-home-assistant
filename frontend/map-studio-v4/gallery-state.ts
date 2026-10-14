@@ -234,7 +234,7 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
     case "ready":
       return state;
     case "cleaning":
-      return { ...state, activity: "cleaning" };
+      return { ...state, activity: "cleaning", currentArea: "Kitchen" };
     case "paused":
       return { ...state, activity: "paused" };
     case "returning":

@@ -92,6 +92,9 @@ interface StatusPresentation {
   readonly recheck?: boolean;
 }
 
+// How vacuum.py matches a firmware room phrase: case, spacing and a leading "the" aside.
+const roomKey = (name: string | null): string => name?.toLowerCase().replace(/\s+/gu, " ").trim().replace(/^the /u, "") ?? "";
+
 const statusCopy = (state: WorkspaceState, localize?: Localize, dates?: DateFormat): StatusPresentation => {
   const t = (key: string, fallback: string, placeholders?: NoticePlaceholders): string =>
     translate(localize, key, fallback, placeholders, dates);
@@ -101,6 +104,10 @@ const statusCopy = (state: WorkspaceState, localize?: Localize, dates?: DateForm
   if (isSelectedRobotUnavailable(state)) return { title: t("v4_selected_robot_unavailable", "Selected robot unavailable"), detail: t("v4_choose_another_robot", "Choose another robot to open its map."), icon: iconOffline, notable: true };
   if (!state.host.robotConnected) return { title: t("v4_robot_offline", "Robot offline"), detail: t("v4_last_map_read_only", "Last known map · read only"), icon: iconOffline, notable: true };
   if (state.activity === "problem") return { title: t("v4_needs_attention", "Needs attention"), detail: t("v4_check_robot", "Check the robot"), icon: iconOffline, notable: true };
+  // shell.md §4 row 15: from the press until the robot or the backend's fence settles.
+  if (state.command === "settling" || state.activity === "stopping" || state.resources.entry?.stopSettlePending) {
+    return { title: t("v4_stopping", "Stopping"), detail: t("v4_waiting_robot", "Waiting for the robot"), icon: iconPaused, notable: true };
+  }
   if (state.dataMode === "history") {
     // shell.md §4 row 7: the date and place of the saved map, as the chip says.
     const saved = savedMapPosition(state);
@@ -131,18 +138,21 @@ const statusCopy = (state: WorkspaceState, localize?: Localize, dates?: DateForm
     return { title: t("v4_action_starting", "Starting"), detail: t("v4_action_starting_detail", "Waiting for the robot to begin"), icon: iconRobot, notable: true };
   }
   const mapUnavailable = state.coherence === "unavailable" || state.coherence === "blocked";
-  const mapUnavailableDetail = t("v4_active_map_unavailable", "The live map is unavailable; new cleaning is disabled.");
-  const withMapConsequence = (detail: string): string => mapUnavailable ? `${detail} · ${mapUnavailableDetail}` : detail;
-  if (state.activity === "cleaning") return { title: t("v4_cleaning", "Cleaning"), detail: withMapConsequence(t("v4_cleaning_progress", "Cleaning in progress")), icon: iconCleaning, notable: true };
-  if (state.activity === "recharging") {
-    const battery = state.batteryPercent === null
-      ? t("v4_recharging_detail", "Will resume automatically when ready")
-      : t("v4_battery", "{percent}% battery", { percent: state.batteryPercent });
-    return { title: t("v4_recharging", "Charging to resume"), detail: withMapConsequence(battery), icon: iconCharging, notable: true };
+  const battery = state.batteryPercent === null ? "" : t("v4_battery", "{percent}% battery", { percent: state.batteryPercent });
+  if (state.activity === "cleaning") {
+    // Row 11: the room the robot reports, when it is a room on this floor.
+    const area = roomKey(state.currentArea);
+    const room = area && state.resources.scene.value?.metadata.rooms.find((candidate) => roomKey(candidate.name) === area)?.name;
+    return {
+      title: t("v4_cleaning", "Cleaning"),
+      detail: mapUnavailable ? t("v4_active_map_unavailable", "Live map unavailable") : room ? t("v4_cleaning_room", "In {room}", { room }) : battery,
+      icon: iconCleaning,
+      notable: true,
+    };
   }
-  if (state.activity === "paused") return { title: t("v4_paused", "Paused"), detail: withMapConsequence(t("v4_can_resume", "Cleaning can resume")), icon: iconPaused, notable: true };
-  if (state.activity === "returning") return { title: t("v4_returning", "Returning"), detail: withMapConsequence(t("v4_going_dock", "Going to the dock")), icon: iconCleaning, notable: true };
-  if (state.activity === "stopping") return { title: t("v4_stopping", "Stopping"), detail: withMapConsequence(t("v4_waiting_robot", "Waiting for the robot")), icon: iconPaused, notable: true };
+  if (state.activity === "recharging") return { title: t("v4_recharging", "Charging to resume"), detail: battery || t("v4_recharging_detail", "Will resume automatically when ready"), icon: iconCharging, notable: true };
+  if (state.activity === "paused") return { title: t("v4_paused", "Paused"), detail: t("v4_can_resume", "Cleaning can resume"), icon: iconPaused, notable: true };
+  if (state.activity === "returning") return { title: t("v4_returning", "Returning"), detail: t("v4_going_dock", "Going to the dock"), icon: iconCleaning, notable: true };
   if (mapUnavailable) return {
     title: t("v4_map_unavailable", "Map unavailable"),
     detail: t("v4_map_unavailable_status", "Home Assistant can't show the map right now, so cleaning can't start."),
@@ -160,9 +170,6 @@ const statusCopy = (state: WorkspaceState, localize?: Localize, dates?: DateForm
     notable: true,
     recheck: true,
   };
-  const battery = state.batteryPercent === null
-    ? t("v4_ready", "Ready")
-    : t("v4_battery", "{percent}% battery", { percent: state.batteryPercent });
   return {
     title: state.activity === "docked" ? t("v4_docked", "Docked") : t("v4_ready", "Ready"),
     detail: battery,
@@ -281,6 +288,8 @@ const workflowCopy = (state: WorkspaceState, localize?: Localize): {
 type SheetDetent = "peek" | "half" | "full";
 
 const DETENTS: readonly SheetDetent[] = ["peek", "half", "full"];
+// A compact sheet (height < 480) has no half (design-system.md §7).
+const COMPACT_DETENTS: readonly SheetDetent[] = ["peek", "full"];
 
 // shell.md §4 notice rule: glyph per tone, and how long each toast stays.
 const NOTICE_ICONS: Readonly<Record<NoticeTone, string>> = {
@@ -305,8 +314,9 @@ const DEFAULT_DETENT: Readonly<Record<Workflow, SheetDetent>> = {
   history: "half",
   support: "full",
 };
-const startingDetent = (state: WorkspaceState): SheetDetent =>
-  state.workflow === "plan" && state.planView === "edit" ? "full" : DEFAULT_DETENT[state.workflow];
+const startingDetent = (state: WorkspaceState, compact: boolean): SheetDetent =>
+  compact ? /^(rooms|draw|areaReview|history)$/u.test(state.workflow) ? "peek" : "full"
+  : state.workflow === "plan" && state.planView === "edit" ? "full" : DEFAULT_DETENT[state.workflow];
 
 // Faster than this on release and the sheet goes to the next detent in the
 // direction of travel regardless of where the finger let go.
@@ -388,6 +398,7 @@ export class MaticMapShellV4 extends LitElement {
     localize: { attribute: false },
     dates: { attribute: false },
     _measuredNarrow: { state: true },
+    _compact: { state: true },
     _sheetOffset: { state: true },
     _helpOpen: { state: true },
     _sheetDetent: { state: true },
@@ -414,7 +425,9 @@ export class MaticMapShellV4 extends LitElement {
   #t(key: string, fallback: string, placeholders?: NoticePlaceholders): string {
     return translate(this.localize, key, fallback, placeholders, this.dates);
   }
-  protected _measuredNarrow = false;
+  // Unset until the host is measured; till then the host's narrow hint decides.
+  protected _measuredNarrow?: boolean;
+  protected _compact = false;
   protected _sheetOffset = 0;
   // The help popover (map-help.ts, in the views chunk) is the shell's: it
   // opens from the rail "?" and closes from Close, Escape (after the menu,
@@ -498,8 +511,15 @@ export class MaticMapShellV4 extends LitElement {
     super.connectedCallback();
     this.#resizeObserver = new ResizeObserver(([entry]) => {
       if (!entry) return;
-      const next = entry.contentRect.width < 1024 || entry.contentRect.height < 480;
-      if (next !== this._measuredNarrow) this._measuredNarrow = next;
+      // design-system.md §7: the inspector at 1024 and up, and from 768 in
+      // landscape (the compact inspector); a sheet otherwise, compact when short.
+      const { width, height } = entry.contentRect;
+      const compact = height < 480;
+      this._measuredNarrow = compact || width < 768 || (width < 1024 && width <= height);
+      if (compact !== this._compact) {
+        this._compact = compact;
+        this._sheetDetent = startingDetent(this.state, compact);
+      }
     });
     this.#resizeObserver.observe(this);
     document.addEventListener("fullscreenchange", this.#fullscreenChange);
@@ -789,11 +809,11 @@ export class MaticMapShellV4 extends LitElement {
         });
       }
       if (!previous) {
-        this._sheetDetent = startingDetent(this.state);
+        this._sheetDetent = startingDetent(this.state, this._compact);
       } else if (previous.workflow !== this.state.workflow || previous.planView !== this.state.planView) {
         // Only on a workflow or view CHANGE: a state tick inside a view must
         // not yank the sheet back to its default while the user is reading.
-        const detent = startingDetent(this.state);
+        const detent = startingDetent(this.state, this._compact);
         if (detent !== this._sheetDetent) {
           // The view, not the user, moved the sheet: it lands at the new
           // height at once. An eased resize here would still be running
@@ -1019,12 +1039,15 @@ export class MaticMapShellV4 extends LitElement {
       : this.#t("v4_workspace_height_full", "Cleaning panel, full height"));
   }
 
+  #detents(): readonly SheetDetent[] {
+    return this._compact ? COMPACT_DETENTS : DETENTS;
+  }
+
   #sheetStep(delta: 1 | -1, wrap = false): void {
-    const index = DETENTS.indexOf(this._sheetDetent);
-    let next = index + delta;
-    if (wrap && next >= DETENTS.length) next = 0;
-    next = Math.max(0, Math.min(DETENTS.length - 1, next));
-    this.#setDetent(DETENTS[next] ?? this._sheetDetent);
+    const detents = this.#detents();
+    let next = detents.indexOf(this._sheetDetent) + delta;
+    if (wrap && next >= detents.length) next = 0;
+    this.#setDetent(detents[Math.max(0, Math.min(detents.length - 1, next))] ?? this._sheetDetent);
   }
 
   #detentHeights(sheet: HTMLElement): Readonly<Record<SheetDetent, number>> {
@@ -1032,10 +1055,10 @@ export class MaticMapShellV4 extends LitElement {
       ?? sheet.parentElement?.clientHeight
       ?? sheet.offsetHeight;
     const rem = parseFloat(getComputedStyle(this).fontSize) || 16;
-    const chrome = [".sheet-grip", ".sheet-tools", ".action-bar"]
+    const chrome = [":scope>.sheet-grip", ":scope>.sheet-tools", ":scope>.action-bar"]
       .map((selector) => sheet.querySelector<HTMLElement>(selector)?.offsetHeight ?? 0)
       .reduce((sum, height) => sum + height, 0) + rem * 0.75;
-    const full = Math.min(available * 0.92, available - rem * 9);
+    const full = this._compact ? available * 0.72 : Math.min(available * 0.92, available - rem * 9);
     const half = Math.min(available * 0.48, rem * 26, full);
     return { peek: Math.min(chrome, half), half, full };
   }
@@ -1112,19 +1135,19 @@ export class MaticMapShellV4 extends LitElement {
       return;
     }
     const dy = event.clientY - drag.startY;
-    const index = DETENTS.indexOf(this._sheetDetent);
+    const detents = this.#detents();
+    const index = detents.indexOf(this._sheetDetent);
     const first = drag.samples[0];
     const last = drag.samples[drag.samples.length - 1];
     const velocity = first && last && last !== first ? (last.y - first.y) / Math.max(1, last.t - first.t) : 0;
     if (Math.abs(velocity) > FLICK_VELOCITY) {
-      const next = Math.max(0, Math.min(DETENTS.length - 1, index + (velocity < 0 ? 1 : -1)));
-      this.#setDetent(DETENTS[next] ?? this._sheetDetent);
+      this.#setDetent(detents[Math.max(0, Math.min(detents.length - 1, index + (velocity < 0 ? 1 : -1)))] ?? this._sheetDetent);
       return;
     }
     const target = drag.startHeight - dy;
     let nearest: SheetDetent = this._sheetDetent;
     let distance = Number.POSITIVE_INFINITY;
-    for (const detent of DETENTS) {
+    for (const detent of detents) {
       const gap = Math.abs(drag.heights[detent] - target);
       if (gap < distance) {
         distance = gap;
@@ -1332,7 +1355,7 @@ export class MaticMapShellV4 extends LitElement {
   }
 
   #skipToWorkspace(): void {
-    if (this._sheetDetent === "peek" && this.#sheet()) this.#setDetent("half");
+    if (this._sheetDetent === "peek" && this.#sheet()) this.#setDetent(this._compact ? "full" : "half");
     void this.updateComplete.then(() => this.#focusPanel());
   }
 
@@ -1696,7 +1719,8 @@ export class MaticMapShellV4 extends LitElement {
 
   protected override render() {
     const state = this.state;
-    const narrow = state.narrowHint || this._measuredNarrow;
+    const narrow = this._measuredNarrow ?? state.narrowHint;
+    const compact = narrow && this._compact;
     const options = this.#options.value;
     const status = statusCopy(state, this.localize, this.dates);
     const selectedRobotUnavailable = isSelectedRobotUnavailable(state);
@@ -1760,7 +1784,7 @@ export class MaticMapShellV4 extends LitElement {
     const toast = this._toast && (this._toast.tone === "success" || this._toast.tone === "error"
       || state.fullMap || (narrow && this._sheetDetent === "peek")) ? this._toast : null;
     return html`
-      <div class=${`root ${narrow ? "narrow" : "wide"}`} ?data-dock=${!narrow && state.workflow === "draw"} @keydown=${this.#keyboard}>
+      <div class=${`root ${narrow ? "narrow" : "wide"}${compact ? " compact" : ""}`} ?data-dock=${!narrow && state.workflow === "draw"} @keydown=${this.#keyboard}>
         <button class="skip-link ms-btn ms-btn--primary" type="button" @click=${this.#skipToMap}>${this.#t("v4_skip_to_map", "Skip to the map")}</button>
         <button class="skip-link ms-btn ms-btn--primary" type="button" @click=${this.#skipToWorkspace}>${this.#t("v4_skip_to_workspace", "Skip to the panel")}</button>
         <div class="app" ?inert=${Boolean(dialog)}>
@@ -1876,22 +1900,23 @@ export class MaticMapShellV4 extends LitElement {
                   <span class="sheet-handle" role="presentation"></span>
                   ${this._sheetDetent === "peek" ? this.#back(state, true) : nothing}
                   <span class="sheet-status">${this.#sheetStatus(state, status)}</span>
-                  <button
+                  ${compact ? this.#actionBar(state, footerPrimary, footerSecondary) : nothing}
+                  ${compact && this._sheetDetent === "full" ? nothing : html`<button
                     class="ms-btn ms-btn--icon ms-btn--sm"
                     type="button"
                     aria-label=${this.#t("v4_show_more", "Expand panel")}
                     aria-controls="sheet-panel"
                     aria-disabled=${this._sheetDetent === "full" ? "true" : nothing}
                     @click=${() => this.#sheetStep(1)}
-                  >${icon(iconChevronUp)}</button>
-                  <button
+                  >${icon(iconChevronUp)}</button>`}
+                  ${compact && this._sheetDetent === "peek" ? nothing : html`<button
                     class="ms-btn ms-btn--icon ms-btn--sm"
                     type="button"
                     aria-label=${this.#t("v4_show_less", "Collapse panel")}
                     aria-controls="sheet-panel"
                     aria-disabled=${this._sheetDetent === "peek" ? "true" : nothing}
                     @click=${() => this.#sheetStep(-1)}
-                  >${icon(iconChevronDown)}</button>
+                  >${icon(iconChevronDown)}</button>`}
                 </div>
                 ${showDrawTools ? html`
                   <div class="sheet-tools">
@@ -1912,7 +1937,7 @@ export class MaticMapShellV4 extends LitElement {
                   ${this.#panelTop(state)}
                   <div class="sheet-body" role="region" aria-labelledby="workspace-title">${this.#panel(state, narrow)}</div>
                 </div>
-                ${this.#actionBar(state, footerPrimary, footerSecondary)}
+                ${compact ? nothing : this.#actionBar(state, footerPrimary, footerSecondary)}
               ` : html`
                 <div class="status-strip">
                   <span class="status-icon" aria-hidden="true">${icon(status.icon)}</span>

@@ -11,6 +11,9 @@ const review = resolve(root, "tests/browser/.generated/map-studio-v4-review");
 // esbuild keeps template text verbatim, so the build drops each comment that
 // fills its own lines in a css`` template instead of shipping it. A comment
 // sharing a line with CSS is left alone rather than risk joining two tokens.
+// Whitespace the CSS grammar ignores (around braces, semicolons, commas and
+// child combinators, after a colon, runs of spaces) goes too; quoted strings
+// and ${} interpolations are kept as written.
 const styleComments = {
   name: "style-comments",
   setup(compiler) {
@@ -18,7 +21,8 @@ const styleComments = {
       const source = await readFile(path, "utf8");
       const contents = source.replace(/\bcss`[^`]*`/gu, (template) => template.replace(
         /\n[ \t]*\/\*(?:(?!\$\{)[\s\S])*?\*\/[ \t]*(?=\n)/gu, "",
-      ));
+      ).split(/("[^"\n]*"|\$\{[^}]*\})/u).map((part, index) => index % 2 ? part : part
+        .replace(/\s*([{};,>])\s*/gu, "$1").replace(/:\s+/gu, ":").replace(/\s+/gu, " ")).join(""));
       return { contents, loader: "ts" };
     });
   },

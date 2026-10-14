@@ -100,6 +100,8 @@ export class HassAdapter {
       ? activityForVacuum(selectedVacuum.state, selectedVacuum.attributes)
       : "unknown";
     const batteryPercent = boundedBattery(selectedVacuum?.attributes?.battery_level);
+    const area = selectedVacuum?.attributes?.current_area;
+    const currentArea = typeof area === "string" && area.trim() ? area : null;
     const language = hass?.selectedLanguage || hass?.language || "en";
     const dateLanguage = hass?.locale?.language || language;
     const timeZone = hass?.locale?.time_zone === "server" ? hass.config?.time_zone : undefined;
@@ -119,6 +121,7 @@ export class HassAdapter {
       host.robotCount,
       activity,
       batteryPercent ?? "none",
+      currentArea ?? "",
       language,
       dateLanguage,
       timeZone ?? "browser",
@@ -137,6 +140,7 @@ export class HassAdapter {
       host,
       activity,
       batteryPercent,
+      currentArea,
       language,
       dates,
       userKey,

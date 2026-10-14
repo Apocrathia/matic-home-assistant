@@ -17,6 +17,8 @@ export const shellStyles = [tokens, base, controls, css`
 
     /* The wide inspector's width, shared by its grid column and the toast's offset. */
     .root { --ms-inspector: 22.5rem; position: relative; min-block-size: 0; block-size: 100%; }
+    /* The compact inspector, 768 to 1023 px landscape (design-system.md §7). */
+    @container (max-width: 1023px) { .root { --ms-inspector: 20rem; } }
 
     .sr-only, .skip-link:not(:focus) {
       position: absolute;
@@ -39,7 +41,6 @@ export const shellStyles = [tokens, base, controls, css`
     .app {
       display: grid;
       grid-template-rows: calc(3.5rem + var(--ms-safe-top)) minmax(0, 1fr);
-      min-block-size: 36rem;
       block-size: 100%;
       background: var(--ms-surface-app);
     }
@@ -136,7 +137,7 @@ export const shellStyles = [tokens, base, controls, css`
     .status-strip strong, .status-strip small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .status-strip strong { font-size: var(--ms-t-sm); }
     .status-strip small { margin-block-start: 0.125rem; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); }
-    .status-strip .action-reason { display: none; }
+    .status-strip .action-reason { grid-column: 1 / -1; text-align: start; }
 
     .workflow {
       display: flex;
@@ -288,7 +289,7 @@ export const shellStyles = [tokens, base, controls, css`
 
     /* Programmatic focus after a workflow change is for assistive tech; a ring on a heading reads as a control. */
     h2[tabindex="-1"]:focus { outline: 0; }
-    .narrow .app { grid-template-rows: calc(3.35rem + var(--ms-safe-top)) minmax(0, 1fr); min-block-size: 28rem; }
+    .narrow .app { grid-template-rows: calc(3.35rem + var(--ms-safe-top)) minmax(0, 1fr); }
     .narrow .workspace { grid-template-columns: minmax(0, 1fr); }
     .narrow .inspector { border-inline-start: 0; }
     .narrow .mobile-sheet {
@@ -411,4 +412,17 @@ export const shellStyles = [tokens, base, controls, css`
     @media (prefers-reduced-motion: reduce) {
       .narrow .mobile-sheet { transition: none; }
     }
+    /* Compact sheet, height < 480 (design-system.md §7): a 48 px bar, peek
+       and full, and the action bar in the grip row with its reason under it. */
+    .compact .app { grid-template-rows: calc(3rem + var(--ms-safe-top)) minmax(0, 1fr); }
+    .compact .mobile-sheet[data-detent="full"] { block-size: 72%; }
+    .compact .sheet-grip { display: flex; flex-wrap: wrap; }
+    .compact .sheet-status { flex: 1; }
+    .compact .sheet-grip .action-bar { display: contents; }
+    .compact .sheet-grip .ms-btn--block { inline-size: auto; min-block-size: var(--ms-control); }
+    .compact .sheet-grip .action-reason { flex-basis: 100%; order: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .compact .action-summary { display: none; }
+    /* Draw at peek: the grip row and one 44 px tool row (map-surfaces.md §5). */
+    .compact .sheet-tools { padding-block: var(--ms-space-1) 0; }
+    .compact [data-detent="peek"] .sheet-hint { display: none; }
   `];
