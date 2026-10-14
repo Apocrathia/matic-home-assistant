@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import { cellHash, cellIds, findCell, startStaging } from "../../scripts/walkthrough.mjs";
 
@@ -32,7 +34,9 @@ test("a staged frame lands in its step's scenario and dialog", async ({ page }) 
 
 test("the stage page sizes the frame, names the cell and switches steps", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 1100 });
-  await page.goto(`${STAGE}#cell=R02-C01&steps=plans,plan-saved-intelligent&w=390&h=844`);
+  await page.goto(`${STAGE}#${cellHash("R02-C01")}`);
+  await expect(page.getByRole("note").locator("strong")).toHaveText("Cell R02-C01");
+  await expect(page.getByRole("alert")).toHaveCount(0);
   const banner = page.getByRole("note");
   await expect(banner).toContainText("R02-C01");
   await expect(banner).toContainText("not live Home Assistant");
@@ -105,6 +109,44 @@ test("every walkthrough cell's hash parses without an error", async ({ page }) =
   }, ids.map((id) => cellHash(id)));
   expect(errors).toEqual([]);
   expect(findCell("R12-C01")).toBeNull();
+});
+
+test("a cell ID staged with another cell's settings is refused, not labelled as that cell", async ({ page }) => {
+  await page.goto(`${STAGE}#cell=R01-C01&steps=plans&w=1024&h=768`);
+  await expect(page.getByRole("alert")).toContainText("do not match cell R01-C01");
+  await expect(page.getByRole("note")).not.toContainText(/^Cell R01-C01/u);
+  await expect(page.getByRole("note").locator("strong")).toHaveText("Not cell R01-C01");
+  await page.goto("about:blank");
+  await openFrame(page, "cell=R01-C01&steps=plans&w=1024&h=768");
+  await expect(page.locator("html")).toHaveAttribute("data-stage-error", /do not match cell R01-C01/u);
+  const errors = await page.evaluate(async (hashes) => {
+    const { parseStageHash } = await import("/map_studio_v4-review/stage.js");
+    return hashes.map((hash) => parseStageHash(hash).errors);
+  }, [`${cellHash("R01-C01")}&step=2`, "cell=R12-C01&steps=ready", "steps=plans&w=1024&h=768"]);
+  expect(errors[0]).toEqual([]);
+  expect(errors[1].join()).toContain("R12-C01 is not a walkthrough cell");
+  expect(errors[2]).toEqual([]);
+});
+
+test("--print on a read-out cell launches no browser", async ({ browserName }) => {
+  test.skip(browserName !== "chromium", "The script does not depend on the test browser.");
+  const script = fileURLToPath(new URL("../../scripts/stage_walkthrough.mjs", import.meta.url));
+  // No browser binaries: any launch fails, so only a launch-free run prints the line.
+  const child = spawn(process.execPath, [script, "R02-C09", "--print", "--port", "0"], {
+    env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: "/nonexistent-playwright-browsers" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stdout.on("data", (chunk) => { output += chunk; });
+  child.stderr.on("data", (chunk) => { output += chunk; });
+  try {
+    await expect.poll(() => output, { timeout: 15_000 }).toMatch(/Not opening a browser \(--print\)\.|Error/u);
+    expect(output).toContain("Not opening a browser (--print).");
+    expect(output).not.toContain("accessibility tree");
+    expect(child.exitCode).toBeNull();
+  } finally {
+    child.kill("SIGTERM");
+  }
 });
 
 test("three cells land in their first step at their size", async ({ page }) => {

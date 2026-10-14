@@ -37,7 +37,7 @@ A cell ID is its row and column, `R04-C02`. The stage URL's hash is the cell ID,
 
 A step is a gallery scenario, optionally with a dialog after a colon (`plan-dirty:discardDraft`). `step=3` opens the
 third step directly. A misspelled step, setting or value is shown as an error on the page, never staged as another
-state.
+state. A cell ID with settings other than its own is an error too, and the banner reads "Not cell R04-C02".
 
 ## Journeys (rows)
 

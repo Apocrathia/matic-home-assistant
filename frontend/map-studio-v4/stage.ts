@@ -8,6 +8,9 @@ import type { DialogKind, Localize, WorkspaceState } from "./contracts";
 import type { MaticMapStudioGalleryV4 } from "./gallery";
 import { GALLERY_DIALOGS, GALLERY_SCENARIOS, type GalleryScenario } from "./gallery-state";
 import { HA_THEMES } from "./mockups/themes";
+// The walkthrough matrix (scripts/walkthrough_cells.json); only this
+// review entry imports it, so it stays out of the panel's startup graph.
+import WALKTHROUGH from "../../scripts/walkthrough_cells.json";
 
 const GALLERY_TAG = "matic-map-studio-gallery-v0-4-0";
 const FRAME_PATH = "/map-studio-v4-stage-frame";
@@ -22,6 +25,8 @@ export interface StageStep {
 
 export interface StageParams {
   readonly cell: string;
+  /** True only for a cell ID whose settings are exactly that matrix cell's. */
+  readonly cellMatches: boolean;
   readonly steps: readonly StageStep[];
   /** Zero-based index into `steps`. */
   readonly step: number;
@@ -37,6 +42,19 @@ export interface StageParams {
   readonly readout: "none" | "tree";
   readonly errors: readonly string[];
 }
+
+/**
+ * The settings a matrix cell stages, as `key=value` pairs: its ID, its row's
+ * steps and its column's setup (scripts/walkthrough.mjs cellHash), or null
+ * for an ID not in the matrix.
+ */
+const cellSettings = (id: string): string[] | null => {
+  const [rowId, columnId] = id.split("-");
+  const row = WALKTHROUGH.rows.find((candidate) => candidate.id === rowId);
+  const column = WALKTHROUGH.columns.find((candidate) => candidate.id === columnId);
+  if (!row || !column || id !== `${row.id}-${column.id}`) return null;
+  return [`cell=${id}`, `steps=${row.steps.join(",")}`, ...column.hash.split("&")];
+};
 
 const KNOWN_KEYS = ["cell", "steps", "step", "w", "h", "theme", "dir", "lang", "contrast", "motion", "input", "readout"];
 
@@ -61,6 +79,21 @@ export const parseStageHash = (hash: string): StageParams => {
     errors.push(`${key}=${raw} is not a size from 200 to 4000`);
     return null;
   };
+  // A cell ID names exactly one staged setup. A hash that adds, drops or
+  // changes any of its settings is refused, so the owner never approves a
+  // cell from a screen staged as something else.
+  const cell = params.get("cell") ?? "";
+  const cellErrors = errors.length;
+  if (cell) {
+    const expected = cellSettings(cell);
+    const actual = [...params].filter(([key]) => key !== "step").map(([key, value]) => `${key}=${value}`);
+    if (!expected) {
+      errors.push(`${cell} is not a walkthrough cell`);
+    } else if (expected.length !== actual.length || [...expected].sort().join("&") !== [...actual].sort().join("&")) {
+      errors.push(`These settings do not match cell ${cell}; stage it with #${expected.join("&")}`);
+    }
+  }
+  const cellErrorsAfter = errors.length;
   const steps: StageStep[] = [];
   for (const label of (params.get("steps") ?? "ready").split(",").map((part) => part.trim()).filter(Boolean)) {
     const [name, dialogName, ...rest] = label.split(":");
@@ -78,7 +111,8 @@ export const parseStageHash = (hash: string): StageParams => {
   const inRange = Number.isInteger(index) && index >= 1 && index <= steps.length;
   if (!inRange) errors.push(`step=${raw} is not from 1 to ${steps.length}`);
   return {
-    cell: params.get("cell") ?? "",
+    cell,
+    cellMatches: cell !== "" && cellErrorsAfter === cellErrors,
     steps,
     step: inRange ? index - 1 : 0,
     width: size("w"),
@@ -211,7 +245,7 @@ export function mountStagePage(doc: Document): void {
   const render = (): void => {
     const params = parseStageHash(view.location.hash);
     const title = doc.createElement("strong");
-    title.textContent = params.cell ? `Cell ${params.cell}` : "Ad hoc stage";
+    title.textContent = !params.cell ? "Ad hoc stage" : params.cellMatches ? `Cell ${params.cell}` : `Not cell ${params.cell}`;
     const heading = line(" · Synthetic test harness, not live Home Assistant. No robot is connected.");
     heading.prepend(title);
     const children: HTMLElement[] = [heading, line(describe(params))];

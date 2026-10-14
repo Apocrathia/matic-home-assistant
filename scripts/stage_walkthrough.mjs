@@ -67,9 +67,11 @@ process.on("SIGTERM", stop);
 
 const [width, height] = ["w", "h"].map((key) => Number(new URLSearchParams(cellHash(id)).get(key)) || undefined);
 
-if (cell.column.stage === "readout") {
+const print = flag("--print");
+
+if (cell.column.stage === "readout" && !print) {
   // The accessibility tree a screen reader reads, names and roles as text,
-  // for every step of the journey.
+  // for every step of the journey. --print launches no browser at all.
   const { webkit } = await import("@playwright/test");
   const browser = await webkit.launch();
   const page = await browser.newPage({ viewport: { width: width ?? 390, height: height ?? 844 } });
@@ -83,7 +85,7 @@ if (cell.column.stage === "readout") {
   await browser.close();
 }
 
-if (flag("--print")) {
+if (print) {
   out("Not opening a browser (--print).");
 } else if (cell.column.stage === "chromium") {
   // Safari has no forced-colours mode, so this cell opens Chromium with
