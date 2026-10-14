@@ -181,6 +181,22 @@ test.describe("home shortcuts", () => {
     await expect.poll(() => focusedText(page)).toMatch(/^button Run Daily clean/);
   });
 
+  test("on the walkthrough stage, Stop during a start cancels it for good", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "home-shortcuts" });
+    await gallery.evaluate((element) => { element.simulateMotion = true; });
+    await runButton(gallery, "Daily clean").click();
+    await expect.poll(async () => (await snapshot(page)).command).toBe("starting");
+    await gallery.getByRole("button", { name: /^Stop/ }).first().click();
+    // Stop plays settling, returning, docked; the start's cleaning never lands.
+    const seen = new Set();
+    for (const deadline = Date.now() + 4_000; Date.now() < deadline;) {
+      seen.add((await snapshot(page)).activity);
+      await page.waitForTimeout(100);
+    }
+    expect(seen.has("cleaning")).toBe(false);
+    expect((await snapshot(page)).activity).toBe("docked");
+  });
+
   test("a run refused before it starts shows its Run view with the heading focused", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "home-shortcuts" });
     await runButton(gallery, "Daily clean").click();

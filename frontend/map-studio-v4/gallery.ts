@@ -191,7 +191,9 @@ export class MaticMapStudioGalleryV4 extends LitElement {
       this.#motion.push(setTimeout(() => this.#store.replace({ ...this.#store.value, ...patch }), delay));
     };
     if (id === "stop") {
-      this.#store.replace({ ...value, command: "settling", notice: null });
+      // A start still playing out is cancelled, as Stop cancels a real one.
+      for (const timer of this.#motion.splice(0)) clearTimeout(timer);
+      this.#store.replace({ ...value, command: "settling", pendingAction: null, notice: null });
       later(900, { command: "idle", activity: "returning", currentArea: null });
       later(2400, { activity: "docked" });
       return;
