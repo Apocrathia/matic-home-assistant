@@ -1208,6 +1208,35 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(gallery.locator(".run-row[data-break]")).toHaveCount(1);
   });
 
+  test("Run lists custom areas in their place and counts them apart from rooms", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-saved-ordered" });
+    const preview = async (steps, missionBoundaries) => gallery.evaluate((element, [steps, missionBoundaries]) => {
+      const state = element.getWorkspaceSnapshot();
+      const catalog = state.resources.plans.value;
+      const plans = catalog.plans.map((plan) => ({ ...plan, nextRunPreview: { ...plan.nextRunPreview,
+        rooms: steps.filter((step) => step.roomId), steps, missionBoundaries } }));
+      element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...state.resources.plans, value: { ...catalog, plans } } } });
+    }, [steps, missionBoundaries]);
+    const rug = { areaId: "rug", name: "Rug", cleaningMode: "mop", coverageSetting: "quick", cadenceReasons: [] };
+    const kitchen = { roomId: "room-a", name: "Kitchen", cleaningMode: "vacuum", coverageSetting: "standard", cadenceReasons: [] };
+    const hall = { areaId: "hall", name: "Hall runner", cleaningMode: "vacuum", coverageSetting: "standard", cadenceReasons: [] };
+
+    await preview([rug, kitchen, hall], [1, 2]);
+    // Boundaries count every step, so each switch between a room and an area starts a part.
+    await expect(gallery.locator("ol.run-list > li")).toHaveText([
+      "1 Rug Mop",
+      "Part 2 starts here; the robot may stop at the dock first 2 Kitchen Vacuum · Optimal",
+      "Part 3 starts here; the robot may stop at the dock first 3 Hall runner Vacuum · Optimal",
+    ]);
+    await expect(gallery.getByText("1 room · 2 custom areas", { exact: true })).toBeVisible();
+    await expect(gallery.getByText("The robot cleans these rooms in 3 parts and may stop at the dock between parts.", { exact: true })).toBeVisible();
+
+    await preview([rug], []);
+    await expect(gallery.locator("ol.run-list > li")).toHaveText(["1 Rug Mop"]);
+    await expect(gallery.getByText("1 custom area", { exact: true })).toBeVisible();
+    await expect(gallery.getByText("0 rooms", { exact: true })).toHaveCount(0);
+  });
+
   test("a paused plan lists its rooms and turns on from the switch", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "plan-run-paused" });
     await expect(gallery.getByText("3 rooms", { exact: true })).toBeVisible();

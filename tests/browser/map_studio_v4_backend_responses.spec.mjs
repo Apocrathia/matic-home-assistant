@@ -100,3 +100,40 @@ test("@safety full scene responses validate headers and truncated bodies for liv
     expect(code, `${source}: ${name}`).toBe(expected);
   }
 });
+
+test("@safety area delete hands back a conflict body and fails other errors", async ({ page }) => {
+  await page.route("**/backend-responses.js", route => route.fulfill({
+    contentType: "text/javascript",
+    body: bundle.outputFiles[0].text,
+  }));
+  await page.goto("/");
+  const result = await page.evaluate(async () => {
+    const { MaticBackend } = await import("/backend-responses.js");
+    let response;
+    const backend = new MaticBackend(() => ({ fetchWithAuth: async () => response() }));
+    const remove = async () => {
+      try {
+        return { value: await backend.deleteArea("/api/matic_robot/areas", "rug") };
+      } catch (error) {
+        return { error: error.code ?? error.name };
+      }
+    };
+    response = () => new Response(null, { status: 204 });
+    const deleted = await remove();
+    response = () => new Response("{\"plans\":[\"Rug only\"]}", {
+      status: 409,
+      headers: { "Content-Type": "application/json", "X-Matic-Areas-Conflict": "plan-would-be-empty" },
+    });
+    const conflict = await remove();
+    response = () => new Response(null, { status: 500 });
+    const failed = await remove();
+    backend.dispose();
+    return { deleted, conflict, failed };
+  });
+
+  expect(result).toEqual({
+    deleted: {},
+    conflict: { value: { plans: ["Rug only"] } },
+    failed: { error: "area-delete-failed" },
+  });
+});

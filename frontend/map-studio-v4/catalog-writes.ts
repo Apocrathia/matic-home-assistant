@@ -105,6 +105,15 @@ export const saveArea = async (context: CatalogWriteContext): Promise<void> => {
   }
 };
 
+/** The plan names in an area-delete conflict, or null when the body is not one. */
+const conflictPlans = (body: unknown): string[] | null => {
+  const plans = (body as { plans?: unknown } | null)?.plans;
+  return Array.isArray(plans) && plans.length > 0 && plans.length <= 100
+    && plans.every((name) => typeof name === "string" && name.trim() && name.length <= 128)
+    ? plans as string[]
+    : null;
+};
+
 export const deleteArea = async (context: CatalogWriteContext): Promise<void> => {
   const { state, signal, store } = context;
   const { notice, canEditCoordinates, isAbort } = context.helpers;
@@ -114,8 +123,21 @@ export const deleteArea = async (context: CatalogWriteContext): Promise<void> =>
   const current = (): boolean => !context.disposed() && !signal.aborted;
   store.patch({ command: "pending", notice: null });
   try {
-    await context.backend.deleteArea(entry.areasUrl, areaId, signal);
+    const conflict = await context.backend.deleteArea(entry.areasUrl, areaId, signal);
     if (!current()) return;
+    if (conflict !== undefined) {
+      // Nothing was deleted: the area is all these plans clean, so they change first.
+      const plans = conflictPlans(conflict);
+      if (!plans) throw new context.helpers.BackendError("area-delete-failed", 409);
+      const names = { plans: new Intl.ListFormat(state.locale, { type: "conjunction" }).format(plans.map((name) => `"${name}"`)) };
+      store.patch({
+        command: "idle",
+        notice: plans.length === 1
+          ? notice("error", "v4_notice_area_in_plans_one", "Can't delete this area because it's all that {plans} cleans. Edit or delete that plan first.", names)
+          : notice("error", "v4_notice_area_in_plans", "Can't delete this area because it's all that {plans} clean. Edit or delete those plans first.", names),
+      });
+      return;
+    }
     store.patch({ command: "idle", notice: notice("success", "v4_notice_area_deleted", "Area deleted") });
     // As a deleted plan returns to the picker, a deleted area returns to Your areas.
     const latest = store.value;

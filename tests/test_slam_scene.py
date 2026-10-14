@@ -3198,6 +3198,38 @@ async def test_plan_workspace_projects_area_entries_and_mission_boundaries(
     assert plans["spots"]["next_run_preview"]["blocker"] is None
 
 
+async def test_area_delete_keeps_the_area_and_plans_a_delete_would_empty(
+    hass,
+) -> None:
+    runtime = _runtime()
+    floor_plan = runtime.coordinator.data.floor_plan
+    manager = CleaningPlanManager(hass)
+    manager._store = SimpleNamespace(async_save=AsyncMock())
+    serial = "synthetic-serial"
+    await manager.async_save_area(serial, "rug", _saved_area(floor_plan, "Rug"))
+    for plan_id, name in (("spots", "Spots"), ("rug-only", "Rug only")):
+        await manager.async_save_plan(
+            serial,
+            plan_id,
+            {"name": name, "rooms": [], "entries": [_area_entry("rug")]},
+            select=False,
+        )
+    runtime.cleaning_plans = manager
+    saves = manager._store.async_save.await_count
+
+    response = await MaticAreasView().delete(
+        _request(_hass(_entry(runtime)), path="/?area_id=rug"), "entry"
+    )
+
+    assert response.status == HTTPStatus.CONFLICT
+    assert response.headers["X-Matic-Areas-Conflict"] == "plan-would-be-empty"
+    assert sorted(json.loads(response.body)["plans"]) == ["Rug only", "Spots"]
+    assert "rug" in manager.areas(serial)
+    plans = manager._robot(serial)["plans"]
+    assert all(plans[plan_id]["entries"] == [_area_entry("rug")] for plan_id in plans)
+    assert manager._store.async_save.await_count == saves
+
+
 async def test_area_delete_reports_the_plans_it_would_empty() -> None:
     runtime = _runtime()
     runtime.cleaning_plans.areas.return_value = {"rug": {"name": "Rug"}}

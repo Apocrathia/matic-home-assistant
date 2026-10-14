@@ -201,9 +201,18 @@ export type NextRunPreviewBlocker =
   | "invalid_cadence_policy"
   | "invalid_plan";
 
+/** A saved custom area in a preview; areas run every time, so it has no cadence reasons. */
+export interface NextRunPreviewArea extends Omit<NextRunPreviewRoom, "roomId"> {
+  readonly areaId: string;
+}
+
+export type NextRunPreviewStep = NextRunPreviewRoom | NextRunPreviewArea;
+
 export interface NextRunPreview {
   readonly rooms: readonly NextRunPreviewRoom[];
-  /** Offsets into the backend's `entries` (rooms and custom areas) when sent, else `rooms`. */
+  /** Every step in run order, rooms and custom areas. Synthetic fixtures may leave it out; the steps are then `rooms`. */
+  readonly steps?: readonly NextRunPreviewStep[];
+  /** Offsets into `steps` when sent, else `rooms`. */
   readonly missionBoundaries: readonly number[];
   readonly blocker: NextRunPreviewBlocker | null;
   readonly previewToken?: string;
@@ -627,20 +636,23 @@ const parseNextRunPreview = (value: unknown): NextRunPreview | undefined => {
     throw new ContractError("invalid-plan-preview");
   }
   const stepCount = steps.length;
-  const rooms: NextRunPreviewRoom[] = preview.rooms.map((candidate) => {
-    const room = objectValue(candidate, "invalid-plan-preview-room");
+  const parsedSteps: NextRunPreviewStep[] = steps.map((candidate) => {
+    const step = objectValue(candidate, "invalid-plan-preview-room");
     return {
-      roomId: boundedString(room.room_id, 128, "invalid-plan-preview-room-id"),
-      name: boundedString(room.name, 128, "invalid-plan-preview-room-name"),
-      cleaningMode: parseCleaningMode(room.cleaning_mode),
-      coverageSetting: parseCoverage(room.coverage_setting),
-      cadenceReasons: parseCadenceReasons(room.cadence_reasons),
+      ...(step.kind === "area"
+        ? { areaId: boundedString(step.area_id, 128, "invalid-plan-preview-room-id") }
+        : { roomId: boundedString(step.room_id, 128, "invalid-plan-preview-room-id") }),
+      name: boundedString(step.name, 128, "invalid-plan-preview-room-name"),
+      cleaningMode: parseCleaningMode(step.cleaning_mode),
+      coverageSetting: parseCoverage(step.coverage_setting),
+      cadenceReasons: parseCadenceReasons(step.cadence_reasons),
     };
   });
+  const rooms = parsedSteps.filter((step): step is NextRunPreviewRoom => "roomId" in step);
+  // A boundary falls strictly inside the steps, so a single step has none.
   const boundaries = preview.mission_boundaries.map((value) =>
-    boundedInteger(value, 1, Math.max(1, stepCount - 1), "invalid-plan-preview-boundary"));
-  if (boundaries.some((value, index) => value >= stepCount
-    || value <= (boundaries[index - 1] ?? 0))) {
+    boundedInteger(value, 1, stepCount - 1, "invalid-plan-preview-boundary"));
+  if (boundaries.some((value, index) => value <= (boundaries[index - 1] ?? 0))) {
     throw new ContractError("invalid-plan-preview-boundary-order");
   }
   const blockers: readonly NextRunPreviewBlocker[] = [
@@ -669,6 +681,7 @@ const parseNextRunPreview = (value: unknown): NextRunPreview | undefined => {
   }
   return {
     rooms,
+    steps: parsedSteps,
     missionBoundaries: boundaries,
     blocker: rawBlocker as NextRunPreviewBlocker | null,
     ...(typeof previewToken === "string" ? { previewToken } : {}),

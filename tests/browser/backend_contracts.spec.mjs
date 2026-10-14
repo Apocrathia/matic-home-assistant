@@ -376,19 +376,25 @@ test("saved-plan preview parsing accepts plans with custom areas", async ({ page
       emptyEntries: parse(ready({ rooms: [], entries: [], mission_boundaries: [] })),
       entriesNotList: parse(ready({ entries: {} })),
       tooMany: parse(ready({ entries: Array.from({ length: 201 }, () => area), mission_boundaries: [] })),
+      areaWithoutId: parse(ready({ entries: [{ ...area, area_id: "" }] })),
     };
   }, plansPayload());
 
+  const kitchen = { roomId: "room-a", name: "Kitchen", cleaningMode: "vacuum", coverageSetting: "standard", cadenceReasons: ["mop_due"] };
+  const rug = { areaId: "rug", name: "Rug", cleaningMode: "mop", coverageSetting: "quick", cadenceReasons: [] };
   expect(result.mixed).toEqual({
-    rooms: [{ roomId: "room-a", name: "Kitchen", cleaningMode: "vacuum", coverageSetting: "standard", cadenceReasons: ["mop_due"] }],
+    rooms: [kitchen],
+    steps: [rug, kitchen],
     missionBoundaries: [1],
     blocker: null,
     previewToken: "a".repeat(64),
   });
   expect(result.areasOnly.rooms).toEqual([]);
+  expect(result.areasOnly.steps).toEqual([rug]);
+  expect(result.areaWithoutId).toBe("invalid-plan-preview-room-id");
   expect(result.blockers).toEqual(["area_map_changed", "area_missing"]);
   expect(result.boundaryPastEntries).toBe("invalid-plan-preview-boundary");
-  expect(result.boundariesWithoutEntries).toBe("invalid-plan-preview-boundary-order");
+  expect(result.boundariesWithoutEntries).toBe("invalid-plan-preview-boundary");
   expect(result.emptyEntries).toBe("empty-plan-preview");
   expect(result.entriesNotList).toBe("invalid-plan-preview");
   expect(result.tooMany).toBe("invalid-plan-preview");

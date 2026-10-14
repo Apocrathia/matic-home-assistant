@@ -296,6 +296,9 @@ export class MaticPlanViewsV4 extends LitElement {
     const ready = !paused && Boolean(preview && !blocker && /^[0-9a-f]{64}$/u.test(preview.previewToken ?? ""));
     const ordered = plan.runBehavior === "ordered";
     const previewRooms = ready && preview ? preview.rooms : [];
+    // Custom areas keep their place among the rooms, and mission boundaries count them.
+    const steps = ready && preview ? preview.steps ?? previewRooms : [];
+    const areas = steps.length - previewRooms.length;
     const blockedRoom = !paused && blocker ? roomBlocker(state, plan)?.jump.roomId ?? null : null;
     // While a save is pending the preview is about to be read again, so it has no problem yet.
     const problem = paused || ready || blockedRoom || state.pendingAction === "save-plan"
@@ -304,18 +307,27 @@ export class MaticPlanViewsV4 extends LitElement {
     const count = ready ? previewRooms.length : plan.rooms.length;
     const seconds = ready ? plan.nextRunEstimateSeconds : null;
     const minutes = seconds === null ? "" : this.#count(Math.max(1, Math.round(seconds / 60)));
-    const summary = seconds === null
-      ? count === 1
-        ? this.#t("v4_plan_summary_rooms_one", "1 room")
-        : this.#t("v4_plan_summary_rooms", "{count} rooms", { count: this.#count(count) })
-      : count === 1
-        ? this.#t("v4_plan_summary_rooms_estimate_one", "1 room · about {minutes} min", { minutes })
-        : this.#t("v4_plan_summary_rooms_estimate", "{count} rooms · about {minutes} min", { count: this.#count(count), minutes });
+    const rooms = count === 1
+      ? this.#t("v4_plan_summary_rooms_one", "1 room")
+      : this.#t("v4_plan_summary_rooms", "{count} rooms", { count: this.#count(count) });
+    // A plan with a custom area has no estimate: the robot keeps no duration history for one.
+    const summary = areas
+      ? [
+        ...count ? [rooms] : [],
+        areas === 1
+          ? this.#t("v4_plan_summary_areas_one", "1 custom area")
+          : this.#t("v4_plan_summary_areas", "{count} custom areas", { count: this.#count(areas) }),
+      ].join(" · ")
+      : seconds === null
+        ? rooms
+        : count === 1
+          ? this.#t("v4_plan_summary_rooms_estimate_one", "1 room · about {minutes} min", { minutes })
+          : this.#t("v4_plan_summary_rooms_estimate", "{count} rooms · about {minutes} min", { count: this.#count(count), minutes });
     const boundaries = ready && preview ? preview.missionBoundaries : [];
     const rows = ready
-      ? previewRooms.map((room, index) => {
+      ? steps.map((step, index) => {
         const part = boundaries.indexOf(index);
-        return this.#runRow(room.name, settingLabel(this.#t, room), ordered ? index + 1 : null, part < 0 ? {} : { part: part + 2 });
+        return this.#runRow(step.name, settingLabel(this.#t, step), ordered ? index + 1 : null, part < 0 ? {} : { part: part + 2 });
       })
       : draftForPlan(plan).rooms.map((room) => this.#runRow(
         catalog.rooms.find((candidate) => candidate.roomId === room.roomId)?.name ?? room.roomId,
