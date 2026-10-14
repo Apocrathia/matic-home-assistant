@@ -43,7 +43,8 @@ const focusedText = (page) => page.evaluate(() => {
 
 // Each button's visible text, one space between its lines.
 const texts = (locator) => locator.evaluateAll((elements) => elements.map((element) => element.innerText.replace(/\s+/g, " ").trim()));
-const choices = (gallery) => gallery.getByRole("group", { name: "Cleaning choices" });
+// Home's Shortcuts section and its Cleaning choices, in that order.
+const choices = (gallery) => gallery.locator(".quick-actions");
 const runButton = (gallery, name) => choices(gallery).locator("button.shortcut").filter({ hasText: name });
 // Changing a pinned plan goes through Your plans; home has no Open control.
 const openPlan = async (root, name) => {
@@ -106,13 +107,18 @@ test.describe("the plan shortcut shows every due line in full", () => {
 // ---- Home shortcuts ------------------------------------------------------
 
 test.describe("home shortcuts", () => {
-  test("home lists Clean rooms, the shortcuts in pin order, Clean custom area, then Your plans", async ({ page }) => {
+  test("home lists the shortcuts in pin order under Shortcuts, then Clean rooms, Clean custom area and Your plans", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "home-shortcuts" });
-    await expect.poll(() => texts(choices(gallery).getByRole("button"))).toEqual([
-      "Clean rooms Pick rooms and clean them now.",
+    await expect.poll(() => texts(gallery.getByRole("group", { name: "Shortcuts" }).getByRole("button"))).toEqual([
       expect.stringMatching(/^Run Daily clean 3 rooms · /),
       "Clean Entryway Vacuum · Optimal",
       expect.stringMatching(/^Run Weekend refresh /),
+    ]);
+    await expect.poll(() => texts(choices(gallery).getByRole("button"))).toEqual([
+      expect.stringMatching(/^Run Daily clean 3 rooms · /),
+      "Clean Entryway Vacuum · Optimal",
+      expect.stringMatching(/^Run Weekend refresh /),
+      "Clean rooms Pick rooms and clean them now.",
       "Clean custom area Draw or choose a custom area",
       "Your plans",
     ]);
@@ -132,6 +138,9 @@ test.describe("home shortcuts", () => {
     const gallery = await loadGallery(page, { scenario: "home-unpinned" });
     await expect.poll(() => texts(choices(gallery).getByRole("button")))
       .toEqual(["Clean rooms Pick rooms and clean them now.", "Clean custom area Draw or choose a custom area", "Your plans"]);
+    // No shortcut, no Shortcuts section and no second heading.
+    await expect(gallery.getByRole("group", { name: "Shortcuts" })).toHaveCount(0);
+    await expect(gallery.getByRole("heading", { name: "More ways to clean" })).toHaveCount(0);
   });
 
   test("a plan shortcut runs through Run plan's own action and an area through Clean this area's", async ({ page }) => {

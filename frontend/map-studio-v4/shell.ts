@@ -1581,6 +1581,9 @@ export class MaticMapShellV4 extends LitElement {
     // detail; a held one is described by the home reason.
     const card = (launcher: Workflow, featured: boolean, glyph: string, disabled: boolean, title: string, detail: string) =>
       this.#shelfRow(title, glyph, launcher, detail, disabled, held, featured ? "ms-row ms-row--card ms-row--featured" : "ms-row ms-row--card");
+    // Pinned shortcuts start cleaning in one tap, so they get their own
+    // section first (owner, 2026-10-14); the cards below open a screen.
+    const shortcuts = this.#shortcuts(state, held);
     return html`
       ${kind === "map-unavailable" || kind === "map-limited" ? html`
         <div class="home-actions">
@@ -1592,11 +1595,15 @@ export class MaticMapShellV4 extends LitElement {
           >${t("v4_retry", "Try again")}</button>
         </div>
       ` : nothing}
+      ${shortcuts === nothing ? nothing : html`
+        <h3 class="ms-section-heading" id="shortcuts-heading">${t("v4_shortcuts_heading", "Shortcuts")}</h3>
+        <div class="quick-actions" role="group" aria-labelledby="shortcuts-heading">${shortcuts}</div>
+        <h3 class="ms-section-heading">${t("v4_more_ways_heading", "More ways to clean")}</h3>
+      `}
       <div class="quick-actions" role="group" aria-label=${t("v4_cleaning_choices", "Cleaning choices")}>
         ${card("rooms", true, iconRobot, roomsDisabled,
           t("v4_clean_rooms", "Clean rooms"),
           !held && noRooms ? t("v4_no_rooms_reason", "Can't clean rooms until you name them in the Matic app.") : t("v4_rooms_quick_detail", "Pick rooms and clean them now."))}
-        ${this.#shortcuts(state, held)}
         ${card("areas", false, iconNewArea, held,
           t("v4_custom_areas", "Clean custom area"),
           t("v4_areas_quick_detail", "Draw or choose a custom area"))}

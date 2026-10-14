@@ -234,8 +234,12 @@ test.describe("no robot (home-rooms.md §4 H10, D2)", () => {
 
 const panelOf = (gallery) => gallery.getByRole("complementary", { name: "Cleaning panel" });
 const homeReason = (gallery) => gallery.locator("#home-reason");
-// The three task cards; the "Your plans" row sits among them (R4 amended).
+// The task cards; the "Your plans" row sits among them (R4 amended). Pinned
+// shortcuts sit in their own Shortcuts section above (owner, 2026-10-14).
 const cards = (gallery) => gallery.getByRole("group", { name: "Cleaning choices" }).locator("button.ms-row--card");
+const shortcutsGroup = (gallery) => gallery.getByRole("group", { name: "Shortcuts" });
+// Every card on home, shortcuts first.
+const homeCards = (gallery) => panelOf(gallery).locator(".quick-actions button.ms-row--card");
 const plansRow = (gallery) => gallery.getByRole("group", { name: "Cleaning choices" }).getByRole("button", { name: "Your plans", exact: true });
 const mapsRows = (gallery) => gallery.locator(".maps .ms-row");
 const LOCATING = "Waiting for the robot to confirm which floor it is on.";
@@ -248,14 +252,16 @@ test.describe("home by state", () => {
       await expect(gallery.getByRole("heading", { name: "Choose what to clean", level: 2 })).toBeVisible();
       await expect(panelOf(gallery).locator(".panel-description")).toHaveCount(0);
       const group = gallery.getByRole("group", { name: "Cleaning choices" });
-      // Three cards (the default plan pinned as a one-tap shortcut) and,
-      // last, the Your plans row (UX9 owner ruling).
-      await expect(group.getByRole("button")).toHaveCount(4);
-      await expect(cards(gallery)).toHaveCount(3);
+      // The default plan pinned as a one-tap shortcut in its own section
+      // first, then two cards and, last, the Your plans row (UX9 owner ruling).
+      await expect(shortcutsGroup(gallery).getByRole("button")).toHaveCount(1);
+      await expect(planCard(gallery)).toHaveAccessibleName(/^Run Daily clean/);
+      await expect(group.getByRole("button")).toHaveCount(3);
+      await expect(cards(gallery)).toHaveCount(2);
       await expect(cards(gallery).nth(0)).toHaveAccessibleName(/^Clean rooms Pick rooms and clean them now\./);
       await expect(cards(gallery).nth(0)).toHaveClass(/ms-row--featured/);
-      await expect(cards(gallery).nth(1)).toHaveAccessibleName(/^Run (a plan|Daily clean)/);
-      await expect(cards(gallery).nth(2)).toHaveAccessibleName(/^Clean custom area Draw or choose a custom area/);
+      await expect(cards(gallery).nth(1)).toHaveAccessibleName(/^Clean custom area Draw or choose a custom area/);
+      expect(await shortcutsGroup(gallery).evaluate((element, other) => !!(element.compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING), await group.elementHandle())).toBe(true);
       await expect(gallery.getByRole("heading", { name: "Maps", level: 3 })).toBeVisible();
       await expect(mapsRows(gallery)).toHaveCount(2);
       await expect(mapsRows(gallery).nth(0)).toHaveAccessibleName(/^Map history Browse earlier floor maps\./);
@@ -263,7 +269,7 @@ test.describe("home by state", () => {
       await expect(panelOf(gallery).locator(".action-bar")).toHaveCount(0);
       await expect(gallery.getByRole("heading", { name: "Map tools" })).toHaveCount(0);
       await expect(panelOf(gallery).getByRole("group", { name: "Map display" })).toHaveCount(0);
-      await expect(panelOf(gallery).locator("h3")).toHaveText(["Maps"]);
+      await expect(panelOf(gallery).locator("h3")).toHaveText(["Shortcuts", "More ways to clean", "Maps"]);
     });
   }
 
@@ -291,9 +297,9 @@ test.describe("home by state", () => {
     const gallery = await loadGallery(page, { scenario: "transition" });
     await expect(gallery.getByRole("heading", { name: "Choose what to clean", level: 2 })).toBeVisible();
     await expect(homeReason(gallery)).toHaveText(LOCATING);
-    await expect(cards(gallery)).toHaveCount(3);
+    await expect(homeCards(gallery)).toHaveCount(3);
     for (const index of [0, 1, 2]) {
-      const card = cards(gallery).nth(index);
+      const card = homeCards(gallery).nth(index);
       await expect(card).toHaveAttribute("aria-disabled", "true");
       await expect(card).toHaveAccessibleDescription(LOCATING);
       await expect(card).not.toContainText(LOCATING);
@@ -308,10 +314,10 @@ test.describe("home by state", () => {
       const gallery = await loadGallery(page, { scenario });
       await expect(gallery.getByRole("heading", { name: "The robot is busy", level: 2 })).toBeVisible();
       await expect(homeReason(gallery)).toHaveText(BUSY);
-      await expect(cards(gallery)).toHaveCount(3);
+      await expect(homeCards(gallery)).toHaveCount(3);
       for (const index of [0, 1, 2]) {
-        await expect(cards(gallery).nth(index)).toHaveAttribute("aria-disabled", "true");
-        await expect(cards(gallery).nth(index)).toHaveAccessibleDescription(BUSY);
+        await expect(homeCards(gallery).nth(index)).toHaveAttribute("aria-disabled", "true");
+        await expect(homeCards(gallery).nth(index)).toHaveAccessibleDescription(BUSY);
       }
       await expect(mapsRows(gallery)).toHaveCount(2);
       await expect(mapsRows(gallery).nth(0)).not.toHaveAttribute("aria-disabled", "true");
@@ -331,7 +337,7 @@ test.describe("home by state", () => {
     await expect(gallery.getByRole("heading", { name: "The robot is busy", level: 2 })).toBeVisible();
     await expect(homeReason(gallery)).toHaveText("Resume or stop this clean before starting a new one.");
     await expect(gallery.getByRole("button", { name: "Resume cleaning" })).toBeVisible();
-    await expect(cards(gallery).nth(1)).toHaveAttribute("aria-disabled", "true");
+    await expect(planCard(gallery)).toHaveAttribute("aria-disabled", "true");
   });
 
   test("a robot problem replaces the cards with diagnostics (H7)", async ({ page }) => {
@@ -351,7 +357,7 @@ test.describe("home by state", () => {
       const gallery = await loadGallery(page, { scenario });
       await expect(gallery.getByRole("heading", { name: "Choose what to clean", level: 2 })).toBeVisible();
       await expect(homeReason(gallery)).toHaveText("Home Assistant can't show the map right now, so cleaning can't start.");
-      await expect(cards(gallery)).toHaveCount(3);
+      await expect(homeCards(gallery)).toHaveCount(3);
       await expect(cards(gallery).nth(0)).toHaveAttribute("aria-disabled", "true");
       await expect(mapsRows(gallery).nth(0)).toHaveAccessibleName(/^Map diagnostics/);
       await recordActions(page);
@@ -470,7 +476,7 @@ const focusedText = (page) => page.evaluate(() => {
   return active ? `${active.tagName.toLowerCase()} ${active.getAttribute("aria-label") ?? active.textContent.replace(/\s+/g, " ").trim()}` : null;
 });
 
-const planCard = (gallery) => cards(gallery).nth(1);
+const planCard = (gallery) => shortcutsGroup(gallery).locator("button.shortcut").first();
 
 test.describe("the plan card", () => {
   test("names the default plan with the picker's lines", async ({ page }) => {
@@ -590,8 +596,8 @@ test.describe("the plan card", () => {
       await expect(row).not.toHaveClass(/ms-row--card/);
       // After the custom-area card, last in the group.
       expect(await row.evaluate((element) => element.nextElementSibling)).toBe(null);
-      expect(await cards(gallery).nth(2).evaluate((card) => card.nextElementSibling?.textContent.replace(/\s+/g, " ").trim())).toBe("Your plans");
-      await expect(cards(gallery)).toHaveCount(3);
+      expect(await cards(gallery).nth(1).evaluate((card) => card.nextElementSibling?.textContent.replace(/\s+/g, " ").trim())).toBe("Your plans");
+      await expect(cards(gallery)).toHaveCount(2);
       await row.click();
       expect((await snapshot(page)).workflow).toBe("plans");
       await expect(gallery.getByRole("heading", { level: 2, name: "Your plans" })).toBeFocused();
@@ -702,7 +708,7 @@ test.describe("the plan card", () => {
     await page.keyboard.press("Escape");
     await expect.poll(() => focusedText(page)).toMatch(/^button Clean rooms/);
 
-    await cards(gallery).nth(2).click();
+    await cards(gallery).nth(1).click();
     await expect(gallery.getByRole("heading", { level: 2, name: "Your areas" })).toBeVisible();
     await back();
     await expect.poll(() => focusedText(page)).toMatch(/^button Clean custom area/);
@@ -743,17 +749,19 @@ test.describe("the plan card", () => {
   // UX9 owner ruling: due lines show in full, so on a phone the half sheet
   // shows Clean rooms and the plan shortcut whole and the custom-area card's
   // top edge; the Your plans row is reached by a small scroll (accepted).
-  test("Clean rooms and the shortcut fit the half sheet at 390, and Your plans scrolls into reach; at 320 too @mobile", async ({ page }) => {
+  // Shortcuts come first (owner, 2026-10-14): the pinned shortcut fits the
+  // half sheet whole and Clean rooms starts inside it.
+  test("the shortcut and Clean rooms fit the half sheet at 390, and Your plans scrolls into reach; at 320 too @mobile", async ({ page }) => {
     for (const viewport of [{ width: 390, height: 844 }, { width: 320, height: 844 }]) {
       const gallery = await loadGallery(page, { scenario: "home-plan-due", viewport });
       const body = panelOf(gallery).locator(".sheet-body");
       const box = await body.boundingBox();
+      const shortcut = await planCard(gallery).boundingBox();
+      expect(shortcut.y).toBeGreaterThanOrEqual(box.y);
+      expect(shortcut.y + shortcut.height).toBeLessThanOrEqual(box.y + box.height + 0.5);
       const rooms = await cards(gallery).nth(0).boundingBox();
       expect(rooms.y).toBeGreaterThanOrEqual(box.y);
-      expect(rooms.y + rooms.height).toBeLessThanOrEqual(box.y + box.height + 0.5);
-      const shortcut = await cards(gallery).nth(1).boundingBox();
-      expect(shortcut.y).toBeGreaterThanOrEqual(box.y);
-      expect(shortcut.y).toBeLessThan(box.y + box.height);
+      expect(rooms.y).toBeLessThan(box.y + box.height);
       await plansRow(gallery).scrollIntoViewIfNeeded();
       const row = await plansRow(gallery).boundingBox();
       const after = await body.boundingBox();
@@ -881,7 +889,7 @@ test.describe("Map options and the rail (home-rooms.md §5 Display, §11 MS-HOME
     await expect(help).toBeVisible();
     await expect(panelOf(gallery).getByRole("button", { name: "How to move the map" })).toHaveCount(0);
     await expect(panelOf(gallery).getByRole("group", { name: "Map display" })).toHaveCount(0);
-    await expect(panelOf(gallery).locator("h3")).toHaveText(["Maps"]);
+    await expect(panelOf(gallery).locator("h3")).toHaveText(["Shortcuts", "More ways to clean", "Maps"]);
     await expect(gallery.locator("matic-map-canvas-v4").getByRole("button", { name: "Room names" })).toHaveCount(0);
     await help.click();
     const popover = gallery.getByRole("dialog", { name: "How to move the map" });

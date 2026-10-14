@@ -161,6 +161,8 @@
     "v4_home_paused_detail": "Resume or stop this clean before starting a new one.",
     "v4_rooms_quick_detail": "Pick rooms and clean them now.",
     "v4_maps_heading": "Maps",
+    "v4_more_ways_heading": "More ways to clean",
+    "v4_shortcuts_heading": "Shortcuts",
     "v4_history_quick_detail": "Browse earlier floor maps.",
     "v4_diagnostics_quick_detail": "Check the map and copy details for support.",
     "v4_setup_title": "Set up your robot",
