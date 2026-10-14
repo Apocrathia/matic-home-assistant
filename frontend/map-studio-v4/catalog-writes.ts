@@ -129,12 +129,12 @@ export const deleteArea = async (context: CatalogWriteContext): Promise<void> =>
       // Nothing was deleted: the area is all these plans clean, so they change first.
       const plans = conflictPlans(conflict);
       if (!plans) throw new context.helpers.BackendError("area-delete-failed", 409);
-      const names = { plans: new Intl.ListFormat(state.locale, { type: "conjunction" }).format(plans.map((name) => `"${name}"`)) };
+      const names = new Intl.ListFormat(state.locale, { type: "conjunction" }).format(plans.map((name) => `"${name}"`));
       store.patch({
         command: "idle",
         notice: plans.length === 1
-          ? notice("error", "v4_notice_area_in_plans_one", "Can't delete this area because it's all that {plans} cleans. Edit or delete that plan first.", names)
-          : notice("error", "v4_notice_area_in_plans", "Can't delete this area because it's all that {plans} clean. Edit or delete those plans first.", names),
+          ? notice("error", "v4_notice_area_in_plans_one", "Can't delete this area because it's all that {plans} cleans. Edit or delete that plan first.", { plans: names })
+          : notice("error", "v4_notice_area_in_plans", "Can't delete this area because it's all that {plans} clean. Edit or delete those plans first.", { plans: names }),
       });
       return;
     }
