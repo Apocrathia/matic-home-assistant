@@ -56,7 +56,8 @@ def test_sign_off_rule_and_links() -> None:
     assert "Stable waits until every cell is approved" in DOC
     assert "npm run stage:walkthrough -- R01-C01" in DOC
     package = json.loads((ROOT / "package.json").read_text())
-    assert package["scripts"]["stage:walkthrough"] == "node scripts/stage_walkthrough.mjs"
+    script = package["scripts"]["stage:walkthrough"]
+    assert script == "node scripts/stage_walkthrough.mjs"
     acceptance = (ROOT / "docs" / "acceptance-0.5.md").read_text()
     gate = next(line for line in acceptance.splitlines() if line.startswith("| E6 — "))
     assert "(owner-walkthrough-0.5.md)" in gate
