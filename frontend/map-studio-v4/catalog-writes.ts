@@ -18,6 +18,7 @@ export interface CatalogWriteHelpers {
   readonly initialWorkspaceState: typeof import("./state").initialWorkspaceState;
   readonly draftForPlan: typeof import("./state").draftForPlan;
   readonly hasStoppableWork: typeof import("./state").hasStoppableWork;
+  readonly hasSavedArea: typeof import("./state").hasSavedArea;
 }
 
 /**
@@ -153,15 +154,16 @@ export const deleteArea = async (context: CatalogWriteContext): Promise<void> =>
 
 export const savePlan = async (context: CatalogWriteContext): Promise<void> => {
   const { state, store, effects } = context;
-  const { notice, canEditCoordinates, parseSavedPlanId, BackendError } = context.helpers;
+  const { notice, canEditCoordinates, parseSavedPlanId, BackendError, hasSavedArea } = context.helpers;
   const draft = state.planDraft;
   const plans = state.resources.plans.value;
-  if (!plans || !draft.name.trim() || !draft.rooms.length || !canEditCoordinates(state)) return;
+  const savedPlan = plans?.plans.find((plan) => plan.id === draft.id);
+  if (!plans || !draft.name.trim() || !canEditCoordinates(state)) return;
+  if (!draft.rooms.length && !hasSavedArea(savedPlan?.entries)) return;
   if (!draftIsLive(state, store.value)) return;
   let savedId = draft.id;
   // Home Assistant makes a new plan the default only when none exists.
-  const request = planSaveRequest(draft, plans.selectedPlan === draft.id,
-    plans.plans.find((plan) => plan.id === draft.id)?.entries);
+  const request = planSaveRequest(draft, plans.selectedPlan === draft.id, savedPlan?.entries);
   const saved = await serviceMutation(context, "save_plan", request, notice("success", "v4_notice_plan_saved", "Plan saved"), (response) => {
     const acknowledgedId = response === undefined && draft.id ? draft.id : parseSavedPlanId(response);
     if (draft.id && acknowledgedId !== draft.id) throw new BackendError("invalid-plan-save-response");

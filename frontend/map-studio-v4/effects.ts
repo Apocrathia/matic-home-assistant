@@ -34,6 +34,7 @@ import {
   initialWorkspaceState,
   draftForPlan,
   hasStoppableWork,
+  hasSavedArea,
   manualRoomPreviewKey,
   planSelection,
   WorkspaceStore,
@@ -58,7 +59,7 @@ const isAbort = (error: unknown): boolean =>
   error instanceof DOMException && error.name === "AbortError";
 
 const CATALOG_WRITE_HELPERS: CatalogWriteHelpers = {
-  notice, parseSavedPlanId, BackendError, isAbort, canEditCoordinates, initialWorkspaceState, draftForPlan, hasStoppableWork,
+  notice, parseSavedPlanId, BackendError, isAbort, canEditCoordinates, initialWorkspaceState, draftForPlan, hasStoppableWork, hasSavedArea,
 };
 
 const problemCode = (error: unknown, fallback: string): string => {

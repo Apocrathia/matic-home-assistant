@@ -25,7 +25,10 @@ const styleComments = {
         /\n[ \t]*\/\*(?:(?!\$\{)[\s\S])*?\*\/[ \t]*(?=\n)/gu, "",
       ).split(/("[^"\n]*"|'[^'\n]*'|url\([^)]*\)|\$\{[^}]*\})/u).map((part, index) => index % 2 ? part : part
         .replace(/\s*([{};,>])\s*/gu, "$1").replace(/;\}/gu, "}").replace(/([^\w.-])0\.(\d)/gu, "$1.$2").replace(/:\s+/gu, ":").replace(/\s+/gu, " ")).join(""));
-      return { contents, loader: "ts" };
+      // Indentation inside template literals ships as text, though HTML and
+      // CSS collapse it and the shader and worker sources ignore it; no
+      // template here keeps whitespace (no <pre>, no white-space: pre).
+      return { contents: contents.replace(/\n[ \t]+/gu, "\n"), loader: "ts" };
     });
   },
 };

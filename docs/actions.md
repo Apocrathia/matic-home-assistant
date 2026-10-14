@@ -71,8 +71,9 @@ between two areas. A preview splits the run at every switch between rooms and
 an area, and is refused (`area_missing`, `area_map_changed`) when an area was
 deleted or the map changed. Deleting an area removes it from every plan; it
 is refused while it is a plan's only item, and Matic Map names those plans.
-Matic Map's Run view lists a plan's areas in their place. In this release a
-plan with an area cannot run yet: Run plan answers "Plans with custom areas
+Matic Map lists a plan's areas in their place, and saving the plan there
+keeps them. In this release a plan with an area cannot run yet: Run plan is
+unavailable in Matic Map, and the action answers "Plans with custom areas
 can't run in this version yet" and starts nothing.
 
 ## Advanced actions
