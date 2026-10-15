@@ -17,12 +17,12 @@ import { PLAN_VIEWS_TAG, PRECISION_CONTROLS_TAG, ROOMS_VIEW_TAG, WORKFLOW_TAG } 
 import { WORKSPACE_INTENT_EVENT } from "./map-canvas";
 import { deleteSubject, hasStoppableWork, initialWorkspaceState } from "./state";
 import { heldReasonKey } from "./draw-tools";
-import { formatDateTime, translate } from "./localize";
+import { formatDateTime, formatList, translate } from "./localize";
 import { LazyChunk, chunkStatus } from "./lazy-chunk";
 import { COVERAGES, MODES, coverageLabel, modeLabel, settingLabel } from "./plan-cadence";
 import { homePinSwitch } from "./home-shortcuts";
 import { icon, iconChevronRight, iconNoticeWarning, iconPlus } from "./icons";
-import type { Translate } from "./plan-copy";
+import { formatNumber, plansWithArea, type Translate } from "./plan-copy";
 // The plan picker, Run and Edit, and the Rooms view.
 import "./plan-views";
 import "./rooms-view";
@@ -172,6 +172,23 @@ line-height: var(--ms-lh-snug);
   readonly #tr = (key: string, fallback: string, placeholders?: Readonly<Record<string, string | number>>): string =>
     this.#t(key, fallback, placeholders);
 
+  /**
+   * The saved plans that clean a custom area, as one quiet line ("In 2 plans:
+   * …"); none when no plan does or the plans aren't loaded.
+   */
+  #inPlans(areaId: string): string | null {
+    const plans = plansWithArea(this.state.resources.plans.value?.plans, areaId);
+    if (!plans.length) return null;
+    const names = formatList(this.state.locale, plans);
+    return plans.length === 1
+      ? this.#t("v4_area_in_plans_one", "In 1 plan: {plans}", { plans: names })
+      : this.#t("v4_area_in_plans", "In {count} plans: {plans}", { count: formatNumber(this.state.locale, plans.length), plans: names });
+  }
+
+  #line(text: string | null, tag: "small" | "p") {
+    return text === null ? nothing : tag === "small" ? html`<small data-in-plans>${text}</small>` : html`<p class="subtle" data-in-plans>${text}</p>`;
+  }
+
   #mopCoverageHint(mode: CleaningMode) {
     return mode === "vacuum" ? nothing : html`<p class="subtle">${this.#t("v4_mop_coverage_hint", "Vacuum coverage applies only when vacuuming. Use the robot's Double-pass mopping setting for an extra mop pass.")}</p>`;
   }
@@ -307,6 +324,7 @@ line-height: var(--ms-lh-snug);
             <span class="ms-row__body">
               <strong><bdi>${area.name}</bdi></strong>
               <small>${settingLabel(this.#tr, area)}</small>
+              ${this.#line(this.#inPlans(area.id), "small")}
               ${check || redraw ? html`<span class="lines"><span class="line" data-tone="warning">${icon(iconNoticeWarning)}<span>${check
                 ? this.#t("v4_area_row_check", "Map changed · Check it before cleaning")
                 : this.#t("v4_area_row_redraw", "Redraw it before cleaning")}</span></span></span>` : nothing}
@@ -364,6 +382,7 @@ line-height: var(--ms-lh-snug);
           </label>
         </div>
         ${this.#mopCoverageHint(draft.cleaningMode)}
+        ${this.#line(draft.id === null ? null : this.#inPlans(draft.id), "p")}
         ${bodyRedraw ? html`
           <div class="toolbar">
             <button class="ms-btn ms-btn--secondary" type="button" data-redraw aria-disabled=${disabled} aria-describedby=${heldBy} @click=${() => { if (!held) this.#intent({ type: "open-workflow", workflow: "draw" }); }}>${this.#t("v4_edit_outline", "Redraw")}</button>

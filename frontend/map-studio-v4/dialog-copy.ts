@@ -1,9 +1,10 @@
 import { isWorkspaceIntent } from "./contracts";
 import type { DialogKind, Localize, ResetCadenceAction, WorkspaceIntent, WorkspaceState } from "./contracts";
 import { needsDraftConfirmation } from "./draft-navigation";
-import { translate } from "./localize";
+import { formatList, translate } from "./localize";
 import { PLAN_VIEWS_TAG, WORKFLOW_TAG } from "./element-tags";
 import { deleteSubject } from "./state";
+import { plansWithArea } from "./plan-copy";
 
 export interface DialogPresentation {
   readonly title: string;
@@ -54,10 +55,18 @@ export const dialogCopy = (
         confirmLabel: t("plan_delete", "Delete"),
         action: "delete-plan",
       };
-    case "confirmDeleteArea":
+    case "confirmDeleteArea": {
+      // Home Assistant takes the area out of every plan that cleans it; a
+      // plan it is all of refuses the delete, which says so (catalog-writes.ts).
+      const inPlans = plansWithArea(plans?.plans.filter((plan) => Array.isArray(plan.entries) && plan.entries.length > 1), state.areaDraft.id ?? "");
       return subject && {
         title: t("v4_delete_area", "Delete area?"),
-        detail: t("v4_delete_area_detail", "Automations that clean \"{name}\" will stop working, and the robot won't move.", { name: subject.name }),
+        detail: inPlans.length
+          ? t("v4_delete_area_detail_plans", "Automations that clean \"{name}\" will stop working, and {plans} won't clean it anymore. The robot won't move.", {
+            name: subject.name,
+            plans: formatList(state.locale, inPlans),
+          })
+          : t("v4_delete_area_detail", "Automations that clean \"{name}\" will stop working, and the robot won't move.", { name: subject.name }),
         ...(subject.successor === undefined ? {} : {
           consequence: subject.successor === null
             ? t("v4_delete_area_none", "No custom area will be selected.")
@@ -67,6 +76,7 @@ export const dialogCopy = (
         confirmLabel: t("area_delete", "Delete"),
         action: "delete-area",
       };
+    }
     case "confirmResetCadence":
       return {
         title: resetMode === "mop"

@@ -34,7 +34,6 @@ import {
   initialWorkspaceState,
   draftForPlan,
   hasStoppableWork,
-  hasSavedArea,
   manualRoomPreviewKey,
   planSelection,
   WorkspaceStore,
@@ -59,7 +58,7 @@ const isAbort = (error: unknown): boolean =>
   error instanceof DOMException && error.name === "AbortError";
 
 const CATALOG_WRITE_HELPERS: CatalogWriteHelpers = {
-  notice, parseSavedPlanId, BackendError, isAbort, canEditCoordinates, initialWorkspaceState, draftForPlan, hasStoppableWork, hasSavedArea,
+  notice, parseSavedPlanId, BackendError, isAbort, canEditCoordinates, initialWorkspaceState, draftForPlan, hasStoppableWork,
 };
 
 const problemCode = (error: unknown, fallback: string): string => {
@@ -2063,7 +2062,7 @@ export class EffectController {
       }
     }
     if (workflow === "plans" || workflow === "plan" || workflow === "rooms") await this.loadPlans();
-    if (workflow === "areas" || workflow === "draw" || workflow === "areaReview") await this.loadAreas();
+    if (workflow === "areas" || workflow === "draw" || workflow === "areaReview" || workflow === "plan") await this.loadAreas();
   }
 
   // `inPlace` keeps a ready catalog on screen: the read never shows loading
@@ -2131,6 +2130,7 @@ export class EffectController {
           name: "",
           rooms: [],
           parkedRooms: [],
+          areas: [],
           dirty: false,
         },
       });
@@ -2163,6 +2163,8 @@ export class EffectController {
   // The home plan card passes origin "home" (home-rooms.md §5 Cards).
   selectPlan(planId: string | null, preserveNotice = false, origin?: PlanOrigin): void {
     this.#store.patch(planSelection(this.#store.value, planId, preserveNotice, origin));
+    // Edit offers the saved custom areas, so a plan reads them as Your areas does.
+    if (this.#store.value.resources.areas.status === "idle") void this.loadAreas();
   }
 
   setPlanEnabled(enabled: boolean): Promise<void> {
@@ -2171,7 +2173,7 @@ export class EffectController {
 
   #resumeAreaCatalog(): void {
     const state = this.#store.value;
-    if ((state.workflow === "areas" || state.workflow === "draw" || state.workflow === "areaReview"
+    if ((state.workflow === "areas" || state.workflow === "draw" || state.workflow === "areaReview" || state.workflow === "plan"
       || state.homePins.pins.some((pin) => pin.kind === "area"))
       && state.resources.areas.status === "idle") {
       void this.loadAreas();

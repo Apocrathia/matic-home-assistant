@@ -1,4 +1,5 @@
 import type { CleaningMode, CoverageSetting, NextRunPreviewRoom, PlanRoom, SavedPlan } from "./backend-contracts";
+import type { PlanDraft, PlanDraftArea } from "./contracts";
 import { formatList } from "./localize";
 
 // Shared by the shell's home plan card and the plan views, so only what the
@@ -45,6 +46,36 @@ export const withPlanAreas = <T>(plan: SavedPlan, rooms: readonly T[], area: (en
   const queue = [...rooms];
   return [...planEntrySlots(plan.entries).flatMap((slot) => slot ? [area(slot)] : queue.splice(0, 1)), ...queue];
 };
+
+/** One step of a plan draft's run: a room with its settings, or a custom area. */
+export type DraftStep =
+  | { readonly room: PlanRoom; readonly area?: undefined }
+  | { readonly room?: undefined; readonly area: PlanDraftArea };
+
+/**
+ * A draft's run order: its rooms, with each custom area after its slot's
+ * rooms. The `save_plan` request sends the same order (catalog-writes.ts).
+ */
+export const draftSteps = ({ rooms, areas }: Pick<PlanDraft, "rooms" | "areas">): DraftStep[] =>
+  [...rooms, null].flatMap((room, at): DraftStep[] => [
+    ...areas.filter((area) => Math.min(area.slot, rooms.length) === at).map((area) => ({ area })),
+    ...room ? [{ room }] : [],
+  ]);
+
+/** A run order back as the draft's rooms and areas, each area after the rooms before it. */
+export const fromSteps = (steps: readonly DraftStep[]): Pick<PlanDraft, "rooms" | "areas"> => {
+  const rooms: PlanRoom[] = [];
+  const areas: PlanDraftArea[] = [];
+  for (const { room, area } of steps) {
+    if (room) rooms.push(room);
+    else areas.push({ ...area, slot: rooms.length });
+  }
+  return { rooms, areas };
+};
+
+/** The names of the saved plans that clean a custom area, quoted, in the catalog's order. */
+export const plansWithArea = (plans: readonly SavedPlan[] | undefined, areaId: string): string[] =>
+  (plans ?? []).filter((plan) => planAreas(plan).some((area) => area.areaId === areaId)).map((plan) => `"${plan.name}"`);
 
 /** "2 rooms · 1 custom area": a plan's rooms (none when it has only areas) and its custom areas. */
 export const roomsAndAreas = (t: Translate, locale: string, rooms: number, areas: number): string => [

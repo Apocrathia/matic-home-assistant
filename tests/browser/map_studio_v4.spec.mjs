@@ -1261,13 +1261,17 @@ test.describe("Map Studio v0.4 foundation", () => {
         ...plan.rooms.slice(1).map((room) => ({ kind: "room", room_id: room.roomId })),
         { kind: "area", area_id: "gone", cleaning_mode: "unknown", coverage_setting: "quick" },
       ] });
-      element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...state.resources.plans, value: { ...catalog, plans } } } });
+      // The draft is read from the plan as the plans list sends it.
+      const planDraft = window.__galleryModule.draftForPlan(plans.find((plan) => plan.id === state.planDraft.id));
+      element.replaceWorkspaceState({ ...state, planDraft, resources: { ...state.resources, plans: { ...state.resources.plans, value: { ...catalog, plans } } } });
     });
     await expect(gallery.getByText("3 rooms · 1 custom area", { exact: true })).toBeVisible();
     // An area Map Studio can't read is left out rather than shown wrong.
     await expect(gallery.locator("ul.run-list > li")).toHaveText(["Kitchen Vacuum · Optimal", "Rug Mop", "Living room Vacuum · Optimal", "Office Vacuum · Optimal"]);
     await gallery.getByRole("button", { name: /^Edit / }).click();
-    await expect(gallery.getByText("This plan also cleans \"Rug\". Saving keeps each custom area in its place.", { exact: true })).toBeVisible();
+    // Edit lists the area in its place among the rooms, and leaves out the one it can't read.
+    await expect(gallery.getByRole("list", { name: "Rooms and custom areas", exact: true }).getByRole("button", { name: /^Settings for / }))
+      .toHaveText([/^\s*Kitchen/u, /^\s*Rug/u, /^\s*Living room/u, /^\s*Office/u]);
     await gallery.getByRole("button", { name: "Cancel", exact: true }).click();
     await gallery.getByRole("button", { name: "Back to plans", exact: true }).click();
     await expect(gallery.getByRole("button", { name: /^Daily clean/ })).toContainText("3 rooms · 1 custom area · ");

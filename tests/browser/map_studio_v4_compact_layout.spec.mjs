@@ -63,6 +63,8 @@ test.describe("status strip (MS-STATUS-01, MS-STATUS-05)", () => {
   });
 
   test("no status detail restates its title", async ({ page }) => {
+    // Every gallery scenario, twice: the walk grows with the scenario list.
+    test.setTimeout(90_000);
     const gallery = await stage(page, "ready", { width: 1440, height: 900 });
     const scenarios = await page.evaluate(async () => (await import("/map_studio_v4-review/review.js")).GALLERY_SCENARIOS);
     for (const battery of [92, null]) {

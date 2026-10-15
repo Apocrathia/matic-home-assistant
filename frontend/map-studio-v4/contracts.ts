@@ -175,6 +175,24 @@ export interface PlanDraft {
   readonly dirty: boolean;
   /** Rooms unticked in Edit keep their settings and schedule here until Save; never sent. */
   readonly parkedRooms: readonly import("./backend-contracts").PlanRoom[];
+  /**
+   * The plan's custom areas in run order. Each runs after its `slot` rooms,
+   * so the draft's run order is its rooms with every area in its place.
+   */
+  readonly areas: readonly PlanDraftArea[];
+  /** Areas unticked in Edit keep their settings here until Save; never sent. */
+  readonly parkedAreas?: readonly PlanDraftArea[];
+}
+
+/** A saved custom area in a plan draft. An area runs every time, so it has no room schedule. */
+export interface PlanDraftArea {
+  readonly areaId: string;
+  /** The name the plans list sent, shown when the areas list no longer holds the area. */
+  readonly name: string;
+  readonly cleaningMode: CleaningMode;
+  readonly coverageSetting: CoverageSetting;
+  /** How many of the draft's rooms run before it; an area keeps this place as rooms rotate. */
+  readonly slot: number;
 }
 
 export interface AreaDraft {

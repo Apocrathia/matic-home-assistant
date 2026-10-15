@@ -15,6 +15,7 @@ import {
   type PrimaryAction,
   type ResourceStamp,
   type AdmittedManualRoomPreview,
+  type PlanDraftArea,
   type WorkspaceIntent,
   type WorkspaceState,
 } from "./contracts";
@@ -156,6 +157,7 @@ export const initialWorkspaceState = (): WorkspaceState => ({
     finishCurrentRoomThreshold: 50,
     dirty: false,
     parkedRooms: [],
+    areas: [],
   },
   planView: "run",
   planOrigin: "plans",
@@ -245,6 +247,7 @@ const isLegacyPlanReduction = (
 };
 
 export const draftForPlan = (plan: SavedPlan): WorkspaceState["planDraft"] => {
+  let slot = 0;
   return {
     id: plan.id,
     name: plan.name,
@@ -261,6 +264,19 @@ export const draftForPlan = (plan: SavedPlan): WorkspaceState["planDraft"] => {
     finishCurrentRoomThreshold: plan.finishCurrentRoomThreshold,
     dirty: false,
     parkedRooms: [],
+    // The entries as sent: each custom area after the rooms before it. One
+    // Matic Map can't read is left out, as the plan views leave it out.
+    areas: (Array.isArray(plan.entries) ? plan.entries as (Record<string, unknown> | null)[] : []).flatMap((entry) => {
+      if (entry?.kind !== "area") {
+        slot += 1;
+        return [];
+      }
+      const { area_id: areaId, name, cleaning_mode: cleaningMode, coverage_setting: coverageSetting } = entry;
+      return typeof areaId === "string" && /^(vacuum|mop|vacuum_and_mop)$/u.test(String(cleaningMode))
+        && /^(quick|standard|heavy_duty)$/u.test(String(coverageSetting))
+        ? [{ areaId, name: typeof name === "string" && name ? name : areaId, cleaningMode, coverageSetting, slot } as PlanDraftArea]
+        : [];
+    }),
   };
 };
 
@@ -468,7 +484,7 @@ export const reduceWorkspace = (
       if (state.workflow === "plan") {
         // Map taps never change the plan in Run (plan.md §5 Map).
         if (state.planView === "run") return state;
-        const { rooms, parkedRooms } = state.planDraft;
+        const { rooms, parkedRooms, areas } = state.planDraft;
         const room = rooms.find((candidate) => candidate.roomId === intent.roomId);
         if (!room && rooms.length >= MAX_ROOM_SEQUENCE_SIZE) return state;
         // An unticked room keeps its settings and schedule until Save, so
@@ -484,6 +500,8 @@ export const reduceWorkspace = (
               ? others(rooms)
               : [...rooms, parked ?? { roomId: intent.roomId, cleaningMode: "vacuum", coverageSetting: "standard" }],
             parkedRooms: room ? [...others(parkedRooms), room] : others(parkedRooms),
+            // The custom areas after a removed room keep their place in the run.
+            areas: room ? areas.map((area) => area.slot > rooms.indexOf(room) ? { ...area, slot: area.slot - 1 } : area) : areas,
           },
         };
       }
@@ -995,9 +1013,6 @@ const motionBlockReason = (state: WorkspaceState): Reason => {
 
 const PLAN_PAUSED: Reason = { reason: "Can't run this plan until you turn it on.", reasonKey: "v4_reason_run_plan_paused" };
 
-/** Whether a saved plan's entries, as the backend sent them, include a custom area. */
-export const hasSavedArea = (entries: unknown): boolean =>
-  Array.isArray(entries) && entries.some((entry) => (entry as { kind?: unknown } | null)?.kind === "area");
 export const PLAN_PREVIEW: Reason = {
   reason: "Can't run this plan until you retry its next-run preview.",
   reasonKey: "v4_reason_run_plan_preview",
@@ -1270,12 +1285,16 @@ export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction | NoBu
       const legacyReduction = isLegacyPlanReduction(state, state.planDraft.rooms);
       const withinRoomLimit = state.planDraft.rooms.length <= MAX_ROOM_SEQUENCE_SIZE || legacyReduction;
       const editable = canEditCoordinates(state);
-      // A save keeps the plan's custom areas, so a plan of areas alone saves without rooms.
-      const savedAreas = hasSavedArea(state.resources.plans.value?.plans.find((plan) => plan.id === state.planDraft.id)?.entries);
+      // A changed plan can't save a custom area drawn on another map. One the
+      // areas list doesn't hold is left to Home Assistant: the list may be older.
+      const areaAttention = state.planDraft.dirty && Boolean(state.resources.areas.value?.areas
+        .some((area) => area.status !== "current" && state.planDraft.areas.some(({ areaId }) => areaId === area.id)));
+      // A plan of custom areas alone saves without rooms.
       const enabled = editable
         && state.planDraft.name.trim().length > 0
-        && (state.planDraft.rooms.length > 0 || savedAreas)
+        && (state.planDraft.rooms.length > 0 || state.planDraft.areas.length > 0)
         && withinRoomLimit
+        && !areaAttention
         && state.command !== "pending";
       return {
         id: "save-plan",
@@ -1289,12 +1308,14 @@ export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction | NoBu
           ? PLAN_SAVING
           : !editable
             ? { reason: "Waiting for the map to be ready.", reasonKey: "v4_reason_save_plan_map" }
-            : withinRoomLimit
-              ? { reason: "Can't save until the plan has a name and at least one room.", reasonKey: "v4_reason_save_plan" }
-              : {
+            : !withinRoomLimit
+              ? {
                 reason: "Can't save until the plan has 100 rooms or fewer.",
                 reasonKey: "v4_reason_save_plan_room_limit",
-              }),
+              }
+              : areaAttention
+                ? { reason: "Can't save until you remove the custom areas that need attention.", reasonKey: "v4_reason_save_plan_areas" }
+                : { reason: "Can't save until the plan has a name and at least one room.", reasonKey: "v4_reason_save_plan" }),
       };
     }
     const plan = state.resources.plans.value?.plans.find((candidate) => candidate.id === state.planDraft.id);

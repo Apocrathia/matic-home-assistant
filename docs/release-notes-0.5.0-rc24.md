@@ -22,9 +22,10 @@ acceptance of identity recovery.
   the panel is out of view.
 - **Home.** One status line, the default plan's card with what is due, **Your
   plans**, **Clean rooms** and **Clean custom area**. Held controls say why.
-- **Plans.** A plan opens in **Run**, with a separate **Edit**. Save, Cancel
-  and Delete ask only when a change would be lost; Back and Escape return to
-  where you came from.
+- **Plans.** A plan opens in **Run**, with a separate **Edit**, where saved
+  custom areas join the rooms in the order you set. Save, Cancel and Delete
+  ask only when a change would be lost; Back and Escape return to where you
+  came from. Your areas names the plans that clean each area.
 - **Room schedules.** Two rows per room, mop and vacuum rotation, each with
   − and +, a line that says when the work is next due and a switch to bring it
   forward once. New schedules count across all plans.
@@ -131,10 +132,10 @@ To restore them, downgrade to RC22.
   developer actions start with "Advanced:". Run and preview IDs are Advanced
   fields. Action errors are plain translated messages.
 - New device triggers: Room finished, Plan finished and Cleaning finished.
-- **Custom areas in plans**: plan actions take saved custom areas beside
-  rooms, or areas alone, and each area runs as its own part of the run in its
-  place ([details](actions.md#custom-areas-in-plans)). Earlier RCs can't open
-  the updated plan storage.
+- **Custom areas in plans**: plan actions and Matic Map take saved custom
+  areas beside rooms, or areas alone, and each area runs as its own part of
+  the run in its place ([details](actions.md#custom-areas-in-plans)). Earlier
+  RCs can't open the updated plan storage.
 - The five blueprints are renamed "Matic: …", describe every input, count a
   named zone as away, and run only when the robot is docked or idle. Re-import
   them to pick up the changes.
