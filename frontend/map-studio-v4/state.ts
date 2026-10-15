@@ -91,6 +91,7 @@ export const initialWorkspaceState = (): WorkspaceState => ({
   cameras: {},
   managedLock: false,
   batteryPercent: null,
+  deepMop: null,
   currentArea: null,
   floor: {
     classifiedCount: 1,
@@ -920,6 +921,13 @@ export const canShowExactPose = (state: WorkspaceState): boolean =>
   && state.map.exactPose
   && state.host.connected
   && state.host.robotConnected;
+
+/** Robot-wide settings do not depend on the selected map or floor. */
+export const canChangeRobotSetting = (state: WorkspaceState): boolean =>
+  state.pageActive && state.host.administrator && state.host.connected
+  && state.host.robotConnected && state.command === "idle"
+  && state.deepMop != null && state.deepMop.enabled !== null
+  && !hasStoppableWork(state);
 
 export const canEditCoordinates = (state: WorkspaceState): boolean =>
   state.pageActive && canShowLiveMap(state)

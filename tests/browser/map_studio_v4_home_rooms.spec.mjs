@@ -1036,9 +1036,9 @@ for (const narrow of [true, false]) {
       const body = gallery.locator("#clean-settings");
       await expect(body.getByRole("combobox", { name: "Cleaning mode" })).toHaveValue("vacuum");
       await expect(body.getByRole("combobox", { name: "Vacuum coverage" })).toHaveValue("standard");
-      const due = body.getByRole("switch", { name: "Include scheduled work that's due" });
+      const due = body.getByRole("switch", { name: "Use room schedules" });
       await expect(due).toHaveAttribute("aria-checked", "true");
-      await expect(due).toHaveAccessibleDescription("Turn off to use only your settings. Skipped work stays due for the next clean.");
+      await expect(due).toHaveAccessibleDescription("");
       await due.click();
       await expect.poll(async () => (await snapshot(page)).selection.useRoomSchedule).toBe(false);
       await expect(due).toHaveAttribute("aria-checked", "false");
@@ -1093,11 +1093,13 @@ for (const narrow of [true, false]) {
       await kitchen.click();
       await gallery.getByRole("combobox", { name: "Cleaning mode for Kitchen" }).selectOption("mop");
       const coverage = gallery.getByRole("combobox", { name: "Vacuum coverage for Kitchen" });
-      await expect(coverage).toHaveAttribute("aria-disabled", "true");
-      await expect(coverage).toHaveAccessibleDescription(/^Vacuum coverage applies only when vacuuming\./);
+      await expect(coverage).toHaveCount(0);
+      await expect(gallery.getByRole("switch", { name: "Double-pass mopping" })).toBeVisible();
       const before = (await snapshot(page)).selection.roomSettings.find((room) => room.roomId === "room-a").coverageSetting;
-      await forceSelect(coverage, "quick");
-      await expect.poll(async () => (await snapshot(page)).selection.roomSettings.find((room) => room.roomId === "room-a").coverageSetting).toBe(before);
+      await gallery.getByRole("combobox", { name: "Cleaning mode for Kitchen" }).selectOption("vacuum_and_mop");
+      await expect(coverage).toHaveValue(before);
+      await expect(gallery.getByRole("switch", { name: "Double-pass mopping" })).toBeVisible();
+      await gallery.getByRole("combobox", { name: "Cleaning mode for Kitchen" }).selectOption("vacuum");
       await expect(coverage).toHaveValue(before);
     });
 
@@ -1175,10 +1177,10 @@ for (const narrow of [true, false]) {
           roomSettings: state.selection.roomSettings.map((room) => room.roomId === "room-a" ? { ...room, cleaningMode: "mop" } : room) } },
         { blocker: "invalid_cadence_policy" }));
       });
-      await expect(checkLines(blocked).last()).toHaveText("The room schedule can't use the cleaning mode you chose. Turn off \"Include scheduled work that's due\", or choose another mode.");
+      await expect(checkLines(blocked).last()).toHaveText("Turn off \"Use room schedules\" to use this cleaning mode.");
       await expect(primaryReason(blocked)).toHaveText("Can't start until you change the settings noted above.");
       await settingsRow(blocked).click();
-      await blocked.getByRole("switch", { name: "Include scheduled work that's due" }).click();
+      await blocked.getByRole("switch", { name: "Use room schedules" }).click();
       await expect(checkLines(blocked).last()).toHaveText("These rooms can't be cleaned with the current settings. Change the settings or the rooms, then try again.");
     });
 
@@ -1237,7 +1239,7 @@ for (const narrow of [true, false]) {
       await expect(mode).toHaveAccessibleDescription(busy);
       await forceSelect(mode, "mop");
       await expect(mode).toHaveValue("vacuum");
-      const due = gallery.getByRole("switch", { name: "Include scheduled work that's due" });
+      const due = gallery.getByRole("switch", { name: "Use room schedules" });
       await expect(due).toHaveAttribute("aria-disabled", "true");
       await due.dispatchEvent("click");
       await gallery.getByRole("button", { name: "Settings for Kitchen" }).click();

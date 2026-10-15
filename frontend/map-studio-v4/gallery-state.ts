@@ -101,6 +101,7 @@ export type GalleryScenario =
 
 const verified = (): WorkspaceState => ({
   ...initialWorkspaceState(),
+  deepMop: { entityId: "switch.synthetic_deep_mop", enabled: false },
   coherence: "current",
   activity: "docked",
   batteryPercent: 92,

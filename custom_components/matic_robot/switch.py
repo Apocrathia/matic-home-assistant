@@ -86,6 +86,14 @@ class MaticSettingSwitch(MaticEntity, SwitchEntity):
         )
 
     @property
+    def extra_state_attributes(self) -> dict[str, str]:
+        """Identify the setting and its robot without relying on entity names."""
+        return {
+            "matic_entry_id": self._config_entry.entry_id,
+            "matic_setting": self.entity_description.key,
+        }
+
+    @property
     def is_on(self) -> bool | None:
         """Return the decoded robot setting."""
         value = getattr(

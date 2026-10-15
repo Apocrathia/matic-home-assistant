@@ -88,6 +88,14 @@ export class HassAdapter {
       }
     }
 
+    const settings = selectedVacuum ? Object.entries(states).filter(([id, entity]) =>
+      id.startsWith("switch.") && maticEntryKey(entity) === selectedEntryKey
+      && entity.attributes?.matic_setting === "deep_mop") : [];
+    const setting = settings.length === 1 ? settings[0] : undefined;
+    const deepMop = setting ? {
+      entityId: setting[0],
+      enabled: setting[1].state === "on" ? true : setting[1].state === "off" ? false : null,
+    } : null;
     const host = {
       connected: hass?.connected !== false,
       administrator: hass?.user?.is_admin === true,
@@ -130,6 +138,8 @@ export class HassAdapter {
       selectedEntryKey ?? "none",
       robotLabel,
       robotChoices.map((robot) => `${robot.entryId}:${robot.label}`).join(","),
+      deepMop?.entityId ?? "",
+      deepMop?.enabled ?? "unknown",
     ].join("|");
 
     if (signature === this.#signature && this.#projection) {
@@ -137,6 +147,7 @@ export class HassAdapter {
     }
     this.#signature = signature;
     this.#projection = {
+      deepMop,
       host,
       activity,
       batteryPercent,

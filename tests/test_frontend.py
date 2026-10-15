@@ -313,7 +313,7 @@ def test_rooms_view_ships_in_the_lazy_workflow_chunk() -> None:
     # The tag itself is in element-tags.ts, which startup already holds; the
     # view's copy only ships with the lazy views.
     assert "matic-map-rooms-v4" in startup
-    for marker in ("Different per room", "Include scheduled work"):
+    for marker in ("Different per room", "Use room schedules"):
         assert marker not in startup
         assert marker in workflow
 

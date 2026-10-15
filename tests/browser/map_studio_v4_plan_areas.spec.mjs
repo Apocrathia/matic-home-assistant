@@ -128,9 +128,9 @@ test.describe("plan Edit with custom areas", () => {
     await coverage.selectOption("heavy_duty");
     await expect(settings).toContainText("Vacuum · Heavy duty");
     await mode.selectOption("mop");
-    await expect(coverage).toBeDisabled();
+    await expect(coverage).toHaveCount(0);
     await expect(settings).toContainText("Mop");
-    await expect(list.getByText("Vacuum coverage applies only when vacuuming. Use the robot's Double-pass mopping setting for an extra mop pass.")).toBeVisible();
+    await expect(list.getByRole("switch", { name: "Double-pass mopping" })).toBeVisible();
     // An area runs every time: it has no room schedule.
     await expect(list.getByRole("group", { name: /^Smart cleaning for / })).toHaveCount(0);
     const { planDraft } = await snapshot(page);

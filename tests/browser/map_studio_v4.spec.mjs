@@ -54,8 +54,9 @@ function syntheticDelta(base, scene, baseRevision, revision) {
   return Buffer.concat([header, compressed]);
 }
 
-async function loadGallery(page, { scenario = "ready", narrow = false } = {}) {
+async function loadGallery(page, { scenario = "ready", narrow = false, beforeMount } = {}) {
   await page.goto("/", { waitUntil: "domcontentloaded" });
+  await beforeMount?.();
   await page.evaluate(async () => {
     window.__galleryModule = await import("/map_studio_v4-review/review.js");
   });
@@ -492,8 +493,16 @@ test.describe("Map Studio v0.4 foundation", () => {
       failure.getByRole("button", { name: "Try again" }).click(),
     ]);
     await page.unroute("**/chunks/workflow-panel-*.js");
-    await page.clock.setSystemTime(new Date("2026-10-12T12:00:31Z"));
-    const later = await loadGallery(page, { scenario: "ready" });
+    const markedAt = await page.evaluate(() => JSON.parse(sessionStorage.getItem("matic-map-resume")).at);
+    const later = await loadGallery(page, {
+      scenario: "ready",
+      beforeMount: async () => {
+        // Age the marker itself, after navigation. Test setup can take more
+        // than a second, so a fixed 12:00:31 does not guarantee a stale marker.
+        await page.clock.setSystemTime(new Date(markedAt + 31_000));
+        expect(await page.evaluate(() => Date.now()) - markedAt).toBeGreaterThanOrEqual(31_000);
+      },
+    });
     await expect(later.getByRole("heading", { level: 2 })).toBeAttached();
     expect(await later.evaluate((element) => element.getWorkspaceSnapshot().workflow), "workflow after a stale resume")
       .toBe("none");
@@ -988,12 +997,12 @@ test.describe("Map Studio v0.4 foundation", () => {
     await gallery.getByRole("button", { name: /^Clean rooms/ }).click();
     const roomList = gallery.getByRole("group", { name: "Rooms to clean" });
     // home-rooms.md §5 Due work: the shared schedule's due work puts the
-    // "Include scheduled work that's due" switch in the settings row, on by
+    // "Use room schedules" switch in the settings row, on by
     // default; off sends the user's settings alone and keeps the switch.
     await expect(gallery.getByRole("switch")).toHaveCount(0);
     await roomList.getByRole("checkbox").first().check();
     await gallery.getByRole("button", { name: /^Cleaning settings/ }).click();
-    const useSchedule = gallery.getByRole("switch", { name: "Include scheduled work that's due" });
+    const useSchedule = gallery.getByRole("switch", { name: "Use room schedules" });
     await expect(useSchedule).toHaveAttribute("aria-checked", "true");
     expect((await snapshot(page)).selection.useRoomSchedule).toBe(true);
     await useSchedule.click();
@@ -5681,6 +5690,7 @@ test.describe("Map Studio v0.4 foundation", () => {
   });
 
   test("keeps first-use supporting copy at AA contrast in light and dark themes", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
     const gallery = await loadGallery(page, { scenario: "ready" });
     await page.addScriptTag({
       type: "module",
@@ -5713,11 +5723,13 @@ test.describe("Map Studio v0.4 foundation", () => {
           ? normalized / 12.92
           : ((normalized + 0.055) / 1.055) ** 2.4;
       };
+      // Computed transition colours may use oklab, not RGB. Let the browser
+      // resolve CSS colours to sRGB before applying the WCAG luminance formula.
       const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 1;
       const context = canvas.getContext("2d", { willReadFrequently: true });
       const luminance = (color) => {
-        // Computed color-mix backgrounds may be returned as oklab(). Let the
-        // browser convert the rendered color to sRGB before measuring it.
+        context.clearRect(0, 0, 1, 1);
         context.fillStyle = color;
         context.fillRect(0, 0, 1, 1);
         const rgb = context.getImageData(0, 0, 1, 1).data;
@@ -5993,8 +6005,8 @@ test.describe("Map Studio v0.4 foundation", () => {
     await mode.selectOption("heavy_duty");
     const cleaningSystem = inspector.getByLabel(/^Cleaning mode for /);
     await cleaningSystem.selectOption("mop");
-    await expect(mode).toHaveAttribute("aria-disabled", "true");
-    await expect(inspector.getByText("Vacuum coverage applies only when vacuuming.", { exact: false })).toBeVisible();
+    await expect(mode).toHaveCount(0);
+    await expect(inspector.getByRole("switch", { name: "Double-pass mopping" })).toBeVisible();
     await cleaningSystem.selectOption("vacuum_and_mop");
     await expect(mode).not.toHaveAttribute("aria-disabled", "true");
     await expect(mode).toHaveValue("heavy_duty");
@@ -10114,7 +10126,7 @@ test.describe("Map Studio accessibility baselines", () => {
     const gallery = await loadGallery(page, { scenario: "rooms-ready" });
     await settleWorkspace(gallery);
     await gallery.getByRole("button", { name: /^Cleaning settings/ }).click();
-    await expect(gallery.getByRole("switch", { name: "Include scheduled work that's due" })).toBeVisible();
+    await expect(gallery.getByRole("switch", { name: "Use room schedules" })).toBeVisible();
     const kitchen = gallery.getByRole("button", { name: "Settings for Kitchen", exact: true });
     await kitchen.click();
     await expect(kitchen).toHaveAttribute("aria-expanded", "true");

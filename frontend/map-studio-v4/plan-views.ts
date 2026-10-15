@@ -3,6 +3,7 @@ import type { PropertyValues } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { controls } from "./controls";
 import { formControls } from "./form-controls";
+import { mopControl } from "./mop-control";
 import { icon, iconChevronRight, iconDue, iconMoveDown, iconMoveUp, iconNoticeWarning, iconPlus } from "./icons";
 import { base, tokens } from "./tokens";
 import type { CadenceReason, CleaningMode, CoverageSetting, PlanRoom, SavedArea, SavedPlan } from "./backend-contracts";
@@ -549,12 +550,11 @@ export class MaticPlanViewsV4 extends LitElement {
               }}
             >${MODES.map((mode) => html`<option value=${mode} ?selected=${mode === room.cleaningMode} ?disabled=${modeLocked && mode !== "vacuum"}>${modeLabel(this.#t, mode)}</option>`)}</select>
           </label>
-          <label class="field ms-field">${this.#t("vacuum_coverage", "Vacuum coverage")}
+          ${room.cleaningMode === "mop" ? nothing : html`<label class="field ms-field">${this.#t("vacuum_coverage", "Vacuum coverage")}
             <select
               aria-label=${this.#t("v4_room_vacuum_coverage_named", "Vacuum coverage for {room}", { room: name })}
               aria-disabled=${gate.disabled}
               aria-describedby=${gate.described}
-              ?disabled=${room.cleaningMode === "mop"}
               .value=${room.coverageSetting}
               @change=${(event: Event) => {
                 const select = event.currentTarget as HTMLSelectElement;
@@ -562,10 +562,10 @@ export class MaticPlanViewsV4 extends LitElement {
                 else this.#patchRoom(index, { coverageSetting: select.value as CoverageSetting });
               }}
             >${COVERAGES.map((option) => html`<option value=${option} ?selected=${option === room.coverageSetting}>${coverageLabel(this.#t, option)}</option>`)}</select>
-          </label>
+          </label>`}
         </div>
         ${modeLocked ? html`<p class="schedule-note" id="mode-reason"><span>${this.#t("v4_cadence_clear_mop_to_change_normal", "Turn the mopping schedule off to change the cleaning mode.")}</span></p>` : nothing}
-        ${room.cleaningMode === "vacuum" ? nothing : html`<p class="subtle">${this.#t("v4_mop_coverage_hint", "Vacuum coverage applies only when vacuuming. Use the robot's Double-pass mopping setting for an extra mop pass.")}</p>`}
+        ${mopControl(this.#t, this.state, room.cadence?.mopEveryN ? "vacuum_and_mop" : room.cleaningMode, `plan-room-${index}`)}
         ${scheduleBlock({
           t: this.#t,
           state: this.state,
@@ -682,12 +682,11 @@ export class MaticPlanViewsV4 extends LitElement {
               }}
             >${MODES.map((mode) => html`<option value=${mode} ?selected=${mode === area.cleaningMode}>${modeLabel(this.#t, mode)}</option>`)}</select>
           </label>
-          <label class="field ms-field">${this.#t("vacuum_coverage", "Vacuum coverage")}
+          ${area.cleaningMode === "mop" ? nothing : html`<label class="field ms-field">${this.#t("vacuum_coverage", "Vacuum coverage")}
             <select
               aria-label=${this.#t("v4_area_vacuum_coverage_named", "Vacuum coverage for {area}", { area: name })}
               aria-disabled=${gate.disabled}
               aria-describedby=${gate.described}
-              ?disabled=${area.cleaningMode === "mop"}
               .value=${area.coverageSetting}
               @change=${(event: Event) => {
                 const select = event.currentTarget as HTMLSelectElement;
@@ -695,9 +694,9 @@ export class MaticPlanViewsV4 extends LitElement {
                 else this.#patchArea(area.areaId, { coverageSetting: select.value as CoverageSetting });
               }}
             >${COVERAGES.map((option) => html`<option value=${option} ?selected=${option === area.coverageSetting}>${coverageLabel(this.#t, option)}</option>`)}</select>
-          </label>
+          </label>`}
         </div>
-        ${area.cleaningMode === "vacuum" ? nothing : html`<p class="subtle">${this.#t("v4_mop_coverage_hint", "Vacuum coverage applies only when vacuuming. Use the robot's Double-pass mopping setting for an extra mop pass.")}</p>`}
+        ${mopControl(this.#t, this.state, area.cleaningMode, `plan-area-${position}`)}
       </div>` : nothing}
     </li>`;
   }

@@ -2,6 +2,7 @@ import { LitElement, css, html, nothing } from "lit";
 import type { PropertyValues } from "lit";
 import { controls } from "./controls";
 import { formControls } from "./form-controls";
+import { mopControl } from "./mop-control";
 import { icon, iconChevronDown, iconChevronRight, iconChevronUp, iconDue, iconNoticeWarning } from "./icons";
 import { base, tokens } from "./tokens";
 import type { CadenceReason, CleaningMode, CoverageSetting, NextRunPreviewRoom } from "./backend-contracts";
@@ -234,7 +235,7 @@ export class MaticRoomsViewV4 extends LitElement {
     return list.length ? list.join(" ") : nothing;
   }
 
-  #settingsRow(state: WorkspaceState, held: string | null, anyDue: boolean) {
+  #settingsRow(state: WorkspaceState, held: string | null, anyDue: boolean, preview: readonly NextRunPreviewRoom[] | null) {
     const t = this.#t;
     const open = this._open === "settings";
     const mode = state.selection.cleaningMode;
@@ -242,7 +243,7 @@ export class MaticRoomsViewV4 extends LitElement {
     // The row's value is the whole-clean setting its selects show, unless a
     // selected room was changed on its own (home-rooms.md §5 Settings).
     const mixed = state.selection.roomSettings.some((room) => state.selection.roomIds.includes(room.roomId)
-      && (room.cleaningMode !== mode || room.coverageSetting !== coverage));
+      && (room.cleaningMode !== mode || (mode !== "mop" && room.coverageSetting !== coverage)));
     const value = mixed
       ? t("v4_settings_mixed", "Different per room")
       : settingLabel(t, { cleaningMode: mode, coverageSetting: coverage });
@@ -270,22 +271,21 @@ export class MaticRoomsViewV4 extends LitElement {
                   @change=${this.#select(locked, mode, (next) => this.#intent({ type: "set-clean-settings", cleaningMode: next as CleaningMode }))}
                 >${MODES.map((option) => html`<option value=${option} ?selected=${option === mode}>${modeLabel(t, option)}</option>`)}</select>
               </label>
-              <label class="ms-field">${t("vacuum_coverage", "Vacuum coverage")}
+              ${mode === "mop" ? nothing : html`<label class="ms-field">${t("vacuum_coverage", "Vacuum coverage")}
                 <select
                   class="ms-select"
                   aria-disabled=${locked || mop ? "true" : nothing}
-                  aria-describedby=${this.#describe(mop && "clean-mop-hint", held)}
+                  aria-describedby=${this.#describe(held)}
                   .value=${coverage}
                   @change=${this.#select(locked || mop, coverage, (next) => this.#intent({ type: "set-clean-settings", coverageSetting: next as CoverageSetting }))}
                 >${COVERAGES.map((option) => html`<option value=${option} ?selected=${option === coverage}>${coverageLabel(t, option)}</option>`)}</select>
-              </label>
+              </label>`}
             </div>
-            ${mop ? html`<p class="hint" id="clean-mop-hint">${t("v4_mop_coverage_hint", "Vacuum coverage applies only when vacuuming. Use the robot's Double-pass mopping setting for an extra mop pass.")}</p>` : nothing}
+            ${mopControl(t, state, preview?.some((room) => room.cleaningMode !== "vacuum") ? "vacuum_and_mop" : mode, "clean")}
             ${anyDue ? html`
               <div class="switch-row">
                 <span class="switch-copy">
-                  <span id="due-label">${t("v4_include_due_schedule", "Include scheduled work that's due")}</span>
-                  <small id="due-hint">${t("v4_include_due_schedule_hint", "Turn off to use only your settings. Skipped work stays due for the next clean.")}</small>
+                  <span id="due-label">${t("v4_include_due_schedule", "Use room schedules")}</span>
                 </span>
                 <button
                   class="ms-switch"
@@ -293,7 +293,7 @@ export class MaticRoomsViewV4 extends LitElement {
                   role="switch"
                   aria-checked=${String(state.selection.useRoomSchedule)}
                   aria-labelledby="due-label"
-                  aria-describedby=${this.#describe("due-hint", held)}
+                  aria-describedby=${this.#describe(held)}
                   aria-disabled=${locked ? "true" : nothing}
                   @click=${() => { if (!locked) this.#intent({ type: "set-use-room-schedule", value: !state.selection.useRoomSchedule }); }}
                 ></button>
@@ -312,7 +312,7 @@ export class MaticRoomsViewV4 extends LitElement {
     const blockedLine = blocker === null ? null
       : blocker === "invalid_cadence_policy" && state.selection.useRoomSchedule
         && state.selection.roomSettings.some((room) => room.cleaningMode !== "vacuum")
-        ? t("v4_room_preview_schedule_override", "The room schedule can't use the cleaning mode you chose. Turn off \"Include scheduled work that's due\", or choose another mode.")
+        ? t("v4_room_preview_schedule_override", "Turn off \"Use room schedules\" to use this cleaning mode.")
         : t("v4_room_preview_blocked", "These rooms can't be cleaned with the current settings. Change the settings or the rooms, then try again.");
     if (!due.length && !boundaries && !failed && !blockedLine) return nothing;
     return html`
@@ -341,7 +341,6 @@ export class MaticRoomsViewV4 extends LitElement {
     const problem = checked ? cadenceProblem(t, reasons) : null;
     const open = this._open === room.roomId;
     const bodyId = `room-settings-${index}`;
-    const hintId = `room-mop-hint-${index}`;
     const mop = settings.cleaningMode === "mop";
     return html`
       <div class="ms-row room-row">
@@ -384,18 +383,18 @@ export class MaticRoomsViewV4 extends LitElement {
                   @change=${this.#select(locked, settings.cleaningMode, (next) => this.#intent({ type: "patch-room-settings", roomId: room.roomId, cleaningMode: next as CleaningMode }))}
                 >${MODES.map((option) => html`<option value=${option} ?selected=${option === settings.cleaningMode}>${modeLabel(t, option)}</option>`)}</select>
               </label>
-              <label class="ms-field">${t("vacuum_coverage", "Vacuum coverage")}
+              ${settings.cleaningMode === "mop" ? nothing : html`<label class="ms-field">${t("vacuum_coverage", "Vacuum coverage")}
                 <select
                   class="ms-select"
                   aria-label=${t("v4_room_vacuum_coverage_named", "Vacuum coverage for {room}", { room: room.name })}
                   aria-disabled=${locked || mop ? "true" : nothing}
-                  aria-describedby=${this.#describe(mop && hintId, held)}
+                  aria-describedby=${this.#describe(held)}
                   .value=${settings.coverageSetting}
                   @change=${this.#select(locked || mop, settings.coverageSetting, (next) => this.#intent({ type: "patch-room-settings", roomId: room.roomId, coverageSetting: next as CoverageSetting }))}
                 >${COVERAGES.map((option) => html`<option value=${option} ?selected=${option === settings.coverageSetting}>${coverageLabel(t, option)}</option>`)}</select>
-              </label>
+              </label>`}
             </div>
-            ${mop ? html`<p class="hint" id=${hintId}>${t("v4_mop_coverage_hint", "Vacuum coverage applies only when vacuuming. Use the robot's Double-pass mopping setting for an extra mop pass.")}</p>` : nothing}
+            ${mopControl(t, state, settings.cleaningMode === "vacuum" ? previewRoom?.cleaningMode ?? "vacuum" : settings.cleaningMode, `room-${index}`)}
           </div>
         ` : nothing}
       </div>
@@ -444,7 +443,7 @@ export class MaticRoomsViewV4 extends LitElement {
             ` : nothing}
           </div>
           ${atLimit ? html`<p class="limit" id="rooms-limit">${t("v4_room_limit_reached", "Up to {limit} rooms fit in one clean, so remove one to add another.", { limit: MAX_ROOM_SEQUENCE_SIZE })}</p>` : nothing}
-          ${this.#settingsRow(state, held, anyDue)}
+          ${this.#settingsRow(state, held, anyDue, preview)}
           ${this.#checkLines(state, preview, admitted?.missionBoundaries.length ?? 0, admitted?.blocker ?? null)}
           <div class="room-list" role="group" aria-labelledby="rooms-heading">
             ${rooms.map((room, index) => this.#row(state, room, index, held, atLimit, previewRoom(room.roomId)))}

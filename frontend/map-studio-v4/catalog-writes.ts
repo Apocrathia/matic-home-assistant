@@ -1,4 +1,4 @@
-// Plan and area writes. They run only from a control inside a workflow, so
+// Plan, area and robot-setting writes. They run only from a control inside a workflow, so
 // effects.ts loads this module on the first write instead of at startup.
 // Runtime imports are deliberately absent: an import edge into the startup
 // modules makes esbuild split them into more chunks, which costs the startup
@@ -51,6 +51,53 @@ export interface CatalogWriteContext {
 const draftIsLive = (captured: WorkspaceState, live: WorkspaceState): boolean => live.workflow === captured.workflow
   && live.planDraft === captured.planDraft && live.areaDraft === captured.areaDraft
   && live.draw.circles === captured.draw.circles && live.draw.outline === captured.draw.outline;
+
+/** Change the existing robot setting; never store it in a room or plan draft. */
+export const setDeepMop = async (context: CatalogWriteContext): Promise<void> => {
+  const { state, store, signal, backend } = context;
+  const setting = state.deepMop;
+  const projection = context.projection();
+  const current = (): boolean => !context.disposed() && !signal.aborted
+    && context.projection()?.entryKey === projection?.entryKey
+    && context.projection()?.userKey === projection?.userKey;
+  if (!setting || setting.enabled === null || !projection || !current()
+    || projection.deepMop?.entityId !== setting.entityId
+    || !store.value.host.administrator || context.helpers.hasStoppableWork(store.value)
+    || store.value.deepMop?.enabled !== setting.enabled) return;
+  const enabled = !setting.enabled;
+  store.patch({ command: "pending", pendingAction: "set-deep-mop", notice: null });
+  try {
+    await backend.service("switch", enabled ? "turn_on" : "turn_off", {}, setting.entityId, { acknowledgementTimeout: "mutation" });
+    if (!current()) return;
+    // HA's service acknowledgement can precede its state_changed delivery.
+    // Keep the last observed value until the selected entity confirms it.
+    const confirmed = await new Promise<boolean>((resolve) => {
+      let done = false;
+      let unsubscribe = (): void => {};
+      const finish = (matched: boolean): void => {
+        if (done) return;
+        done = true;
+        window.clearTimeout(timer);
+        signal.removeEventListener("abort", abort);
+        unsubscribe();
+        resolve(matched);
+      };
+      const abort = (): void => finish(false);
+      const timer = window.setTimeout(() => finish(false), 5_000);
+      signal.addEventListener("abort", abort, { once: true });
+      unsubscribe = store.subscribe((live) => {
+        if (!current() || !live.host.connected || !live.host.administrator || !live.host.robotConnected
+          || live.deepMop?.entityId !== setting.entityId || live.deepMop.enabled === null) finish(false);
+        else if (live.deepMop?.entityId === setting.entityId && live.deepMop.enabled === enabled) finish(true);
+      });
+      if (done) unsubscribe();
+    });
+    if (current()) store.patch({ command: "idle", notice: confirmed ? null : context.failure });
+    context.settled(confirmed && current());
+  } catch (error) {
+    if (!context.helpers.isAbort(error) && current()) store.patch({ command: "idle", notice: context.failure });
+  }
+};
 
 export const saveArea = async (context: CatalogWriteContext): Promise<void> => {
   const { state, signal, store, backend, effects } = context;

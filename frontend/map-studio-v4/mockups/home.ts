@@ -355,8 +355,8 @@ export class MockRooms extends MockScreen {
         ${modeSelect(t("v4_cleaning_system"), WHOLE_MODE)}
         ${coverageSelect(t("v4_vacuum_coverage"), WHOLE_COVERAGE)}
         ${due ? html`<div class="switch-row">
-          <span class="switch-copy"><span id="due-switch-label">${t("v4_include_due_schedule")}</span><small id="due-switch-hint">${t("v4_include_due_schedule_hint")}</small></span>
-          <button class="ms-switch" type="button" role="switch" aria-checked="true" aria-labelledby="due-switch-label" aria-describedby="due-switch-hint"></button>
+          <span class="switch-copy"><span id="due-switch-label">${t("v4_include_due_schedule")}</span></span>
+          <button class="ms-switch" type="button" role="switch" aria-checked="true" aria-labelledby="due-switch-label"></button>
         </div>` : nothing}
       </div>` : nothing}
     </div>`;

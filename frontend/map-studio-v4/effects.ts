@@ -25,6 +25,7 @@ import { BackendError, MaticBackend } from "./backend";
 import type { CatalogWriteContext, CatalogWriteHelpers } from "./catalog-writes";
 import {
   canEditCoordinates,
+  canChangeRobotSetting,
   canReadFloorResources,
   canResumeMotion,
   canStartMotion,
@@ -90,6 +91,7 @@ const NOTICES = {
   areaDeleteFailed: notice("error", "v4_notice_area_delete_failed", "Home Assistant can't confirm the area was deleted, so try again."),
   resetMopFailed: notice("error", "v4_notice_reset_mop_failed", "Mopping progress wasn't reset; try again."),
   resetVacuumFailed: notice("error", "v4_notice_reset_vacuum_failed", "Vacuum rotation progress wasn't reset; try again."),
+  deepMopFailed: notice("error", "v4_deep_mop_failed", "Couldn't confirm double-pass mopping. Try again."),
 } as const;
 
 // Keeps the snapshot's timestamp; views format it as they render.
@@ -156,7 +158,7 @@ const sameCoherenceGeneration = (left: ResourceStamp, right: ResourceStamp): boo
 const POSE_POLL_INTERVAL_MS = 1_000;
 const SPATIAL_READ_RECOVERY_INTERVAL_MS = 5_000;
 const READ_ONLY_WORKFLOWS: readonly Workflow[] = ["rooms", "plans", "plan", "areas", "draw", "areaReview"];
-const MUTATION_RESOURCES = ["plan-mutation", "area-mutation"] as const;
+const MUTATION_RESOURCES = ["plan-mutation", "area-mutation", "setting-mutation"] as const;
 
 interface ManualPreviewCapture {
   readonly key: string;
@@ -273,7 +275,8 @@ export class EffectController {
     this.#invalidateSpatialFence(false, MUTATION_RESOURCES);
     this.#stopPolling();
     // A transmitted write cannot be undone by aborting its acknowledgement.
-    // Keep its independent owner until it settles or the entry/frame changes.
+    // Keep its independent owner until it settles or its scope changes.
+    // Robot settings survive map changes; coordinate writes keep their frame.
     this.#abortResources(MUTATION_RESOURCES);
     this.#catalogRefreshQueued = false;
     this.#catalogRefreshQueuedPreserveGeneration = false;
@@ -495,6 +498,7 @@ export class EffectController {
       activity: projection.activity,
       batteryPercent: projection.batteryPercent,
       currentArea: projection.currentArea,
+      deepMop: projection.deepMop,
       robotLabel: projection.robotLabel,
       robots: projection.robots,
       locale: projection.language,
@@ -842,7 +846,7 @@ export class EffectController {
     if (this.#spatialRecovery) this.#signalSpatialRecoveryRead(this.#spatialRecovery.key);
     // Invalidate the generation before aborting requests so no completion from
     // the old floor/scene can become visible while REST revalidates identity.
-    this.#abortResources(["catalog", ...preservedResources]);
+    this.#abortResources(["catalog", "setting-mutation", ...preservedResources]);
     this.#entryIdentity = "";
   }
 
@@ -1098,7 +1102,7 @@ export class EffectController {
     let mutationCancelled = false;
     for (const [name, controller] of this.#controllers) {
       if (except.includes(name)) continue;
-      mutationCancelled ||= name === "plan-mutation" || name === "area-mutation" || name === "plan-preflight";
+      mutationCancelled ||= name === "plan-mutation" || name === "area-mutation" || name === "setting-mutation" || name === "plan-preflight";
       controller.abort();
       this.#controllers.delete(name);
     }
@@ -1126,6 +1130,7 @@ export class EffectController {
     this.#store.patch({
       command: "idle",
       dataMode: empty.dataMode,
+      deepMop: null,
       floor: empty.floor,
       managedLock: false,
       workflow: "none",
@@ -1408,6 +1413,7 @@ export class EffectController {
       && previousDraftFloor === entry.mapFloorOrdinal
       && previousDraftSession === entry.mapSessionKey;
     const preserve = ["catalog"];
+    if (previousEntry?.entryId === entry.entryId) preserve.push("setting-mutation");
     if (sameResourceBoundary && !resetDrafts) preserve.push("plans", "areas");
     if (sameVerifiedFrame) preserve.push("plan-mutation", "area-mutation");
     const stamp = this.#coherence.begin(
@@ -1442,7 +1448,7 @@ export class EffectController {
     const state = this.#store.value;
     this.#store.patch({
       ...(resetDrafts ? {
-        command: "idle" as const,
+        command: state.pendingAction === "set-deep-mop" ? state.command : "idle" as const,
         workflow: "none" as const,
         dialog: null,
         precisionOpen: false,
@@ -1936,7 +1942,7 @@ export class EffectController {
       snapshot?.id || floor.id,
       snapshot?.revision || 0,
     );
-    this.#abortResources(["catalog"]);
+    this.#abortResources(["catalog", "setting-mutation"]);
     this.#store.patch({
       generation: stamp.generation,
       coherence: "current",
@@ -1985,7 +1991,7 @@ export class EffectController {
     if (!floor || !snapshot) return;
     this.#clearSpatialReadRecovery();
     const stamp = this.#coherence.begin(entry.entryId, floor.id, snapshot.id, snapshot.revision);
-    this.#abortResources(["catalog"]);
+    this.#abortResources(["catalog", "setting-mutation"]);
     this.#store.patch({
       generation: stamp.generation,
       dataMode: "history",
@@ -2401,7 +2407,8 @@ export class EffectController {
     try {
       const writes = await this.#catalogWritesModule();
       const live = this.#store.value;
-      if (controller.signal.aborted || !canEditCoordinates(live) || live.command === "pending") return;
+      const admitted = resource === "setting-mutation" ? canChangeRobotSetting(live) : canEditCoordinates(live);
+      if (controller.signal.aborted || !admitted || live.command === "pending") return;
       if (!writes) {
         this.#store.patch({ notice: failure });
         return;
@@ -2430,6 +2437,9 @@ export class EffectController {
   async executeAction(idOrAction: string | ResetCadenceAction, settled?: SaveSettled): Promise<void> {
     const id = typeof idOrAction === "string" ? idOrAction : idOrAction.id;
     switch (id) {
+      case "toggle-deep-mop":
+        await this.#write("setting-mutation", NOTICES.deepMopFailed, (writes, context) => writes.setDeepMop(context));
+        return;
       case "recheck-status": {
         if (this.#store.value.rechecking) return;
         const entryId = this.#store.value.selection.entryId;
