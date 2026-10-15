@@ -3193,6 +3193,7 @@ async def test_load_repairs_malformed_plan_storage_without_inventing_history(
         "rooms": {},
         "plans": {"valid": {"name": "Valid", "rooms": []}},
         "areas": {},
+        "area_history": {},
         "rotation_resets": {},
         "shared_room_cadence": {},
         "plan_room_cadence": {},

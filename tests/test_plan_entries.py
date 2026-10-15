@@ -429,64 +429,81 @@ async def _mixed_manager(hass, floor: FloorPlan) -> CleaningPlanManager:
     return manager
 
 
-async def test_preview_keeps_areas_in_saved_order_and_rooms_in_their_groups(
-    hass,
-) -> None:
+async def test_preview_rotates_rooms_and_areas_together_but_saved_order_is_exact(hass):
     floor = _floor()
     manager = await _mixed_manager(hass, floor)
-    # Intelligent order puts Study before Kitchen; Hall has its own group.
-    manager.choose = MagicMock(
-        side_effect=lambda _serial, _plan, rooms: list(reversed(rooms))
-    )
-
-    preview = manager.preview(
-        SERIAL,
-        ROOM_MAP,
-        "mixed",
-        floor_token=plan_floor_token(floor),
-        floor_plan=floor,
-    )
-
-    assert [room["room_id"] for room in preview["rooms"]] == [
-        "room-study",
-        "room-kitchen",
-        "room-hall",
-    ]
+    robot = manager._robot(SERIAL)
+    robot["rooms"] = {
+        "room-kitchen": {"last_opportunity": "2026-01-04T00:00:00+00:00"},
+        "room-study": {"last_opportunity": "2026-01-02T00:00:00+00:00"},
+    }
+    robot["area_history"]["rug"] = {
+        "fingerprint": plan_area_fingerprint(robot["areas"]["rug"]),
+        "last_opportunity": "2026-01-03T00:00:00+00:00",
+    }
+    # Mat and Hall are unattempted, so their saved relative order breaks the tie.
+    preview = manager.preview(SERIAL, ROOM_MAP, "mixed", floor_plan=floor)
     entries = preview["entries"]
-    assert [entry.get("room_id") or entry["area_id"] for entry in entries] == [
-        "room-study",
-        "room-kitchen",
-        "rug",
+    assert [e.get("room_id", e.get("area_id")) for e in entries] == [
         "mat",
         "room-hall",
+        "room-study",
+        "rug",
+        "room-kitchen",
     ]
-    assert entries[0] == {"kind": "room", **preview["rooms"][0]}
-    assert entries[2] == {
-        "kind": "area",
-        "area_id": "rug",
-        "name": "Rug",
-        "cleaning_mode": "vacuum",
-        "coverage_setting": "quick",
-        "binding_status": "current",
-        "binding_fingerprint": plan_area_fingerprint(manager.areas(SERIAL)["rug"]),
-    }
-    assert entries[3]["cleaning_mode"] == "vacuum_and_mop"
+    assert [r["room_id"] for r in preview["rooms"]] == [
+        "room-hall",
+        "room-study",
+        "room-kitchen",
+    ]
+    assert [r.get("room_id", r.get("area_id")) for r in preview["rotation"]] == [
+        "mat",
+        "room-hall",
+        "room-study",
+        "rug",
+        "room-kitchen",
+    ]
+    assert entries[0]["cleaning_mode"] == "vacuum_and_mop"
+    assert entries[3]["binding_fingerprint"] == plan_area_fingerprint(
+        robot["areas"]["rug"]
+    )
     assert preview["room_count"] == 3
     assert preview["area_count"] == 2
-    assert entry_mission_boundaries(entries) == [2, 3, 4]
-
+    assert entry_mission_boundaries(entries) == [1, 3, 4]
+    # The executor receives exactly the preview's room order and area positions.
+    legs = plan_legs(
+        [
+            CleaningRoom(
+                **{
+                    k: r[k]
+                    for k in ("room_id", "name", "cleaning_mode", "coverage_setting")
+                }
+            )
+            for r in preview["rooms"]
+        ],
+        run_entries(entries),
+        mixed_settings=True,
+    )
+    assert [
+        leg.area_id if isinstance(leg, AreaLeg) else [r.room_id for r in leg]
+        for leg in legs
+    ] == [
+        "mat",
+        ["room-hall", "room-study"],
+        "rug",
+        ["room-kitchen"],
+    ]
     ordered = manager.preview(
         SERIAL, ROOM_MAP, "mixed", intelligent=False, floor_plan=floor
     )
-    assert [
-        entry.get("room_id") or entry["area_id"] for entry in ordered["entries"]
-    ] == [
+    assert [e.get("room_id", e.get("area_id")) for e in ordered["entries"]] == [
         "room-kitchen",
         "room-study",
         "rug",
         "mat",
         "room-hall",
     ]
+    assert all(r["selection_reason"] == "saved_order" for r in ordered["rotation"])
 
 
 async def test_preview_supports_area_only_plans(hass) -> None:

@@ -552,15 +552,16 @@ def checkpoint_legs(checkpoint: Mapping[str, Any]) -> list[PlanLeg]:
 
 @dataclass(frozen=True, slots=True)
 class _RotationCandidate:
-    """One room's trusted rotation key and explainable selection metadata."""
+    """One room or area's trusted rotation key and selection metadata."""
 
     index: int
-    room: CleaningRoom
+    room: CleaningRoom | AreaLeg
     effective_timestamp: float | None
     effective_value: str | None
     source: str | None
     last_result: str | None
     last_completion: str | None
+    completion_basis: str | None = None
 
 
 def plan_floor_token(floor_plan: FloorPlan) -> str:
@@ -1232,6 +1233,10 @@ class CleaningPlanManager:
                 recovered = True
             if not recoverable and _close_unfinished_room_records(
                 robot, recovered_at=dt_util.utcnow().isoformat()
+            ):
+                recovered = True
+            if not recoverable and _close_unfinished_area_records(
+                robot, ended_at=dt_util.utcnow().isoformat()
             ):
                 recovered = True
         if recovered:
@@ -2518,6 +2523,9 @@ class CleaningPlanManager:
                         )
                     ]
                 robot["areas"].pop(area_id, None)
+                robot["area_history"].pop(area_id, None)
+                for rotation in robot["rotations"].values():
+                    rotation.get("areas", {}).pop(area_id, None)
                 if robot.get("selected_area") == area_id:
                     robot["selected_area"] = next(iter(robot["areas"]), None)
                 await self._async_save_with_rollback(serial_number, before)
@@ -3056,7 +3064,7 @@ class CleaningPlanManager:
     async def async_reset_history(
         self, serial_number: str, plan_id: str | None = None
     ) -> None:
-        """Reset one plan's room history or all managed history."""
+        """Reset one plan's room and area history or all managed history."""
 
         async def commit(_lease: _MetadataLockLease) -> None:
             async with self._user_metadata_store_transaction(serial_number):
@@ -3075,6 +3083,7 @@ class CleaningPlanManager:
                 if plan_id is None:
                     robot["rotations"] = {}
                     robot["rooms"] = {}
+                    robot["area_history"] = {}
                     robot["rotation_resets"] = {}
                 else:
                     robot["rotations"].pop(plan_id, None)
@@ -3120,9 +3129,8 @@ class CleaningPlanManager:
     ) -> dict[str, Any]:
         """Return the next complete execution order without changing state.
 
-        Custom areas keep their saved positions and are checked against
-        ``floor_plan``; intelligent order moves rooms only within the run of
-        rooms between two areas.
+        Intelligent rotation ranks rooms and custom areas together. Saved
+        order preserves every entry's exact position. Areas must match the map.
         """
         plan = self.plan(serial_number, plan_id)
         entries = plan_entries(plan)
@@ -3148,24 +3156,29 @@ class CleaningPlanManager:
             if intelligent is None
             else intelligent
         )
-        chosen = (
-            self.choose(serial_number, plan["id"], rooms) if use_intelligent else rooms
+        room_by_id = {room.room_id: room for room in rooms}
+        targets: list[CleaningRoom | AreaLeg] = [
+            AreaLeg(
+                entry["area_id"],
+                area_projections[entry["area_id"]]["name"],
+                entry["cleaning_mode"],
+                entry["coverage_setting"],
+                area_projections[entry["area_id"]]["binding_fingerprint"],
+            )
+            if entry["kind"] == "area"
+            else room_by_id[entry["room_id"]]
+            for entry in entries
+        ]
+        candidates = self._rotation_candidates(serial_number, plan["id"], targets)
+        ordered_candidates = (
+            sorted(candidates, key=_rotation_sort_key)
+            if use_intelligent
+            else candidates
         )
-        if areas:
-            # Rank rooms globally, then keep each one inside its own group.
-            rank = {room.room_id: index for index, room in enumerate(chosen)}
-            groups: list[list[CleaningRoom]] = [[]]
-            saved_rooms = iter(rooms)
-            for entry in entries:
-                if entry["kind"] == "area":
-                    groups.append([])
-                else:
-                    groups[-1].append(next(saved_rooms))
-            chosen = [
-                room
-                for group in groups
-                for room in sorted(group, key=lambda room: rank[room.room_id])
-            ]
+        ordered_targets = [candidate.room for candidate in ordered_candidates]
+        chosen = [
+            target for target in ordered_targets if isinstance(target, CleaningRoom)
+        ]
         effective, cadence = self.resolve_cadence(
             serial_number,
             plan["id"],
@@ -3176,12 +3189,12 @@ class CleaningPlanManager:
         preview_rooms = [
             {**asdict(room), "cadence": cadence[room.room_id]} for room in effective
         ]
-        effective_rooms = iter(preview_rooms)
+        effective_by_id = {room["room_id"]: room for room in preview_rooms}
         preview_entries = [
-            area_projections[entry["area_id"]]
-            if entry["kind"] == "area"
-            else {"kind": "room", **next(effective_rooms)}
-            for entry in entries
+            area_projections[target.area_id]
+            if isinstance(target, AreaLeg)
+            else {"kind": "room", **effective_by_id[target.room_id]}
+            for target in ordered_targets
         ]
         return {
             "valid": True,
@@ -3195,18 +3208,8 @@ class CleaningPlanManager:
             "rooms": preview_rooms,
             "entries": preview_entries,
             **({"area_count": len(areas)} if areas else {}),
-            "rotation": (
-                self.rotation_details(serial_number, plan["id"], rooms)
-                if use_intelligent
-                else _saved_order_rotation_details(
-                    rooms,
-                    {
-                        candidate.room.room_id: candidate
-                        for candidate in self._rotation_candidates(
-                            serial_number, plan["id"], rooms
-                        )
-                    },
-                )
+            "rotation": _rotation_details(
+                ordered_candidates, intelligent=use_intelligent
             ),
             "room_count": len(effective),
             "return_to_base": bool(plan.get("return_to_base", True)),
@@ -3839,32 +3842,7 @@ class CleaningPlanManager:
             self._rotation_candidates(serial_number, plan_id, rooms),
             key=_rotation_sort_key,
         )
-        details: list[dict[str, Any]] = []
-        previous_timestamp: float | None = None
-        for rank, candidate in enumerate(ordered, start=1):
-            if candidate.effective_timestamp is None:
-                reason = "no_prior_opportunity"
-            elif (
-                previous_timestamp is not None
-                and candidate.effective_timestamp == previous_timestamp
-            ):
-                reason = "saved_order_tiebreak"
-            else:
-                reason = "least_recent_opportunity"
-            details.append(
-                {
-                    "rank": rank,
-                    "room_id": candidate.room.room_id,
-                    "room": candidate.room.name,
-                    "last_result": candidate.last_result,
-                    "last_opportunity": candidate.effective_value,
-                    "last_opportunity_source": candidate.source,
-                    "last_completion": candidate.last_completion,
-                    "selection_reason": reason,
-                }
-            )
-            previous_timestamp = candidate.effective_timestamp
-        return details
+        return _rotation_details(ordered, intelligent=True)
 
     def choose(
         self,
@@ -3879,20 +3857,18 @@ class CleaningPlanManager:
                 self._rotation_candidates(serial_number, plan_id, rooms),
                 key=_rotation_sort_key,
             )
+            if isinstance(candidate.room, CleaningRoom)
         ]
 
     def _rotation_candidates(
         self,
         serial_number: str,
         plan_id: str,
-        rooms: Sequence[CleaningRoom],
+        rooms: Sequence[CleaningRoom | AreaLeg],
     ) -> list[_RotationCandidate]:
         """Build the shared trusted keys used by ordering and diagnostics."""
         robot = self._robot(serial_number)
         rotation = robot["rotations"].get(plan_id)
-        records_value = rotation.get("rooms") if isinstance(rotation, Mapping) else None
-        records = records_value if isinstance(records_value, Mapping) else {}
-        global_records = robot["rooms"] if isinstance(robot["rooms"], Mapping) else {}
         now = dt_util.utcnow()
         reset_values = robot["rotation_resets"]
         reset_at = _latest_timestamp(
@@ -3901,10 +3877,22 @@ class CleaningPlanManager:
         )
         candidates: list[_RotationCandidate] = []
         for index, room in enumerate(rooms):
-            record_value = records.get(room.room_id)
-            global_value = global_records.get(room.room_id)
-            record = record_value if isinstance(record_value, Mapping) else {}
-            global_record = global_value if isinstance(global_value, Mapping) else {}
+            is_area = isinstance(room, AreaLeg)
+            key = room.area_id if isinstance(room, AreaLeg) else room.room_id
+            records = (
+                rotation.get("areas" if is_area else "rooms", {})
+                if isinstance(rotation, Mapping)
+                else {}
+            )
+            record = records.get(key, {})
+            global_record = robot["area_history" if is_area else "rooms"].get(key, {})
+            if isinstance(room, AreaLeg):
+                record = record if record.get("fingerprint") == room.fingerprint else {}
+                global_record = (
+                    global_record
+                    if global_record.get("fingerprint") == room.fingerprint
+                    else {}
+                )
             local_opportunity = _latest_timestamp_value(
                 record.get("last_opportunity"),
                 record.get("last_completed"),
@@ -3933,7 +3921,8 @@ class CleaningPlanManager:
             else:
                 effective = global_opportunity
                 source = "global"
-            last_result = record.get("last_result")
+            result_record = global_record if is_area and source == "global" else record
+            last_result = result_record.get("last_result")
             completion_values = _latest_timestamp_value(
                 record.get("last_completed"),
                 global_record.get("last_completed"),
@@ -3945,6 +3934,16 @@ class CleaningPlanManager:
                 and completion_values[0] <= reset_at
             ):
                 completion_values = None
+            completion_basis = None
+            if is_area and completion_values is not None:
+                completion_record = (
+                    record
+                    if _latest_timestamp(record.get("last_completed"), now=now)
+                    == completion_values[0]
+                    else global_record
+                )
+                if completion_record.get("completion_basis") == "owned_session_ended":
+                    completion_basis = "owned_session_ended"
             candidates.append(
                 _RotationCandidate(
                     index=index,
@@ -3956,6 +3955,7 @@ class CleaningPlanManager:
                     last_completion=(
                         completion_values[1] if completion_values else None
                     ),
+                    completion_basis=completion_basis,
                 )
             )
         return candidates
@@ -4428,6 +4428,7 @@ class CleaningPlanManager:
             run_id=run_id,
             ended_at=ended_at,
         )
+        _close_unfinished_area_records(robot, run_id=run_id, ended_at=ended_at)
         docked = last_run.get("outcome") == "stopped_docked"
         stored_completed_count = _stored_count(last_run, "completed_room_count")
         was_completed = last_run.get("outcome") == "completed"
@@ -4664,8 +4665,8 @@ class CleaningPlanManager:
     ) -> None:
         """Publish the custom area a managed run is cleaning now.
 
-        Areas run every time and earn no credit, so no per-room record changes;
-        the active entry names the area instead of a room.
+        Dispatch alone is not a cleaning opportunity. History is recorded
+        separately once the native session's owned start is confirmed.
         """
 
         def mutate() -> bool | None:
@@ -4674,6 +4675,7 @@ class CleaningPlanManager:
             if (
                 not isinstance(last_run, dict)
                 or last_run.get("run_id") != run_id
+                or last_run.get("plan_id") != plan_id
                 or last_run.get("outcome") != "running"
             ):
                 return None
@@ -4709,24 +4711,150 @@ class CleaningPlanManager:
 
         await self._async_mutate_and_save(serial_number, mutate)
 
-    async def async_mark_area_finished(
-        self, serial_number: str, area: AreaLeg, *, run_id: str
-    ) -> None:
-        """Clear the active custom area once its own native mission ended."""
+    async def _async_mutate_area_history(
+        self, serial_number: str, mutate: Callable[[], bool]
+    ) -> bool:
+        """Commit area evidence atomically; failed writes cannot publish credit."""
 
-        def mutate() -> bool | None:
+        async def commit(_lease: _MetadataLockLease) -> bool:
+            async with self._store_lock:
+                if serial_number in self._removed_robots:
+                    return False
+                before = deepcopy(self._robot(serial_number))
+                if not mutate():
+                    return False
+                await self._async_save_with_rollback(serial_number, before)
+                return True
+
+        def notify(changed: bool) -> None:
+            if changed:
+                self._notify_listeners(serial_number)
+
+        result = await self._async_run_owned_metadata(
+            serial_number, commit, after_commit=notify
+        )
+        return bool(result)
+
+    async def async_mark_area_accepted(
+        self,
+        serial_number: str,
+        plan_id: str,
+        area: AreaLeg,
+        *,
+        run_id: str,
+        acceptance_is_current: Callable[[], bool],
+    ) -> bool:
+        """Record one owned cleaning opportunity, never a dispatch or a retry."""
+
+        def mutate() -> bool:
+            robot = self._robot(serial_number)
+            run = robot.get("last_run")
+            active = robot.get("active_plan")
+            if (
+                not acceptance_is_current()
+                or not isinstance(run, dict)
+                or run.get("run_id") != run_id
+                or run.get("plan_id") != plan_id
+                or run.get("outcome") != "running"
+                or not isinstance(active, dict)
+                or active.get("run_id") != run_id
+                or active.get("area_id") != area.area_id
+                or active.get("plan_id") != plan_id
+            ):
+                return False
+            now = dt_util.utcnow().isoformat()
+            rotation = self._rotation(serial_number, plan_id)
+            for records in (rotation.setdefault("areas", {}), robot["area_history"]):
+                record = records.get(area.area_id)
+                if (
+                    not isinstance(record, dict)
+                    or record.get("fingerprint") != area.fingerprint
+                ):
+                    record = {"fingerprint": area.fingerprint}
+                    records[area.area_id] = record
+                if record.get("run_id") == run_id:
+                    continue
+                record.update(
+                    {
+                        "name": area.name,
+                        "run_id": run_id,
+                        "last_opportunity": now,
+                        "last_result": "running",
+                        "started_runs": _stored_count(record, "started_runs") + 1,
+                    }
+                )
+            return True
+
+        return await self._async_mutate_area_history(serial_number, mutate)
+
+    async def async_mark_area_finished(
+        self,
+        serial_number: str,
+        area: AreaLeg,
+        *,
+        run_id: str,
+        completed: bool = False,
+        completion_is_current: Callable[[], bool] | None = None,
+    ) -> bool:
+        """Record an owned session end separately from interrupted attempts.
+
+        Firmware has no drawn-area coverage result. Completion here means an
+        accepted, continuously owned session ended normally, not room coverage
+        or cadence credit. Repeated recovery callbacks cannot increment twice.
+        """
+
+        def mutate() -> bool:
             robot = self._robot(serial_number)
             active = robot.get("active_plan")
+            run = robot.get("last_run")
             if (
                 not isinstance(active, dict)
                 or active.get("run_id") != run_id
                 or active.get("area_id") != area.area_id
+                or not isinstance(run, dict)
+                or run.get("run_id") != run_id
+                or run.get("plan_id") != active.get("plan_id")
+                or run.get("outcome") != "running"
+                or (
+                    completed
+                    and (completion_is_current is None or not completion_is_current())
+                )
             ):
-                return None
+                return False
+            rotation = robot["rotations"].get(active["plan_id"], {})
+            record = rotation.get("areas", {}).get(area.area_id, {})
+            if completed and (
+                record.get("run_id") != run_id
+                or record.get("fingerprint") != area.fingerprint
+            ):
+                return False
+            now = dt_util.utcnow().isoformat()
+            for records in (rotation.get("areas", {}), robot["area_history"]):
+                record = records.get(area.area_id, {})
+                if (
+                    record.get("run_id") != run_id
+                    or record.get("fingerprint") != area.fingerprint
+                ):
+                    continue
+                if record.get("last_completed_run_id") == run_id:
+                    continue
+                record["last_result"] = "completed" if completed else "interrupted"
+                if completed:
+                    record.update(
+                        {
+                            "last_completed": now,
+                            "last_completed_run_id": run_id,
+                            "completion_basis": "owned_session_ended",
+                            "completed_runs": _stored_count(record, "completed_runs")
+                            + 1,
+                        }
+                    )
+                else:
+                    record["last_interrupted"] = now
             robot["active_plan"] = None
             return True
 
-        await self._async_mutate_and_save(serial_number, mutate)
+        return await self._async_mutate_area_history(serial_number, mutate)
 
     async def async_mark_completed(
         self,
@@ -5388,6 +5516,7 @@ class CleaningPlanManager:
             "rooms",
             "plans",
             "areas",
+            "area_history",
             "rotation_resets",
             "shared_room_cadence",
             "plan_room_cadence",
@@ -5410,7 +5539,7 @@ class CleaningPlanManager:
             if normalized_dedup != dedup:
                 robot["native_completion_dedup"] = normalized_dedup
                 changed = True
-        for key in ("rooms", "plans", "areas"):
+        for key in ("rooms", "plans", "areas", "area_history"):
             records = robot[key]
             for record_id, record in tuple(records.items()):
                 if not isinstance(record, dict):
@@ -5478,15 +5607,18 @@ class CleaningPlanManager:
                 rotation = {"rooms": {}}
                 rotations[plan_id] = rotation
                 changed = True
-            room_records = rotation.get("rooms")
-            if not isinstance(room_records, dict):
-                room_records = {}
-                rotation["rooms"] = room_records
-                changed = True
-            for room_id, record in tuple(room_records.items()):
-                if not isinstance(record, dict):
-                    room_records.pop(room_id)
+            for kind in ("rooms", "areas"):
+                if kind == "areas" and kind not in rotation:
+                    continue
+                records = rotation.get(kind)
+                if not isinstance(records, dict):
+                    records = {}
+                    rotation[kind] = records
                     changed = True
+                for record_id, record in tuple(records.items()):
+                    if not isinstance(record, dict):
+                        records.pop(record_id)
+                        changed = True
         reset_values = robot["rotation_resets"]
         for plan_id, value in tuple(reset_values.items()):
             if not isinstance(value, str):
@@ -5977,6 +6109,30 @@ class CleaningPlanManager:
             self._robot(serial_number).pop("pending_native_reconciliation", None)
             await self._async_save_and_notify(serial_number)
             self._reconciliation_removal_pending.discard(serial_number)
+
+
+def _close_unfinished_area_records(
+    robot: dict[str, Any], *, ended_at: str, run_id: str | None = None
+) -> bool:
+    """Retain accepted opportunities without inventing success after a stop/restart."""
+    changed = False
+    containers = [
+        robot["area_history"],
+        *(rotation.get("areas", {}) for rotation in robot["rotations"].values()),
+    ]
+    for records in containers:
+        for record in records.values():
+            if record.get("last_result") == "running" and (
+                run_id is None or record.get("run_id") == run_id
+            ):
+                record.update(
+                    {
+                        "last_result": "ended_unverified",
+                        "last_ended_unverified": ended_at,
+                    }
+                )
+                changed = True
+    return changed
 
 
 def _close_unfinished_room_records(
@@ -6561,32 +6717,44 @@ def _rotation_sort_key(candidate: _RotationCandidate) -> tuple[bool, float, int]
     )
 
 
-def _saved_order_rotation_details(
-    rooms: Sequence[CleaningRoom],
-    history: Mapping[str, _RotationCandidate] | None = None,
+def _rotation_details(
+    candidates: Sequence[_RotationCandidate], *, intelligent: bool
 ) -> list[dict[str, Any]]:
-    """Describe an ordered plan while preserving its saved room order."""
-    return [
-        {
-            "rank": rank,
-            "room_id": room.room_id,
-            "room": room.name,
-            "last_result": history[room.room_id].last_result
-            if history and room.room_id in history
-            else None,
-            "last_opportunity": history[room.room_id].effective_value
-            if history and room.room_id in history
-            else None,
-            "last_opportunity_source": history[room.room_id].source
-            if history and room.room_id in history
-            else None,
-            "last_completion": history[room.room_id].last_completion
-            if history and room.room_id in history
-            else None,
-            "selection_reason": "saved_order",
-        }
-        for rank, room in enumerate(rooms, start=1)
-    ]
+    """Explain the same mixed order used by the execution preview."""
+    details = []
+    previous_timestamp = None
+    for rank, candidate in enumerate(candidates, start=1):
+        target = candidate.room
+        reason = "saved_order"
+        if intelligent:
+            reason = (
+                "no_prior_opportunity"
+                if candidate.effective_timestamp is None
+                else "saved_order_tiebreak"
+                if candidate.effective_timestamp == previous_timestamp
+                else "least_recent_opportunity"
+            )
+        details.append(
+            {
+                "rank": rank,
+                **(
+                    {
+                        "area_id": target.area_id,
+                        "area": target.name,
+                        "last_completion_basis": candidate.completion_basis,
+                    }
+                    if isinstance(target, AreaLeg)
+                    else {"room_id": target.room_id, "room": target.name}
+                ),
+                "last_result": candidate.last_result,
+                "last_opportunity": candidate.effective_value,
+                "last_opportunity_source": candidate.source,
+                "last_completion": candidate.last_completion,
+                "selection_reason": reason,
+            }
+        )
+        previous_timestamp = candidate.effective_timestamp
+    return details
 
 
 def _latest_timestamp_value(

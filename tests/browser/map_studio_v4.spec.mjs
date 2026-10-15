@@ -1175,7 +1175,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       await expect(gallery.getByText("3 rooms · about 33 min", { exact: true })).toBeVisible();
       await expect(gallery.getByText("Mop due in Kitchen, Living room, and Office", { exact: true })).toBeVisible();
       await expect(gallery.getByRole("heading", { name: "Next run", level: 3 })).toBeVisible();
-      await expect(gallery.getByText("Longest-waiting rooms first, checked again when you run the plan.", { exact: true })).toBeVisible();
+      await expect(gallery.getByText("Longest-waiting rooms and custom areas first, checked again when you run the plan.", { exact: true })).toBeVisible();
       // Intelligent rotation: an unnumbered list, one setting string per row.
       await expect(gallery.locator("ol.run-list")).toHaveCount(0);
       const rows = gallery.locator("ul.run-list > li");
@@ -1193,7 +1193,7 @@ test.describe("Map Studio v0.4 foundation", () => {
   test("Run numbers Saved order and marks each part break", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "plan-saved-ordered" });
     await expect(gallery.locator("ol.run-list > li")).toHaveText(["1 Office Vacuum · Optimal", "2 Kitchen Vacuum · Optimal", "3 Living room Vacuum · Optimal"]);
-    await expect(gallery.getByText("Longest-waiting rooms first, checked again when you run the plan.")).toHaveCount(0);
+    await expect(gallery.getByText("Longest-waiting rooms and custom areas first, checked again when you run the plan.")).toHaveCount(0);
 
     await gallery.evaluate((element) => element.setScenario("plan-run-parts"));
     await settleWorkspace(gallery);
@@ -7707,7 +7707,7 @@ for (const ordered of [false, true]) {
     await expect(choice).toHaveAttribute("aria-pressed", "true");
     await expect(order.getByRole("button", { name: ordered ? "Intelligent rotation" : "Saved order", exact: true })).toHaveAttribute("aria-pressed", "false");
     // plan.md §3: the hint under the segment says what the order means.
-    await expect(order.getByText(ordered ? "Top to bottom, as listed" : "Longest-waiting rooms first", { exact: true })).toBeVisible();
+    await expect(order.getByText(ordered ? "Top to bottom, as listed" : "Longest-waiting first", { exact: true })).toBeVisible();
     expect((await snapshot(page)).planDraft.runBehavior).toBe(ordered ? "ordered" : "intelligent");
     const rooms = gallery.getByRole("list", { name: "Rooms", exact: true });
     await expect(rooms.getByRole("button", { name: /^Move .* (earlier|later)$/ })).toHaveCount(ordered ? 6 : 0);

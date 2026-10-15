@@ -103,17 +103,17 @@ test.describe("plan Edit with custom areas", () => {
     expect((await snapshot(page)).planDraft.dirty).toBe(true);
   });
 
-  test("in Intelligent rotation areas keep their places, unnumbered, and the hint says so", async ({ page }) => {
+  test("Intelligent rotation includes every room and area without promising a fixed order", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "plan-edit-areas-rotation" });
     const list = gallery.getByRole("list", { name: "Rooms and custom areas", exact: true });
-    await expect(gallery.getByText("Custom areas keep their places, and only the rooms between them change order. Choose Saved order to move them.", { exact: true })).toBeVisible();
+    await expect(gallery.getByText("Rooms and custom areas rotate together. Saved order follows your exact sequence.", { exact: true })).toBeVisible();
     await expect(list.locator(".pos-badge")).toHaveCount(0);
     await expect(list.getByRole("button", { name: /^Move / })).toHaveCount(0);
     await expect(list.getByRole("button", { name: /^Settings for / })).toHaveText([
       /^\s*Kitchen/u, /^\s*Entryway/u, /^\s*Living room/u, /^\s*Office/u, /^\s*Under the dining table/u,
     ]);
     await gallery.getByRole("button", { name: "Saved order", exact: true }).click();
-    await expect(gallery.getByText(/Choose Saved order to move them/u)).toHaveCount(0);
+    await expect(gallery.getByText(/Rooms and custom areas rotate together/u)).toHaveCount(0);
     await expect(list.locator(".pos-badge")).toHaveCount(5);
   });
 
@@ -291,6 +291,15 @@ test.describe("Run and home with custom areas", () => {
     await expect(gallery.locator("ol.run-list > li bdi")).toHaveText(["Kitchen", "Entryway", "Living room", "Office", "Under the dining table"]);
     await expect(gallery.locator("ol.run-list > li[data-break]")).toHaveCount(3);
     await expect(gallery.getByText("The robot cleans in 4 parts and may stop at the dock between parts.", { exact: true })).toBeVisible();
+  });
+
+  test("Intelligent Run shows the mixed server order even when areas cross rooms", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-edit-areas-rotation" });
+    await gallery.evaluate((element) => element.replaceWorkspaceState({ ...element.getWorkspaceSnapshot(), planView: "run" }));
+    await settleWorkspace(gallery);
+    await expect(gallery.locator("ul.run-list > li bdi")).toHaveText(["Under the dining table", "Office", "Entryway", "Living room", "Kitchen"]);
+    await expect(gallery.getByText("Longest-waiting rooms and custom areas first, checked again when you run the plan.", { exact: true })).toBeVisible();
+    await expect(gallery.locator("ul.run-list > li[data-break]")).toHaveCount(3);
   });
 
   test("a plan of areas alone lists them and no rooms", async ({ page }) => {

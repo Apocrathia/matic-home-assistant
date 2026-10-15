@@ -80,7 +80,7 @@ export const COPY = {
   v4_no_plans: "No plans yet",
   v4_no_plans_hint: "Save a plan to repeat a set of rooms.",
   v4_create_plan: "Create a plan",
-  v4_plan_order_intelligent_hint: "Longest-waiting rooms first",
+  v4_plan_order_intelligent_hint: "Longest-waiting first",
   v4_plan_order_ordered_hint: "Top to bottom, as listed",
   v4_plan_row_rotation: "{count} rooms · Longest-waiting rooms first",
   v4_plan_row_ordered: "{count} rooms · Top to bottom, as listed",
@@ -104,7 +104,7 @@ export const COPY = {
   v4_next_run_preview: "Next run",
   v4_next_run_after_active: "After this run",
   v4_plan_rooms_heading: "Rooms in this plan",
-  v4_plan_rotation_settings: "Longest-waiting rooms first, checked again when you run the plan.",
+  v4_plan_rotation_settings: "Longest-waiting rooms and custom areas first, checked again when you run the plan.",
   v4_part_break: "Part {number} starts here; the robot may stop at the dock first",
   v4_needs_attention_chip: "Needs attention", // (literal) plan.md §3 row chip
   v4_plan_summary_return: "Returns to the dock when finished",

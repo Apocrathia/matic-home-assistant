@@ -2166,6 +2166,12 @@ async def test_mixed_plan_runs_each_area_as_its_own_owned_mission(
     assert first[PLAN_FLOOR_TOKEN] == "a" * 64
     assert isinstance(first[PLAN_MOTION_TOKEN], int)
     assert robot.dispatched[1]["params"]["cleaning_mode"] == "vacuum_and_mop"
+    for area_id in ("rug", "mat"):
+        local = manager._robot("serial")["rotations"]["test-plan"]["areas"][area_id]
+        global_record = manager._robot("serial")["area_history"][area_id]
+        for record in (local, global_record):
+            assert record["started_runs"] == record["completed_runs"] == 1
+            assert record["completion_basis"] == "owned_session_ended"
     # Each area minted its own session.
     assert first[PLAN_SESSION_ID] != robot.dispatched[1]["params"][PLAN_SESSION_ID]
     # The checkpoint keeps the run order and the areas already finished.
@@ -2272,6 +2278,10 @@ async def test_replaced_area_session_is_unverified_without_stop(hass, fast_area_
     assert last_run["reason_code"] == "native_task_taken_over"
     assert manager.snapshot("serial")["active_plan"] is None
     assert REPLACEMENT.decode() not in str(manager.snapshot("serial"))
+    history = manager._robot("serial")["area_history"]["rug"]
+    assert history["started_runs"] == 1
+    assert history["last_result"] == "interrupted"
+    assert "last_completed" not in history
 
 
 async def test_area_takeover_during_shutdown_leaves_the_run_suspended(
@@ -2349,6 +2359,12 @@ async def test_failed_area_stops_its_own_mission_and_fails_the_run(
     assert snapshot["last_run"]["outcome"] == "failed"
     assert snapshot["last_run"]["reason_code"] == reason_code
     assert len(robot.dispatched) == 1
+    history = manager._robot("serial")["area_history"]
+    if failure in {"start_timeout", "command_failed"}:
+        assert history == {}
+    else:
+        assert history["rug"]["started_runs"] == 1
+        assert "last_completed" not in history["rug"]
 
 
 @pytest.mark.parametrize(
@@ -2444,6 +2460,10 @@ async def test_immediate_stop_during_an_area_cancels_without_area_stop(
     assert _event_names(events) == [("area_started", "rug"), ("plan_finished", None)]
     assert events[-1].data["outcome"] == "cancelled"
     assert events[-1].data["reason_code"] == "managed_stop"
+    history = manager._robot("serial")["area_history"]["rug"]
+    assert history["started_runs"] == 1
+    assert history["last_result"] == "ended_unverified"
+    assert "last_completed" not in history
     # The Stop request owns its own STOP; the area leg sends none.
     sender.assert_not_awaited()
     assert len(robot.dispatched) == 1
@@ -2534,6 +2554,34 @@ async def test_area_end_waiter_fails_closed_and_waits_out_a_return(hass, monkeyp
     with pytest.raises(PlanCancelledError):
         await _async_wait_for_area_end(
             hass, "vacuum.matic", cancel, active, returning_then_home, ORIGINAL
+        )
+
+
+@pytest.mark.parametrize("during_read", ["stop", "error", "unknown_end"])
+async def test_area_end_does_not_credit_a_stop_error_or_unknown_ownership_gap(
+    hass, fast_area_polls, during_read
+):
+    cancel = asyncio.Event()
+    hass.states.async_set("vacuum.matic", "cleaning")
+
+    async def read():
+        if during_read == "stop":
+            cancel.set()
+        elif during_read == "error":
+            hass.states.async_set("vacuum.matic", "error")
+        return b""
+
+    reader = (
+        AsyncMock(side_effect=[None, b""]) if during_read == "unknown_end" else read
+    )
+    error = {
+        "stop": PlanCancelledError,
+        "error": ServiceValidationError,
+        "unknown_end": RoomTakenOverError,
+    }[during_read]
+    with pytest.raises(error):
+        await _async_wait_for_area_end(
+            hass, "vacuum.matic", cancel, None, reader, ORIGINAL
         )
 
 

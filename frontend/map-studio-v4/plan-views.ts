@@ -302,7 +302,7 @@ export class MaticPlanViewsV4 extends LitElement {
     const ready = !paused && Boolean(preview && !blocker && /^[0-9a-f]{64}$/u.test(preview.previewToken ?? ""));
     const ordered = plan.runBehavior === "ordered";
     const previewRooms = ready && preview ? preview.rooms : [];
-    // Custom areas keep their place among the rooms, and mission boundaries count them.
+    // The server preview orders every room and area; boundaries count both.
     const steps = ready && preview ? preview.steps ?? previewRooms : [];
     const areas = ready ? steps.length - previewRooms.length : planAreas(plan).length;
     const blockedRoom = !paused && blocker ? roomBlocker(state, plan)?.jump.roomId ?? null : null;
@@ -349,7 +349,7 @@ export class MaticPlanViewsV4 extends LitElement {
         : state.resources.entry?.activePlan
           ? this.#t("v4_next_run_after_active", "After this run")
           : this.#t("v4_next_run_preview", "Next run")}</h3>
-      ${ready && !ordered ? html`<p class="quiet">${this.#t("v4_plan_rotation_settings", "Longest-waiting rooms first, checked again when you run the plan.")}</p>` : nothing}
+      ${ready && !ordered ? html`<p class="quiet">${this.#t("v4_plan_rotation_settings", "Longest-waiting rooms and custom areas first, checked again when you run the plan.")}</p>` : nothing}
       ${boundaries.length ? html`<p class="quiet">${this.#t("v4_room_parts", "The robot cleans in {count} parts and may stop at the dock between parts.", {
         count: this.#count(boundaries.length + 1),
       })}</p>` : nothing}
@@ -795,8 +795,8 @@ export class MaticPlanViewsV4 extends LitElement {
         </div>
         <p class="quiet">${ordered
           ? this.#t("v4_plan_order_ordered_hint", "Top to bottom, as listed")
-          : this.#t("v4_plan_order_intelligent_hint", "Longest-waiting rooms first")}</p>
-        ${areas && !ordered ? html`<p class="quiet">${this.#t("v4_plan_areas_rotation_hint", "Custom areas keep their places, and only the rooms between them change order. Choose Saved order to move them.")}</p>` : nothing}
+          : this.#t("v4_plan_order_intelligent_hint", "Longest-waiting first")}</p>
+        ${areas && !ordered ? html`<p class="quiet">${this.#t("v4_plan_areas_rotation_hint", "Rooms and custom areas rotate together. Saved order follows your exact sequence.")}</p>` : nothing}
       </div>
       <div class="list-header">
         <h3 class="heading" id="edit-rooms">${areas
