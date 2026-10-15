@@ -1,11 +1,9 @@
 # v0.5.0-rc24
 
-RC24 is the first release candidate with the 0.5 interface overhaul: Matic Map
-and the robot's Home Assistant surfaces are rebuilt around plain words, one
-action at a time and layouts that fit every screen. RC23 was prepared but never
-tagged, so its entity, setup and action changes ship here for the first time.
-Entity IDs and unique IDs stay the same, so dashboards and automations keep
-working. Requires Home Assistant 2026.10 or later.
+RC24 is the first release candidate with the 0.5 interface overhaul, including
+plain words, one action at a time and layouts for every screen. RC23 was never
+tagged; its entity, setup and action changes first ship here.
+Retained entities keep their IDs and unique IDs; four duplicates are retired below. Requires Home Assistant 2026.10+.
 
 **Stable 0.5.0 waits until every cell of the
 [owner walkthrough](owner-walkthrough-0.5.md) is approved** (117 cells: 13
@@ -79,9 +77,8 @@ Only the names Home Assistant shows change; each entity ID stays as it was.
 | `binary_sensor.matic_diagnostic_upload` | Robot diagnostic upload | Diagnostic upload |
 | `switch.matic_voice_assistant` | Matic Cues | Cues voice assistant |
 
-IDs assume a robot named "Matic". A robot that reports no name is now called
-"Matic (Unofficial)" followed by the last four characters of its host name, and
-the device model reads "Robot".
+IDs assume a robot named "Matic". An unnamed robot is "Matic (Unofficial)" plus
+its host name's last four characters; its device model reads "Robot".
 
 ### Removed
 
@@ -96,7 +93,9 @@ replacement.
 | `sensor.matic_software_version` (Software version) | the device's software version |
 | `sensor.matic_hardware_revision` (Hardware revision) | the device's hardware version |
 
-To restore them, downgrade to RC22.
+For rollback, restore a matching pre-upgrade Home Assistant backup. RC22 rejects
+RC24's minor-11 plan store, so downgrading integration files alone is insufficient.
+Preserve any newer run records before restoring prior state.
 
 ### States, units and defaults
 
@@ -135,7 +134,7 @@ To restore them, downgrade to RC22.
 - **Custom areas in plans**: plan actions and Matic Map take saved custom
   areas beside rooms, or areas alone, and each area runs as its own part of
   the run in its place ([details](actions.md#custom-areas-in-plans)). Earlier
-  RCs can't open the updated plan storage.
+  RCs can't open the updated plan storage; use the rollback guidance above.
 - The five blueprints are renamed "Matic: …", describe every input, count a
   named zone as away, and run only when the robot is docked or idle. Re-import
   them to pick up the changes.
