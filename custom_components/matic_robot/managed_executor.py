@@ -12,7 +12,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta
@@ -59,11 +59,15 @@ from .plans import (
     PLAN_FLOOR_TOKEN,
     PLAN_MOTION_TOKEN,
     PLAN_SESSION_ID,
+    AreaLeg,
     CleaningPlanManager,
     CleaningRoom,
     ManagedMotionReplacedError,
+    PlanLeg,
     effective_room_settings,
     normalize_run_provenance,
+    plan_legs,
+    run_entries,
 )
 from .plans import (
     leg_groups as leg_groups,
@@ -252,7 +256,7 @@ async def _async_dispatch_leg_command(
     hass: HomeAssistant,
     call: ServiceCall,
     entity_id: str,
-    rooms: Sequence[CleaningRoom],
+    rooms: Sequence[CleaningRoom] | AreaLeg,
     motion_token: int | None,
     session_history: Callable[[], Awaitable[tuple[CleaningSessionRecord, ...]]] | None,
     *,
@@ -264,8 +268,13 @@ async def _async_dispatch_leg_command(
     expected_dispatch_identity: bytes | None = None,
     expected_dispatch_history: frozenset[str] | None = None,
 ) -> _PreparedRoomDispatch:
-    """Issue one owned leg mission with its completion-history baseline."""
-    leg = tuple(rooms)
+    """Issue one owned leg mission with its completion-history baseline.
+
+    A custom area leg is its own mission, started through the vacuum's
+    integration-private ``clean_plan_area`` command with the same ownership.
+    """
+    area = rooms if isinstance(rooms, AreaLeg) else None
+    leg = () if isinstance(rooms, AreaLeg) else tuple(rooms)
     if floor_is_current is not None and not floor_is_current():
         raise _validation_error(
             "The robot's room map is unavailable", "room_plan_unavailable"
@@ -299,19 +308,30 @@ async def _async_dispatch_leg_command(
         )
     managed_session_id = uuid4() if motion_token is not None else None
     dispatched_at = dt_util.utcnow()
-    params: dict[str, Any] = {
-        "rooms": [room.room_id for room in leg],
-        "cleaning_mode": leg[0].cleaning_mode,
-        "coverage": leg[0].coverage_setting,
-        "ordered": len(leg) > 1,
-    }
+    params: dict[str, Any]
+    if area is not None:
+        command = "clean_plan_area"
+        params = {
+            "area": area.area_id,
+            "fingerprint": area.fingerprint,
+            "cleaning_mode": area.cleaning_mode,
+            "coverage": area.coverage_setting,
+        }
+    else:
+        command = "clean_rooms"
+        params = {
+            "rooms": [room.room_id for room in leg],
+            "cleaning_mode": leg[0].cleaning_mode,
+            "coverage": leg[0].coverage_setting,
+            "ordered": len(leg) > 1,
+        }
+        if len({effective_room_settings(room) for room in leg}) > 1:
+            params["room_coverage"] = [room.coverage_setting for room in leg]
+            params["room_modes"] = [room.cleaning_mode for room in leg]
     if motion_token is not None:
         params[PLAN_MOTION_TOKEN] = motion_token
     if managed_session_id is not None:
         params[PLAN_SESSION_ID] = str(managed_session_id)
-    if len({effective_room_settings(room) for room in leg}) > 1:
-        params["room_coverage"] = [room.coverage_setting for room in leg]
-        params["room_modes"] = [room.cleaning_mode for room in leg]
     if floor_token is not None:
         params[PLAN_FLOOR_TOKEN] = floor_token
     if on_dispatch is not None:
@@ -322,7 +342,7 @@ async def _async_dispatch_leg_command(
             "send_command",
             {
                 ATTR_ENTITY_ID: entity_id,
-                "command": "clean_rooms",
+                "command": command,
                 "params": params,
             },
             blocking=True,
@@ -962,6 +982,245 @@ async def _async_run_room(
     if completion_verified and prefetch_next is not None:
         await prefetch_next()
     return completion_verified
+
+
+async def _async_wait_for_area_end(
+    hass: HomeAssistant,
+    entity_id: str,
+    cancel_event: asyncio.Event,
+    active_session: Callable[[], Awaitable[bool | None]] | None,
+    reader: Callable[[], Awaitable[bytes | None]] | None,
+    expected: bytes | None,
+) -> None:
+    """Wait until a plan custom area's own native mission ends.
+
+    The robot reports no result for a drawn area, so the end of the area's
+    session is the end of the area; it earns no credit. A replaced or
+    unreadable session fails closed and a robot error is terminal. Firmware
+    can keep an ended mission's identity while the robot is home, so an
+    inactive session when docked or idle also ends it. A low-charge return
+    keeps the same session and is waited out.
+    """
+    if reader is None or not expected:
+        raise RoomTakenOverError(
+            "The custom area's native task could not be identified"
+        )
+    unknown_reads = 0
+    while True:
+        if cancel_event.is_set():
+            raise PlanCancelledError
+        state = hass.states.get(entity_id)
+        if state is not None and state.state == "error":
+            raise _validation_error(
+                "The selected Matic robot reported an error", "robot_error"
+            )
+        identity = await _async_read_session_identity(reader)
+        if identity is None:
+            unknown_reads += 1
+            if unknown_reads >= ACTIVE_SESSION_UNKNOWN_ATTEMPTS:
+                raise RoomTakenOverError(
+                    "The native task ownership could not be verified"
+                )
+        elif identity == b"":
+            return
+        elif identity != expected:
+            raise RoomTakenOverError("The native cleaning task was replaced")
+        else:
+            unknown_reads = 0
+            if (
+                state is not None
+                and state.state in {"docked", "idle"}
+                and await _async_active_session_state(active_session) is False
+            ):
+                return
+        with suppress(TimeoutError):
+            async with asyncio.timeout(ROOM_STATUS_REFRESH_SECONDS):
+                await cancel_event.wait()
+
+
+async def _async_wait_for_area_record(
+    reader: Callable[[], Awaitable[tuple[CleaningSessionRecord, ...]]] | None,
+    baseline: frozenset[bytes] | None,
+    cancel_event: asyncio.Event,
+) -> None:
+    """Wait, bounded, for an ended area mission's own history record.
+
+    The next leg dispatches only while native history is unchanged since the
+    handoff, and an area's record can land minutes after the area ends. This
+    run owned the robot throughout, so any new record is the area's own. A
+    record that never arrives leaves that fence to fail closed.
+    """
+    if reader is None or baseline is None:
+        return
+    for _attempt in range(SESSION_HISTORY_ATTEMPTS):
+        if cancel_event.is_set():
+            raise PlanCancelledError
+        keys = await _async_session_history_baseline(reader)
+        if keys is not None and keys - baseline:
+            return
+        with suppress(TimeoutError):
+            async with asyncio.timeout(SESSION_HISTORY_RETRY_SECONDS):
+                await cancel_event.wait()
+
+
+def _area_refused_before_start(error: BaseException) -> bool:
+    """Whether the vacuum refused an area leg before sending its start."""
+    return isinstance(error, ServiceValidationError) and error.translation_key in {
+        "area_map_changed",
+        "invalid_area",
+        "invalid_plan_command",
+        "plan_area_missing",
+        "room_plan_unavailable",
+    }
+
+
+async def _async_run_area_leg(
+    hass: HomeAssistant,
+    call: ServiceCall,
+    manager: CleaningPlanManager,
+    entity_id: str,
+    serial_number: str,
+    area: AreaLeg,
+    cancel_event: asyncio.Event,
+    motion_token: int,
+    active_session: Callable[[], Awaitable[bool | None]] | None,
+    session_history: Callable[[], Awaitable[tuple[CleaningSessionRecord, ...]]] | None,
+    managed_user_command: Callable[[int, UserCommand], Awaitable[None]] | None,
+    *,
+    prepared_dispatch: _PreparedRoomDispatch | None,
+    finish_room_event: asyncio.Event,
+    floor_is_current: Callable[[], bool] | None,
+    floor_token: str | None,
+    session_identity: Callable[[], Awaitable[bytes | None]] | None,
+    expected_dispatch_identity: bytes | None,
+    expected_dispatch_history: frozenset[str] | None,
+    on_native_identity: Callable[[bytes | None], None],
+    run_id: str,
+    checkpoint_dispatch: Callable[[_PreparedRoomDispatch], Awaitable[None]] | None,
+    provenance: str,
+    settle_history: bool,
+) -> bool:
+    """Clean one plan custom area as its own owned native mission.
+
+    The start must carry the session ID this run minted, as a room leg's does;
+    the area then runs until that session ends. Areas run every time and earn
+    no credit, so the end of the mission is the area's result.
+    """
+    plan_id = str(call.data["plan_id"])
+    event_data = {
+        "entity_id": entity_id,
+        "plan_id": plan_id,
+        "run_id": run_id,
+        "area_id": area.area_id,
+        "area": area.name,
+        "cleaning_mode": area.cleaning_mode,
+        "coverage_setting": area.coverage_setting,
+        "provenance": provenance,
+    }
+    dispatch = prepared_dispatch
+    dispatch_attempted = dispatch is not None
+    try:
+        if dispatch is None:
+            dispatch_attempted = True
+            dispatch = await _async_dispatch_leg_command(
+                hass,
+                call,
+                entity_id,
+                area,
+                motion_token,
+                session_history,
+                floor_is_current=floor_is_current,
+                floor_token=floor_token,
+                on_dispatch=lambda: on_native_identity(None),
+                session_identity=session_identity,
+                on_identity=on_native_identity,
+                expected_dispatch_identity=expected_dispatch_identity,
+                expected_dispatch_history=expected_dispatch_history,
+            )
+            if checkpoint_dispatch is not None:
+                await checkpoint_dispatch(dispatch)
+        await manager.async_mark_area_started(
+            serial_number, plan_id, area, run_id=run_id
+        )
+        if not dispatch.recovered:
+            hass.bus.async_fire(
+                f"{DOMAIN}_area_started", event_data, context=call.context
+            )
+        try:
+            await _async_wait_for_owned_start(
+                hass,
+                entity_id,
+                int(call.data["start_timeout"]),
+                cancel_event,
+                None,
+                session_identity,
+                on_native_identity,
+                dispatch.native_identity_baseline,
+                dispatch.native_identity,
+                already_accepted=dispatch.recovered,
+            )
+        except TimeoutError as err:
+            raise RoomStartTimeoutError from err
+        budget = await _async_completion_budget(
+            dispatch, int(call.data["completion_timeout"]), checkpoint_dispatch
+        )
+        async with asyncio.timeout(budget):
+            await _async_wait_for_area_end(
+                hass,
+                entity_id,
+                cancel_event,
+                active_session,
+                session_identity,
+                dispatch.native_identity,
+            )
+        if settle_history:
+            await _async_wait_for_area_record(
+                session_history, dispatch.history_baseline, cancel_event
+            )
+    except PlanCancelledError, RoomTakenOverError, asyncio.CancelledError:
+        # Stop owns its own STOP; a replaced task was never ours to stop.
+        raise
+    except Exception as err:
+        # A graceful stop cannot upgrade a failed area once it has failed.
+        finish_room_event.clear()
+        if not _managed_stop_fence_owned_by_run(manager, serial_number, run_id):
+            await _async_cleanup_managed_motion(
+                managed_user_command,
+                motion_token,
+                dispatch_attempted
+                and _coverage_guard_cause(err) is None
+                and not _area_refused_before_start(err),
+            )
+        await manager.async_mark_area_finished(serial_number, area, run_id=run_id)
+        hass.bus.async_fire(
+            f"{DOMAIN}_area_failed",
+            {**event_data, "reason_code": _failure_reason_code(err)},
+            context=call.context,
+        )
+        if isinstance(err, ServiceValidationError):
+            raise
+        if isinstance(err, RoomStartTimeoutError):
+            raise _validation_error(
+                f"The robot did not begin cleaning {area.name} before the "
+                "start timeout",
+                "plan_start_timeout",
+                {"room": area.name},
+            ) from err
+        if isinstance(err, TimeoutError):
+            raise _validation_error(
+                f"Timed out while cleaning {area.name}",
+                "plan_timeout",
+                {"room": area.name},
+            ) from err
+        if isinstance(err, MaticError):
+            raise _validation_error(
+                "The robot could not complete the custom area",
+                "robot_command_failed",
+            ) from err
+        raise
+    await manager.async_mark_area_finished(serial_number, area, run_id=run_id)
+    hass.bus.async_fire(f"{DOMAIN}_area_finished", event_data, context=call.context)
+    return True
 
 
 async def _async_run_leg(
@@ -2718,7 +2977,7 @@ async def _async_wait_for_owned_start(
     entity_id: str,
     timeout_seconds: int,
     cancel_event: asyncio.Event | None,
-    rooms: CleaningRoom | Sequence[CleaningRoom],
+    rooms: CleaningRoom | Sequence[CleaningRoom] | None,
     reader: Callable[[], Awaitable[bytes | None]] | None,
     bind_identity: Callable[[bytes | None], None],
     identity_baseline: bytes | None,
@@ -3142,8 +3401,13 @@ async def _async_execute_rooms_reserved(
     _prepared_run_id: str,
     validate_prepared_run: Callable[[], None] | None = None,
     coverage_verifier: CoverageVerifier | None = None,
+    entries: Sequence[Mapping[str, Any]] | None = None,
 ) -> None:
-    """Execute every resolved room with safe cancellation semantics."""
+    """Execute every resolved room and custom area with safe cancellation.
+
+    ``entries`` is the preview's run order when the plan has a custom area;
+    a recovered run reads it from its checkpoint instead.
+    """
     lock = manager.lock(serial_number)
     async with lock:
         manager.require_command_admission(serial_number)
@@ -3173,6 +3437,8 @@ async def _async_execute_rooms_reserved(
         )
         checkpoint = deepcopy(recovery["recovery_checkpoint"]) if recovery else {}
         completed_room_ids: set[str] = set(checkpoint.get("completed_room_ids", []))
+        finished_area_legs: set[int] = set(checkpoint.get("finished_area_legs", []))
+        area_leg_count = 0
         chosen: list[CleaningRoom] = []
         durable = floor_token is not None and session_identity is not None
 
@@ -3253,15 +3519,41 @@ async def _async_execute_rooms_reserved(
             if checkpoint.get("stop_intent") == "after_room":
                 finish_room_event.set()
             chosen = rooms
-            legs = leg_groups(
-                chosen,
-                mixed_settings=durable
-                and (recovery is None or checkpoint.get("mixed_settings") is True),
-                preserve_legacy_settings=(
-                    recovery is not None
-                    and checkpoint.get("mixed_settings") is not True
-                ),
+            leg_entries = (
+                checkpoint.get("entries")
+                if recovery is not None
+                else run_entries(entries)
             )
+            mixed_settings = durable and (
+                recovery is None or checkpoint.get("mixed_settings") is True
+            )
+            preserve_legacy_settings = (
+                recovery is not None and checkpoint.get("mixed_settings") is not True
+            )
+            # A room-only run keeps its legs exactly as before custom areas.
+            legs: list[PlanLeg] = (
+                list(
+                    leg_groups(
+                        chosen,
+                        mixed_settings=mixed_settings,
+                        preserve_legacy_settings=preserve_legacy_settings,
+                    )
+                )
+                if leg_entries is None
+                else plan_legs(
+                    chosen,
+                    leg_entries,
+                    mixed_settings=mixed_settings,
+                    preserve_legacy_settings=preserve_legacy_settings,
+                )
+            )
+            area_leg_count = sum(isinstance(leg, AreaLeg) for leg in legs)
+            if area_leg_count and not durable:
+                # A custom area is recognised only by its owned session.
+                raise _validation_error(
+                    "A plan with custom areas needs a tracked run",
+                    "invalid_plan_command",
+                )
             if recovery is None:
                 run_started = True
                 await manager.async_begin_run(
@@ -3305,6 +3597,8 @@ async def _async_execute_rooms_reserved(
                     "finish_current_room": finish_current_room,
                     "finish_current_room_threshold": finish_current_room_threshold,
                 }
+                if leg_entries is not None:
+                    checkpoint["entries"] = leg_entries
                 if cadence_by_room is not None:
                     checkpoint["cadence_by_room"] = deepcopy(
                         {key: dict(value) for key, value in cadence_by_room.items()}
@@ -3322,8 +3616,10 @@ async def _async_execute_rooms_reserved(
                     serial_number, motion_token
                 ):
                     raise PlanCancelledError
-                prepared_dispatch = recovered_dispatch or prepared_dispatches.pop(
-                    leg[0].room_id, None
+                prepared_dispatch = recovered_dispatch or (
+                    None
+                    if isinstance(leg, AreaLeg)
+                    else prepared_dispatches.pop(leg[0].room_id, None)
                 )
                 recovered_dispatch = None
                 expected_dispatch_history = None
@@ -3390,7 +3686,8 @@ async def _async_execute_rooms_reserved(
                     await manager.async_set_recovery_checkpoint(
                         serial_number, run_id, checkpoint
                     )
-                next_leg = legs[index + 1] if index + 1 < len(legs) else None
+                following = legs[index + 1] if index + 1 < len(legs) else None
+                next_leg = following if isinstance(following, list) else None
 
                 async def prefetch_next(
                     candidate: list[CleaningRoom] | None = next_leg,
@@ -3430,52 +3727,82 @@ async def _async_execute_rooms_reserved(
                     prepared_dispatches[candidate[0].room_id] = dispatched
                     return dispatched
 
-                completion_verified = await _async_run_leg(
-                    hass,
-                    call,
-                    manager,
-                    entity_id,
-                    serial_number,
-                    leg,
-                    cancel_event,
-                    refresh,
-                    motion_token,
-                    active_session,
-                    session_history,
-                    confirm_room_completed,
-                    managed_user_command,
-                    prepared_dispatch=prepared_dispatch,
-                    prefetch_next=prefetch_next
-                    if next_leg is not None and not durable
-                    else None,
-                    finish_room_event=finish_room_event,
-                    floor_is_current=floor_is_current,
-                    floor_token=floor_token,
-                    session_identity=session_identity,
-                    expected_dispatch_identity=expected_dispatch_identity,
-                    expected_dispatch_history=expected_dispatch_history,
-                    on_native_identity=bind_native_identity,
-                    run_id=run_id,
-                    record_room_completed=record_room_completion,
-                    checkpoint_dispatch=save_dispatch if durable else None,
-                    provenance=run_provenance,
-                    recovered_suspend_reason=(
-                        (manager.snapshot(serial_number).get("active_plan") or {}).get(
-                            "suspend_reason"
-                        )
-                        if recovery is not None and index == checkpoint["leg_index"]
-                        else None
-                    ),
-                    recovered_room_id=(
-                        (manager.snapshot(serial_number).get("active_plan") or {}).get(
-                            "room_id"
-                        )
-                        if recovery is not None and index == checkpoint["leg_index"]
-                        else None
-                    ),
-                    wait_for_leg_outcome=wait_for_leg_outcome,
-                    coverage_verifier=coverage_verifier,
-                )
+                if isinstance(leg, AreaLeg):
+                    completion_verified = await _async_run_area_leg(
+                        hass,
+                        call,
+                        manager,
+                        entity_id,
+                        serial_number,
+                        leg,
+                        cancel_event,
+                        motion_token,
+                        active_session,
+                        session_history,
+                        managed_user_command,
+                        prepared_dispatch=prepared_dispatch,
+                        finish_room_event=finish_room_event,
+                        floor_is_current=floor_is_current,
+                        floor_token=floor_token,
+                        session_identity=session_identity,
+                        expected_dispatch_identity=expected_dispatch_identity,
+                        expected_dispatch_history=expected_dispatch_history,
+                        on_native_identity=bind_native_identity,
+                        run_id=run_id,
+                        checkpoint_dispatch=save_dispatch,
+                        provenance=run_provenance,
+                        # Later legs need the area's own record in history.
+                        settle_history=index + 1 < len(legs),
+                    )
+                    finished_area_legs.add(index)
+                    checkpoint["finished_area_legs"] = sorted(finished_area_legs)
+                else:
+                    completion_verified = await _async_run_leg(
+                        hass,
+                        call,
+                        manager,
+                        entity_id,
+                        serial_number,
+                        leg,
+                        cancel_event,
+                        refresh,
+                        motion_token,
+                        active_session,
+                        session_history,
+                        confirm_room_completed,
+                        managed_user_command,
+                        prepared_dispatch=prepared_dispatch,
+                        prefetch_next=prefetch_next
+                        if next_leg is not None and not durable
+                        else None,
+                        finish_room_event=finish_room_event,
+                        floor_is_current=floor_is_current,
+                        floor_token=floor_token,
+                        session_identity=session_identity,
+                        expected_dispatch_identity=expected_dispatch_identity,
+                        expected_dispatch_history=expected_dispatch_history,
+                        on_native_identity=bind_native_identity,
+                        run_id=run_id,
+                        record_room_completed=record_room_completion,
+                        checkpoint_dispatch=save_dispatch if durable else None,
+                        provenance=run_provenance,
+                        recovered_suspend_reason=(
+                            (
+                                manager.snapshot(serial_number).get("active_plan") or {}
+                            ).get("suspend_reason")
+                            if recovery is not None and index == checkpoint["leg_index"]
+                            else None
+                        ),
+                        recovered_room_id=(
+                            (
+                                manager.snapshot(serial_number).get("active_plan") or {}
+                            ).get("room_id")
+                            if recovery is not None and index == checkpoint["leg_index"]
+                            else None
+                        ),
+                        wait_for_leg_outcome=wait_for_leg_outcome,
+                        coverage_verifier=coverage_verifier,
+                    )
                 expected_dispatch_identity = None
                 if not completion_verified:
                     break
@@ -3518,14 +3845,19 @@ async def _async_execute_rooms_reserved(
                         serial_number, run_id, checkpoint
                     )
             completed_room_count = len(completed_room_ids)
-            if finish_room_event.is_set() and completed_room_count < len(chosen):
+            # Every room verified and every custom area's own mission ended.
+            all_entries_done = (
+                completed_room_count == len(chosen)
+                and len(finished_area_legs) == area_leg_count
+            )
+            if finish_room_event.is_set() and not all_entries_done:
                 run_outcome = "cancelled"
                 run_reason_code = "managed_stop"
                 run_cause = "managed_cancellation"
                 mark_managed_stop = getattr(manager, "mark_managed_stop", None)
                 if callable(mark_managed_stop):
                     mark_managed_stop(serial_number)
-            elif completed_room_count == len(chosen):
+            elif all_entries_done:
                 run_outcome = "completed"
                 run_reason_code = "all_rooms_verified"
                 run_cause = "verified_completion"
@@ -3538,8 +3870,8 @@ async def _async_execute_rooms_reserved(
             ):
                 raise PlanCancelledError
             current = hass.states.get(entity_id)
-            needs_dock_confirmation = finish_room_event.is_set() and (
-                completed_room_count < len(chosen)
+            needs_dock_confirmation = (
+                finish_room_event.is_set() and not all_entries_done
             )
             if (
                 (call.data["return_to_base"] or finish_room_event.is_set())
@@ -3897,6 +4229,7 @@ async def _async_execute_rooms(
     wait_for_leg_outcome: LegOutcomeWaiter | None = None,
     validate_prepared_run: Callable[[], None] | None = None,
     coverage_verifier: CoverageVerifier | None = None,
+    entries: Sequence[Mapping[str, Any]] | None = None,
 ) -> None:
     """Reserve queued cadence synchronously, then execute the prepared run."""
     manager.require_command_admission(serial_number)
@@ -3967,6 +4300,7 @@ async def _async_execute_rooms(
             _prepared_run_id=run_id,
             validate_prepared_run=validate_prepared_run,
             coverage_verifier=coverage_verifier,
+            entries=entries,
         )
     finally:
         manager.release_prepared_run(serial_number, run_id)

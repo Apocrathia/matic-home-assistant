@@ -671,17 +671,19 @@ class MaticNextCleaningRoomSensor(_MaticPlanSensor):
                     room.id: room_cadence_identity(floor_plan, room.id)
                     for room in floor_plan.rooms
                 },
+                floor_plan=floor_plan,
             )
         except KeyError, ValueError:
             return None
 
     @property
     def native_value(self) -> str | None:
-        """Return the mapped name of the next due room."""
+        """Return the name of the next room, or custom area, the plan cleans."""
         preview = self._preview()
-        if not preview or not preview["rooms"]:
+        steps = (preview.get("entries") or preview["rooms"]) if preview else None
+        if not steps:
             return None
-        return str(preview["rooms"][0]["name"])
+        return str(steps[0]["name"])
 
     @property
     def extra_state_attributes(self) -> dict[str, object] | None:

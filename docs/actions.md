@@ -72,9 +72,15 @@ an area, and is refused (`area_missing`, `area_map_changed`) when an area was
 deleted or the map changed. Deleting an area removes it from every plan; it
 is refused while it is a plan's only item, and Matic Map names those plans.
 Matic Map lists a plan's areas in their place, and saving the plan there
-keeps them. In this release a plan with an area cannot run yet: Run plan is
-unavailable in Matic Map, and the action answers "Plans with custom areas
-can't run in this version yet" and starts nothing.
+keeps them.
+
+When the plan runs, each area is a robot mission of its own, between the rooms
+around it. The run starts an area only when the robot is idle, rechecks that
+the area is unchanged and on the current map, and follows the area's own
+mission until it ends; the robot reports no per-area result, so an area counts
+as done when its mission ends and never changes room schedules. Stop with
+"finish the current room" lets the current area finish first. The
+`area_started`, `area_finished` and `area_failed` events report each area.
 
 ## Advanced actions
 

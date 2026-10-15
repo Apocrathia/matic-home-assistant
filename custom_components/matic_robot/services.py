@@ -731,13 +731,6 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 call.data.get("plan"),
                 intelligent=intelligent,
             )
-            if _preview_has_area(preview):
-                # Area legs need the executor that ships in a later update;
-                # never start the rooms alone.
-                raise _validation_error(
-                    "Plans with custom areas can't run yet",
-                    "plan_areas_not_supported_yet",
-                )
             if preview_token is not None and preview_token != initial_preview_token:
                 raise _validation_error(
                     "The saved-plan preview is stale; refresh it before starting",
@@ -840,6 +833,8 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 None,
             ),
             validate_prepared_run=validate_prepared_run,
+            # The run order of rooms and custom areas, when there is an area.
+            entries=preview["entries"] if _preview_has_area(preview) else None,
         )
 
     async def async_clean_room_sequence(call: ServiceCall) -> None:
@@ -1734,7 +1729,8 @@ def _saved_plan_execution(
     room_identities = _room_cadence_identities(floor_plan)
     plan = manager.plan(serial_number, str(preview["plan_id"]))
     raw_rooms = preview.get("rooms")
-    if not isinstance(raw_rooms, list) or not raw_rooms:
+    # A plan of custom areas alone runs with no rooms.
+    if not isinstance(raw_rooms, list) or not (raw_rooms or _preview_has_area(preview)):
         raise ValueError("plan has no rooms")
     if any(not isinstance(room, Mapping) for room in raw_rooms):
         raise ValueError("plan contains an invalid room")

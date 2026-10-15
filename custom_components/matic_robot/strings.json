@@ -358,7 +358,6 @@
     "v4_plan_can_run": "Plan enabled",
     "v4_plan_can_run_on": "When it's on, this plan can run from here, from automations and from Home Assistant actions.",
     "v4_reason_run_plan_paused": "Can't run this plan until you turn it on.",
-    "v4_reason_run_plan_areas": "Can't run plans with custom areas in this version yet.",
     "v4_reason_live_map_required": "Can't edit until you show the live map.",
     "v4_zone_invalid": "Keep the outline from crossing itself.",
     "v4_zone_empty": "Make the outline wider and keep it on the mapped floor.",
@@ -1356,9 +1355,6 @@
     },
     "plan_area_limit": {
       "message": "A plan can include up to {limit} custom areas. Remove some areas and try again."
-    },
-    "plan_areas_not_supported_yet": {
-      "message": "Plans with custom areas can't run in this version yet. Remove the custom areas from this plan to run it, or clean each area on its own."
     },
     "invalid_room_position": {
       "message": "Choose a position from 1 to {count}, then try again."

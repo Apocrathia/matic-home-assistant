@@ -402,6 +402,155 @@ def entry_mission_boundaries(entries: Sequence[Mapping[str, Any]]) -> list[int]:
 
 
 @dataclass(frozen=True, slots=True)
+class AreaLeg:
+    """One saved custom area in a plan run: always a native mission of its own.
+
+    ``fingerprint`` is the area's geometry and map binding when the run was
+    prepared; the area is checked against it again just before dispatch.
+    """
+
+    area_id: str
+    name: str
+    cleaning_mode: str
+    coverage_setting: str
+    fingerprint: str
+
+
+type PlanLeg = list[CleaningRoom] | AreaLeg
+
+_RUN_AREA_ENTRY_KEYS = frozenset(
+    {"kind", "area_id", "name", "cleaning_mode", "coverage_setting", "fingerprint"}
+)
+
+
+def run_entries(preview_entries: object) -> list[dict[str, str]] | None:
+    """Return the run-order entries a checkpoint keeps for a plan with areas.
+
+    A plan without areas keeps its legacy checkpoint exactly (``None``): its
+    legs are ``leg_groups`` of the rooms alone.
+    """
+    if not isinstance(preview_entries, list) or not any(
+        isinstance(entry, Mapping) and entry.get("kind") == "area"
+        for entry in preview_entries
+    ):
+        return None
+    return [
+        {
+            "kind": "area",
+            "area_id": str(entry["area_id"]),
+            "name": str(entry["name"]),
+            "cleaning_mode": str(entry["cleaning_mode"]),
+            "coverage_setting": str(entry["coverage_setting"]),
+            "fingerprint": str(entry["binding_fingerprint"]),
+        }
+        if entry["kind"] == "area"
+        else {"kind": "room", "room_id": str(entry["room_id"])}
+        for entry in preview_entries
+    ]
+
+
+def plan_legs(
+    rooms: Sequence[CleaningRoom],
+    entries: object,
+    *,
+    mixed_settings: bool = False,
+    preserve_legacy_settings: bool = False,
+) -> list[PlanLeg]:
+    """Split a run into its native missions, in entry order.
+
+    Without area entries this is ``leg_groups``. Each area is a leg of its
+    own, and the rooms between two areas group as ``leg_groups`` would. The
+    room entries must name ``rooms`` in the same order.
+    """
+    if entries is None:
+        return list(
+            leg_groups(
+                rooms,
+                mixed_settings=mixed_settings,
+                preserve_legacy_settings=preserve_legacy_settings,
+            )
+        )
+    if not isinstance(entries, list):
+        raise ValueError("run entries are invalid")
+    legs: list[PlanLeg] = []
+    pending: list[CleaningRoom] = []
+    position = 0
+
+    def close_rooms() -> None:
+        legs.extend(
+            leg_groups(
+                pending,
+                mixed_settings=mixed_settings,
+                preserve_legacy_settings=preserve_legacy_settings,
+            )
+        )
+        pending.clear()
+
+    for entry in entries:
+        kind = entry.get("kind") if isinstance(entry, Mapping) else None
+        if kind == "room":
+            if position >= len(rooms) or rooms[position].room_id != entry.get(
+                "room_id"
+            ):
+                raise ValueError("run entries do not match its rooms")
+            pending.append(rooms[position])
+            position += 1
+            continue
+        if (
+            kind == "area"
+            and set(entry) == _RUN_AREA_ENTRY_KEYS
+            and all(
+                isinstance(entry[key], str) and entry[key]
+                for key in _RUN_AREA_ENTRY_KEYS
+            )
+            and entry["cleaning_mode"] in _CLEANING_MODES
+            and entry["coverage_setting"] in _COVERAGE_SETTINGS
+            and len(entry["fingerprint"]) == 64
+        ):
+            close_rooms()
+            legs.append(
+                AreaLeg(
+                    entry["area_id"],
+                    entry["name"],
+                    entry["cleaning_mode"],
+                    entry["coverage_setting"],
+                    entry["fingerprint"],
+                )
+            )
+            continue
+        raise ValueError("run entries are invalid")
+    if position != len(rooms):
+        raise ValueError("run entries do not match its rooms")
+    close_rooms()
+    return legs
+
+
+def _dispatching_room_leg(checkpoint: Mapping[str, Any]) -> bool:
+    """Whether the checkpoint's current leg is rooms, the only mixed dispatch."""
+    index = checkpoint.get("leg_index")
+    if checkpoint.get("entries") is None:
+        # Without areas every room shares the one mixed first leg.
+        return index == 0
+    try:
+        legs = checkpoint_legs(checkpoint)
+    except KeyError, TypeError, ValueError:
+        return False
+    return (
+        type(index) is int and 0 <= index < len(legs) and isinstance(legs[index], list)
+    )
+
+
+def checkpoint_legs(checkpoint: Mapping[str, Any]) -> list[PlanLeg]:
+    """Rebuild a durable run's legs from its checkpoint."""
+    return plan_legs(
+        [CleaningRoom(**room) for room in checkpoint["rooms"]],
+        checkpoint.get("entries"),
+        mixed_settings=checkpoint.get("mixed_settings") is True,
+        preserve_legacy_settings=checkpoint.get("mixed_settings") is not True,
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class _RotationCandidate:
     """One room's trusted rotation key and explainable selection metadata."""
 
@@ -1063,19 +1212,21 @@ class CleaningPlanManager:
                 active["status"] = "recovering"
                 recovered = True
             elif active:
-                rotation = robot["rotations"].setdefault(
-                    active["plan_id"], {"rooms": {}}
-                )
-                record = rotation["rooms"].setdefault(active["room_id"], {})
-                record.update(
-                    {
-                        "last_result": "interrupted",
-                        "last_interrupted": dt_util.utcnow().isoformat(),
-                        "last_error": (
-                            "Home Assistant restarted while cleaning this room"
-                        ),
-                    }
-                )
+                if "room_id" in active:
+                    # A custom area keeps no per-room record to interrupt.
+                    rotation = robot["rotations"].setdefault(
+                        active["plan_id"], {"rooms": {}}
+                    )
+                    record = rotation["rooms"].setdefault(active["room_id"], {})
+                    record.update(
+                        {
+                            "last_result": "interrupted",
+                            "last_interrupted": dt_util.utcnow().isoformat(),
+                            "last_error": (
+                                "Home Assistant restarted while cleaning this room"
+                            ),
+                        }
+                    )
                 robot["last_interrupted_plan"] = deepcopy(active)
                 robot["active_plan"] = None
                 recovered = True
@@ -1982,6 +2133,12 @@ class CleaningPlanManager:
             self.cancel(serial_number)
             self._cancellation_reasons.setdefault(serial_number, "managed_stop")
             return PlanStopDecision("immediate")
+        if "room_id" not in active:
+            # A custom area has no duration history to estimate progress from,
+            # so finishing the current entry means finishing the area.
+            self.cancellation_event(serial_number).clear()
+            self.finish_room_event(serial_number).set()
+            return PlanStopDecision("after_room", None, threshold)
         record = (
             robot["rotations"]
             .get(active["plan_id"], {})
@@ -3975,22 +4132,18 @@ class CleaningPlanManager:
                 ):
                     return False
                 try:
-                    legs = leg_groups(
-                        [CleaningRoom(**value) for value in raw_rooms],
-                        mixed_settings=checkpoint.get("mixed_settings") is True,
-                        preserve_legacy_settings=checkpoint.get("mixed_settings")
-                        is not True,
-                    )
-                except TypeError:
+                    legs = checkpoint_legs(checkpoint)
+                except TypeError, ValueError:
                     return False
-                if index >= len(legs) or list(room_ids) != [
-                    room.room_id for room in legs[index]
+                leg = legs[index] if index < len(legs) else None
+                if not isinstance(leg, list) or list(room_ids) != [
+                    room.room_id for room in leg
                 ]:
                     return False
                 native_rooms = {room.id: room for room in floor_plan.rooms}
                 bindings = []
                 settings = {}
-                for room in legs[index]:
+                for room in leg:
                     if room.cleaning_mode not in {"vacuum", "vacuum_and_mop"}:
                         continue
                     if room.room_id not in native_rooms:
@@ -4063,7 +4216,7 @@ class CleaningPlanManager:
                     or not isinstance(checkpoint, dict)
                     or checkpoint.get("phase") != "dispatching"
                     or checkpoint.get("mixed_settings") is not True
-                    or checkpoint.get("leg_index") != 0
+                    or not _dispatching_room_leg(checkpoint)
                 ):
                     raise HomeAssistantError(
                         "Mixed mission checkpoint is not dispatchable"
@@ -4500,6 +4653,80 @@ class CleaningPlanManager:
 
         result = await self._async_mutate_and_save(serial_number, mutate)
         return bool(result)
+
+    async def async_mark_area_started(
+        self,
+        serial_number: str,
+        plan_id: str,
+        area: AreaLeg,
+        *,
+        run_id: str,
+    ) -> None:
+        """Publish the custom area a managed run is cleaning now.
+
+        Areas run every time and earn no credit, so no per-room record changes;
+        the active entry names the area instead of a room.
+        """
+
+        def mutate() -> bool | None:
+            robot = self._robot(serial_number)
+            last_run = robot.get("last_run")
+            if (
+                not isinstance(last_run, dict)
+                or last_run.get("run_id") != run_id
+                or last_run.get("outcome") != "running"
+            ):
+                return None
+            previous = robot.get("active_plan")
+            previous = previous if isinstance(previous, dict) else {}
+            # A restart rejoining the same area keeps its original start.
+            same_area = (
+                previous.get("run_id") == run_id
+                and previous.get("plan_id") == plan_id
+                and previous.get("area_id") == area.area_id
+            )
+            robot["active_plan"] = {
+                "plan_id": plan_id,
+                "plan_name": self._plan_name(serial_number, plan_id),
+                "area_id": area.area_id,
+                "area": area.name,
+                "started": previous.get("started")
+                if same_area
+                else dt_util.utcnow().isoformat(),
+                "status": "running",
+                "run_id": run_id,
+            }
+            if _has_frozen_stop_policy(last_run):
+                robot["active_plan"].update(
+                    {
+                        "finish_current_room": last_run["finish_current_room"],
+                        "finish_current_room_threshold": _bounded_stop_threshold(
+                            last_run["finish_current_room_threshold"]
+                        ),
+                    }
+                )
+            return True
+
+        await self._async_mutate_and_save(serial_number, mutate)
+
+    async def async_mark_area_finished(
+        self, serial_number: str, area: AreaLeg, *, run_id: str
+    ) -> None:
+        """Clear the active custom area once its own native mission ended."""
+
+        def mutate() -> bool | None:
+            robot = self._robot(serial_number)
+            active = robot.get("active_plan")
+            if (
+                not isinstance(active, dict)
+                or active.get("run_id") != run_id
+                or active.get("area_id") != area.area_id
+            ):
+                return None
+            robot["active_plan"] = None
+            return True
+
+        await self._async_mutate_and_save(serial_number, mutate)
 
     async def async_mark_completed(
         self,

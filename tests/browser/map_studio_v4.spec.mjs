@@ -1230,9 +1230,8 @@ test.describe("Map Studio v0.4 foundation", () => {
     ]);
     await expect(gallery.getByText("1 room · 2 custom areas", { exact: true })).toBeVisible();
     await expect(gallery.getByText("The robot cleans these rooms in 3 parts and may stop at the dock between parts.", { exact: true })).toBeVisible();
-    // Home Assistant refuses these runs until the area executor ships, so Run plan says so instead of failing.
-    await expect(gallery.getByRole("button", { name: /^Run plan/ })).toBeDisabled();
-    await expect(gallery.locator(".action-reason")).toHaveText("Can't run plans with custom areas in this version yet.");
+    // A plan with custom areas runs like any other.
+    await expect(gallery.getByRole("button", { name: /^Run plan/ })).toBeEnabled();
 
     await preview([rug], []);
     await expect(gallery.locator("ol.run-list > li")).toHaveText(["1 Rug Mop"]);

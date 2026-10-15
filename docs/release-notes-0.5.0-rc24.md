@@ -131,10 +131,10 @@ To restore them, downgrade to RC22.
   developer actions start with "Advanced:". Run and preview IDs are Advanced
   fields. Action errors are plain translated messages.
 - New device triggers: Room finished, Plan finished and Cleaning finished.
-- **Custom areas in plans**, step 1 of 3: plan actions take saved custom
-  areas beside rooms, or areas alone ([details](actions.md#custom-areas-in-plans)).
-  A plan with an area previews but doesn't run yet. Earlier RCs can't open the
-  updated plan storage.
+- **Custom areas in plans**: plan actions take saved custom areas beside
+  rooms, or areas alone, and each area runs as its own robot mission in its
+  place ([details](actions.md#custom-areas-in-plans)). Earlier RCs can't open
+  the updated plan storage.
 - The five blueprints are renamed "Matic: …", describe every input, count a
   named zone as away, and run only when the robot is docked or idle. Re-import
   them to pick up the changes.

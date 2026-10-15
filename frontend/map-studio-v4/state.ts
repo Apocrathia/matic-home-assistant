@@ -994,8 +994,6 @@ const motionBlockReason = (state: WorkspaceState): Reason => {
 };
 
 const PLAN_PAUSED: Reason = { reason: "Can't run this plan until you turn it on.", reasonKey: "v4_reason_run_plan_paused" };
-// The area executor ships in a later version; Home Assistant refuses these runs until then.
-const PLAN_AREAS: Reason = { reason: "Can't run plans with custom areas in this version yet.", reasonKey: "v4_reason_run_plan_areas" };
 
 /** Whether a saved plan's entries, as the backend sent them, include a custom area. */
 export const hasSavedArea = (entries: unknown): boolean =>
@@ -1301,8 +1299,7 @@ export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction | NoBu
     }
     const plan = state.resources.plans.value?.plans.find((candidate) => candidate.id === state.planDraft.id);
     const blocker = plan?.nextRunPreview?.blocker;
-    const areas = Boolean(plan?.nextRunPreview?.steps?.some((step) => "areaId" in step));
-    const previewReady = !areas && Boolean(plan?.nextRunPreview && !blocker
+    const previewReady = Boolean(plan?.nextRunPreview && !blocker
       && /^[0-9a-f]{64}$/u.test(plan.nextRunPreview.previewToken ?? ""));
     return {
       id: "run-plan",
@@ -1316,9 +1313,7 @@ export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction | NoBu
           ? PLAN_PAUSED
           : previewReady
             ? {}
-            : areas
-              ? PLAN_AREAS
-              : (plan && blocker && (roomBlocker(state, plan) ?? PLAN_BLOCKERS[blocker])) || PLAN_PREVIEW),
+            : (plan && blocker && (roomBlocker(state, plan) ?? PLAN_BLOCKERS[blocker])) || PLAN_PREVIEW),
     };
   }
   if (state.workflow === "areaReview") {
