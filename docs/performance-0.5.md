@@ -1,8 +1,8 @@
 # Matic 0.5 performance evidence
 
-This is paired source and compiled-asset evidence for RC9. The [unreleased refinements](performance-0.5-refinements.md)
-have a separate current lab receipt; these RC9 results do not qualify them or establish runtime,
-field, mobile, transport, or physical acceptance.
+Current lab evidence is in the [RC24 receipt](performance-0.5-rc24.md).
+The RC9 results below and [earlier refinements](performance-0.5-refinements.md) remain historical;
+they do not qualify RC24 or establish runtime, field, transport, or physical acceptance.
 The release ledger is [acceptance-0.5.md](acceptance-0.5.md).
 
 The authority baseline is stable v0.4.6; the paired control remains v0.4.5.
