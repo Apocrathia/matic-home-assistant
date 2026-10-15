@@ -161,14 +161,17 @@ export const COPY = {
   v4_reason_save_plan: "Can't save until the plan has a name and at least one room or custom area.",
 
   // room-schedule.md §6
-  v4_room_schedule: "Schedule",
-  v4_room_cadence_named: "Room schedule for {room}",
+  v4_cadence_smart_intro: "Add mopping or vary vacuum coverage automatically, based on completed cleans.",
+  v4_cadence_mop_legacy_hint: "This saved setting mops every clean. Choose 2 or more for occasional mopping, or turn it off and select Vacuum + mop above.",
+  v4_cadence_mop_smart_hint: "Every 2 cleans or more. For mopping on every clean, turn this off and choose Vacuum + mop above.",
+  v4_room_schedule: "Smart cleaning",
+  v4_room_cadence_named: "Smart cleaning for {room}",
   v4_room_more_named: "More for {room}",
   v4_reset_mop_cadence_button: "Reset mopping",
   v4_reset_coverage_cadence_button: "Reset vacuum rotation",
   v4_cadence_mop_interval: "Mop every {count} cleans",
   v4_cadence_mop_interval_one: "Mop every clean",
-  v4_cadence_mop_off: "Mop",
+  v4_cadence_mop_off: "Occasional mopping",
   v4_cadence_coverage_quick: "Quick vacuum every {count} cleans",
   v4_cadence_coverage_quick_one: "Quick vacuum every clean",
   v4_cadence_coverage_quick_off: "Quick vacuum",
@@ -194,19 +197,19 @@ export const COPY = {
   v4_cadence_next_mop_quick: "Mop and quick vacuum on the next clean",
   v4_cadence_next_mop_optimal: "Mop and optimal vacuum on the next clean",
   v4_cadence_next_mop_heavy: "Mop and heavy duty vacuum on the next clean",
-  v4_cadence_next_hint: "Brings it forward once; the schedule then continues as usual.",
+  v4_cadence_next_hint: "Do it once on the next clean, then resume the usual pattern.",
   v4_advanced: "Advanced",
-  v4_cadence_scope: "Count cleans",
+  v4_cadence_scope: "Count completed cleans",
   v4_cadence_shared: "Across all plans (recommended)",
   v4_cadence_this_plan: "In this plan only",
-  v4_cadence_new_shared_effect: "Saving creates a schedule shared by every plan that uses this room, starting from zero.",
+  v4_cadence_new_shared_effect: "Starts counting from zero, across plans that use these settings.",
   v4_cadence_shared_join_effect: "Saving shares this room's progress with every plan that uses it, picking up any progress already counted.",
   v4_cadence_shared_leave_effect: "Saving starts new progress for this plan only, and other plans keep the shared schedule.",
-  v4_cadence_new_private_effect: "Saving starts progress for this plan only, from zero.",
-  v4_cadence_existing_effect: "Changing how often keeps the progress, and turning a schedule off pauses it.",
+  v4_cadence_new_private_effect: "Starts counting completed cleans in this plan only, from zero.",
+  v4_cadence_existing_effect: "Changing how often keeps your progress. Turning this off pauses counting.",
   v4_cadence_shared_available: "{room} has a shared schedule, and turning on a row uses it.",
   v4_cadence_join_pending: "Uses {room}'s shared schedule; change it after you save, or choose \"In this plan only\" under Advanced.",
-  v4_cadence_shared_edit_effect: "Changes apply to every plan that uses {room}'s shared schedule.",
+  v4_cadence_shared_edit_effect: "Changes apply to every plan using {room}'s smart cleaning settings.",
   v4_cadence_description: "Only cleans the robot confirms count toward these schedules, and due work stays due until a clean is confirmed.",
   v4_cadence_mop_progress_unverified: "Can't run this schedule until you reset its mopping progress, which Home Assistant can't confirm.",
 
@@ -274,7 +277,7 @@ export const COPY = {
   v4_rooms_busy: "Can't change rooms until the robot finishes or stops.", // home-rooms.md §6
   v4_reason_plan_saving: "Waiting for Home Assistant to save the plan.", // plan.md §6
   v4_reason_plan_switch_busy: "Can't change this until the robot finishes.", // plan.md §6
-  v4_cadence_clear_mop_to_change_normal: "Can't change the cleaning mode until the mop schedule is off.", // room-schedule.md §6
+  v4_cadence_clear_mop_to_change_normal: "Vacuum is the usual clean; mopping is added when due. Turn occasional mopping off to choose Vacuum + mop for every clean.", // room-schedule.md §6
 } as const;
 
 export type CopyKey = keyof typeof COPY;

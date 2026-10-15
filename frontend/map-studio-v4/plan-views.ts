@@ -564,7 +564,7 @@ export class MaticPlanViewsV4 extends LitElement {
             >${COVERAGES.map((option) => html`<option value=${option} ?selected=${option === room.coverageSetting}>${coverageLabel(this.#t, option)}</option>`)}</select>
           </label>
         </div>
-        ${modeLocked ? html`<p class="sched-status sched-reason" id="mode-reason">${icon(iconNoticeWarning)}<span>${this.#t("v4_cadence_clear_mop_to_change_normal", "Can't change the cleaning mode until the mop schedule is off.")}</span></p>` : nothing}
+        ${modeLocked ? html`<p class="schedule-note" id="mode-reason"><span>${this.#t("v4_cadence_clear_mop_to_change_normal", "Vacuum is the usual clean; mopping is added when due. Turn occasional mopping off to choose Vacuum + mop for every clean.")}</span></p>` : nothing}
         ${room.cleaningMode === "vacuum" ? nothing : html`<p class="subtle">${this.#t("v4_mop_coverage_hint", "Vacuum coverage applies only when vacuuming. Use the robot's Double-pass mopping setting for an extra mop pass.")}</p>`}
         ${scheduleBlock({
           t: this.#t,

@@ -606,7 +606,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     // plan.md §3: a room's schedule is inside its settings.
     await inspector.getByRole("button", { name: "Settings for Kitchen", exact: true }).click();
     // room-schedule.md §3: Reset lives in the room's "More for {room}" menu.
-    const more = inspector.getByRole("group", { name: "Room schedule for Kitchen" }).getByRole("button", { name: "More for Kitchen" });
+    const more = inspector.getByRole("group", { name: "Smart cleaning for Kitchen" }).getByRole("button", { name: "More for Kitchen" });
     await more.click();
     await expect(inspector.getByRole("menuitem", { name: "Reset vacuum rotation progress for Kitchen" })).toBeVisible();
     const reset = inspector.getByRole("menuitem", { name: "Reset mopping progress for Kitchen" });
@@ -666,7 +666,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
     const inspector = gallery.locator(".inspector");
     await inspector.getByRole("button", { name: "Settings for Kitchen", exact: true }).click();
-    await expect(inspector.getByRole("group", { name: "Room schedule for Kitchen" })).toBeVisible();
+    await expect(inspector.getByRole("group", { name: "Smart cleaning for Kitchen" })).toBeVisible();
     await expect(inspector).toContainText("Can't run this schedule until you reset its mopping progress, which Home Assistant can't confirm.");
     await expect(inspector).toContainText("Can't run this schedule until you reset its vacuum rotation progress, which Home Assistant can't confirm.");
     await expect(inspector.getByRole("button", { name: "Reset mopping progress for Kitchen" })).toBeVisible();
@@ -4769,10 +4769,11 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(kitchen).toHaveAttribute("aria-expanded", "true");
     await expect(list.getByLabel(/^Cleaning mode for /)).toHaveCount(1);
     // room-schedule.md §3: the open room shows its Schedule group, headed, not a disclosure.
-    const cadenceSettings = list.getByRole("group", { name: "Room schedule for Kitchen" });
+    const cadenceSettings = list.getByRole("group", { name: "Smart cleaning for Kitchen" });
     await expect(cadenceSettings).toHaveCount(1);
-    await expect(cadenceSettings.getByRole("heading", { level: 3, name: "Schedule" })).toBeVisible();
-    await expect(cadenceSettings.getByRole("spinbutton", { name: /^Mop/ })).toHaveAttribute("min", "1");
+    await expect(cadenceSettings.getByRole("heading", { level: 3, name: "Smart cleaning" })).toBeVisible();
+    await expect(cadenceSettings.getByRole("spinbutton", { name: /^(Mop|Occasional mopping)/ })).toHaveAttribute("min", "2");
+    await expect(cadenceSettings.getByRole("spinbutton", { name: /vacuum/ })).toHaveAttribute("min", "1");
     await expect(cadenceSettings.getByRole("spinbutton", { name: /vacuum/ })).toHaveAttribute("max", "100");
     const second = list.getByRole("button", { name: /^Settings for / }).nth(1);
     await second.click();
@@ -4997,7 +4998,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
       const rooms = gallery.getByRole("list", { name: "Rooms", exact: true });
       await rooms.getByRole("button", { name: "Settings for Kitchen", exact: true }).click();
-      const cadence = rooms.getByRole("group", { name: "Room schedule for Kitchen" });
+      const cadence = rooms.getByRole("group", { name: "Smart cleaning for Kitchen" });
       const mopInterval = cadence.getByRole("spinbutton", { name: "Mop every 100 cleans" });
       const coverageInterval = cadence.getByRole("spinbutton", { name: "Heavy duty vacuum every 2 cleans" });
       const coverage = cadence.getByLabel("Vacuum level for Kitchen");

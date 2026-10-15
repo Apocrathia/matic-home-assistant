@@ -13,9 +13,9 @@ import { formatNumber, type Translate } from "./plan-copy";
 import { roomBlockReason } from "./state";
 import { icon, iconChevronRight, iconNoticeWarning, iconOverflow } from "./icons";
 import type { MenuController } from "./menu-controller";
-import { stepper } from "./stepper";
+import { MOP_INTERVAL_MIN, snapInterval, stepper } from "./stepper";
 
-export { INTERVAL_MAX, INTERVAL_MIN, snapInterval, stepInterval } from "./stepper";
+export { INTERVAL_MAX, INTERVAL_MIN, MOP_INTERVAL_MIN, snapInterval, stepInterval } from "./stepper";
 
 export const MODES: readonly CleaningMode[] = ["vacuum", "mop", "vacuum_and_mop"];
 export const COVERAGES: readonly CoverageSetting[] = ["quick", "standard", "heavy_duty"];
@@ -167,7 +167,7 @@ const NEXT: Record<CoverageSetting, (t: Translate, mop: boolean) => string> = {
 
 const mopLabel = (t: Translate, locale: string, every: number | null): string =>
   every === null
-    ? t("v4_cadence_mop_off", "Mop")
+    ? t("v4_cadence_mop_off", "Occasional mopping")
     : every === 1
       ? t("v4_cadence_mop_interval_one", "Mop every clean")
       : t("v4_cadence_mop_interval", "Mop every {count} cleans", { count: formatNumber(locale, every) });
@@ -304,20 +304,20 @@ const explanation = (t: Translate, f: Facts, name: string): string | null => {
     return t("v4_cadence_shared_leave_effect", "Saving starts new progress for this plan only, and other plans keep the shared schedule.");
   }
   if (!participating && policy.scope === "shared" && scheduled) {
-    return t("v4_cadence_new_shared_effect", "Saving creates a schedule shared by every plan that uses this room, starting from zero.");
+    return t("v4_cadence_new_shared_effect", "Starts counting from zero, across plans that use these settings.");
   }
   // A paused private schedule keeps its counters, so a row turned back on
   // resumes them (cadence.py:93-99); only a row with none starts from zero.
   const resumes = (["mop", "coverage"] as const).some((kind) =>
     policy[FIELDS[kind].every] !== null && (f.savedProgress?.[FIELDS[kind].count] ?? 0) > 0);
   if (policy.scope === "plan" && scheduled && !hasSchedule(f.savedPolicy) && !resumes) {
-    return t("v4_cadence_new_private_effect", "Saving starts progress for this plan only, from zero.");
+    return t("v4_cadence_new_private_effect", "Starts counting completed cleans in this plan only, from zero.");
   }
   if (f.savedPolicy && (policy.mopEveryN !== f.savedPolicy.mopEveryN || policy.coverageEveryN !== f.savedPolicy.coverageEveryN)) {
-    return t("v4_cadence_existing_effect", "Changing how often keeps the progress, and turning a schedule off pauses it.");
+    return t("v4_cadence_existing_effect", "Changing how often keeps your progress. Turning this off pauses counting.");
   }
   return participating
-    ? t("v4_cadence_shared_edit_effect", "Changes apply to every plan that uses {room}'s shared schedule.", { room: name })
+    ? t("v4_cadence_shared_edit_effect", "Changes apply to every plan using {room}'s smart cleaning settings.", { room: name })
     : null;
 };
 
@@ -350,7 +350,7 @@ export const scheduleModel = (t: Translate, locale: string, input: ScheduleInput
       status: statusLine(t, locale, f, "mop"),
       reason: mopUnverified
         ? t("v4_cadence_mop_progress_unverified", "Can't run this schedule until you reset its mopping progress, which Home Assistant can't confirm.")
-        : mopBlocked ? t("v4_cadence_mop_requires_vacuum", "Can't add a mop schedule until this room's cleaning mode is Vacuum.") : null,
+        : mopBlocked ? t("v4_cadence_mop_requires_vacuum", "This mode already mops every clean. Choose Vacuum above for occasional mopping.") : null,
       blocked: mopBlocked,
       unverified: mopUnverified,
     },
@@ -412,7 +412,13 @@ export const withInterval = (input: ScheduleInput, kind: ScheduleKind, every: nu
   const f = facts(input);
   const { policy } = f;
   if (f.joinPending) return null;
+  if (kind === "mop" && every !== null) every = snapInterval(String(every), false, policy.mopEveryN, MOP_INTERVAL_MIN);
   if (every !== null && !hasSchedule(policy) && policy.scope === "shared") {
+    // Enabling occasional work must not silently join an every-clean mop
+    // policy. An explicit Advanced scope choice can still join it unchanged.
+    if (f.shared?.mopEveryN === 1) {
+      return withInterval({ ...input, room: { ...input.room, cadence: { ...policy, scope: "plan" } } }, kind, every);
+    }
     const join = joined(f);
     if (join) return join;
     if (unjoinable(f)) return withInterval({ ...input, room: { ...input.room, cadence: { ...policy, scope: "plan" } } }, kind, every);
@@ -589,7 +595,8 @@ export const scheduleBlock = (context: ScheduleContext, room: PlanRoom, index: n
           labelId: `${id}-label`,
           label: data.label,
           value: data.every,
-          describedBy: ids(lineId, held),
+          minimum: kind === "mop" ? MOP_INTERVAL_MIN : 1,
+          describedBy: ids(lineId, policy.mopEveryN === 1 && kind === "mop" ? "sched-mop-guide" : null, held),
           heldBy: held ?? (data.blocked ? lineId : null),
           readonly: model.joinPending,
           t,
@@ -597,6 +604,9 @@ export const scheduleBlock = (context: ScheduleContext, room: PlanRoom, index: n
         })}
       </div>
       ${line(`${id}-status`, data)}
+      ${kind === "mop" ? html`<small class="sched-status" id="sched-mop-guide">${policy.mopEveryN === 1
+        ? t("v4_cadence_mop_legacy_hint", "This saved setting mops every clean. Choose 2 or more for occasional mopping, or turn it off and select Vacuum + mop above.")
+        : t("v4_cadence_mop_smart_hint", "Every 2 cleans or more. For mopping on every clean, turn this off and choose Vacuum + mop above.")}</small>` : nothing}
       ${data.unverified && draft.id ? html`${resetButton(kind, "ms-btn ms-btn--secondary", `${id}-reset-reason`)}
         ${block ? reasonLine(`${id}-reset-reason`, block, "p") : nothing}` : nothing}
     </div>`;
@@ -622,10 +632,13 @@ export const scheduleBlock = (context: ScheduleContext, room: PlanRoom, index: n
       if (next) patch(next);
     }}
   >${COVERAGES.map((option) => html`<option value=${option} ?selected=${option === model.level}>${coverageLabel(t, option)}</option>`)}</select>`;
-  return html`<section class="schedule" role="group" aria-label=${t("v4_room_cadence_named", "Room schedule for {room}", { room: name })}>
-    <div class="schedule-head"><h3>${t("v4_room_schedule", "Schedule")}</h3>${overflow}</div>
+  return html`<section class="schedule" role="group" aria-label=${t("v4_room_cadence_named", "Smart cleaning for {room}", { room: name })}>
+    <div class="schedule-head"><h3>${t("v4_room_schedule", "Smart cleaning")}</h3>${overflow}</div>
+    <p class="schedule-note">${t("v4_cadence_smart_intro", "Add mopping or vary vacuum coverage automatically, based on completed cleans.")}</p>
     ${model.roomReason ? reasonLine(null, withRoom(model.roomReason, name), "p") : nothing}
-    ${model.sharedHint ? html`<p class="schedule-note">${withRoom(t("v4_cadence_shared_available", "{room} has a shared schedule, and turning on a row uses it.", { room: ROOM_MARK }), name)}</p>` : nothing}
+    ${model.sharedHint ? html`<p class="schedule-note">${withRoom(input.catalogRoom?.sharedCadence?.mopEveryN === 1
+      ? t("v4_cadence_shared_every_clean_hint", "{room}'s shared setting mops every clean. New smart cleaning stays in this plan; use Advanced to join the existing setting.", { room: ROOM_MARK })
+      : t("v4_cadence_shared_available", "{room} has a shared schedule, and turning on a row uses it.", { room: ROOM_MARK }), name)}</p>` : nothing}
     ${row("mop", model.mop, nothing)}
     ${row("coverage", model.coverage, level)}
     ${model.legacyCoverage ? html`<button
@@ -639,7 +652,7 @@ export const scheduleBlock = (context: ScheduleContext, room: PlanRoom, index: n
     ${next ? html`<div class="switch-row">
       <span class="switch-copy">
         <span id="sched-next-label">${next.label}</span>
-        <small id="sched-next-hint">${t("v4_cadence_next_hint", "Brings it forward once; the schedule then continues as usual.")}</small>
+        <small id="sched-next-hint">${t("v4_cadence_next_hint", "Do it once on the next clean, then resume the usual pattern.")}</small>
       </span>
       <button
         class="ms-switch"
@@ -657,7 +670,7 @@ export const scheduleBlock = (context: ScheduleContext, room: PlanRoom, index: n
     <details class="advanced">
       <summary>${t("v4_advanced", "Advanced")}${icon(iconChevronRight)}</summary>
       <fieldset class="scope">
-        <legend>${t("v4_cadence_scope", "Count cleans")}</legend>
+        <legend>${t("v4_cadence_scope", "Count completed cleans")}</legend>
         ${([["shared", t("v4_cadence_shared", "Across all plans (recommended)")], ["plan", t("v4_cadence_this_plan", "In this plan only")]] as const).map(([scope, label]) => {
           const off = held ?? (scope === "shared" && model.sharedReason ? "sched-scope-reason" : null);
           return html`<label class="scope-row"><input
