@@ -529,6 +529,63 @@ async def test_selected_saved_address_rejects_a_bond_reused_after_preflight(
     client.write_gatt_char.assert_not_awaited()
 
 
+@pytest.mark.parametrize("selected", [False, True])
+async def test_uncertain_pair_result_stops_before_gatt(monkeypatch, selected) -> None:
+    path = TARGET_PATH
+    discovery = _candidate(TEST_ADDRESS, path, fresh=True)
+    session = SimpleNamespace(
+        async_require_connection_agent=AsyncMock(),
+        async_has_bond=AsyncMock(return_value=False),
+        async_remove_bond=AsyncMock(),
+        async_pair=AsyncMock(),
+        reused_existing_bond=None,
+    )
+
+    @asynccontextmanager
+    async def agent(*_args):
+        yield session
+
+    class Client:
+        is_connected = False
+
+        def __init__(self) -> None:
+            self.write_gatt_char = AsyncMock()
+            self.read_gatt_char = AsyncMock()
+
+        @property
+        def services(self):
+            raise AssertionError(
+                "uncertain Pair result must stop before service discovery"
+            )
+
+    client = Client()
+    monkeypatch.setattr(bluetooth_pairing, "_async_bluez_pairing_agent", agent)
+    monkeypatch.setattr(
+        bluetooth_pairing,
+        "_async_matic_discoveries",
+        AsyncMock(return_value=[discovery]),
+    )
+    connect = AsyncMock(return_value=client)
+    monkeypatch.setattr(bluetooth_pairing, "establish_connection", connect)
+    error = (
+        BluetoothBondResetFailedError if selected else BluetoothPairingIncompleteError
+    )
+
+    with pytest.raises(error):
+        await async_request_bluetooth_credential(
+            object(),
+            "synthetic-user",
+            replace_existing_bond=True,
+            bond_address=TEST_ADDRESS,
+            reset_bond_paths=set(),
+            reset_bond_path=path if selected else None,
+        )
+
+    connect.assert_awaited_once()
+    client.write_gatt_char.assert_not_awaited()
+    client.read_gatt_char.assert_not_awaited()
+
+
 async def test_selected_device_address_change_before_grant_is_rejected(
     monkeypatch,
 ) -> None:
@@ -858,7 +915,7 @@ def _credential_client(user_id: str) -> SimpleNamespace:
     )
 
 
-@pytest.mark.parametrize("reused", [False, True, None])
+@pytest.mark.parametrize("reused", [False, True])
 async def test_grant_reports_the_issuing_candidates_passkey_bond(
     monkeypatch, reused
 ) -> None:

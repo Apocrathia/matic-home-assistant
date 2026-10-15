@@ -657,6 +657,20 @@ async def async_request_bluetooth_credential(
                             bluez_device_path,
                             replace_existing=replace_bond,
                         )
+                        if bluez_session.reused_existing_bond is None:
+                            if (
+                                reset_bond_path == bluez_device_path
+                                and reset_bond_paths is not None
+                                and bluez_device_path in reset_bond_paths
+                            ):
+                                raise BluetoothBondResetFailedError(
+                                    "BlueZ could not confirm a fresh bond after the "
+                                    "selected device's single reset attempt"
+                                )
+                            raise BluetoothPairingIncompleteError(
+                                "BlueZ could not confirm whether the Matic bond was "
+                                "created by this pairing attempt"
+                            )
                         if bluez_session.reused_existing_bond:
                             if (
                                 reset_bond_path is not None

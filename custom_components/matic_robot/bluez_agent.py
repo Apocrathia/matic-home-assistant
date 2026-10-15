@@ -161,9 +161,16 @@ class MaticPairingAgent(ServiceInterface):
 class BlueZPairingSession:
     """Pair a device through the connection that owns its scoped agent."""
 
-    def __init__(self, bus: MessageBus, *, default_agent_ready: bool = True) -> None:
+    def __init__(
+        self,
+        bus: MessageBus,
+        *,
+        default_agent_ready: bool = True,
+        passkey_exchange: BluetoothPasskeyExchange | None = None,
+    ) -> None:
         self._bus = bus
         self._default_agent_ready = default_agent_ready
+        self._passkey_exchange = passkey_exchange
         # None until async_pair decides; only False proves a new bond.
         self.reused_existing_bond: bool | None = None
 
@@ -257,8 +264,22 @@ class BlueZPairingSession:
             if err.dbus_error == _BLUEZ_ALREADY_EXISTS and await self._async_is_paired(
                 device_path
             ):
-                _LOGGER.debug("Reusing the concurrently completed Matic bond")
-                self.reused_existing_bond = False
+                exchange = self._passkey_exchange
+                if (
+                    exchange is not None
+                    and exchange.candidate_requested
+                    and exchange.candidate_submitted
+                    and exchange.candidate_answered
+                ):
+                    _LOGGER.debug(
+                        "Accepting the concurrently completed Matic bond after "
+                        "the scoped agent answered its passkey request"
+                    )
+                    self.reused_existing_bond = False
+                else:
+                    _LOGGER.debug(
+                        "BlueZ reports a concurrent bond without scoped passkey proof"
+                    )
                 return
             if err.dbus_error == _BLUEZ_IN_PROGRESS:
                 # Matic's own Security Request already started this bond;
@@ -316,7 +337,11 @@ async def async_bluez_pairing_agent(
         except Exception:
             _LOGGER.debug("Could not register the BlueZ pairing agent", exc_info=True)
         yield (
-            BlueZPairingSession(bus, default_agent_ready=default_agent_ready)
+            BlueZPairingSession(
+                bus,
+                default_agent_ready=default_agent_ready,
+                passkey_exchange=passkey_exchange,
+            )
             if registered
             else None
         )

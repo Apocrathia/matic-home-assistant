@@ -237,7 +237,7 @@ async def test_pairing_session_rejects_invalid_device_path_for_reauth() -> None:
         )
 
 
-async def test_pairing_session_accepts_a_bond_completed_during_pairing() -> None:
+async def test_pairing_session_does_not_attest_unproven_already_exists_race() -> None:
     bus = AsyncMock()
     bus.call.side_effect = [
         _paired(False),
@@ -250,7 +250,53 @@ async def test_pairing_session_accepts_a_bond_completed_during_pairing() -> None
     await session.async_pair("/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF")
 
     assert bus.call.await_count == 3
+    assert session.reused_existing_bond is None
+
+
+async def test_pairing_session_attests_already_exists_with_answered_passkey() -> None:
+    exchange = BluetoothPasskeyExchange()
+    exchange.begin_candidate()
+    request = asyncio.create_task(exchange.async_request_passkey())
+    await exchange.async_wait_until_requested()
+    exchange.submit(123456)
+    assert await request == 123456
+    exchange.note_answered()
+
+    bus = AsyncMock()
+    bus.call.side_effect = [
+        _paired(False),
+        _error("org.bluez.Error.AlreadyExists", "Already Exists"),
+        _paired(True),
+    ]
+    session = BlueZPairingSession(bus, passkey_exchange=exchange)
+
+    await session.async_pair("/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF")
+
+    assert bus.call.await_count == 3
     assert session.reused_existing_bond is False
+
+
+async def test_already_exists_stays_uncertain_without_agent_answer() -> None:
+    exchange = BluetoothPasskeyExchange()
+    exchange.begin_candidate()
+    request = asyncio.create_task(exchange.async_request_passkey())
+    await exchange.async_wait_until_requested()
+    exchange.submit(123456)
+    assert await request == 123456
+
+    bus = AsyncMock()
+    bus.call.side_effect = [
+        _paired(False),
+        _error("org.bluez.Error.AlreadyExists", "Already Exists"),
+        _paired(True),
+    ]
+    session = BlueZPairingSession(bus, passkey_exchange=exchange)
+
+    await session.async_pair("/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF")
+
+    assert exchange.candidate_requested and exchange.candidate_submitted
+    assert not exchange.candidate_answered
+    assert session.reused_existing_bond is None
 
 
 async def test_pairing_session_rejects_unverified_already_exists() -> None:
@@ -290,9 +336,11 @@ async def test_pairing_agent_registers_and_unregisters_a_default_agent(
     bus = _install_message_bus(
         monkeypatch, [_method_return(), _method_return(), _method_return()]
     )
+    exchange = BluetoothPasskeyExchange()
 
-    async with async_bluez_pairing_agent(TEST_ADDRESS) as session:
+    async with async_bluez_pairing_agent(TEST_ADDRESS, exchange) as session:
         assert isinstance(session, BlueZPairingSession)
+        assert session._passkey_exchange is exchange
         exported_path, exported_agent = bus.export.call_args.args
         assert exported_path == _AGENT_PATH
         assert isinstance(exported_agent, MaticPairingAgent)
