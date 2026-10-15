@@ -2,23 +2,21 @@
 
 ## Source and scope
 
-- Candidate: `77448328ea2824238616fbf85c33e3cbc073dbc8`; intended base: `b03a3839e7eefe50cd4205835d280aca4b1695ba`.
+- Candidate: `d865312f36ef21a372d946272d206a70eb1ea92c`; intended base: `b03a3839e7eefe50cd4205835d280aca4b1695ba`.
 - This is synthetic browser and local source evidence. It does not establish live command persistence, robot compatibility or release acceptance.
 
-## Fixed during this walkthrough
+## Changes verified
 
-| Commit | Change |
-|---|---|
-| `05e3d963` | Area-only plans no longer say they clean rooms; Save guidance accepts a room or custom area. |
-| `e026dd13` | Intelligent rotation includes rooms and custom areas; Saved order retains the exact sequence. Area history is geometry-bound and completion requires the owned session to end. |
-| `34bd4868` | Smart cleaning wording and occasional mopping use Off or 2–100 cleans; normal Vacuum + mop remains distinct. Existing every-clean settings are preserved until explicitly changed. |
-| `77448328` | Full room/area names wrap in Run/Edit; hidden disabled reasons no longer cause outer-page scrolling; accessibility readouts include omitted heading actions. |
+- Home shortcuts have a distinct, softly tinted group and play icons. Standard navigation remains neutral; comfortable controls and full names are preserved.
+- Long room/area names wrap in Run/Edit. Hidden disabled explanations are anchored so they cannot extend the outer page.
+- Destructive text, selection labels and canvas badges use colors resolved against their actual backgrounds. Short dialogs scroll within the viewport.
+- Smart cleaning defaults and scope labels agree; held-mode and paused-plan copy explain the current state. Existing every-clean schedules remain supported.
+- Intelligent rotation includes rooms and custom areas; Saved order preserves the sequence. Area history is geometry-bound.
+- Area completion rereads cancellation and robot state after awaiting session identity, preventing false completion when Stop, error or resumed activity arrives during that read.
 
-The page-scroll root cause was an absolutely positioned, visually hidden explanation whose static position extended beyond the clipped workflow. Anchoring it fixes document bounds while preserving its accessible description. Regression checks cover phone, tablet and desktop.
+## Full matrix on the candidate
 
-## Full matrix on the final candidate
-
-All 117 cells and 765 banner-step visits completed. Safari covered C01–C07 and C09 (104 cells, 680 steps); Chromium covered C08 (13 cells, 85 steps) with forced colours and reduced motion confirmed. R08 included opening Help in every state. No stage errors, outer-page overflow or visible-control text overflow were observed.
+All 117 cells and 765 banner-step visits completed. Safari covered C01–C07 and C09 (104 cells, 680 steps); Chromium covered C08 (13 cells, 85 steps) with forced colors and reduced motion confirmed. R08 included opening Help in every state. There were no missing/duplicate steps, stage errors, outer-page overflow or visible-control text overflow.
 
 | Row | Journey | Cells | Step visits |
 |---|---|---:|---:|
@@ -36,36 +34,44 @@ All 117 cells and 765 banner-step visits completed. Safari covered C01–C07 and
 | R12 | Your areas | 9 | 63 |
 | R13 | Home shortcuts | 9 | 72 |
 
-C09 also has 85 WebKit name/role readouts, with no unnamed visible form/action controls. Direct control snapshots supplement 22 whole-page omissions, including Edit and More actions in a shadow heading with `display:contents`. This is browser accessibility evidence, not a full physical screen-reader usability verdict.
 
-The matrix checks staged states, copy, geometry, media settings and accessible controls. The interaction suites below separately exercise transitions, edits, saves through the synthetic backend, sharing, deletion, drawing and safety states. Matrix visits alone do not prove all actions in live Home Assistant.
+C09 also has 85 WebKit name/role readouts, with no unnamed visible form/action controls. Direct control snapshots supplement whole-page omissions from shadow headings with `display:contents`. This is browser accessibility evidence, not a physical screen-reader usability verdict.
+
+The matrix checks staged states, copy, geometry, media settings and accessible controls. Interaction suites separately exercise transitions, edits, synthetic saves, sharing, deletion, drawing and safety states. Matrix visits alone do not prove actions in live Home Assistant.
 
 ## Verification
 
-| Source | Check | Result |
-|---|---|---|
-| `77448328` | TypeScript and production/review bundle build | Pass |
-| `77448328` | Walkthrough-stage spec, WebKit and Chromium | 27 passed; 3 documented Chromium-only capability skips in WebKit |
-| `77448328` | Affected plan/area interaction spec | 26 desktop WebKit + 3 mobile WebKit passed |
-| `77448328` | Frontend assets and translation tests | 112 passed |
-| `77448328` | Startup gzip graph | 91,552 bytes / unchanged 92,160-byte limit |
-| `34bd4868` | Eight walkthrough interaction specs, desktop WebKit | 641 passed; 3 Chromium-only skips |
-| `34bd4868` | Same specs, mobile WebKit | 92 passed |
-| `34bd4868` | Smart cleaning focused verification | 149 Python + 63 WebKit passed |
-| `e026dd13` | Rotation/executor verification | 923 Python + 35 WebKit passed; ruff and mypy passed |
+| Check on candidate | Result |
+|---|---|
+| TypeScript and production/review bundle build | Pass |
+| Startup gzip graph | 91,696 bytes / unchanged 92,160-byte limit |
+| Python: session ownership, rotation, configuration flows, frontend and translations | 478 passed |
+| Frontend assets/translations after final build | 112 passed (overlaps the Python set) |
+| Focused browser regressions | 37 passed; 1 Chromium-only capability skip |
+| Contrast and short-dialog regressions | 18 passed across Chromium/WebKit |
+| Affected Home/Your areas/room schedule suites | 207 passed across initial run and targeted retest; 1 capability skip |
+| Seven additional suites, desktop/mobile WebKit | 159 + 27 passed |
+| Expanded screen/dialog axe audit | 316 cases, zero violations |
+| Home Assistant light/dark color audit | 92 cases, zero failing contrast pairs; 64 focus checks and 12 destructive-text checks |
+| Reflow audit | 84 screen layouts + 9 dialogs; no page or sheet-body overflow |
+| Changed Python lint and `git diff --check` | Pass |
 
-The final CSS/readout change was reviewed across its four source/test files with no findings. Earlier interaction results are source-bound above; final matrix, stage and affected plan tests refresh evidence affected by the last change. Generated assets came from the installed dependency tree. `git diff --check` passed.
+The affected-suite run initially had one assertion comparing the old shortcut row width with a main card. It was updated to compare the new group's outer boundary, then passed. Three reflow warnings identify the intentional horizontal drawing-toolbar scroller at 320×256; they are not page overflow. Short dialogs fit and all actions are reachable.
 
-Eight-spec set: `map_studio_v4_home_rooms`, `plan_areas`, `cadence_roundtrip`, `your_areas`, `notices`, the main `map_studio_v4` spec, `walkthrough_stage`, and `room_schedule` (all under `tests/browser`, with the common prefix).
+The additional suites cover map surfaces, dialog navigation, nonphysical acceptance, compact layouts, entry configuration, entry selection and general quality. The 316-case audit covers 79 staged screen/dialog combinations in both themes at phone and desktop widths, expanding native disclosure controls and recording visible select options. Automated accessibility coverage is bounded by these states and rules.
 
-Browser commands used `--trace=off`; screenshot-taking tests and default `@audit` captures were excluded as required by the walkthrough. The title exclusion was `keeps a (saved|retained) map visible during live revalidation|map corner controls stay separate|zone controls fit and edit on|forced colors keep the primary and Stop labels readable`. Forced-colour states were inspected through the separate full C08 matrix. No screenshots or video were captured.
+Configuration source review and Python tests cover discovery/manual pairing, code/reset/recovery paths, reauthentication, reconfiguration, default-plan and advanced transport options, and single/all-schedule reset. These are local configuration-flow checks; live onboarding was not completed.
 
-## Items still requiring physical or owner evidence
+Local reviewers checked the affected backend and frontend changes and their corrections with no remaining findings in those scopes. Generated assets came from the installed dependency tree. Earlier broad interaction results remain bound to their earlier source commits; the candidate runs above refresh the affected surfaces.
+
+Browser commands used `--trace=off`; screenshot-taking cases and default `@audit` captures were excluded. Forced-color states were inspected through the full C08 matrix. No screenshots or video were captured.
+
+## Evidence still needed
 
 - **C05:** real iPhone/iPad touch. Safari input hints and mobile WebKit emulation are complete.
 - **C08:** real Windows High Contrast. Chromium emulation on the Mac is complete.
 - **Gate F:** supervised room-plus-area run, matching area-session IDs, completion/dock observation and the separate Stop run. The [run sheet](owner-gate-f-run-sheet.md) is prepared; physical execution is pending.
-- **R11 live setup:** opened and closed the installed integration's initial dialog without submitting it. The synthetic setup/first-clean states passed; onboarding completion is unverified.
-- **Shipping:** authentic complete PR review bound to full head/base, required CI, designated-owner manual merge and release/runtime qualification remain outstanding. Local review/tests do not substitute for these gates.
+- **Live setup:** the installed integration's initial dialog was opened and closed without submission. Synthetic setup/first-clean states passed; onboarding completion is unverified.
+- **Shipping:** authentic complete PR review bound to full head/base, required CI, designated-owner manual merge and release/runtime qualification remain outstanding.
 
-Compact truncation in the history selector, dense room-count summary and status header remains intentional; full contextual text is available in the associated view or accessible name. No further confirmed product defect remains from this bounded pass.
+No further confirmed product defect remains from this bounded pass. These results do not certify universal usability or award-level quality.
