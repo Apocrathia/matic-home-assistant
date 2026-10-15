@@ -7,7 +7,7 @@ import { css } from "lit";
 export const formControls = css`
 .mop-setting { display: flex; align-items: center; gap: var(--ms-space-3); min-block-size: var(--ms-control); color: var(--ms-text); font-size: var(--ms-t-sm); }
 .mop-setting-copy { display: grid; flex: 1; min-inline-size: 0; gap: var(--ms-space-1); overflow-wrap: anywhere; }
-.mop-setting-copy small { color: var(--ms-text-quiet); font-size: var(--ms-t-xs); }
+.mop-setting-copy small { color: var(--ms-text); font-size: var(--ms-t-xs); }
 .ms-switch {
 position: relative;
 flex: none;
