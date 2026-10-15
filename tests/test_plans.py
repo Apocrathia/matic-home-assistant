@@ -66,6 +66,7 @@ from custom_components.matic_robot.plans import (
     PLAN_FLOOR_TOKEN,
     PLAN_MOTION_TOKEN,
     AreaBindingUpgradeResult,
+    AreaLeg,
     CleaningPlanManager,
     CleaningRoom,
     ManagedMotionReplacedError,
@@ -10155,3 +10156,149 @@ async def test_plan_manager_initialization_clears_failed_manager(hass) -> None:
         await plans_module.async_get_plan_manager(hass)
 
     assert plans_module.DATA_PLAN_MANAGER not in hass.data[DOMAIN]
+
+
+# Custom area legs ------------------------------------------------------------
+
+_AREA = AreaLeg("rug", "Rug", "vacuum", "quick", "f" * 64)
+
+
+async def test_area_start_publishes_the_area_without_touching_room_records(
+    hass,
+) -> None:
+    manager = CleaningPlanManager(hass)
+    manager._store = SimpleNamespace(async_save=AsyncMock())
+    await manager.async_save_plan(
+        "serial", "away", {"name": "Away", "rooms": []}, select=False
+    )
+
+    # Nothing is published without the run that owns the area.
+    await manager.async_mark_area_started("serial", "away", _AREA, run_id="run")
+    assert manager.snapshot("serial")["active_plan"] is None
+    await manager.async_begin_run(
+        "serial",
+        "away",
+        "run",
+        0,
+        trigger="user",
+        service="run_selected_plan",
+        finish_current_room=True,
+        finish_current_room_threshold=40,
+    )
+    await manager.async_mark_area_started("serial", "away", _AREA, run_id="other")
+    assert manager.snapshot("serial")["active_plan"] is None
+
+    await manager.async_mark_area_started("serial", "away", _AREA, run_id="run")
+    active = manager._robot("serial")["active_plan"]
+    assert active == {
+        "plan_id": "away",
+        "plan_name": "Away",
+        "area_id": "rug",
+        "area": "Rug",
+        "started": active["started"],
+        "status": "running",
+        "run_id": "run",
+        "finish_current_room": True,
+        "finish_current_room_threshold": 40,
+    }
+    assert "room_id" not in active
+    assert manager._robot("serial")["rotations"] == {}
+
+    # Rejoining the same area keeps its start; the next area starts anew.
+    manager._robot("serial")["active_plan"]["started"] = "2026-01-01T00:00:00+00:00"
+    await manager.async_mark_area_started("serial", "away", _AREA, run_id="run")
+    assert manager.snapshot("serial")["active_plan"]["started"] == (
+        "2026-01-01T00:00:00+00:00"
+    )
+    mat = AreaLeg("mat", "Mat", "vacuum", "quick", "f" * 64)
+    await manager.async_mark_area_started("serial", "away", mat, run_id="run")
+    assert manager.snapshot("serial")["active_plan"]["started"] != (
+        "2026-01-01T00:00:00+00:00"
+    )
+
+    # Only the same run's same area can clear it.
+    await manager.async_mark_area_finished("serial", _AREA, run_id="run")
+    await manager.async_mark_area_finished("serial", mat, run_id="other")
+    assert manager.snapshot("serial")["active_plan"]["area_id"] == "mat"
+    await manager.async_mark_area_finished("serial", mat, run_id="run")
+    assert manager.snapshot("serial")["active_plan"] is None
+    await manager.async_mark_area_finished("serial", mat, run_id="run")
+    assert manager.snapshot("serial")["active_plan"] is None
+
+
+async def test_area_start_without_frozen_stop_policy_omits_it(hass) -> None:
+    manager = CleaningPlanManager(hass)
+    manager._store = SimpleNamespace(async_save=AsyncMock())
+    await manager.async_begin_run(
+        "serial", "away", "run", 0, trigger="user", service="run_selected_plan"
+    )
+    manager._robot("serial")["last_run"].pop("finish_current_room")
+    await manager.async_mark_area_started("serial", "away", _AREA, run_id="run")
+    assert "finish_current_room" not in manager.snapshot("serial")["active_plan"]
+
+
+@pytest.mark.parametrize("recoverable", [False, True])
+async def test_restart_keeps_an_active_area_without_inventing_a_room(
+    hass, recoverable
+) -> None:
+    manager = CleaningPlanManager(hass)
+    manager._store = SimpleNamespace(async_save=AsyncMock())
+    await manager.async_begin_run(
+        "serial", "away", "run", 0, trigger="user", service="run_selected_plan"
+    )
+    await manager.async_mark_area_started("serial", "away", _AREA, run_id="run")
+    if recoverable:
+        await manager.async_set_recovery_checkpoint(
+            "serial", "run", {"version": 1, "rooms": [], "phase": "accepted"}
+        )
+    recovering = CleaningPlanManager(hass)
+    recovering._store = SimpleNamespace(
+        async_load=AsyncMock(return_value=deepcopy(manager._data)),
+        async_save=AsyncMock(),
+    )
+
+    await recovering.async_load()
+
+    robot = recovering._robot("serial")
+    if recoverable:
+        assert robot["active_plan"]["area_id"] == "rug"
+        assert robot["active_plan"]["status"] == "recovering"
+    else:
+        assert robot["active_plan"] is None
+        assert robot["last_interrupted_plan"]["area"] == "Rug"
+    assert robot["rotations"] == {}
+
+
+@pytest.mark.parametrize("finish_current_room", [False, True])
+async def test_stop_during_an_area_finishes_the_area_or_stops_now(
+    hass, finish_current_room
+) -> None:
+    manager = CleaningPlanManager(hass)
+    manager._store = SimpleNamespace(async_save=AsyncMock())
+    await manager.async_begin_run(
+        "serial",
+        "away",
+        "run",
+        0,
+        trigger="user",
+        service="run_selected_plan",
+        finish_current_room=finish_current_room,
+        finish_current_room_threshold=30,
+    )
+    await manager.async_mark_area_started("serial", "away", _AREA, run_id="run")
+    cancel = manager.prepare_run("serial")
+    lock = manager.lock("serial")
+    await lock.acquire()
+    try:
+        decision = manager.request_stop("serial")
+    finally:
+        lock.release()
+
+    if finish_current_room:
+        # No duration history exists for an area: finish it, then stop.
+        assert decision == PlanStopDecision("after_room", None, 30)
+        assert manager.finish_room_event("serial").is_set()
+        assert not cancel.is_set()
+    else:
+        assert decision == PlanStopDecision("immediate")
+        assert cancel.is_set()

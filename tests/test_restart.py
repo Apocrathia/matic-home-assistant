@@ -7,6 +7,7 @@ from dataclasses import asdict, replace
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import UUID
 
 import pytest
 from homeassistant.core import CoreState, ServiceCall
@@ -27,10 +28,13 @@ from custom_components.matic_robot.managed_executor import (
     _async_completion_budget,
     _async_execute_rooms,
     _async_run_leg,
+    _async_wait_for_area_end,
     _async_wait_for_owned_start,
     _PreparedRoomDispatch,
 )
 from custom_components.matic_robot.plans import (
+    PLAN_SESSION_ID,
+    AreaLeg,
     CleaningPlanManager,
     CleaningRoom,
     leg_groups,
@@ -40,6 +44,7 @@ from custom_components.matic_robot.restart import (
     _matches_mixed_session_hash,
     async_recover_managed_run,
 )
+from tests.wire_builders import _session_identity
 
 
 @pytest.fixture
@@ -183,6 +188,31 @@ async def test_mixed_session_checkpoint_rejects_wrong_phase(recovery_state):
     expected_hash = hashlib.sha256(b"session").hexdigest()
     with pytest.raises(HomeAssistantError, match="not dispatchable"):
         await manager.async_checkpoint_mixed_session("serial", "run", expected_hash)
+
+
+@pytest.mark.parametrize(("leg_index", "dispatchable"), [(0, False), (1, True)])
+async def test_mixed_session_checkpoint_refuses_a_custom_area_leg(
+    recovery_state, leg_index, dispatchable
+):
+    manager, _, checkpoint, room = recovery_state
+    checkpoint.update(
+        {
+            "phase": "dispatching",
+            "mixed_settings": True,
+            "leg_index": leg_index,
+            "entries": [_area_entry(), {"kind": "room", "room_id": room.room_id}],
+        }
+    )
+    await manager.async_set_recovery_checkpoint("serial", "run", checkpoint)
+    expected_hash = hashlib.sha256(b"session").hexdigest()
+
+    if dispatchable:
+        await manager.async_checkpoint_mixed_session("serial", "run", expected_hash)
+        stored = manager.recovery_run("serial")["recovery_checkpoint"]
+        assert stored["mixed_initial_session_hash"] == expected_hash
+    else:
+        with pytest.raises(HomeAssistantError, match="not dispatchable"):
+            await manager.async_checkpoint_mixed_session("serial", "run", expected_hash)
 
 
 async def test_mixed_stop_checkpoint_rejects_stale_owner(recovery_state):
@@ -1394,3 +1424,211 @@ async def test_recovered_paused_start_enters_resume_monitor(hass):
         )
         == "paused"
     )
+
+
+# Custom area legs ------------------------------------------------------------
+
+
+def _area_entry(area_id: str = "rug", name: str = "Rug") -> dict:
+    return {
+        "kind": "area",
+        "area_id": area_id,
+        "name": name,
+        "cleaning_mode": "vacuum",
+        "coverage_setting": "quick",
+        "fingerprint": "f" * 64,
+    }
+
+
+async def _area_leg_checkpoint(manager, checkpoint, room, **changes):
+    """Make the fixture's accepted leg a custom area after a verified room."""
+    checkpoint.update(
+        {
+            "entries": [{"kind": "room", "room_id": room.room_id}, _area_entry()],
+            "leg_index": 1,
+            "completed_room_ids": [room.room_id],
+            **changes,
+        }
+    )
+    await manager.async_set_recovery_checkpoint("serial", "run", checkpoint)
+    await manager.async_mark_area_started(
+        "serial",
+        "plan",
+        AreaLeg("rug", "Rug", "vacuum", "quick", "f" * 64),
+        run_id="run",
+    )
+
+
+@pytest.fixture
+def fast_area_polls(monkeypatch):
+    monkeypatch.setattr(
+        "custom_components.matic_robot.managed_executor.ROOM_STATUS_REFRESH_SECONDS",
+        0.001,
+    )
+
+
+async def test_restart_rejoins_an_accepted_area_until_its_session_ends(
+    hass, recovery_state, fast_area_polls
+):
+    manager, entry, checkpoint, room = recovery_state
+    await _area_leg_checkpoint(manager, checkpoint, room)
+    client = entry.runtime_data.client
+    started_before = manager.snapshot("serial")["active_plan"]["started"]
+    events = []
+    hass.bus.async_listen(f"{DOMAIN}_area_started", events.append)
+    hass.bus.async_listen(f"{DOMAIN}_area_finished", events.append)
+    mark_started = manager.async_mark_area_started
+
+    async def rejoined(*args, **kwargs):
+        await mark_started(*args, **kwargs)
+        # The area's own session ends once the run has rejoined it.
+        client.async_get_cleaning_session_identity.return_value = b""
+
+    manager.async_mark_area_started = rejoined
+    commands = AsyncMock()
+    hass.services.async_register("vacuum", "send_command", commands)
+
+    await async_recover_managed_run(hass, entry, "serial")
+    await hass.async_block_till_done()
+
+    commands.assert_not_awaited()
+    client.async_send_user_command.assert_not_awaited()
+    # A rejoined area keeps its start and announces only its finish.
+    assert [event.event_type for event in events] == [f"{DOMAIN}_area_finished"]
+    assert events[0].data["area_id"] == "rug"
+    snapshot = manager.snapshot("serial")
+    assert snapshot["last_run"]["outcome"] == "completed"
+    assert snapshot["active_plan"] is None
+    assert started_before is not None
+
+
+async def test_restart_does_not_rejoin_an_area_whose_session_ended(
+    hass, recovery_state
+):
+    manager, entry, checkpoint, room = recovery_state
+    await _area_leg_checkpoint(manager, checkpoint, room)
+    entry.runtime_data.client.async_get_cleaning_session_identity.return_value = b""
+
+    with patch("custom_components.matic_robot.restart._async_execute_rooms") as execute:
+        await async_recover_managed_run(hass, entry, "serial")
+
+    execute.assert_not_called()
+    entry.runtime_data.client.async_send_user_command.assert_not_awaited()
+    assert manager.snapshot("serial")["last_run"]["outcome"] == "unverified"
+
+
+@pytest.mark.parametrize("phase", ["verifying", "dispatching"])
+async def test_restart_never_verifies_or_mixes_an_area_leg(hass, recovery_state, phase):
+    manager, entry, checkpoint, room = recovery_state
+    changes = {"phase": phase}
+    if phase == "verifying":
+        changes["verification_deadline"] = (
+            dt_util.utcnow() + timedelta(minutes=5)
+        ).isoformat()
+    else:
+        changes.update(
+            {
+                "mixed_settings": True,
+                "mixed_initial_session_hash": hashlib.sha256(b"session").hexdigest(),
+            }
+        )
+    await _area_leg_checkpoint(manager, checkpoint, room, **changes)
+
+    with patch("custom_components.matic_robot.restart._async_execute_rooms") as execute:
+        await async_recover_managed_run(hass, entry, "serial")
+
+    execute.assert_not_called()
+    entry.runtime_data.client.async_get_cleaning_session_identity.assert_not_awaited()
+    entry.runtime_data.client.async_send_user_command.assert_not_awaited()
+    assert manager.snapshot("serial")["last_run"]["outcome"] == "unverified"
+
+
+@pytest.mark.parametrize("area_finished", [False, True])
+async def test_restart_handoff_after_an_area_requires_its_finish(
+    hass, recovery_state, area_finished
+):
+    manager, entry, checkpoint, room = recovery_state
+    checkpoint.update(
+        {
+            "phase": "handoff",
+            "entries": [_area_entry(), {"kind": "room", "room_id": room.room_id}],
+            "leg_index": 1,
+            "handoff_history": [],
+            "finished_area_legs": [0] if area_finished else [],
+        }
+    )
+    await manager.async_set_recovery_checkpoint("serial", "run", checkpoint)
+
+    with (
+        patch(
+            "custom_components.matic_robot.restart._async_wait_for_settled_leg_handoff",
+            AsyncMock(return_value=True),
+        ),
+        patch("custom_components.matic_robot.restart._async_execute_rooms") as execute,
+    ):
+        await async_recover_managed_run(hass, entry, "serial")
+
+    assert execute.called is area_finished
+    if area_finished:
+        assert execute.call_args.kwargs["recovered_dispatch"] is None
+        assert execute.call_args.kwargs["handoff_expected_identity"] == (
+            b"synthetic-session"
+        )
+
+
+async def test_restart_handoff_dispatches_the_next_custom_area(
+    hass, recovery_state, fast_area_polls
+):
+    manager, entry, checkpoint, room = recovery_state
+    checkpoint.update(
+        {
+            "phase": "handoff",
+            "entries": [{"kind": "room", "room_id": room.room_id}, _area_entry()],
+            "leg_index": 1,
+            "completed_room_ids": [room.room_id],
+            "handoff_history": [],
+        }
+    )
+    await manager.async_set_recovery_checkpoint("serial", "run", checkpoint)
+    client = entry.runtime_data.client
+    identity = client.async_get_cleaning_session_identity
+    entity_id = checkpoint["entity_id"]
+    hass.states.async_set(entity_id, "docked")
+    dispatched = []
+
+    async def send_command(call):
+        dispatched.append(call.data)
+        identity.return_value = _session_identity(
+            UUID(call.data["params"][PLAN_SESSION_ID])
+        )
+        hass.states.async_set(entity_id, "cleaning")
+
+    async def area_ends(*args):
+        # The area's own session ends once its start was confirmed.
+        identity.return_value = b""
+        hass.states.async_set(entity_id, "docked")
+        await _async_wait_for_area_end(*args)
+
+    hass.services.async_register("vacuum", "send_command", send_command)
+
+    with (
+        patch(
+            "custom_components.matic_robot.restart._async_wait_for_settled_leg_handoff",
+            AsyncMock(return_value=True),
+        ),
+        patch(
+            "custom_components.matic_robot.managed_executor._async_wait_for_settled_leg_handoff",
+            AsyncMock(return_value=True),
+        ),
+        patch(
+            "custom_components.matic_robot.managed_executor._async_wait_for_area_end",
+            side_effect=area_ends,
+        ),
+    ):
+        await async_recover_managed_run(hass, entry, "serial")
+
+    assert [call["command"] for call in dispatched] == ["clean_plan_area"]
+    assert dispatched[0]["params"]["area"] == "rug"
+    assert dispatched[0]["params"]["fingerprint"] == "f" * 64
+    assert manager.snapshot("serial")["last_run"]["outcome"] == "completed"
+    client.async_send_user_command.assert_not_awaited()

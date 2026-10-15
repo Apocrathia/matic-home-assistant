@@ -283,6 +283,49 @@ async def test_receipt_checkpoint_rejects_incomplete_dispatch_evidence(hass, inv
     assert manager.coverage_receipt("serial", "run-1") is None
 
 
+_AREA_ENTRY = {
+    "kind": "area",
+    "area_id": "rug",
+    "name": "Rug",
+    "cleaning_mode": "vacuum",
+    "coverage_setting": "quick",
+    "fingerprint": "f" * 64,
+}
+
+
+@pytest.mark.parametrize(
+    ("entries", "leg_index", "admitted"),
+    [
+        ([_AREA_ENTRY, {"kind": "room", "room_id": ROOM_ID}], 1, True),
+        # A custom area leg is never a room receipt's dispatch.
+        ([_AREA_ENTRY, {"kind": "room", "room_id": ROOM_ID}], 0, False),
+        ([{"kind": "room", "room_id": ROOM_ID}, _AREA_ENTRY], 1, False),
+        ([{"kind": "room", "room_id": ROOM_ID}, _AREA_ENTRY], 2, False),
+        ([{**_AREA_ENTRY, "fingerprint": "short"}], 0, False),
+    ],
+)
+async def test_receipt_checkpoint_binds_only_room_legs_of_a_plan_with_areas(
+    hass, entries, leg_index, admitted
+):
+    manager = _manager(hass)
+    checkpoint = _dispatch_checkpoint()
+    checkpoint.update({"entries": entries, "leg_index": leg_index})
+    await _begin_dispatch(manager, checkpoint=checkpoint)
+
+    assert (
+        await manager.async_checkpoint_coverage_receipt(
+            "serial",
+            "run-1",
+            _receipt(),
+            floor_plan=FLOOR,
+            room_ids=[ROOM_ID],
+            session_id=SESSION,
+        )
+        is admitted
+    )
+    assert (manager.coverage_receipt("serial", "run-1") is not None) is admitted
+
+
 async def test_mixed_dispatch_receipt_binds_only_its_vacuum_rooms(hass):
     manager = _manager(hass)
     floor = replace(

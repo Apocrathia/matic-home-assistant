@@ -5504,7 +5504,8 @@ class CleaningPlanManager:
         if active is not None and (
             not isinstance(active, dict)
             or not isinstance(active.get("plan_id"), str)
-            or not isinstance(active.get("room_id"), str)
+            # A plan's custom area is active by its area ID, not a room.
+            or not isinstance(active.get("room_id", active.get("area_id")), str)
         ):
             robot["active_plan"] = None
             changed = True

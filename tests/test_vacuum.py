@@ -12,7 +12,20 @@ import pytest
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 from custom_components.matic_robot import vacuum
-from custom_components.matic_robot.client.commands import UserCommand
+from custom_components.matic_robot.area_binding import (
+    AREA_SCHEMA_VERSION,
+    binding_for_floor_plan,
+)
+from custom_components.matic_robot.client.commands import (
+    CleaningMode,
+    CoverageSetting,
+    UserCommand,
+)
+from custom_components.matic_robot.client.exceptions import (
+    CoverageGuardError,
+    CoverageGuardReason,
+    MaticError,
+)
 from custom_components.matic_robot.client.mission import decode_mission_client_state
 from custom_components.matic_robot.const import MAX_ROOM_SEQUENCE_SIZE
 from custom_components.matic_robot.plans import (
@@ -22,6 +35,7 @@ from custom_components.matic_robot.plans import (
     CleaningPlanManager,
     CleaningRoom,
     ManagedMotionReplacedError,
+    plan_area_fingerprint,
     plan_floor_token,
 )
 from tests.test_entities import _entry
@@ -1047,3 +1061,167 @@ async def test_after_room_stop_supersedes_queued_direct_motion(
         if not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+
+
+# Plan custom areas -----------------------------------------------------------
+
+_AREA_SESSION = "55555555-5555-4555-8555-555555555555"
+
+
+def _plan_area_vacuum(hass, area: dict | None = None):
+    entry = _entry()
+    manager = CleaningPlanManager(hass)
+    manager._store = SimpleNamespace(async_save=AsyncMock())
+    entry.runtime_data.cleaning_plans = manager
+    entry.runtime_data.coordinator.client.async_start_custom_coverage = AsyncMock()
+    floor = entry.runtime_data.coordinator.data.floor_plan
+    saved = area or {
+        "schema_version": AREA_SCHEMA_VERSION,
+        "name": "Rug",
+        "circles": [{"x": 1.0, "y": 2.0, "radius": 0.35}],
+        "cleaning_mode": "vacuum",
+        "coverage_setting": "standard",
+        "map_binding": binding_for_floor_plan(floor),
+    }
+    manager._robot("synthetic-serial")["areas"]["rug"] = saved
+    token = manager.begin_managed_motion("synthetic-serial")
+    params = {
+        "area": "rug",
+        "fingerprint": plan_area_fingerprint(saved),
+        "cleaning_mode": "vacuum_and_mop",
+        "coverage": "heavy_duty",
+        PLAN_MOTION_TOKEN: token,
+        PLAN_SESSION_ID: _AREA_SESSION,
+        PLAN_FLOOR_TOKEN: plan_floor_token(floor),
+    }
+    return entry, manager, vacuum.MaticVacuum(entry), params
+
+
+async def test_plan_area_command_starts_its_owned_custom_coverage(hass) -> None:
+    entry, manager, entity, params = _plan_area_vacuum(hass)
+    client = entry.runtime_data.coordinator.client
+
+    await entity.async_send_command("clean_plan_area", params)
+
+    client.async_start_custom_coverage.assert_awaited_once()
+    call = client.async_start_custom_coverage.await_args
+    assert call.args[0] is entry.runtime_data.coordinator.data.floor_plan
+    assert call.args[1] == [(1.0, 2.0, 0.35)]
+    assert call.kwargs["cleaning_mode"] is CleaningMode.BOTH
+    assert call.kwargs["coverage_setting"] is CoverageSetting.HEAVY_DUTY
+    assert str(call.kwargs["session_id"]) == _AREA_SESSION
+    entry.runtime_data.coordinator.async_request_refresh.assert_awaited()
+    # The dispatch check is the transport's last word before the bytes go out.
+    require_current = call.kwargs["require_current"]
+    require_current()
+    manager.cancellation_event("synthetic-serial").set()
+    with pytest.raises(HomeAssistantError) as stopped:
+        require_current()
+    assert stopped.value.translation_key == "coverage_stopped_before_start"
+    entry.runtime_data.slam_map.floor_plan_is_current.return_value = False
+    with pytest.raises(ServiceValidationError, match="room map"):
+        require_current()
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {PLAN_MOTION_TOKEN: None},
+        {PLAN_SESSION_ID: None},
+        {PLAN_FLOOR_TOKEN: None},
+        {"area": None},
+        {"area": ""},
+        {"area": 1},
+        {"fingerprint": None},
+        {"fingerprint": 1},
+    ],
+)
+async def test_plan_area_command_requires_its_managed_run(hass, change) -> None:
+    entry, _manager, entity, params = _plan_area_vacuum(hass)
+    for key, value in change.items():
+        if value is None:
+            params.pop(key)
+        else:
+            params[key] = value
+
+    with pytest.raises(ServiceValidationError) as raised:
+        await entity.async_send_command("clean_plan_area", params)
+
+    assert raised.value.translation_key == "invalid_plan_command"
+    entry.runtime_data.coordinator.client.async_start_custom_coverage.assert_not_awaited()
+
+
+async def test_plan_area_command_without_params_is_refused(hass) -> None:
+    entry, _manager, entity, _params = _plan_area_vacuum(hass)
+    with pytest.raises(ServiceValidationError) as raised:
+        await entity.async_send_command("clean_plan_area")
+    assert raised.value.translation_key == "invalid_plan_command"
+    entry.runtime_data.coordinator.client.async_start_custom_coverage.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("change", "translation_key"),
+    [
+        ("deleted", "plan_area_missing"),
+        ("corrupt", "plan_area_missing"),
+        ("redrawn", "area_map_changed"),
+        ("other_map", "area_map_changed"),
+        ("bad_circle", "invalid_area"),
+        ("stale_floor", "room_plan_unavailable"),
+    ],
+)
+async def test_plan_area_command_rechecks_the_area_before_starting(
+    hass, change, translation_key
+) -> None:
+    entry, manager, entity, params = _plan_area_vacuum(hass)
+    areas = manager._robot("synthetic-serial")["areas"]
+    floor = entry.runtime_data.coordinator.data.floor_plan
+    if change == "deleted":
+        areas.pop("rug")
+    elif change == "corrupt":
+        areas["rug"] = "corrupt"
+    elif change == "redrawn":
+        areas["rug"]["circles"][0]["x"] = 1.5
+    elif change == "other_map":
+        areas["rug"]["map_binding"] = binding_for_floor_plan(
+            replace(floor, mission_id=floor.mission_id + 1)
+        )
+        params["fingerprint"] = plan_area_fingerprint(areas["rug"])
+    elif change == "bad_circle":
+        areas["rug"]["circles"] = [{"x": "left", "y": 2.0, "radius": 0.35}]
+        params["fingerprint"] = plan_area_fingerprint(areas["rug"])
+    else:
+        params[PLAN_FLOOR_TOKEN] = "0" * 64
+
+    with pytest.raises(ServiceValidationError) as raised:
+        await entity.async_send_command("clean_plan_area", params)
+
+    assert raised.value.translation_key == translation_key
+    entry.runtime_data.coordinator.client.async_start_custom_coverage.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("error", "expected", "translation_key"),
+    [
+        (
+            CoverageGuardError(CoverageGuardReason.NATIVE_SESSION_ACTIVE),
+            ServiceValidationError,
+            CoverageGuardReason.NATIVE_SESSION_ACTIVE.value,
+        ),
+        (MaticError("offline"), HomeAssistantError, "robot_command_failed"),
+        (ValueError("encode"), HomeAssistantError, "robot_command_failed"),
+    ],
+)
+async def test_plan_area_command_translates_start_failures(
+    hass, error, expected, translation_key
+) -> None:
+    entry, _manager, entity, params = _plan_area_vacuum(hass)
+    client = entry.runtime_data.coordinator.client
+    client.async_start_custom_coverage.side_effect = error
+
+    with pytest.raises(expected) as raised:
+        await entity.async_send_command("clean_plan_area", params)
+
+    assert raised.value.translation_key == translation_key
+    assert raised.value.__cause__ is error
+    entry.runtime_data.coordinator.async_request_refresh.assert_not_awaited()

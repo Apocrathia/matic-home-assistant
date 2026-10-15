@@ -1,29 +1,36 @@
 """A suspended native mission cannot adopt an independent OEM cleaning task."""
 
 import asyncio
+from copy import deepcopy
 from dataclasses import replace
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
 import pytest
 from homeassistant.core import ServiceCall
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.util import dt as dt_util
 
+from custom_components.matic_robot.client.commands import UserCommand
 from custom_components.matic_robot.client.exceptions import MaticError
 from custom_components.matic_robot.managed_executor import (
     PlanCancelledError,
     RoomInterruptedError,
     RoomRunOutcome,
     RoomTakenOverError,
+    _area_refused_before_start,
     _async_execute_rooms,
     _async_run_leg,
+    _async_wait_for_area_end,
+    _async_wait_for_area_record,
     _async_wait_for_owned_resume,
     _LegOutcomeObserver,
     _PreparedRoomDispatch,
 )
 from custom_components.matic_robot.plans import (
+    PLAN_FLOOR_TOKEN,
+    PLAN_MOTION_TOKEN,
     PLAN_SESSION_ID,
     CleaningPlanManager,
     CleaningRoom,
@@ -1934,3 +1941,606 @@ async def test_successful_managed_dispatch_rejects_a_replaced_or_missing_session
         )
 
     assert bound == []
+
+
+# Custom area legs ------------------------------------------------------------
+
+AREA_FINGERPRINT = "f" * 64
+
+
+def _area_preview_entry(area_id: str, name: str, mode: str = "vacuum") -> dict:
+    """One custom area as the authoritative plan preview lists it."""
+    return {
+        "kind": "area",
+        "area_id": area_id,
+        "name": name,
+        "cleaning_mode": mode,
+        "coverage_setting": "quick",
+        "binding_status": "current",
+        "binding_fingerprint": AREA_FINGERPRINT,
+    }
+
+
+class _AreaRobot:
+    """A synthetic robot whose native session follows each managed start."""
+
+    def __init__(self, hass) -> None:
+        self.hass = hass
+        self.identity: bytes | None = b""
+        self.records: list[SimpleNamespace] = []
+        self.dispatched: list[dict] = []
+        self.history_reads = 0
+        self.refuse: Exception | None = None
+        self.starts = True
+        # What happens while each area runs, in order; the default ends it.
+        self.during_area: list = []
+        hass.services.async_register("vacuum", "send_command", self.send_command)
+        hass.states.async_set("vacuum.matic", "docked")
+
+    async def send_command(self, call) -> None:
+        self.dispatched.append(call.data)
+        if self.refuse is not None:
+            raise self.refuse
+        self.identity = _session_identity(UUID(call.data["params"][PLAN_SESSION_ID]))
+        if self.starts:
+            self.hass.states.async_set("vacuum.matic", "cleaning")
+
+    async def read_identity(self) -> bytes | None:
+        return self.identity
+
+    async def history(self) -> tuple[SimpleNamespace, ...]:
+        self.history_reads += 1
+        return tuple(self.records)
+
+    def end_session(self, *, record: bool = True) -> None:
+        self.identity = b""
+        if record:
+            self.records.append(
+                SimpleNamespace(key=f"synthetic-record-{len(self.records)}".encode())
+            )
+        self.hass.states.async_set("vacuum.matic", "docked")
+
+    async def area_runs(self, *args) -> None:
+        action = self.during_area.pop(0) if self.during_area else self.end_session
+        action()
+        await _async_wait_for_area_end(*args)
+
+
+def _area_manager(hass, *, finish_current_room: bool = False) -> CleaningPlanManager:
+    manager = CleaningPlanManager(hass)
+    manager._store = SimpleNamespace(async_save=AsyncMock())
+    manager._robot("serial")["plans"]["test-plan"] = {
+        "name": "Areas",
+        "rooms": [],
+        "finish_current_room": finish_current_room,
+        "finish_current_room_threshold": 50,
+    }
+    return manager
+
+
+async def _run_area_plan(
+    hass,
+    manager: CleaningPlanManager,
+    robot: _AreaRobot,
+    rooms: list[CleaningRoom],
+    entries: list[dict],
+    *,
+    sender: AsyncMock,
+    start_timeout: int = 10,
+    completion_timeout: int = 10,
+    floor_token: str | None = "a" * 64,
+    events: list | None = None,
+) -> tuple[list, list[dict]]:
+    """Run a plan with areas; room legs verify instantly, areas run for real."""
+    events = [] if events is None else events
+    for name in ("area_started", "area_finished", "area_failed", "plan_finished"):
+        hass.bus.async_listen(f"matic_robot_{name}", events.append)
+    checkpoints: list[dict] = []
+    save_checkpoint = manager.async_set_recovery_checkpoint
+
+    async def keep_checkpoint(serial, run_id, checkpoint):
+        checkpoints.append(deepcopy(checkpoint))
+        await save_checkpoint(serial, run_id, checkpoint)
+
+    manager.async_set_recovery_checkpoint = keep_checkpoint
+
+    async def verify_rooms(*args, **kwargs) -> bool:
+        for room in args[5]:
+            kwargs["record_room_completed"](room)
+        return True
+
+    call = ServiceCall(
+        hass,
+        "matic_robot",
+        "run_selected_plan",
+        {
+            "plan_id": "test-plan",
+            "start_timeout": start_timeout,
+            "completion_timeout": completion_timeout,
+            "return_to_base": True,
+        },
+    )
+    try:
+        with (
+            patch(
+                "custom_components.matic_robot.managed_executor._async_run_leg",
+                AsyncMock(side_effect=verify_rooms),
+            ),
+            patch(
+                "custom_components.matic_robot.managed_executor._async_wait_for_settled_leg_handoff",
+                AsyncMock(return_value=True),
+            ),
+            patch(
+                "custom_components.matic_robot.managed_executor._async_wait_for_area_end",
+                side_effect=robot.area_runs,
+            ),
+            patch(
+                "custom_components.matic_robot.managed_executor.schedule_dock_confirmation",
+                MagicMock(return_value=False),
+            ),
+        ):
+            await _async_execute_rooms(
+                hass,
+                call,
+                manager,
+                "vacuum.matic",
+                "serial",
+                rooms,
+                session_identity=robot.read_identity,
+                active_session=AsyncMock(return_value=False),
+                session_history=robot.history,
+                managed_user_command=sender,
+                floor_is_current=lambda: True,
+                floor_token=floor_token,
+                entries=entries,
+            )
+    finally:
+        await hass.async_block_till_done()
+    return events, checkpoints
+
+
+def _event_names(events: list) -> list[tuple[str, str | None]]:
+    return [
+        (event.event_type.removeprefix("matic_robot_"), event.data.get("area_id"))
+        for event in events
+    ]
+
+
+@pytest.fixture
+def fast_area_polls(monkeypatch):
+    monkeypatch.setattr(
+        "custom_components.matic_robot.managed_executor.ROOM_STATUS_REFRESH_SECONDS",
+        0.001,
+    )
+    monkeypatch.setattr(
+        "custom_components.matic_robot.managed_executor.SESSION_HISTORY_RETRY_SECONDS",
+        0.001,
+    )
+    monkeypatch.setattr(
+        "custom_components.matic_robot.managed_executor.SESSION_HISTORY_ATTEMPTS", 3
+    )
+
+
+STUDY = CleaningRoom("room-study", "Study", "mop", "standard")
+MIXED_ENTRIES = [
+    _area_preview_entry("rug", "Rug"),
+    {"kind": "room", "room_id": ROOM.room_id, "name": ROOM.name},
+    {"kind": "room", "room_id": STUDY.room_id, "name": STUDY.name},
+    _area_preview_entry("mat", "Mat", "vacuum_and_mop"),
+]
+
+
+async def test_mixed_plan_runs_each_area_as_its_own_owned_mission(
+    hass, fast_area_polls
+):
+    manager = _area_manager(hass)
+    robot = _AreaRobot(hass)
+    sender = AsyncMock()
+
+    events, checkpoints = await _run_area_plan(
+        hass, manager, robot, [ROOM, STUDY], MIXED_ENTRIES, sender=sender
+    )
+
+    assert _event_names(events) == [
+        ("area_started", "rug"),
+        ("area_finished", "rug"),
+        ("area_started", "mat"),
+        ("area_finished", "mat"),
+        ("plan_finished", None),
+    ]
+    assert events[0].data["area"] == "Rug"
+    assert events[0].data["coverage_setting"] == "quick"
+    assert events[-1].data["outcome"] == "completed"
+    assert events[-1].data["room_count"] == 2
+    assert [call["command"] for call in robot.dispatched] == [
+        "clean_plan_area",
+        "clean_plan_area",
+    ]
+    first = robot.dispatched[0]["params"]
+    assert first["area"] == "rug"
+    assert first["fingerprint"] == AREA_FINGERPRINT
+    assert first["cleaning_mode"] == "vacuum"
+    assert first["coverage"] == "quick"
+    assert first[PLAN_FLOOR_TOKEN] == "a" * 64
+    assert isinstance(first[PLAN_MOTION_TOKEN], int)
+    assert robot.dispatched[1]["params"]["cleaning_mode"] == "vacuum_and_mop"
+    # Each area minted its own session.
+    assert first[PLAN_SESSION_ID] != robot.dispatched[1]["params"][PLAN_SESSION_ID]
+    # The checkpoint keeps the run order and the areas already finished.
+    assert checkpoints[0]["entries"] == [
+        {
+            "kind": "area",
+            "area_id": "rug",
+            "name": "Rug",
+            "cleaning_mode": "vacuum",
+            "coverage_setting": "quick",
+            "fingerprint": AREA_FINGERPRINT,
+        },
+        {"kind": "room", "room_id": ROOM.room_id},
+        {"kind": "room", "room_id": STUDY.room_id},
+        {
+            **checkpoints[0]["entries"][0],
+            "area_id": "mat",
+            "name": "Mat",
+            "cleaning_mode": "vacuum_and_mop",
+        },
+    ]
+    handoffs = [item for item in checkpoints if item["phase"] == "handoff"]
+    assert handoffs[0]["leg_index"] == 1
+    assert handoffs[0]["finished_area_legs"] == [0]
+    # The next leg's history fence includes the area's own record.
+    assert len(handoffs[0]["handoff_history"]) == 1
+    snapshot = manager.snapshot("serial")
+    assert snapshot["last_run"]["outcome"] == "completed"
+    assert snapshot["last_run"]["completed_room_count"] == 2
+    assert snapshot["active_plan"] is None
+    sender.assert_not_awaited()
+
+
+async def test_plan_of_areas_alone_completes_without_rooms(hass, fast_area_polls):
+    manager = _area_manager(hass)
+    robot = _AreaRobot(hass)
+    # The first area's record arrives late; the second leg still starts.
+    robot.during_area = [lambda: robot.end_session(record=False)]
+    sender = AsyncMock()
+
+    events, _checkpoints = await _run_area_plan(
+        hass,
+        manager,
+        robot,
+        [],
+        [_area_preview_entry("rug", "Rug"), _area_preview_entry("mat", "Mat")],
+        sender=sender,
+    )
+
+    assert _event_names(events)[-1] == ("plan_finished", None)
+    assert events[-1].data["outcome"] == "completed"
+    assert events[-1].data["room_count"] == 0
+    assert [call["params"]["area"] for call in robot.dispatched] == ["rug", "mat"]
+    # Dispatch baselines plus the bounded wait for the first area's record.
+    assert robot.history_reads >= 3
+    assert manager.snapshot("serial")["last_run"]["outcome"] == "completed"
+    sender.assert_not_awaited()
+
+
+async def test_a_plan_with_areas_needs_a_tracked_run(hass, fast_area_polls):
+    manager = _area_manager(hass)
+    robot = _AreaRobot(hass)
+
+    with pytest.raises(ServiceValidationError) as raised:
+        await _run_area_plan(
+            hass,
+            manager,
+            robot,
+            [],
+            [_area_preview_entry("rug", "Rug")],
+            sender=AsyncMock(),
+            floor_token=None,
+        )
+
+    assert raised.value.translation_key == "invalid_plan_command"
+    assert robot.dispatched == []
+
+
+async def test_replaced_area_session_is_unverified_without_stop(hass, fast_area_polls):
+    manager = _area_manager(hass)
+    robot = _AreaRobot(hass)
+    robot.during_area = [lambda: setattr(robot, "identity", REPLACEMENT)]
+    sender = AsyncMock()
+
+    with pytest.raises(RoomTakenOverError):
+        await _run_area_plan(
+            hass, manager, robot, [ROOM, STUDY], MIXED_ENTRIES, sender=sender
+        )
+
+    sender.assert_not_awaited()
+    assert len(robot.dispatched) == 1
+    last_run = manager.snapshot("serial")["last_run"]
+    assert last_run["outcome"] == "unverified"
+    assert last_run["reason_code"] == "native_task_taken_over"
+    assert manager.snapshot("serial")["active_plan"] is None
+    assert REPLACEMENT.decode() not in str(manager.snapshot("serial"))
+
+
+@pytest.mark.parametrize(
+    ("failure", "translation_key", "reason_code"),
+    [
+        ("start_timeout", "plan_start_timeout", "start_timeout"),
+        ("completion_timeout", "plan_timeout", "completion_timeout"),
+        ("robot_error", "robot_error", "robot_error"),
+        ("command_failed", "robot_command_failed", "robot_error"),
+    ],
+)
+async def test_failed_area_stops_its_own_mission_and_fails_the_run(
+    hass, fast_area_polls, failure, translation_key, reason_code
+):
+    manager = _area_manager(hass)
+    robot = _AreaRobot(hass)
+    options = {}
+    if failure == "start_timeout":
+        robot.starts = False
+        options["start_timeout"] = 0
+    elif failure == "completion_timeout":
+        options["completion_timeout"] = 0
+    elif failure == "robot_error":
+        robot.during_area = [lambda: hass.states.async_set("vacuum.matic", "error")]
+    else:
+        robot.refuse = MaticError("synthetic transport failure")
+    sender = AsyncMock()
+    events: list = []
+
+    with pytest.raises(ServiceValidationError) as raised:
+        await _run_area_plan(
+            hass,
+            manager,
+            robot,
+            [ROOM, STUDY],
+            MIXED_ENTRIES,
+            sender=sender,
+            events=events,
+            **options,
+        )
+
+    assert raised.value.translation_key == translation_key
+    sender.assert_awaited_once()
+    assert sender.await_args.args[1] is UserCommand.STOP
+    expected = [("area_failed", "rug"), ("plan_finished", None)]
+    if failure != "command_failed":
+        expected.insert(0, ("area_started", "rug"))
+    assert _event_names(events) == expected
+    assert events[-2].data["reason_code"] == reason_code
+    assert events[-2].data["area"] == "Rug"
+    snapshot = manager.snapshot("serial")
+    assert snapshot["active_plan"] is None
+    assert snapshot["last_run"]["outcome"] == "failed"
+    assert snapshot["last_run"]["reason_code"] == reason_code
+    assert len(robot.dispatched) == 1
+
+
+@pytest.mark.parametrize(
+    "translation_key",
+    [
+        "area_map_changed",
+        "invalid_area",
+        "invalid_plan_command",
+        "plan_area_missing",
+        "room_plan_unavailable",
+    ],
+)
+async def test_area_refused_before_start_sends_no_stop(
+    hass, fast_area_polls, translation_key
+):
+    manager = _area_manager(hass)
+    robot = _AreaRobot(hass)
+    robot.refuse = ServiceValidationError(
+        translation_domain="matic_robot", translation_key=translation_key
+    )
+    sender = AsyncMock()
+    failed = []
+    hass.bus.async_listen("matic_robot_area_failed", failed.append)
+
+    with pytest.raises(ServiceValidationError) as raised:
+        await _run_area_plan(
+            hass, manager, robot, [ROOM, STUDY], MIXED_ENTRIES, sender=sender
+        )
+
+    assert raised.value.translation_key == translation_key
+    sender.assert_not_awaited()
+    assert [event.data["reason_code"] for event in failed] == ["managed_failure"]
+    assert manager.snapshot("serial")["active_plan"] is None
+
+
+async def test_unrecognised_area_refusal_still_stops_its_task(hass, fast_area_polls):
+    manager = _area_manager(hass)
+    robot = _AreaRobot(hass)
+    robot.refuse = ServiceValidationError(
+        translation_domain="matic_robot", translation_key="robot_command_failed"
+    )
+    sender = AsyncMock()
+
+    with pytest.raises(ServiceValidationError) as raised:
+        await _run_area_plan(
+            hass, manager, robot, [ROOM, STUDY], MIXED_ENTRIES, sender=sender
+        )
+
+    # A refusal not known to precede the start may follow it: stop the task.
+    assert raised.value.translation_key == "robot_command_failed"
+    sender.assert_awaited_once()
+    assert sender.await_args.args[1] is UserCommand.STOP
+
+
+async def test_unexpected_area_failure_stops_and_propagates(hass, fast_area_polls):
+    manager = _area_manager(hass)
+    robot = _AreaRobot(hass)
+    robot.refuse = HomeAssistantError("synthetic service failure")
+    sender = AsyncMock()
+    failed = []
+    hass.bus.async_listen("matic_robot_area_failed", failed.append)
+
+    with pytest.raises(HomeAssistantError, match="synthetic service failure"):
+        await _run_area_plan(hass, manager, robot, [], MIXED_ENTRIES[:1], sender=sender)
+
+    sender.assert_awaited_once()
+    assert [event.data["reason_code"] for event in failed] == ["managed_failure"]
+    last_run = manager.snapshot("serial")["last_run"]
+    assert (last_run["outcome"], last_run["reason_code"]) == (
+        "failed",
+        "managed_failure",
+    )
+
+
+async def test_immediate_stop_during_an_area_cancels_without_area_stop(
+    hass, fast_area_polls
+):
+    manager = _area_manager(hass)
+    robot = _AreaRobot(hass)
+    decisions = []
+    robot.during_area = [lambda: decisions.append(manager.request_stop("serial"))]
+    sender = AsyncMock()
+
+    events, _ = await _run_area_plan(
+        hass, manager, robot, [ROOM, STUDY], MIXED_ENTRIES, sender=sender
+    )
+
+    assert [decision.behavior for decision in decisions] == ["immediate"]
+    assert _event_names(events) == [("area_started", "rug"), ("plan_finished", None)]
+    assert events[-1].data["outcome"] == "cancelled"
+    assert events[-1].data["reason_code"] == "managed_stop"
+    # The Stop request owns its own STOP; the area leg sends none.
+    sender.assert_not_awaited()
+    assert len(robot.dispatched) == 1
+    assert manager.snapshot("serial")["active_plan"] is None
+
+
+@pytest.mark.parametrize("last_leg", [False, True])
+async def test_after_room_stop_during_an_area_finishes_the_area(
+    hass, fast_area_polls, last_leg
+):
+    manager = _area_manager(hass, finish_current_room=True)
+    robot = _AreaRobot(hass)
+    decisions = []
+
+    def stop_after_area() -> None:
+        decisions.append(manager.request_stop("serial"))
+        robot.end_session()
+
+    robot.during_area = [stop_after_area]
+    sender = AsyncMock()
+    rooms = [] if last_leg else [ROOM, STUDY]
+    entries = [_area_preview_entry("rug", "Rug")] if last_leg else MIXED_ENTRIES
+
+    events, _ = await _run_area_plan(
+        hass, manager, robot, rooms, entries, sender=sender
+    )
+
+    assert [decision.behavior for decision in decisions] == ["after_room"]
+    assert _event_names(events) == [
+        ("area_started", "rug"),
+        ("area_finished", "rug"),
+        ("plan_finished", None),
+    ]
+    # Finishing the last entry is a complete run; otherwise the run stops.
+    assert events[-1].data["outcome"] == ("completed" if last_leg else "cancelled")
+    if not last_leg:
+        assert events[-1].data["reason_code"] == "managed_stop"
+    assert len(robot.dispatched) == 1
+    sender.assert_not_awaited()
+
+
+async def test_area_end_waiter_fails_closed_and_waits_out_a_return(hass, monkeypatch):
+    monkeypatch.setattr(
+        "custom_components.matic_robot.managed_executor.ROOM_STATUS_REFRESH_SECONDS",
+        0.001,
+    )
+    cancel = asyncio.Event()
+    hass.states.async_set("vacuum.matic", "cleaning")
+    with pytest.raises(RoomTakenOverError, match="could not be identified"):
+        await _async_wait_for_area_end(
+            hass, "vacuum.matic", cancel, None, None, ORIGINAL
+        )
+    with pytest.raises(RoomTakenOverError, match="could not be identified"):
+        await _async_wait_for_area_end(
+            hass, "vacuum.matic", cancel, None, AsyncMock(return_value=ORIGINAL), b""
+        )
+    with pytest.raises(RoomTakenOverError, match="could not be verified"):
+        await _async_wait_for_area_end(
+            hass,
+            "vacuum.matic",
+            cancel,
+            None,
+            AsyncMock(return_value=None),
+            ORIGINAL,
+        )
+
+    # A low-charge return keeps the session; firmware may keep an ended
+    # mission's identity while home, so an inactive session there ends it.
+    reads = []
+    active = AsyncMock(return_value=False)
+
+    async def returning_then_home() -> bytes | None:
+        reads.append(hass.states.get("vacuum.matic").state)
+        if len(reads) == 1:
+            hass.states.async_set("vacuum.matic", "returning", {"low_charge": True})
+            return None
+        if len(reads) == 2:
+            hass.states.async_set("vacuum.matic", "docked")
+        return ORIGINAL
+
+    await _async_wait_for_area_end(
+        hass, "vacuum.matic", cancel, active, returning_then_home, ORIGINAL
+    )
+    assert reads == ["cleaning", "returning", "docked"]
+    active.assert_awaited_once()
+
+    cancel.set()
+    with pytest.raises(PlanCancelledError):
+        await _async_wait_for_area_end(
+            hass, "vacuum.matic", cancel, active, returning_then_home, ORIGINAL
+        )
+
+
+async def test_area_record_waiter_is_bounded_and_honours_cancel(monkeypatch):
+    monkeypatch.setattr(
+        "custom_components.matic_robot.managed_executor.SESSION_HISTORY_RETRY_SECONDS",
+        0.001,
+    )
+    monkeypatch.setattr(
+        "custom_components.matic_robot.managed_executor.SESSION_HISTORY_ATTEMPTS", 3
+    )
+    cancel = asyncio.Event()
+    old = SimpleNamespace(key=b"synthetic-old")
+    new = SimpleNamespace(key=b"synthetic-new")
+
+    # Nothing to wait for without a reader or a dispatch baseline.
+    await _async_wait_for_area_record(None, frozenset(), cancel)
+    unused = AsyncMock()
+    await _async_wait_for_area_record(unused, None, cancel)
+    unused.assert_not_awaited()
+
+    arrives = AsyncMock(side_effect=[(old,), MaticError("busy"), (old, new)])
+    await _async_wait_for_area_record(arrives, frozenset({old.key}), cancel)
+    assert arrives.await_count == 3
+
+    # A record that never arrives leaves the next leg's fence to decide.
+    never = AsyncMock(return_value=(old,))
+    await _async_wait_for_area_record(never, frozenset({old.key}), cancel)
+    assert never.await_count == 3
+
+    async def stopped() -> tuple:
+        cancel.set()
+        return (old,)
+
+    with pytest.raises(PlanCancelledError):
+        await _async_wait_for_area_record(stopped, frozenset({old.key}), cancel)
+
+
+def test_only_known_vacuum_refusals_skip_the_area_cleanup_stop():
+    def refusal(key: str) -> ServiceValidationError:
+        return ServiceValidationError(
+            translation_domain="matic_robot", translation_key=key
+        )
+
+    assert _area_refused_before_start(refusal("area_map_changed"))
+    assert _area_refused_before_start(refusal("plan_area_missing"))
+    assert not _area_refused_before_start(refusal("robot_command_failed"))
+    assert not _area_refused_before_start(MaticError("area_map_changed"))
