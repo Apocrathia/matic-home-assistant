@@ -6,13 +6,20 @@ Requires Home Assistant 2026.10 or later. Stable remains `v0.4.8` while
 
 ## Bluetooth pairing
 
-**Robot was reset** can delete a previous Bluetooth bond only when the discovered
-robot matches the address saved for that entry. If that address is absent from
-discovery, pairing stops before contacting another candidate.
+**Robot was reset** binds automatic bond replacement to the Bluetooth address
+saved for that entry. If that address is absent from discovery, pairing stops
+before contacting another candidate.
 
-Older entries without a saved address can still try pairing with their sole fresh
-advertisement. They cannot authorize deleting an existing bond. This closes a
-case where another nearby robot's bond could be removed before credential checks.
+For older entries without a saved address, an existing bond requires an explicit
+selection in **Reset this Bluetooth pairing?**. Select only the robot you put
+in Pairing mode; cancel if you cannot identify it. The selected robot must still
+be advertising before its bond can be removed. Removal is limited to one attempt
+per device in that flow, including retries after an uncertain result.
+
+Recovery still requires a fresh passkey exchange and authentication against the
+selected network robot's stored identity before saving access. This repairs a
+legacy-entry recovery regression without allowing another nearby robot's bond to
+be removed automatically.
 
 ## Upgrade and rollback
 
