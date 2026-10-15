@@ -8,7 +8,7 @@ Entity IDs and unique IDs stay the same, so dashboards and automations keep
 working. Requires Home Assistant 2026.10 or later.
 
 **Stable 0.5.0 waits until every cell of the
-[owner walkthrough](owner-walkthrough-0.5.md) is approved** (99 cells: 11
+[owner walkthrough](owner-walkthrough-0.5.md) is approved** (117 cells: 13
 journeys at 9 setups, staged live and approved one at a time), and until the
 rest of Gates E6 and F in [acceptance-0.5.md](acceptance-0.5.md) close: this
 RC installed through HACS and read back, restart recovery, Stop reachability,

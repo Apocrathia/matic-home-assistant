@@ -99,7 +99,7 @@ state. A cell ID with settings other than its own is an error too, and the banne
 
 ### Ledger
 
-The agent keeps one ledger line per cell: cell ID, verdict, critique (if any), the fixing commit and the re-approval.
+The agent keeps one [ledger line per cell](owner-walkthrough-0.5-ledger.json): cell ID, verdict, critique (if any), the fixing commit and the re-approval.
 The release PR carries the ledger; stable is not tagged while any line is open.
 
 ## Limits
