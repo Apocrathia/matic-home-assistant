@@ -927,7 +927,7 @@ export const canChangeRobotSetting = (state: WorkspaceState): boolean =>
   state.pageActive && state.host.administrator && state.host.connected
   && state.host.robotConnected && state.command === "idle"
   && state.deepMop != null && state.deepMop.enabled !== null
-  && !hasStoppableWork(state);
+  && !state.managedLock && !hasStoppableWork(state);
 
 export const canEditCoordinates = (state: WorkspaceState): boolean =>
   state.pageActive && canShowLiveMap(state)

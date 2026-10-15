@@ -20,7 +20,7 @@ export const mopControl = (t: Translate, state: WorkspaceState, mode: CleaningMo
         ? t("v4_saving", "Saving…")
         : unavailable || !state.host.connected || !state.host.robotConnected || !state.host.administrator
           ? t("v4_setting_unavailable", "Unavailable")
-          : hasStoppableWork(state) ? t("v4_setting_busy", "Available when cleaning stops")
+          : state.managedLock || hasStoppableWork(state) ? t("v4_setting_busy", "Available when cleaning stops")
           : t("v4_deep_mop_scope", "All mopping · saves immediately")}</small>
     </span>
     ${unavailable ? nothing : html`<button class="ms-switch" type="button" role="switch"

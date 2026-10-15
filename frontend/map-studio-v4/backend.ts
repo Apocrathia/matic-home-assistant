@@ -2,12 +2,12 @@ import type { AreaOutline } from "./area-outline";
 import { MAX_ROOM_SEQUENCE_SIZE, type HassLike } from "./contracts";
 import {
   CATALOG_URL,
+  areaCatalogHelpers,
   ContractError,
   DELTA_HEADER_BYTES,
   DELTA_MAX_BYTES,
   SCENE_MAX_BYTES,
   isPrivatePath,
-  parseAreasCatalog,
   parseCatalog,
   parseHistoryCatalog,
   parseManualRoomSequencePreview,
@@ -382,7 +382,11 @@ export class MaticBackend {
   }
 
   async areas(path: string, signal?: AbortSignal): Promise<AreasCatalog> {
-    return parseAreasCatalog(await this.#json("areas", path, REQUEST_TIMEOUTS.workflow, signal));
+    const [{ parseAreasCatalog }, value] = await Promise.all([
+      import("./area-catalog"),
+      this.#json("areas", path, REQUEST_TIMEOUTS.workflow, signal),
+    ]);
+    return parseAreasCatalog(value, areaCatalogHelpers);
   }
 
   async previewRoomSequence(

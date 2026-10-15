@@ -258,3 +258,29 @@ for (const scenario of ["area-review-saved", "plan-edit-areas"]) {
     await expect(ui.getByRole("switch", { name: "Double-pass mopping" })).toHaveCount(0);
   });
 }
+
+for (const fence of ["stopSettlePending", "nativeReconciliationPending"]) {
+  test(`double-pass waits for the ${fence} catalog fence after the command settles`, async ({ page }) => {
+    await setupWrite(page);
+    const held = await page.evaluate(async (field) => {
+      const run = window.__mop;
+      run.entry = { ...run.entry, [field]: true };
+      await run.effects.refreshCatalog(true);
+      await run.effects.executeAction("toggle-deep-mop");
+      return { calls: run.calls.length, command: run.store.value.command, locked: run.store.value.managedLock };
+    }, fence);
+    expect(held).toEqual({ calls: 0, command: "idle", locked: true });
+    await page.evaluate(async (field) => {
+      const run = window.__mop;
+      run.entry = { ...run.entry, [field]: false };
+      await run.effects.refreshCatalog(true);
+      run.operation = run.effects.executeAction("toggle-deep-mop");
+    }, fence);
+    await expect.poll(() => page.evaluate(() => window.__mop.calls.length)).toBe(1);
+    await page.evaluate(async () => {
+      const run = window.__mop; run.release();
+      run.effects.sync({ ...run.projection, deepMop: { ...run.projection.deepMop, enabled: true } });
+      await run.operation; run.effects.dispose();
+    });
+  });
+}
