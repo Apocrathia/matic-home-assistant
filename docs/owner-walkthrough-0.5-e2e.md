@@ -72,6 +72,6 @@ Browser commands used `--trace=off`; screenshot-taking cases and default `@audit
 - **C08:** real Windows High Contrast. Chromium emulation on the Mac is complete.
 - **Gate F:** supervised room-plus-area run, matching area-session IDs, completion/dock observation and the separate Stop run. The [run sheet](owner-gate-f-run-sheet.md) is prepared; physical execution is pending.
 - **Live setup:** the installed integration's initial dialog was opened and closed without submission. Synthetic setup/first-clean states passed; onboarding completion is unverified.
-- **Shipping:** authentic complete PR review bound to full head/base, required CI, designated-owner manual merge and release/runtime qualification remain outstanding.
+- **Shipping:** PR #264 completed source review, required CI and manual merge as `630029aef521ff0d5492ed8012d95b94e675da1d`. Its reviewed head `744d646be5f99d8341832dca7bb7f168c4efe563` passed 2,485 browser cases (six skips) and 4,978 Python tests at 100% coverage. The matrix above retains its original source scope; release/runtime qualification remains open in the [RC24 receipt](verification-0.5-rc24.md).
 
 No further confirmed product defect remains from this bounded pass. These results do not certify universal usability or award-level quality.
