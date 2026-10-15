@@ -1402,6 +1402,10 @@ async def test_verified_setting_entities_write_and_refresh() -> None:
         False,
     ]
     assert all(entity.available for entity in switches)
+    assert [entity.extra_state_attributes for entity in switches] == [
+        {"matic_entry_id": entry.entry_id, "matic_setting": description.key}
+        for description in switch.DESCRIPTIONS
+    ]
 
     await switches[0].async_turn_on()
     await switches[1].async_turn_off()

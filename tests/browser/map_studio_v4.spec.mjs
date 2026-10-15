@@ -54,8 +54,9 @@ function syntheticDelta(base, scene, baseRevision, revision) {
   return Buffer.concat([header, compressed]);
 }
 
-async function loadGallery(page, { scenario = "ready", narrow = false } = {}) {
+async function loadGallery(page, { scenario = "ready", narrow = false, beforeMount } = {}) {
   await page.goto("/", { waitUntil: "domcontentloaded" });
+  await beforeMount?.();
   await page.evaluate(async () => {
     window.__galleryModule = await import("/map_studio_v4-review/review.js");
   });
@@ -492,8 +493,16 @@ test.describe("Map Studio v0.4 foundation", () => {
       failure.getByRole("button", { name: "Try again" }).click(),
     ]);
     await page.unroute("**/chunks/workflow-panel-*.js");
-    await page.clock.setSystemTime(new Date("2026-10-12T12:00:31Z"));
-    const later = await loadGallery(page, { scenario: "ready" });
+    const markedAt = await page.evaluate(() => JSON.parse(sessionStorage.getItem("matic-map-resume")).at);
+    const later = await loadGallery(page, {
+      scenario: "ready",
+      beforeMount: async () => {
+        // Age the marker itself, after navigation. Test setup can take more
+        // than a second, so a fixed 12:00:31 does not guarantee a stale marker.
+        await page.clock.setSystemTime(new Date(markedAt + 31_000));
+        expect(await page.evaluate(() => Date.now()) - markedAt).toBeGreaterThanOrEqual(31_000);
+      },
+    });
     await expect(later.getByRole("heading", { level: 2 })).toBeAttached();
     expect(await later.evaluate((element) => element.getWorkspaceSnapshot().workflow), "workflow after a stale resume")
       .toBe("none");
@@ -606,7 +615,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     // plan.md §3: a room's schedule is inside its settings.
     await inspector.getByRole("button", { name: "Settings for Kitchen", exact: true }).click();
     // room-schedule.md §3: Reset lives in the room's "More for {room}" menu.
-    const more = inspector.getByRole("group", { name: "Room schedule for Kitchen" }).getByRole("button", { name: "More for Kitchen" });
+    const more = inspector.getByRole("group", { name: "Smart cleaning for Kitchen" }).getByRole("button", { name: "More for Kitchen" });
     await more.click();
     await expect(inspector.getByRole("menuitem", { name: "Reset vacuum rotation progress for Kitchen" })).toBeVisible();
     const reset = inspector.getByRole("menuitem", { name: "Reset mopping progress for Kitchen" });
@@ -666,7 +675,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
     const inspector = gallery.locator(".inspector");
     await inspector.getByRole("button", { name: "Settings for Kitchen", exact: true }).click();
-    await expect(inspector.getByRole("group", { name: "Room schedule for Kitchen" })).toBeVisible();
+    await expect(inspector.getByRole("group", { name: "Smart cleaning for Kitchen" })).toBeVisible();
     await expect(inspector).toContainText("Can't run this schedule until you reset its mopping progress, which Home Assistant can't confirm.");
     await expect(inspector).toContainText("Can't run this schedule until you reset its vacuum rotation progress, which Home Assistant can't confirm.");
     await expect(inspector.getByRole("button", { name: "Reset mopping progress for Kitchen" })).toBeVisible();
@@ -707,7 +716,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(rows.nth(1)).toHaveText("Part 2 starts here; the robot may stop at the dock first Kitchen Vacuum · Quick");
     await expect(gallery.getByText("Mop due in Living room", { exact: true })).toBeVisible();
     await expect(gallery.getByText("Quick vacuum due in Kitchen", { exact: true })).toBeVisible();
-    await expect(gallery.getByText("The robot cleans these rooms in 2 parts and may stop at the dock between parts.", { exact: true })).toBeVisible();
+    await expect(gallery.getByText("The robot cleans in 2 parts and may stop at the dock between parts.", { exact: true })).toBeVisible();
     // plan.md §6 (v4_action_run_plan_named): Run plan is named with the plan.
     await expect(gallery.getByRole("button", { name: "Run plan Daily clean", exact: true })).toBeEnabled();
   });
@@ -988,12 +997,12 @@ test.describe("Map Studio v0.4 foundation", () => {
     await gallery.getByRole("button", { name: /^Clean rooms/ }).click();
     const roomList = gallery.getByRole("group", { name: "Rooms to clean" });
     // home-rooms.md §5 Due work: the shared schedule's due work puts the
-    // "Include scheduled work that's due" switch in the settings row, on by
+    // "Use room schedules" switch in the settings row, on by
     // default; off sends the user's settings alone and keeps the switch.
     await expect(gallery.getByRole("switch")).toHaveCount(0);
     await roomList.getByRole("checkbox").first().check();
     await gallery.getByRole("button", { name: /^Cleaning settings/ }).click();
-    const useSchedule = gallery.getByRole("switch", { name: "Include scheduled work that's due" });
+    const useSchedule = gallery.getByRole("switch", { name: "Use room schedules" });
     await expect(useSchedule).toHaveAttribute("aria-checked", "true");
     expect((await snapshot(page)).selection.useRoomSchedule).toBe(true);
     await useSchedule.click();
@@ -1175,7 +1184,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       await expect(gallery.getByText("3 rooms · about 33 min", { exact: true })).toBeVisible();
       await expect(gallery.getByText("Mop due in Kitchen, Living room, and Office", { exact: true })).toBeVisible();
       await expect(gallery.getByRole("heading", { name: "Next run", level: 3 })).toBeVisible();
-      await expect(gallery.getByText("Longest-waiting rooms first, checked again when you run the plan.", { exact: true })).toBeVisible();
+      await expect(gallery.getByText("Longest-waiting rooms and custom areas first, checked again when you run the plan.", { exact: true })).toBeVisible();
       // Intelligent rotation: an unnumbered list, one setting string per row.
       await expect(gallery.locator("ol.run-list")).toHaveCount(0);
       const rows = gallery.locator("ul.run-list > li");
@@ -1193,11 +1202,11 @@ test.describe("Map Studio v0.4 foundation", () => {
   test("Run numbers Saved order and marks each part break", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "plan-saved-ordered" });
     await expect(gallery.locator("ol.run-list > li")).toHaveText(["1 Office Vacuum · Optimal", "2 Kitchen Vacuum · Optimal", "3 Living room Vacuum · Optimal"]);
-    await expect(gallery.getByText("Longest-waiting rooms first, checked again when you run the plan.")).toHaveCount(0);
+    await expect(gallery.getByText("Longest-waiting rooms and custom areas first, checked again when you run the plan.")).toHaveCount(0);
 
     await gallery.evaluate((element) => element.setScenario("plan-run-parts"));
     await settleWorkspace(gallery);
-    await expect(gallery.getByText("The robot cleans these rooms in 2 parts and may stop at the dock between parts.", { exact: true })).toBeVisible();
+    await expect(gallery.getByText("The robot cleans in 2 parts and may stop at the dock between parts.", { exact: true })).toBeVisible();
     await expect(gallery.getByText("Mop due in Kitchen", { exact: true })).toBeVisible();
     const rows = gallery.locator("ol.run-list > li");
     await expect(rows).toHaveText([
@@ -1229,7 +1238,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       "Part 3 starts here; the robot may stop at the dock first 3 Hall runner Vacuum · Optimal",
     ]);
     await expect(gallery.getByText("1 room · 2 custom areas", { exact: true })).toBeVisible();
-    await expect(gallery.getByText("The robot cleans these rooms in 3 parts and may stop at the dock between parts.", { exact: true })).toBeVisible();
+    await expect(gallery.getByText("The robot cleans in 3 parts and may stop at the dock between parts.", { exact: true })).toBeVisible();
     // A plan with custom areas runs like any other.
     await expect(gallery.getByRole("button", { name: /^Run plan/ })).toBeEnabled();
 
@@ -1242,7 +1251,7 @@ test.describe("Map Studio v0.4 foundation", () => {
   test("a paused plan lists its rooms and turns on from the switch", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "plan-run-paused" });
     await expect(gallery.getByText("3 rooms", { exact: true })).toBeVisible();
-    await expect(gallery.getByRole("heading", { name: "Rooms in this plan", level: 3 })).toBeVisible();
+    await expect(gallery.getByRole("heading", { name: "In this plan", level: 3 })).toBeVisible();
     await expect(gallery.locator("ul.run-list > li")).toHaveText(["Kitchen Vacuum · Optimal", "Living room Vacuum · Optimal", "Office Vacuum · Optimal"]);
     await expect(gallery.getByRole("switch", { name: "Plan enabled" })).toHaveAttribute("aria-checked", "false");
     await expect(gallery.getByRole("button", { name: "Try again", exact: true })).toHaveCount(0);
@@ -4769,10 +4778,11 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(kitchen).toHaveAttribute("aria-expanded", "true");
     await expect(list.getByLabel(/^Cleaning mode for /)).toHaveCount(1);
     // room-schedule.md §3: the open room shows its Schedule group, headed, not a disclosure.
-    const cadenceSettings = list.getByRole("group", { name: "Room schedule for Kitchen" });
+    const cadenceSettings = list.getByRole("group", { name: "Smart cleaning for Kitchen" });
     await expect(cadenceSettings).toHaveCount(1);
-    await expect(cadenceSettings.getByRole("heading", { level: 3, name: "Schedule" })).toBeVisible();
-    await expect(cadenceSettings.getByRole("spinbutton", { name: /^Mop/ })).toHaveAttribute("min", "1");
+    await expect(cadenceSettings.getByRole("heading", { level: 3, name: "Smart cleaning" })).toBeVisible();
+    await expect(cadenceSettings.getByRole("spinbutton", { name: /^(Mop|Occasional mopping)/ })).toHaveAttribute("min", "2");
+    await expect(cadenceSettings.getByRole("spinbutton", { name: /vacuum/ })).toHaveAttribute("min", "1");
     await expect(cadenceSettings.getByRole("spinbutton", { name: /vacuum/ })).toHaveAttribute("max", "100");
     const second = list.getByRole("button", { name: /^Settings for / }).nth(1);
     await second.click();
@@ -4997,7 +5007,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       await gallery.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
       const rooms = gallery.getByRole("list", { name: "Rooms", exact: true });
       await rooms.getByRole("button", { name: "Settings for Kitchen", exact: true }).click();
-      const cadence = rooms.getByRole("group", { name: "Room schedule for Kitchen" });
+      const cadence = rooms.getByRole("group", { name: "Smart cleaning for Kitchen" });
       const mopInterval = cadence.getByRole("spinbutton", { name: "Mop every 100 cleans" });
       const coverageInterval = cadence.getByRole("spinbutton", { name: "Heavy duty vacuum every 2 cleans" });
       const coverage = cadence.getByLabel("Vacuum level for Kitchen");
@@ -5491,7 +5501,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     const quick = gallery.getByRole("group", { name: "Cleaning choices" }).getByRole("button");
     await expect(quick).toHaveCount(3);
     await expect(quick.nth(0)).toHaveAccessibleName(/^Clean rooms Pick rooms and clean them now\./);
-    await expect(quick.nth(0)).toHaveClass(/ms-row--featured/);
+    await expect(quick.nth(0)).not.toHaveClass(/ms-row--featured/);
     // The default plan pinned as a one-tap shortcut under Shortcuts, then the
     // custom-area card and the Your plans row (UX9 owner ruling).
     await expect(gallery.getByRole("group", { name: "Shortcuts" }).getByRole("button")).toHaveAccessibleName(/^Run Daily clean 3 rooms/);
@@ -5680,6 +5690,7 @@ test.describe("Map Studio v0.4 foundation", () => {
   });
 
   test("keeps first-use supporting copy at AA contrast in light and dark themes", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
     const gallery = await loadGallery(page, { scenario: "ready" });
     await page.addScriptTag({
       type: "module",
@@ -5712,9 +5723,16 @@ test.describe("Map Studio v0.4 foundation", () => {
           ? normalized / 12.92
           : ((normalized + 0.055) / 1.055) ** 2.4;
       };
+      // Computed transition colours may use oklab, not RGB. Let the browser
+      // resolve CSS colours to sRGB before applying the WCAG luminance formula.
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 1;
+      const context = canvas.getContext("2d", { willReadFrequently: true });
       const luminance = (color) => {
-        const values = color.match(/[\d.]+/g)?.slice(0, 3).map(Number) ?? [0, 0, 0];
-        const rgb = color.startsWith("color(srgb") ? values.map((value) => value * 255) : values;
+        context.clearRect(0, 0, 1, 1);
+        context.fillStyle = color;
+        context.fillRect(0, 0, 1, 1);
+        const rgb = context.getImageData(0, 0, 1, 1).data;
         return 0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2]);
       };
       // Walk up to the first ancestor that actually paints a background, so
@@ -5885,7 +5903,7 @@ test.describe("Map Studio v0.4 foundation", () => {
 
     const response = await gallery.evaluate(async (element) => {
       const shell = element.shadowRoot.querySelector("matic-map-shell-v4");
-      const rooms = shell.shadowRoot.querySelector(".quick-actions button.ms-row--featured");
+      const rooms = shell.shadowRoot.querySelector('[data-launcher="rooms"]');
       const started = performance.now();
       rooms.click();
       await shell.updateComplete;
@@ -5987,8 +6005,8 @@ test.describe("Map Studio v0.4 foundation", () => {
     await mode.selectOption("heavy_duty");
     const cleaningSystem = inspector.getByLabel(/^Cleaning mode for /);
     await cleaningSystem.selectOption("mop");
-    await expect(mode).toHaveAttribute("aria-disabled", "true");
-    await expect(inspector.getByText("Vacuum coverage applies only when vacuuming.", { exact: false })).toBeVisible();
+    await expect(mode).toHaveCount(0);
+    await expect(inspector.getByRole("switch", { name: "Double-pass mopping" })).toBeVisible();
     await cleaningSystem.selectOption("vacuum_and_mop");
     await expect(mode).not.toHaveAttribute("aria-disabled", "true");
     await expect(mode).toHaveValue("heavy_duty");
@@ -7707,7 +7725,7 @@ for (const ordered of [false, true]) {
     await expect(choice).toHaveAttribute("aria-pressed", "true");
     await expect(order.getByRole("button", { name: ordered ? "Intelligent rotation" : "Saved order", exact: true })).toHaveAttribute("aria-pressed", "false");
     // plan.md §3: the hint under the segment says what the order means.
-    await expect(order.getByText(ordered ? "Top to bottom, as listed" : "Longest-waiting rooms first", { exact: true })).toBeVisible();
+    await expect(order.getByText(ordered ? "Top to bottom, as listed" : "Longest-waiting first", { exact: true })).toBeVisible();
     expect((await snapshot(page)).planDraft.runBehavior).toBe(ordered ? "ordered" : "intelligent");
     const rooms = gallery.getByRole("list", { name: "Rooms", exact: true });
     await expect(rooms.getByRole("button", { name: /^Move .* (earlier|later)$/ })).toHaveCount(ordered ? 6 : 0);
@@ -10108,7 +10126,7 @@ test.describe("Map Studio accessibility baselines", () => {
     const gallery = await loadGallery(page, { scenario: "rooms-ready" });
     await settleWorkspace(gallery);
     await gallery.getByRole("button", { name: /^Cleaning settings/ }).click();
-    await expect(gallery.getByRole("switch", { name: "Include scheduled work that's due" })).toBeVisible();
+    await expect(gallery.getByRole("switch", { name: "Use room schedules" })).toBeVisible();
     const kitchen = gallery.getByRole("button", { name: "Settings for Kitchen", exact: true });
     await kitchen.click();
     await expect(kitchen).toHaveAttribute("aria-expanded", "true");
@@ -10352,6 +10370,18 @@ test.describe("Map Studio resolved theme colours", () => {
     return `rgb(${red}, ${green}, ${blue})`;
   }, property);
 
+  test("checked switches keep their knob distinct from a custom theme's indicator", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-saved-intelligent" });
+    const toggle = gallery.getByRole("switch", { name: "Plan enabled", exact: true });
+    for (const vars of [HA_LIGHT, HA_DARK, { ...HA_LIGHT, "--primary-color": "#777777", "--text-primary-color": "#777777" }]) {
+      await theme(page, vars);
+      await expect.poll(async () => {
+        const colors = await toggle.evaluate((element) => ["::before", "::after"].map((pseudo) => getComputedStyle(element, pseudo).backgroundColor));
+        return ratio(...colors);
+      }).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
   test("the focus ring reaches 3:1 on both surfaces and danger text 4.5:1 on the card", async ({ page }) => {
     await page.setViewportSize({ width: 1024, height: 768 });
     const gallery = await loadGallery(page, { scenario: "draw" });
@@ -10371,20 +10401,30 @@ test.describe("Map Studio resolved theme colours", () => {
       const color = await ring();
       return { color, sunken: ratio(color, "rgb(229, 229, 229)"), card: ratio(color, "rgb(255, 255, 255)") };
     }, "#009ac7 is 2.59:1 on #e5e5e5").toEqual({ color: "rgb(0, 139, 179)", sunken: 3.12, card: 3.93 });
-    await expect.poll(async () => {
-      const color = await style(feedback, "color");
-      return { color, card: ratio(color, "rgb(255, 255, 255)") };
-    }, "#db4437 is 4.29:1 on #fff").toEqual({ color: "rgb(208, 65, 52)", card: 4.68 });
+    await expect.poll(async () => ratio(await style(feedback, "color"), "rgb(255, 255, 255)")).toBeGreaterThanOrEqual(4.5);
 
     await theme(page, HA_DARK);
     await expect.poll(async () => {
       const color = await ring();
       return { color, sunken: ratio(color, "rgb(40, 40, 40)"), card: ratio(color, "rgb(28, 28, 28)") };
     }, "a passing indicator is kept").toEqual({ color: "rgb(0, 154, 199)", sunken: 4.53, card: 5.23 });
-    await expect.poll(async () => {
-      const color = await style(feedback, "color");
-      return { color, card: ratio(color, "rgb(28, 28, 28)") };
-    }, "#db4437 is 3.97:1 on #1c1c1c").toEqual({ color: "rgb(223, 87, 75)", card: 4.55 });
+    await expect.poll(async () => ratio(await style(feedback, "color"), "rgb(28, 28, 28)")).toBeGreaterThanOrEqual(4.5);
+  });
+
+  test("Delete area text keeps contrast at rest, hover and press in both themes", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "area-review-saved" });
+    const button = gallery.getByRole("button", { name: "Delete", exact: true });
+    for (const vars of [HA_LIGHT, HA_DARK]) {
+      await theme(page, vars);
+      const check = async () => expect.poll(async () => ratio(await paint(button, "color"), await paint(button, "backgroundColor"))).toBeGreaterThanOrEqual(4.5);
+      await check();
+      await button.hover();
+      await check();
+      await page.mouse.down();
+      await check();
+      await page.mouse.move(0, 0);
+      await page.mouse.up();
+    }
   });
 
   // The indicator is checked on every surface it sits on. A light card over
@@ -10478,14 +10518,16 @@ test.describe("Map Studio resolved theme colours", () => {
       for (const [name, value] of Object.entries({
         "--ms-accent": "#009ac7",
         "--ms-resolved-indicator": "rgba(0,139,179,1)",
+        "--ms-on-accent": "#008bb3",
+        "--ms-resolved-on-indicator": "#000000",
         "--ms-surface-card": "rgba(28, 28, 28, 0.5)",
         "--ms-surface-sunken": "rgba(40, 40, 40, 0.8)",
       })) host.style.setProperty(name, value);
       document.body.append(host);
-      const { accent, plate, roomFill } = readCanvasPalette(host);
-      return { accent, plate, roomFill };
+      const { accent, onAccent, plate, roomFill } = readCanvasPalette(host);
+      return { accent, onAccent, plate, roomFill };
     });
-    expect(palette).toEqual({ accent: [0, 139, 179], plate: [28, 28, 28], roomFill: [40, 40, 40] });
+    expect(palette).toEqual({ accent: [0, 139, 179], onAccent: [0, 0, 0], plate: [28, 28, 28], roomFill: [40, 40, 40] });
   });
 
   // design-system.md §3 and §7: every selection and checked state reads the

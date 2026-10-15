@@ -129,8 +129,8 @@ test.describe("home shortcuts", () => {
       expect(await shortcut.evaluate((element) => element.parentElement.closest("button") === null && element.querySelectorAll("button, a, [role=button]").length === 0)).toBe(true);
     }
     await expect(choices(gallery).getByRole("button", { name: /^Open / })).toHaveCount(0);
-    const [first, rooms] = [await shortcuts.first().boundingBox(), await choices(gallery).getByRole("button", { name: /^Clean rooms/ }).boundingBox()];
-    expect(Math.abs(first.width - rooms.width)).toBeLessThanOrEqual(1);
+    const [group, rooms] = [await gallery.getByRole("group", { name: "Shortcuts" }).boundingBox(), await choices(gallery).getByRole("button", { name: /^Clean rooms/ }).boundingBox()];
+    expect(Math.abs(group.width - rooms.width)).toBeLessThanOrEqual(1);
     await expect(gallery.getByRole("button", { name: "Your areas" })).toHaveCount(0);
   });
 
@@ -309,6 +309,28 @@ test.describe("home shortcuts", () => {
 });
 
 test.describe("home shortcuts: review fixes", () => {
+  for (const scheme of ["light", "dark", "forced"]) {
+    test(`shortcuts stay distinct and comfortably sized in ${scheme}`, async ({ page, browserName }) => {
+      test.skip(scheme === "forced" && browserName !== "chromium", "Forced colours require Chromium.");
+      await page.emulateMedia({ colorScheme: scheme === "dark" ? "dark" : "light", forcedColors: scheme === "forced" ? "active" : "none" });
+      const gallery = await loadGallery(page, { scenario: "home-shortcuts" });
+      await gallery.evaluate((element, mode) => { element.style.colorScheme = mode; }, scheme === "dark" ? "dark" : "light");
+      const run = runButton(gallery, "Daily clean");
+      const rooms = choices(gallery).getByRole("button", { name: /^Clean rooms/ });
+      const badge = (locator) => locator.locator(".ms-row__lead").evaluate((element) => {
+        const style = getComputedStyle(element);
+        return { radius: style.borderRadius, background: style.backgroundColor };
+      });
+      expect((await run.boundingBox()).height).toBeGreaterThanOrEqual(52);
+      expect((await run.boundingBox()).width).toBeGreaterThanOrEqual(44);
+      expect((await badge(run)).radius).not.toBe((await badge(rooms)).radius);
+      if (scheme !== "forced") expect((await badge(run)).background).not.toBe((await badge(rooms)).background);
+      await page.keyboard.press("Tab");
+      await run.focus();
+      await expect(run).toBeFocused();
+    });
+  }
+
   test("a shortcut starts with the play glyph and is the whole row", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "home-shortcuts" });
     const run = runButton(gallery, "Daily clean");

@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
-import { cellHash, cellIds, findCell, startStaging } from "../../scripts/walkthrough.mjs";
+import { accessibilityReadout, cellHash, cellIds, findCell, startStaging } from "../../scripts/walkthrough.mjs";
 
 // The owner walkthrough stage (docs/owner-walkthrough-0.5.md): one URL hash
 // puts the real shell gallery into a matrix cell's state, size and setup.
@@ -22,6 +22,57 @@ const stageFrame = async (page) => {
   await frame.locator("html[data-stage-ready]").waitFor({ state: "attached" });
   return frame;
 };
+
+test("readouts include the plan heading actions through display:contents", async ({ page }) => {
+  await openFrame(page, "steps=plan-saved-intelligent");
+  expect(await accessibilityReadout(page)).toContain('button "Edit Daily clean"');
+  await page.goto("about:blank");
+  await openFrame(page, "steps=plan-edit-areas");
+  expect(await accessibilityReadout(page)).toContain('button "More actions"');
+});
+
+test("a shared-progress reset fits a short zoomed viewport and keeps actions reachable", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 256 });
+  await openFrame(page, "steps=plan-cadence-shared:confirmResetCadence");
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  const box = await dialog.boundingBox();
+  expect(box.y).toBeGreaterThanOrEqual(0);
+  expect(box.y + box.height).toBeLessThanOrEqual(256);
+  for (const button of await dialog.getByRole("button").all()) {
+    await button.focus();
+    await button.scrollIntoViewIfNeeded();
+    const action = await button.boundingBox();
+    expect(action.y).toBeGreaterThanOrEqual(box.y);
+    expect(action.y + action.height).toBeLessThanOrEqual(box.y + box.height);
+  }
+});
+
+for (const [width, height] of [[390, 844], [1024, 768], [1440, 900]]) {
+  test(`plan item names wrap and hidden reasons stay inside the page at ${width}`, async ({ page }) => {
+    await page.setViewportSize({ width, height });
+    await openFrame(page, "steps=plan-edit-area-stale");
+    const last = page.getByRole("button", { name: "Move Old rug later", exact: true });
+    await expect(last).toHaveAccessibleDescription("Old rug is already last");
+    expect(await page.evaluate(() => ({ width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight }))).toEqual({ width, height });
+    await page.goto("about:blank");
+    await openFrame(page, "steps=plan-edit-areas");
+    const name = page.locator(".row-lines bdi").filter({ hasText: "Under the dining table" });
+    await expect(name).toBeVisible();
+    const bounds = await name.evaluate((element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const box = element.getBoundingClientRect();
+      return { text: [...range.getClientRects()].map((r) => ({ left: r.left, right: r.right, top: r.top, bottom: r.bottom })), box: { left: box.left, right: box.right, top: box.top, bottom: box.bottom } };
+    });
+    for (const text of bounds.text) {
+      expect(text.left).toBeGreaterThanOrEqual(bounds.box.left - 1);
+      expect(text.right).toBeLessThanOrEqual(bounds.box.right + 1);
+      expect(text.top).toBeGreaterThanOrEqual(bounds.box.top - 1);
+      expect(text.bottom).toBeLessThanOrEqual(bounds.box.bottom + 1);
+    }
+  });
+}
 
 test("a staged frame lands in its step's scenario and dialog", async ({ page }) => {
   await openFrame(page, "steps=plans,plan-saved-intelligent:confirmDeletePlan&step=2");

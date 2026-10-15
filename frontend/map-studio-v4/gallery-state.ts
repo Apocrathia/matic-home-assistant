@@ -101,6 +101,7 @@ export type GalleryScenario =
 
 const verified = (): WorkspaceState => ({
   ...initialWorkspaceState(),
+  deepMop: { entityId: "switch.synthetic_deep_mop", enabled: false },
   coherence: "current",
   activity: "docked",
   batteryPercent: 92,
@@ -265,9 +266,12 @@ const areasPlan = (runBehavior: SavedPlan["runBehavior"]): SavedPlan => {
     ...daily,
     runBehavior,
     entries: [roomEntry("room-a"), areaEntry(entryway), roomEntry("room-b"), roomEntry("room-c"), areaEntry(dining)],
-    nextRunPreview: previewFor(daily.rooms, {
-      steps: [kitchen, areaStep(entryway), living, office, areaStep(dining)].filter((step) => step !== undefined),
-      missionBoundaries: [1, 2, 4],
+    nextRunPreview: previewFor(runBehavior === "intelligent" ? [...daily.rooms].reverse() : daily.rooms, {
+      // Synthetic history: dining has waited longest, followed by Office.
+      steps: (runBehavior === "intelligent"
+        ? [areaStep(dining), office, areaStep(entryway), living, kitchen]
+        : [kitchen, areaStep(entryway), living, office, areaStep(dining)]).filter((step) => step !== undefined),
+      missionBoundaries: runBehavior === "intelligent" ? [1, 2, 3] : [1, 2, 4],
     }),
     nextRunEstimateSeconds: null,
   };
@@ -868,8 +872,8 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
       return openPlan(withAreas(state), areasPlan("ordered"), "run");
     case "plan-run-areas-only":
       return openPlan(withAreas(state), spotsPlan(), "run", catalogWith([savedDailyPlan(), spotsPlan()]));
-    // Edit orders areas among the rooms in Saved order; in Intelligent
-    // rotation they keep their places and show no numbers.
+    // Edit shows the saved tie-break order. Intelligent rotation ranks all
+    // entries from history when previewing a run, so editing shows no numbers.
     case "plan-edit-areas":
       return openPlan(withAreas(state), areasPlan("ordered"), "edit");
     case "plan-edit-areas-rotation":

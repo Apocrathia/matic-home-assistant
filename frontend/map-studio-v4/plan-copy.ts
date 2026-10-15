@@ -119,7 +119,7 @@ export const planRowLine2 = (t: Translate, locale: string, plan: SavedPlan): str
   if (areas) {
     return `${roomsAndAreas(t, locale, count, areas)} · ${ordered
       ? t("v4_plan_order_ordered_hint", "Top to bottom, as listed")
-      : t("v4_plan_order_intelligent_hint", "Longest-waiting rooms first")}`;
+      : t("v4_plan_order_intelligent_hint", "Longest-waiting first")}`;
   }
   if (count === 1) {
     return ordered

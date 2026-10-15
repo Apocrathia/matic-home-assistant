@@ -259,7 +259,7 @@ test.describe("home by state", () => {
       await expect(group.getByRole("button")).toHaveCount(3);
       await expect(cards(gallery)).toHaveCount(2);
       await expect(cards(gallery).nth(0)).toHaveAccessibleName(/^Clean rooms Pick rooms and clean them now\./);
-      await expect(cards(gallery).nth(0)).toHaveClass(/ms-row--featured/);
+      await expect(cards(gallery).nth(0)).not.toHaveClass(/ms-row--featured/);
       await expect(cards(gallery).nth(1)).toHaveAccessibleName(/^Clean custom area Draw or choose a custom area/);
       expect(await shortcutsGroup(gallery).evaluate((element, other) => !!(element.compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING), await group.elementHandle())).toBe(true);
       await expect(gallery.getByRole("heading", { name: "Maps", level: 3 })).toBeVisible();
@@ -675,7 +675,7 @@ test.describe("the plan card", () => {
     await expect.poll(() => focusedText(page)).toBe("h2 Choose what to clean");
   });
 
-  test("a long plan name stays on one line and keeps its full name", async ({ page }) => {
+  test("a long shortcut name wraps in full without widening its card", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "ready", narrow: true });
     const short = await planCard(gallery).boundingBox();
     const name = "A very long plan name that goes on and on past the width of the card";
@@ -688,12 +688,12 @@ test.describe("the plan card", () => {
     await expect(planCard(gallery).locator("strong bdi")).toHaveText(name);
     const title = planCard(gallery).locator(".card-name");
     const widths = await title.evaluate((element) => ({ scroll: element.scrollWidth, client: element.clientWidth }));
-    expect(widths.scroll, JSON.stringify(widths)).toBeGreaterThan(widths.client);
+    expect(widths.scroll, JSON.stringify(widths)).toBeLessThanOrEqual(widths.client + 1);
     // The card itself stays inside the sheet.
     const sheet = await panelOf(gallery).boundingBox();
     const card = await planCard(gallery).boundingBox();
     expect(card.x + card.width).toBeLessThanOrEqual(sheet.x + sheet.width);
-    expect((await planCard(gallery).boundingBox()).height).toBe(short.height);
+    expect((await planCard(gallery).boundingBox()).height).toBeGreaterThan(short.height);
   });
 
   test("every home launcher takes focus back when its workflow closes (MS-KEY-01)", async ({ page }) => {
@@ -1016,7 +1016,7 @@ for (const narrow of [true, false]) {
       await expect(checkLines(gallery)).toHaveText([
         "Mop due in Kitchen",
         "Heavy duty vacuum due in Living room",
-        "The robot cleans these rooms in 2 parts and may stop at the dock between parts.",
+        "The robot cleans in 2 parts and may stop at the dock between parts.",
       ]);
       const lines = await checkLines(gallery).first().boundingBox();
       const rows = await roomsGroup(gallery).boundingBox();
@@ -1036,9 +1036,9 @@ for (const narrow of [true, false]) {
       const body = gallery.locator("#clean-settings");
       await expect(body.getByRole("combobox", { name: "Cleaning mode" })).toHaveValue("vacuum");
       await expect(body.getByRole("combobox", { name: "Vacuum coverage" })).toHaveValue("standard");
-      const due = body.getByRole("switch", { name: "Include scheduled work that's due" });
+      const due = body.getByRole("switch", { name: "Use room schedules" });
       await expect(due).toHaveAttribute("aria-checked", "true");
-      await expect(due).toHaveAccessibleDescription("Turn off to use only your settings. Skipped work stays due for the next clean.");
+      await expect(due).toHaveAccessibleDescription("");
       await due.click();
       await expect.poll(async () => (await snapshot(page)).selection.useRoomSchedule).toBe(false);
       await expect(due).toHaveAttribute("aria-checked", "false");
@@ -1093,11 +1093,13 @@ for (const narrow of [true, false]) {
       await kitchen.click();
       await gallery.getByRole("combobox", { name: "Cleaning mode for Kitchen" }).selectOption("mop");
       const coverage = gallery.getByRole("combobox", { name: "Vacuum coverage for Kitchen" });
-      await expect(coverage).toHaveAttribute("aria-disabled", "true");
-      await expect(coverage).toHaveAccessibleDescription(/^Vacuum coverage applies only when vacuuming\./);
+      await expect(coverage).toHaveCount(0);
+      await expect(gallery.getByRole("switch", { name: "Double-pass mopping" })).toBeVisible();
       const before = (await snapshot(page)).selection.roomSettings.find((room) => room.roomId === "room-a").coverageSetting;
-      await forceSelect(coverage, "quick");
-      await expect.poll(async () => (await snapshot(page)).selection.roomSettings.find((room) => room.roomId === "room-a").coverageSetting).toBe(before);
+      await gallery.getByRole("combobox", { name: "Cleaning mode for Kitchen" }).selectOption("vacuum_and_mop");
+      await expect(coverage).toHaveValue(before);
+      await expect(gallery.getByRole("switch", { name: "Double-pass mopping" })).toBeVisible();
+      await gallery.getByRole("combobox", { name: "Cleaning mode for Kitchen" }).selectOption("vacuum");
       await expect(coverage).toHaveValue(before);
     });
 
@@ -1175,10 +1177,10 @@ for (const narrow of [true, false]) {
           roomSettings: state.selection.roomSettings.map((room) => room.roomId === "room-a" ? { ...room, cleaningMode: "mop" } : room) } },
         { blocker: "invalid_cadence_policy" }));
       });
-      await expect(checkLines(blocked).last()).toHaveText("The room schedule can't use the cleaning mode you chose. Turn off \"Include scheduled work that's due\", or choose another mode.");
+      await expect(checkLines(blocked).last()).toHaveText("Turn off \"Use room schedules\" to use this cleaning mode.");
       await expect(primaryReason(blocked)).toHaveText("Can't start until you change the settings noted above.");
       await settingsRow(blocked).click();
-      await blocked.getByRole("switch", { name: "Include scheduled work that's due" }).click();
+      await blocked.getByRole("switch", { name: "Use room schedules" }).click();
       await expect(checkLines(blocked).last()).toHaveText("These rooms can't be cleaned with the current settings. Change the settings or the rooms, then try again.");
     });
 
@@ -1237,7 +1239,7 @@ for (const narrow of [true, false]) {
       await expect(mode).toHaveAccessibleDescription(busy);
       await forceSelect(mode, "mop");
       await expect(mode).toHaveValue("vacuum");
-      const due = gallery.getByRole("switch", { name: "Include scheduled work that's due" });
+      const due = gallery.getByRole("switch", { name: "Use room schedules" });
       await expect(due).toHaveAttribute("aria-disabled", "true");
       await due.dispatchEvent("click");
       await gallery.getByRole("button", { name: "Settings for Kitchen" }).click();

@@ -3,6 +3,7 @@ import type { PropertyValues } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { controls } from "./controls";
 import { formControls } from "./form-controls";
+import { mopControl } from "./mop-control";
 import { icon, iconChevronRight, iconDue, iconMoveDown, iconMoveUp, iconNoticeWarning, iconPlus } from "./icons";
 import { base, tokens } from "./tokens";
 import type { CadenceReason, CleaningMode, CoverageSetting, PlanRoom, SavedArea, SavedPlan } from "./backend-contracts";
@@ -70,7 +71,7 @@ export class MaticPlanViewsV4 extends LitElement {
 .run-row:last-child { border-block-end: 0; }
 .run-row[data-break] { margin-block-start: var(--ms-space-3); padding-block-start: var(--ms-space-3); border-block-start: 2px dashed var(--ms-line-strong); }
 .row-lines { display: grid; flex: 1; gap: 0.125rem; min-inline-size: 0; }
-.row-lines bdi { overflow: hidden; font-weight: var(--ms-w-bold); text-overflow: ellipsis; white-space: nowrap; }
+.row-lines bdi { font-weight: var(--ms-w-bold); overflow-wrap: anywhere; }
 .row-lines small { color: color-mix(in srgb, var(--ms-text) 78%, var(--ms-local, var(--ms-surface-card))); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
 .row-lines .ms-chip { justify-self: start; }
 .pos-badge { display: grid; flex: none; place-items: center; inline-size: 1.5rem; block-size: 1.5rem; border-radius: 50%; background: color-mix(in srgb, var(--ms-accent) 12%, var(--ms-surface-card)); font-size: var(--ms-t-xs); font-weight: var(--ms-w-bold); font-variant-numeric: tabular-nums; }
@@ -80,7 +81,7 @@ export class MaticPlanViewsV4 extends LitElement {
 .pin-setting:empty { display: none; }
 .switch-copy { display: grid; flex: 1; gap: 0.125rem; min-inline-size: 0; font-size: var(--ms-t-md); }
 .switch-copy small, .reason { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
-.sr-only { position: absolute; overflow: hidden; inline-size: 1px; block-size: 1px; margin: -1px; padding: 0; border: 0; clip-path: inset(50%); white-space: nowrap; }
+.sr-only { position: absolute; inset-block-start: 0; inset-inline-start: 0; overflow: hidden; inline-size: 1px; block-size: 1px; margin: -1px; padding: 0; border: 0; clip-path: inset(50%); white-space: nowrap; }
 /* Edit (plan.md §3, ported from mockups/plan.ts). */
 .edit { display: grid; gap: var(--ms-space-3); }
 .order { display: grid; gap: var(--ms-space-1); margin: 0; padding: 0; border: 0; font-size: var(--ms-t-sm); }
@@ -302,7 +303,7 @@ export class MaticPlanViewsV4 extends LitElement {
     const ready = !paused && Boolean(preview && !blocker && /^[0-9a-f]{64}$/u.test(preview.previewToken ?? ""));
     const ordered = plan.runBehavior === "ordered";
     const previewRooms = ready && preview ? preview.rooms : [];
-    // Custom areas keep their place among the rooms, and mission boundaries count them.
+    // The server preview orders every room and area; boundaries count both.
     const steps = ready && preview ? preview.steps ?? previewRooms : [];
     const areas = ready ? steps.length - previewRooms.length : planAreas(plan).length;
     const blockedRoom = !paused && blocker ? roomBlocker(state, plan)?.jump.roomId ?? null : null;
@@ -345,12 +346,12 @@ export class MaticPlanViewsV4 extends LitElement {
       <p class="summary">${summary}</p>
       ${this.#lines(dueLines(this.#t, state.locale, previewRooms))}
       <h3 class="heading">${paused
-        ? this.#t("v4_plan_rooms_heading", "Rooms in this plan")
+        ? this.#t("v4_plan_rooms_heading", "In this plan")
         : state.resources.entry?.activePlan
           ? this.#t("v4_next_run_after_active", "After this run")
           : this.#t("v4_next_run_preview", "Next run")}</h3>
-      ${ready && !ordered ? html`<p class="quiet">${this.#t("v4_plan_rotation_settings", "Longest-waiting rooms first, checked again when you run the plan.")}</p>` : nothing}
-      ${boundaries.length ? html`<p class="quiet">${this.#t("v4_room_parts", "The robot cleans these rooms in {count} parts and may stop at the dock between parts.", {
+      ${ready && !ordered ? html`<p class="quiet">${this.#t("v4_plan_rotation_settings", "Longest-waiting rooms and custom areas first, checked again when you run the plan.")}</p>` : nothing}
+      ${boundaries.length ? html`<p class="quiet">${this.#t("v4_room_parts", "The robot cleans in {count} parts and may stop at the dock between parts.", {
         count: this.#count(boundaries.length + 1),
       })}</p>` : nothing}
       ${problem ? html`<p class="problem">${this.#t(problem.reasonKey, problem.reason)}</p>
@@ -549,12 +550,11 @@ export class MaticPlanViewsV4 extends LitElement {
               }}
             >${MODES.map((mode) => html`<option value=${mode} ?selected=${mode === room.cleaningMode} ?disabled=${modeLocked && mode !== "vacuum"}>${modeLabel(this.#t, mode)}</option>`)}</select>
           </label>
-          <label class="field ms-field">${this.#t("vacuum_coverage", "Vacuum coverage")}
+          ${room.cleaningMode === "mop" ? nothing : html`<label class="field ms-field">${this.#t("vacuum_coverage", "Vacuum coverage")}
             <select
               aria-label=${this.#t("v4_room_vacuum_coverage_named", "Vacuum coverage for {room}", { room: name })}
               aria-disabled=${gate.disabled}
               aria-describedby=${gate.described}
-              ?disabled=${room.cleaningMode === "mop"}
               .value=${room.coverageSetting}
               @change=${(event: Event) => {
                 const select = event.currentTarget as HTMLSelectElement;
@@ -562,10 +562,10 @@ export class MaticPlanViewsV4 extends LitElement {
                 else this.#patchRoom(index, { coverageSetting: select.value as CoverageSetting });
               }}
             >${COVERAGES.map((option) => html`<option value=${option} ?selected=${option === room.coverageSetting}>${coverageLabel(this.#t, option)}</option>`)}</select>
-          </label>
+          </label>`}
         </div>
-        ${modeLocked ? html`<p class="sched-status sched-reason" id="mode-reason">${icon(iconNoticeWarning)}<span>${this.#t("v4_cadence_clear_mop_to_change_normal", "Can't change the cleaning mode until the mop schedule is off.")}</span></p>` : nothing}
-        ${room.cleaningMode === "vacuum" ? nothing : html`<p class="subtle">${this.#t("v4_mop_coverage_hint", "Vacuum coverage applies only when vacuuming. Use the robot's Double-pass mopping setting for an extra mop pass.")}</p>`}
+        ${modeLocked ? html`<p class="schedule-note" id="mode-reason"><span>${this.#t("v4_cadence_clear_mop_to_change_normal", "Turn the mopping schedule off to change the cleaning mode.")}</span></p>` : nothing}
+        ${mopControl(this.#t, this.state, room.cadence?.mopEveryN ? "vacuum_and_mop" : room.cleaningMode, `plan-room-${index}`)}
         ${scheduleBlock({
           t: this.#t,
           state: this.state,
@@ -682,12 +682,11 @@ export class MaticPlanViewsV4 extends LitElement {
               }}
             >${MODES.map((mode) => html`<option value=${mode} ?selected=${mode === area.cleaningMode}>${modeLabel(this.#t, mode)}</option>`)}</select>
           </label>
-          <label class="field ms-field">${this.#t("vacuum_coverage", "Vacuum coverage")}
+          ${area.cleaningMode === "mop" ? nothing : html`<label class="field ms-field">${this.#t("vacuum_coverage", "Vacuum coverage")}
             <select
               aria-label=${this.#t("v4_area_vacuum_coverage_named", "Vacuum coverage for {area}", { area: name })}
               aria-disabled=${gate.disabled}
               aria-describedby=${gate.described}
-              ?disabled=${area.cleaningMode === "mop"}
               .value=${area.coverageSetting}
               @change=${(event: Event) => {
                 const select = event.currentTarget as HTMLSelectElement;
@@ -695,9 +694,9 @@ export class MaticPlanViewsV4 extends LitElement {
                 else this.#patchArea(area.areaId, { coverageSetting: select.value as CoverageSetting });
               }}
             >${COVERAGES.map((option) => html`<option value=${option} ?selected=${option === area.coverageSetting}>${coverageLabel(this.#t, option)}</option>`)}</select>
-          </label>
+          </label>`}
         </div>
-        ${area.cleaningMode === "vacuum" ? nothing : html`<p class="subtle">${this.#t("v4_mop_coverage_hint", "Vacuum coverage applies only when vacuuming. Use the robot's Double-pass mopping setting for an extra mop pass.")}</p>`}
+        ${mopControl(this.#t, this.state, area.cleaningMode, `plan-area-${position}`)}
       </div>` : nothing}
     </li>`;
   }
@@ -795,8 +794,8 @@ export class MaticPlanViewsV4 extends LitElement {
         </div>
         <p class="quiet">${ordered
           ? this.#t("v4_plan_order_ordered_hint", "Top to bottom, as listed")
-          : this.#t("v4_plan_order_intelligent_hint", "Longest-waiting rooms first")}</p>
-        ${areas && !ordered ? html`<p class="quiet">${this.#t("v4_plan_areas_rotation_hint", "Custom areas keep their places, and only the rooms between them change order. Choose Saved order to move them.")}</p>` : nothing}
+          : this.#t("v4_plan_order_intelligent_hint", "Longest-waiting first")}</p>
+        ${areas && !ordered ? html`<p class="quiet">${this.#t("v4_plan_areas_rotation_hint", "Rooms and custom areas rotate together. Saved order follows your exact sequence.")}</p>` : nothing}
       </div>
       <div class="list-header">
         <h3 class="heading" id="edit-rooms">${areas

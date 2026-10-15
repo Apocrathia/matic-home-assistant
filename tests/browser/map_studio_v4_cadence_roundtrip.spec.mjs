@@ -105,7 +105,7 @@ const exerciseCadenceRoundtrip = async ({ page }) => {
   }
 
   const rooms = panel.getByRole("list", { name: "Rooms", exact: true });
-  const schedule = rooms.getByRole("group", { name: "Room schedule for Kitchen" });
+  const schedule = rooms.getByRole("group", { name: "Smart cleaning for Kitchen" });
   // A saved plan opens in Run, and Save returns there (plan.md §5); its
   // schedules change in Edit, inside the room's settings (plan.md §3).
   const openSchedule = async () => {
@@ -116,7 +116,7 @@ const exerciseCadenceRoundtrip = async ({ page }) => {
   };
   await openSchedule();
   await expectNoSeriousAccessibilityViolations(page, "plan cadence editor");
-  // "Count cleans" lives under Advanced (room-schedule.md §3).
+  // "Count completed cleans" lives under Advanced (room-schedule.md §3).
   const scopeRadio = (label) => schedule.getByRole("radio", { name: label, exact: true, includeHidden: true });
   const setScope = async (label) => {
     if (!(await scopeRadio(label).isVisible())) await schedule.getByText("Advanced", { exact: true }).click();
@@ -125,7 +125,7 @@ const exerciseCadenceRoundtrip = async ({ page }) => {
   const shared = "Across all plans (recommended)";
   const thisPlan = "In this plan only";
   // Each field is named by its row's label line, which says its value (room-schedule.md §3).
-  const mopInterval = schedule.getByRole("spinbutton", { name: /^Mop/ });
+  const mopInterval = schedule.getByRole("spinbutton", { name: /^(Mop|Occasional mopping)/ });
   const coverageInterval = schedule.getByRole("spinbutton", { name: /vacuum/ });
   const coverageSetting = schedule.getByLabel("Vacuum level for Kitchen");
   // One next-clean switch, named by the work it brings forward.
@@ -186,7 +186,7 @@ const exerciseCadenceRoundtrip = async ({ page }) => {
   await panel.getByRole("button", { name: /^Daily clean/ }).click();
   await panel.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
   await rooms.getByRole("button", { name: "Settings for Kitchen", exact: true }).click();
-  const reopenedSchedule = rooms.getByRole("group", { name: "Room schedule for Kitchen" });
+  const reopenedSchedule = rooms.getByRole("group", { name: "Smart cleaning for Kitchen" });
   await expect(reopenedSchedule.getByRole("radio", { name: shared, exact: true, includeHidden: true })).toBeChecked();
   await expect(reopenedSchedule.getByRole("spinbutton", { name: "Mop every 7 cleans" })).toHaveValue("7");
   await expect(reopenedSchedule.getByRole("spinbutton", { name: "Heavy duty vacuum every 5 cleans" })).toHaveValue("5");
@@ -273,7 +273,7 @@ test("mop-only legacy vacuum rules stay visible and can leave shared participati
   await panel.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
   const rooms = panel.getByRole("list", { name: "Rooms", exact: true });
   await rooms.getByRole("button", { name: "Settings for Kitchen", exact: true }).click();
-  const schedule = rooms.getByRole("group", { name: "Room schedule for Kitchen" });
+  const schedule = rooms.getByRole("group", { name: "Smart cleaning for Kitchen" });
   const rotation = schedule.getByRole("spinbutton", { name: /vacuum/ });
   await expect(rotation).toHaveValue("3");
   await expect(rotation).toHaveAttribute("aria-disabled", "true");

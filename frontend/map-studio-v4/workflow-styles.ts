@@ -26,21 +26,30 @@ export const shellWorkflowStyles = css`
 
     .panel-back { flex: none; }
 
-    /* Home shortcuts (home-shortcuts.ts): the name stays on one line, and
-       every due line shows in full (owner, 2026-10-13). The open button
-       sits beside the card, a 44 px target of its own. */
+    /* One-tap shortcuts share a quiet surface; navigation keeps separate cards.
+       Whole-row targets and full names/due lines keep actions easy to identify. */
+    .quick-actions.home-shortcuts { gap: 0; border: 1px solid var(--ms-line); border-radius: var(--ms-radius-lg); }
+    .home-shortcuts .shortcut { --ms-local: light-dark(color-mix(in srgb, var(--ms-accent) 4%, var(--ms-surface-card)), color-mix(in srgb, var(--ms-accent) 8%, var(--ms-surface-card))); border-color: transparent; border-radius: 0; }
+    .home-shortcuts .shortcut:first-child { border-start-start-radius: var(--ms-radius-lg); border-start-end-radius: var(--ms-radius-lg); }
+    .home-shortcuts .shortcut:last-child { border-end-start-radius: var(--ms-radius-lg); border-end-end-radius: var(--ms-radius-lg); }
+    .home-shortcuts .shortcut + .shortcut { border-block-start-color: var(--ms-line); }
+    .home-shortcuts .shortcut .ms-row__lead { border-radius: 50%; }
+    .home-shortcuts .shortcut:not([aria-disabled="true"]) .ms-row__lead { color: var(--ms-resolved-on-accent-fill, var(--ms-on-accent)); background: var(--ms-resolved-accent-fill, var(--ms-accent)); }
     .quick-actions .card-title { display: flex; gap: var(--ms-space-1) var(--ms-space-2); align-items: center; min-inline-size: 0; }
-    .quick-actions .card-name { overflow: hidden; min-inline-size: 0; text-overflow: ellipsis; white-space: nowrap; }
+    .quick-actions .card-name { min-inline-size: 0; overflow-wrap: anywhere; }
     .quick-actions .card-title .ms-chip { flex: none; }
     .quick-actions .card-lines { display: block; margin-block-start: 0.125rem; color: var(--ms-text); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
     .quick-actions .ms-row[aria-disabled="true"] .card-lines { color: var(--ms-text-disabled); }
     /* A held shortcut's reason is the one thing that says why: readable text. */
     .quick-actions .ms-row[aria-disabled="true"] .line[data-tone="warning"] { color: var(--ms-text-quiet); }
-    .shortcut:not([aria-disabled="true"]) .ms-row__lead { color: var(--ms-resolved-indicator, var(--ms-accent)); }
+    @media (forced-colors: active) {
+      .quick-actions.home-shortcuts, .home-shortcuts .shortcut + .shortcut { border-color: ButtonBorder; }
+      .home-shortcuts .shortcut:not([aria-disabled="true"]) .ms-row__lead { forced-color-adjust: none; color: HighlightText; background: Highlight; }
+    }
     .quick-actions .line { display: block; padding-inline-start: 1.25rem; text-indent: -1.25rem; }
     .quick-actions .line .ms-icon { display: inline-block; inline-size: 1rem; block-size: 1rem; margin-inline-end: var(--ms-space-1); vertical-align: -0.1875rem; color: var(--ms-resolved-indicator, var(--ms-accent)); }
     .quick-actions .line[data-tone="warning"] .ms-icon { color: var(--ms-warning); }
-    .pins-error { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
+    .pins-error { margin: 0; padding: var(--ms-space-3); color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
 
     .action-summary { margin: 0; overflow: hidden; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); text-overflow: ellipsis; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
     /* A landscape phone keeps the bar to its button (home-rooms.md §7). */

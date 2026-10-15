@@ -3,6 +3,7 @@ import type { PropertyValues } from "lit";
 import { html as staticHtml, unsafeStatic } from "lit/static-html.js";
 import { controls } from "./controls";
 import { formControls } from "./form-controls";
+import { mopControl } from "./mop-control";
 import { base, tokens } from "./tokens";
 
 import type { CleaningMode, CoverageSetting } from "./backend-contracts";
@@ -78,7 +79,7 @@ export class MaticMapWorkflowV4 extends LitElement {
 
   static override styles = [tokens, base, controls, formControls, css`
 :host { display: block; min-inline-size: 0; container-type: inline-size; }
-.ms-row--danger { color: var(--ms-danger); }
+.ms-row--danger { color: var(--ms-resolved-danger-text, var(--ms-danger)); }
 .sr-only { position: absolute; overflow: hidden; inline-size: 1px; block-size: 1px; margin: -1px; clip-path: inset(50%); white-space: nowrap; }
 button, select, input[type="checkbox"] { cursor: pointer; }
 .stack { display: grid; gap: var(--ms-space-3); }
@@ -189,9 +190,7 @@ line-height: var(--ms-lh-snug);
     return text === null ? nothing : tag === "small" ? html`<small data-in-plans>${text}</small>` : html`<p class="subtle" data-in-plans>${text}</p>`;
   }
 
-  #mopCoverageHint(mode: CleaningMode) {
-    return mode === "vacuum" ? nothing : html`<p class="subtle">${this.#t("v4_mop_coverage_hint", "Vacuum coverage applies only when vacuuming. Use the robot's Double-pass mopping setting for an extra mop pass.")}</p>`;
-  }
+
 
   #intent(intent: WorkspaceIntent): void {
     this.dispatchEvent(new CustomEvent(WORKSPACE_INTENT_EVENT, {
@@ -374,14 +373,14 @@ line-height: var(--ms-lh-snug);
               this.#intent({ type: "patch-area-draft", patch: { cleaningMode: eventValue(event) as CleaningMode } });
             }}>${MODES.map((mode) => html`<option value=${mode} ?selected=${mode === draft.cleaningMode}>${this.#modeLabel(mode)}</option>`)}</select>
           </label>
-          <label class="field ms-field">${this.#t("vacuum_coverage", "Vacuum coverage")}
-            <select ?disabled=${draft.cleaningMode === "mop"} .value=${draft.coverageSetting} aria-disabled=${disabled} aria-describedby=${heldBy} @change=${(event: Event) => {
+          ${draft.cleaningMode === "mop" ? nothing : html`<label class="field ms-field">${this.#t("vacuum_coverage", "Vacuum coverage")}
+            <select .value=${draft.coverageSetting} aria-disabled=${disabled} aria-describedby=${heldBy} @change=${(event: Event) => {
               if (held) { (event.currentTarget as HTMLSelectElement).value = draft.coverageSetting; return; }
               this.#intent({ type: "patch-area-draft", patch: { coverageSetting: eventValue(event) as CoverageSetting } });
             }}>${COVERAGES.map((option) => html`<option value=${option} ?selected=${option === draft.coverageSetting}>${this.#coverageLabel(option)}</option>`)}</select>
-          </label>
+          </label>`}
         </div>
-        ${this.#mopCoverageHint(draft.cleaningMode)}
+        ${mopControl(this.#tr, this.state, draft.cleaningMode, "area")}
         ${this.#line(draft.id === null ? null : this.#inPlans(draft.id), "p")}
         ${bodyRedraw ? html`
           <div class="toolbar">

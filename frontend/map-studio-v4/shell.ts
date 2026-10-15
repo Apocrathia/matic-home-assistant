@@ -555,19 +555,21 @@ export class MaticMapShellV4 extends LitElement {
     this.#unwatchTheme = watchTheme(() => this.#resolveTheme());
   }
 
-  // MS-AXE-03 (design-system.md §5): the six D1 colours, resolved from HA's
+  // MS-AXE-03 (design-system.md §5): semantic colours resolved from HA's
   // theme colours (theme-probe.ts): the primary and Stop fill pairs, the
   // focus and selection indicator (3:1 on the card and sunken surfaces) and
-  // danger text (4.5:1 on the card). Forced colours bypass it.
+  // danger text (4.5:1 on resting, hovered and pressed rows). Forced colours bypass it.
   #resolveTheme(): void {
     const forced = window.matchMedia("(forced-colors: active)").matches;
     const read = readColors(this.renderRoot, {
       accent: "var(--ms-accent)", danger: "var(--ms-danger)", label: "var(--ms-on-accent)",
       card: "var(--ms-surface-card)", sunken: "var(--ms-surface-sunken)",
+      hover: "color-mix(in srgb, var(--ms-text) 7%, var(--ms-surface-sunken))",
+      pressed: "color-mix(in srgb, var(--ms-text) 14%, var(--ms-surface-sunken))",
     });
     // In the order read. A translucent colour has no single contrast, so it
     // resolves nothing.
-    const [accent, danger, label, card, sunken] = Object.values(read).map(opaque);
+    const [accent, danger, label, card, sunken, hover, pressed] = Object.values(read).map(opaque);
     const pair = (fill?: Channel | null) => (forced || !fill || !label ? [] : resolveFill(fill, label));
     const tone = (color: Channel | null | undefined, ratio: number, surface = card) =>
       (forced || !color || !card || !surface ? undefined : resolveTone(color, ratio, [card, surface]));
@@ -575,12 +577,15 @@ export class MaticMapShellV4 extends LitElement {
     const value = (channel?: Channel): string => (channel ? rgba(channel, 1) : "");
     const [accentFill, onAccentFill] = pair(accent);
     const [dangerFill, onDangerFill] = pair(danger);
+    const indicator = tone(accent, 3, sunken);
     this.style.setProperty("--ms-resolved-accent-fill", value(accentFill));
     this.style.setProperty("--ms-resolved-on-accent-fill", value(onAccentFill));
     this.style.setProperty("--ms-resolved-danger-fill", value(dangerFill));
     this.style.setProperty("--ms-resolved-on-danger-fill", value(onDangerFill));
-    this.style.setProperty("--ms-resolved-indicator", value(tone(accent, 3, sunken)));
-    this.style.setProperty("--ms-resolved-danger-text", value(tone(danger, 4.5)));
+    this.style.setProperty("--ms-resolved-indicator", value(indicator));
+    this.style.setProperty("--ms-resolved-on-indicator", value(indicator && label ? resolveTone(label, 4.5, [indicator]) : undefined));
+    this.style.setProperty("--ms-resolved-danger-text", value(!forced && danger && card && sunken && hover && pressed
+      ? resolveTone(danger, 4.5, [card, sunken, hover, pressed]) : tone(danger, 4.5)));
   }
 
   override disconnectedCallback(): void {
@@ -1604,11 +1609,11 @@ export class MaticMapShellV4 extends LitElement {
       ` : nothing}
       ${shortcuts === nothing ? nothing : html`
         <h3 class="ms-section-heading" id="shortcuts-heading">${t("v4_shortcuts_heading", "Shortcuts")}</h3>
-        <div class="quick-actions" role="group" aria-labelledby="shortcuts-heading">${shortcuts}</div>
+        <div class="quick-actions home-shortcuts" role="group" aria-labelledby="shortcuts-heading">${shortcuts}</div>
         <h3 class="ms-section-heading">${t("v4_more_ways_heading", "More ways to clean")}</h3>
       `}
       <div class="quick-actions" role="group" aria-label=${t("v4_cleaning_choices", "Cleaning choices")}>
-        ${card("rooms", true, iconRobot, roomsDisabled,
+        ${card("rooms", shortcuts === nothing, iconRobot, roomsDisabled,
           t("v4_clean_rooms", "Clean rooms"),
           !held && noRooms ? t("v4_no_rooms_reason", "Can't clean rooms until you name them in the Matic app.") : t("v4_rooms_quick_detail", "Pick rooms and clean them now."))}
         ${card("areas", false, iconNewArea, held,

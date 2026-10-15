@@ -4,22 +4,23 @@ import { icon, iconMinus, iconPlus } from "./icons";
 import type { Translate } from "./plan-copy";
 
 export const INTERVAL_MIN = 1;
+export const MOP_INTERVAL_MIN = 2;
 export const INTERVAL_MAX = 100;
 
-/** What a committed field becomes: bad input keeps the value, empty is Off, numbers snap into 1 to 100. */
-export const snapInterval = (raw: string, badInput: boolean, current: number | null): number | null => {
+/** What a committed field becomes: bad input keeps the value, empty is Off, numbers snap into the allowed interval. */
+export const snapInterval = (raw: string, badInput: boolean, current: number | null, minimum = INTERVAL_MIN): number | null => {
   if (badInput) return current;
   const text = raw.trim();
   if (text === "") return null;
   const value = Number(text);
-  return Number.isFinite(value) ? Math.min(INTERVAL_MAX, Math.max(INTERVAL_MIN, Math.round(value))) : current;
+  return Number.isFinite(value) ? Math.min(INTERVAL_MAX, Math.max(minimum, Math.round(value))) : current;
 };
 
-/** "−" at 1 turns the row Off, "+" at Off gives 1, and the ends stay put. */
-export const stepInterval = (current: number | null, delta: -1 | 1): number | null =>
+/** Below the minimum is Off; a legacy value increases to the new minimum. */
+export const stepInterval = (current: number | null, delta: -1 | 1, minimum = INTERVAL_MIN): number | null =>
   current === null
-    ? delta > 0 ? INTERVAL_MIN : null
-    : current + delta < INTERVAL_MIN ? null : Math.min(INTERVAL_MAX, current + delta);
+    ? delta > 0 ? minimum : null
+    : current + delta < minimum ? delta > 0 ? minimum : null : Math.min(INTERVAL_MAX, current + delta);
 
 /**
  * `ms-stepper` (design-system.md §4): [− 44×44][number field][+ 44×44] in one
@@ -47,6 +48,7 @@ export interface StepperOptions {
   /** The label line's text, for "Decrease {label}" and "Increase {label}". */
   readonly label: string;
   readonly value: number | null;
+  readonly minimum?: number;
   /** The status or reason line, and the hold's reason while one applies. */
   readonly describedBy: string | null;
   /** Why − and + can't act now (a hold or a mode conflict); null while they can. */
@@ -61,11 +63,12 @@ export interface StepperOptions {
 export const stepper = (o: StepperOptions): TemplateResult => {
   const { id, t, value } = o;
   const held = o.heldBy !== null;
+  const minimum = o.minimum ?? INTERVAL_MIN;
   const field = html`<input
     id=${id}
     type="number"
     inputmode="numeric"
-    min="1"
+    min=${minimum}
     max=${INTERVAL_MAX}
     step="1"
     placeholder=${t("v4_cadence_off", "Off")}
@@ -76,7 +79,7 @@ export const stepper = (o: StepperOptions): TemplateResult => {
     .value=${value === null ? "" : String(value)}
     @change=${(event: Event) => {
       const input = event.currentTarget as HTMLInputElement;
-      const next = o.readonly || held ? value : snapInterval(input.value, input.validity.badInput, value);
+      const next = o.readonly || held ? value : snapInterval(input.value, input.validity.badInput, value, minimum);
       input.value = next === null ? "" : String(next);
       if (next !== value) o.commit(next);
     }}
@@ -101,7 +104,7 @@ export const stepper = (o: StepperOptions): TemplateResult => {
       aria-disabled=${reason || held ? "true" : nothing}
       aria-describedby=${[reason ? endId : null, o.heldBy].filter(Boolean).join(" ") || nothing}
       title=${reason ?? nothing}
-      @click=${() => { if (!reason && !held) o.commit(stepInterval(value, delta)); }}
+      @click=${() => { if (!reason && !held) o.commit(stepInterval(value, delta, minimum)); }}
     >${icon(delta < 0 ? iconMinus : iconPlus)}${reason ? html`<span class="sr-only" id=${endId}>${reason}</span>` : nothing}</button>`;
   };
   return html`<span class="ms-stepper">${end(-1)}${field}${end(1)}</span>`;

@@ -5,6 +5,9 @@ import { css } from "lit";
 // field's input share one rule in controls.ts, which the shell's switchers
 // need too.
 export const formControls = css`
+.mop-setting { display: flex; align-items: center; gap: var(--ms-space-3); min-block-size: var(--ms-control); color: var(--ms-text); font-size: var(--ms-t-sm); }
+.mop-setting-copy { display: grid; flex: 1; min-inline-size: 0; gap: var(--ms-space-1); overflow-wrap: anywhere; }
+.mop-setting-copy small { color: var(--ms-text); font-size: var(--ms-t-xs); }
 .ms-switch {
 position: relative;
 flex: none;
@@ -42,7 +45,7 @@ box-shadow: var(--ms-shadow-1);
 transition: translate var(--ms-fast) var(--ms-ease);
 }
 .ms-switch[aria-checked="true"]::before { border-color: var(--ms-resolved-indicator, var(--ms-accent)); background: var(--ms-resolved-indicator, var(--ms-accent)); }
-.ms-switch[aria-checked="true"]::after { translate: 1.25rem -50%; background: var(--ms-on-accent); }
+.ms-switch[aria-checked="true"]::after { translate: 1.25rem -50%; background: var(--ms-resolved-on-indicator, var(--ms-on-accent)); }
 .ms-switch:focus-visible { outline: 0; }
 .ms-switch:focus-visible::before { outline: 2px solid var(--ms-resolved-indicator, var(--ms-accent)); outline-offset: 2px; }
 .ms-switch:disabled, .ms-switch[aria-disabled="true"] { cursor: default; opacity: 0.55; }

@@ -189,6 +189,7 @@ interface StepperOptions {
   readonly id: string;
   readonly label: string;
   readonly value: number | null;
+  readonly minimum?: number;
   readonly readonly?: boolean;
   readonly status?: string | null;
   readonly reason?: string;
@@ -209,7 +210,7 @@ const stepperRow = (options: StepperOptions): TemplateResult => {
     id=${id}
     type="number"
     inputmode="numeric"
-    min="1"
+    min=${options.minimum ?? 1}
     max="100"
     step="1"
     ?readonly=${Boolean(options.readonly)}
@@ -300,15 +301,18 @@ const scheduleBlock = (model: ScheduleModel, onScope: (scope: "shared" | "plan")
         ? html`<button class="ms-btn ms-btn--icon" type="button" aria-label=${t("v4_room_more_named", { room: name })} title=${t("v4_room_more_named", { room: name })}>${glyph(iconOverflow)}</button>`
         : nothing}
     </div>
+    <p class="schedule-note">${t("v4_cadence_smart_intro")}</p>
     ${model.sharedHint ? html`<p class="schedule-note">${t("v4_cadence_shared_available", { room: name })}</p>` : nothing}
     ${stepperRow({
       id: `${id}-mop`,
       label: mopLabel(model.mopEvery),
       value: model.mopEvery,
+      minimum: 2,
       status: model.mopStatus,
       ...(model.readonly ? { readonly: true } : {}),
       ...(model.mopReason ? { reason: model.mopReason, reset: t("v4_reset_mop_cadence_button") } : {}),
     })}
+    <small class="sched-status">${t(model.mopEvery === 1 ? "v4_cadence_mop_legacy_hint" : "v4_cadence_mop_smart_hint")}</small>
     ${stepperRow({
       id: `${id}-cov`,
       label: rotationLabel(model.level, model.covEvery),

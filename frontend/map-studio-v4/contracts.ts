@@ -161,7 +161,7 @@ export interface AdmittedManualRoomPreview {
 }
 
 export type PlanView = "run" | "edit";
-export type PendingAction = "run-plan" | "save-plan";
+export type PendingAction = "run-plan" | "save-plan" | "set-deep-mop";
 
 export interface PlanDraft {
   readonly id: string | null;
@@ -296,6 +296,7 @@ export function readWorkspaceNotice(value: unknown): WorkspaceNotice | null {
 }
 
 export interface WorkspaceState {
+  readonly deepMop: RobotSetting | null;
   readonly pageActive: boolean;
   readonly owner: { readonly userKey: string; readonly entryKey: string | null } | null;
   readonly draftFloorOrdinal: number | null;
@@ -526,6 +527,7 @@ export interface DateFormat {
 }
 
 export interface HassProjection {
+  readonly deepMop: RobotSetting | null;
   readonly host: HostState;
   readonly activity: RobotActivity;
   readonly batteryPercent: number | null;
@@ -538,6 +540,11 @@ export interface HassProjection {
   readonly entryKey: string | null;
   readonly robotLabel: string;
   readonly robots: readonly RobotChoice[];
+}
+
+export interface RobotSetting {
+  readonly entityId: string;
+  readonly enabled: boolean | null;
 }
 
 export interface PanelLike {

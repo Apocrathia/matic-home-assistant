@@ -995,7 +995,7 @@ async def _async_wait_for_area_end(
     """Wait until a plan custom area's own native mission ends.
 
     The robot reports no result for a drawn area, so the end of the area's
-    session is the end of the area; it earns no credit. A replaced or
+    session is the end of the area (not coverage evidence). A replaced or
     unreadable session fails closed and a robot error is terminal. Firmware
     can keep an ended mission's identity while the robot is home, so an
     inactive session when docked or idle also ends it. A low-charge return
@@ -1015,6 +1015,14 @@ async def _async_wait_for_area_end(
                 "The selected Matic robot reported an error", "robot_error"
             )
         identity = await _async_read_session_identity(reader)
+        # A Stop or error can arrive while the identity request is in flight.
+        if cancel_event.is_set():
+            raise PlanCancelledError
+        current = hass.states.get(entity_id)
+        if current is not None and current.state == "error":
+            raise _validation_error(
+                "The selected Matic robot reported an error", "robot_error"
+            )
         if identity is None:
             unknown_reads += 1
             if unknown_reads >= ACTIVE_SESSION_UNKNOWN_ATTEMPTS:
@@ -1022,17 +1030,31 @@ async def _async_wait_for_area_end(
                     "The native task ownership could not be verified"
                 )
         elif identity == b"":
+            if unknown_reads:
+                raise RoomTakenOverError(
+                    "The custom area ended while native task ownership was unknown"
+                )
             return
         elif identity != expected:
             raise RoomTakenOverError("The native cleaning task was replaced")
         else:
             unknown_reads = 0
-            if (
-                state is not None
-                and state.state in {"docked", "idle"}
-                and await _async_active_session_state(active_session) is False
-            ):
-                return
+            if current is not None and current.state in {"docked", "idle"}:
+                active = await _async_active_session_state(active_session)
+                # The robot can stop, fail or resume during this second read.
+                if cancel_event.is_set():
+                    raise PlanCancelledError
+                current = hass.states.get(entity_id)
+                if current is not None and current.state == "error":
+                    raise _validation_error(
+                        "The selected Matic robot reported an error", "robot_error"
+                    )
+                if (
+                    active is False
+                    and current is not None
+                    and current.state in {"docked", "idle"}
+                ):
+                    return
         with suppress(TimeoutError):
             async with asyncio.timeout(ROOM_STATUS_REFRESH_SECONDS):
                 await cancel_event.wait()
@@ -1103,8 +1125,8 @@ async def _async_run_area_leg(
     """Clean one plan custom area as its own owned native mission.
 
     The start must carry the session ID this run minted, as a room leg's does;
-    the area then runs until that session ends. Areas run every time and earn
-    no credit, so the end of the mission is the area's result.
+    the area then runs until that session ends. Accepted starts and normal
+    owned session ends update area rotation history, never room cadence.
     """
     plan_id = str(call.data["plan_id"])
     event_data = {
@@ -1117,6 +1139,14 @@ async def _async_run_area_leg(
         "coverage_setting": area.coverage_setting,
         "provenance": provenance,
     }
+
+    def evidence_is_current() -> bool:
+        return (
+            not cancel_event.is_set()
+            and manager.managed_motion_is_current(serial_number, motion_token)
+            and (floor_is_current is None or floor_is_current())
+        )
+
     dispatch = prepared_dispatch
     dispatch_attempted = dispatch is not None
     try:
@@ -1161,6 +1191,14 @@ async def _async_run_area_leg(
             )
         except TimeoutError as err:
             raise RoomStartTimeoutError from err
+        if not await manager.async_mark_area_accepted(
+            serial_number,
+            plan_id,
+            area,
+            run_id=run_id,
+            acceptance_is_current=evidence_is_current,
+        ):
+            raise PlanCancelledError
         budget = await _async_completion_budget(
             dispatch, int(call.data["completion_timeout"]), checkpoint_dispatch
         )
@@ -1233,7 +1271,14 @@ async def _async_run_area_leg(
                 "robot_command_failed",
             ) from err
         raise
-    await manager.async_mark_area_finished(serial_number, area, run_id=run_id)
+    if not await manager.async_mark_area_finished(
+        serial_number,
+        area,
+        run_id=run_id,
+        completed=True,
+        completion_is_current=evidence_is_current,
+    ):
+        raise PlanCancelledError
     hass.bus.async_fire(f"{DOMAIN}_area_finished", event_data, context=call.context)
     return True
 

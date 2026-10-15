@@ -91,6 +91,7 @@ export const initialWorkspaceState = (): WorkspaceState => ({
   cameras: {},
   managedLock: false,
   batteryPercent: null,
+  deepMop: null,
   currentArea: null,
   floor: {
     classifiedCount: 1,
@@ -921,6 +922,13 @@ export const canShowExactPose = (state: WorkspaceState): boolean =>
   && state.host.connected
   && state.host.robotConnected;
 
+/** Robot-wide settings do not depend on the selected map or floor. */
+export const canChangeRobotSetting = (state: WorkspaceState): boolean =>
+  state.pageActive && state.host.administrator && state.host.connected
+  && state.host.robotConnected && state.command === "idle"
+  && state.deepMop != null && state.deepMop.enabled !== null
+  && !state.managedLock && !hasStoppableWork(state);
+
 export const canEditCoordinates = (state: WorkspaceState): boolean =>
   state.pageActive && canShowLiveMap(state)
   && state.coherence === "current"
@@ -1315,7 +1323,7 @@ export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction | NoBu
               }
               : areaAttention
                 ? { reason: "Can't save until you remove the custom areas that need attention.", reasonKey: "v4_reason_save_plan_areas" }
-                : { reason: "Can't save until the plan has a name and at least one room.", reasonKey: "v4_reason_save_plan" }),
+                : { reason: "Can't save until the plan has a name and at least one room or custom area.", reasonKey: "v4_reason_save_plan" }),
       };
     }
     const plan = state.resources.plans.value?.plans.find((candidate) => candidate.id === state.planDraft.id);
