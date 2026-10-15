@@ -5713,9 +5713,14 @@ test.describe("Map Studio v0.4 foundation", () => {
           ? normalized / 12.92
           : ((normalized + 0.055) / 1.055) ** 2.4;
       };
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d", { willReadFrequently: true });
       const luminance = (color) => {
-        const values = color.match(/[\d.]+/g)?.slice(0, 3).map(Number) ?? [0, 0, 0];
-        const rgb = color.startsWith("color(srgb") ? values.map((value) => value * 255) : values;
+        // Computed color-mix backgrounds may be returned as oklab(). Let the
+        // browser convert the rendered color to sRGB before measuring it.
+        context.fillStyle = color;
+        context.fillRect(0, 0, 1, 1);
+        const rgb = context.getImageData(0, 0, 1, 1).data;
         return 0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2]);
       };
       // Walk up to the first ancestor that actually paints a background, so
