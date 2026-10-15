@@ -17,6 +17,7 @@ from custom_components.matic_robot.bluetooth_pairing import (
     MATIC_BLE_SERVICE_UUID,
     BluetoothAdapterUnavailableError,
     BluetoothBondRecoveryRequiredError,
+    BluetoothBondResetFailedError,
     BluetoothCandidateAmbiguousError,
     BluetoothCredentialGrant,
     BluetoothPairingIncompleteError,
@@ -53,24 +54,37 @@ async def test_stale_bond_recovery_is_scoped_and_bounded(
     path = "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF"
     user_id = "40dd38c5-0492-49de-b333-41f16f67471e"
     candidate = SimpleNamespace(
-        device=SimpleNamespace(address=TEST_ADDRESS, details={"path": path})
+        device=SimpleNamespace(address=TEST_ADDRESS, details={"path": path}),
+        fresh=True,
     )
     other = SimpleNamespace(device=SimpleNamespace(address=OTHER_ADDRESS))
     discover = AsyncMock(return_value=[candidate, other])
     monkeypatch.setattr(bluetooth_pairing, "_async_matic_discoveries", discover)
+    bond_exists = True
+
+    async def has_bond(_device_path):
+        return bond_exists
+
     session = SimpleNamespace(
-        reused_existing_bond=True, async_require_connection_agent=AsyncMock()
+        reused_existing_bond=True,
+        async_require_connection_agent=AsyncMock(),
+        async_has_bond=has_bond,
     )
 
     async def remove(device_path):
+        nonlocal bond_exists
         assert device_path == path
-        assert not client.is_connected
+        assert not connect.await_count
         if outcome == "remove_failure":
             raise BleakDBusError("org.bluez.Error.Failed", "synthetic")
         if outcome == "cancel":
             raise asyncio.CancelledError
+        bond_exists = False
 
-    session.async_pair = AsyncMock()
+    async def pair(_device_path, **_kwargs):
+        session.reused_existing_bond = False
+
+    session.async_pair = AsyncMock(side_effect=pair)
     session.async_remove_bond = AsyncMock(side_effect=remove)
     addresses = []
 
@@ -114,11 +128,11 @@ async def test_stale_bond_recovery_is_scoped_and_bounded(
         )
     assert budget == {path}
     if outcome == "remove_failure":
-        assert "stale Bluetooth bond recovery failed" in caplog.text
+        assert "selected Bluetooth bond recovery failed" in caplog.text
         assert TEST_ADDRESS not in caplog.text
     assert addresses == [TEST_ADDRESS]
-    assert connect.await_count == 1
-    client.disconnect.assert_awaited_once()
+    assert connect.await_count == 0
+    client.disconnect.assert_not_awaited()
     client.read_gatt_char.assert_not_awaited()
 
     discover.return_value = [candidate]
@@ -128,12 +142,23 @@ async def test_stale_bond_recovery_is_scoped_and_bounded(
             object(), user_id, reset_bond_paths=budget, reset_bond_path=path
         )
         assert grant.credential.app_id == user_id
+    elif outcome in {"remove_failure", "cancel"}:
+        with pytest.raises(BluetoothBondResetFailedError, match="single reset attempt"):
+            await async_request_bluetooth_credential(
+                object(), user_id, reset_bond_paths=budget, reset_bond_path=path
+            )
     else:
         with pytest.raises(BluetoothPairingIncompleteError, match=f"ATT=0x{code:02x}"):
             await async_request_bluetooth_credential(
                 object(), user_id, reset_bond_paths=budget, reset_bond_path=path
             )
     assert discover.await_count == 2
+    if outcome in {"remove_failure", "cancel"}:
+        assert connect.await_count == 0
+        client.disconnect.assert_not_awaited()
+    else:
+        assert connect.await_count == 1
+        client.disconnect.assert_awaited_once()
     session.async_remove_bond.assert_awaited_once_with(path)
 
 
@@ -155,6 +180,7 @@ async def test_unrelated_protocol_errors_do_not_reset_bonds(
         reused_existing_bond=reused,
         async_pair=AsyncMock(),
         async_remove_bond=AsyncMock(),
+        async_has_bond=AsyncMock(return_value=False),
     )
 
     @asynccontextmanager
@@ -171,7 +197,8 @@ async def test_unrelated_protocol_errors_do_not_reset_bonds(
                     device=SimpleNamespace(
                         address=TEST_ADDRESS,
                         details={"path": "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF"},
-                    )
+                    ),
+                    fresh=True,
                 )
             ]
         ),
@@ -221,7 +248,8 @@ async def test_multiple_robots_require_selection_only_if_all_fail(
         SimpleNamespace(
             device=SimpleNamespace(
                 address=address, name="Synthetic Matic", details={"path": path}
-            )
+            ),
+            fresh=True,
         )
         for address, path in zip([TEST_ADDRESS, OTHER_ADDRESS], paths, strict=True)
     ]
@@ -239,6 +267,7 @@ async def test_multiple_robots_require_selection_only_if_all_fail(
             reused_existing_bond=True,
             async_pair=AsyncMock(),
             async_remove_bond=AsyncMock(),
+            async_has_bond=AsyncMock(return_value=False),
         )
         sessions.append(session)
         yield session
@@ -311,6 +340,363 @@ async def test_missing_selected_robot_never_falls_back_to_another(monkeypatch) -
             reset_bond_path="/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF",
         )
     connect.assert_not_awaited()
+
+
+async def test_changed_selected_path_never_removes_or_contacts_other_candidate(
+    monkeypatch,
+) -> None:
+    selected_path = "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF"
+    replacement = SimpleNamespace(
+        device=SimpleNamespace(
+            address=TEST_ADDRESS,
+            details={"path": "/org/bluez/hci1/dev_AA_BB_CC_DD_EE_FF"},
+        ),
+        fresh=True,
+    )
+    monkeypatch.setattr(
+        bluetooth_pairing,
+        "_async_matic_discoveries",
+        AsyncMock(return_value=[replacement]),
+    )
+    pairing_agent = MagicMock()
+    connect = AsyncMock()
+    monkeypatch.setattr(bluetooth_pairing, "_async_bluez_pairing_agent", pairing_agent)
+    monkeypatch.setattr(bluetooth_pairing, "establish_connection", connect)
+
+    with pytest.raises(BluetoothPairingIncompleteError):
+        await async_request_bluetooth_credential(
+            object(),
+            "synthetic-user",
+            reset_bond_paths=set(),
+            reset_bond_path=selected_path,
+        )
+
+    pairing_agent.assert_not_called()
+    connect.assert_not_awaited()
+
+
+async def test_selected_path_address_mismatch_is_rejected_inside_agent(
+    monkeypatch,
+) -> None:
+    assert bluetooth_pairing._bluez_path_address("/org/bluez/hci0/dev_invalid") is None
+    path = TARGET_PATH
+    discovery = _candidate(OTHER_ADDRESS, path, fresh=True)
+    session = SimpleNamespace(
+        async_require_connection_agent=AsyncMock(),
+        async_has_bond=AsyncMock(return_value=False),
+        async_remove_bond=AsyncMock(),
+    )
+
+    @asynccontextmanager
+    async def agent(*_args):
+        yield session
+
+    connect = AsyncMock()
+    monkeypatch.setattr(bluetooth_pairing, "_async_bluez_pairing_agent", agent)
+    monkeypatch.setattr(
+        bluetooth_pairing,
+        "_async_matic_discoveries",
+        AsyncMock(return_value=[discovery]),
+    )
+    monkeypatch.setattr(bluetooth_pairing, "establish_connection", connect)
+
+    with pytest.raises(BluetoothPairingIncompleteError):
+        await async_request_bluetooth_credential(
+            object(),
+            "synthetic-user",
+            reset_bond_paths=set(),
+            reset_bond_path=path,
+        )
+
+    connect.assert_not_awaited()
+    session.async_remove_bond.assert_not_awaited()
+
+
+@pytest.mark.parametrize("session_mode", ["missing", "still_bonded"])
+async def test_selected_bond_reset_requires_a_live_one_time_bluez_session(
+    monkeypatch, session_mode
+) -> None:
+    path = TARGET_PATH
+    discovery = _candidate(TEST_ADDRESS, path, fresh=True)
+    session = SimpleNamespace(
+        async_require_connection_agent=AsyncMock(),
+        async_has_bond=AsyncMock(return_value=False),
+        async_remove_bond=AsyncMock(),
+        async_pair=AsyncMock(),
+        reused_existing_bond=True,
+    )
+
+    @asynccontextmanager
+    async def agent(*_args):
+        yield None if session_mode == "missing" else session
+
+    client = SimpleNamespace(is_connected=True, disconnect=AsyncMock())
+    connect = AsyncMock(return_value=client)
+    monkeypatch.setattr(bluetooth_pairing, "_async_bluez_pairing_agent", agent)
+    monkeypatch.setattr(
+        bluetooth_pairing,
+        "_async_matic_discoveries",
+        AsyncMock(return_value=[discovery]),
+    )
+    monkeypatch.setattr(bluetooth_pairing, "establish_connection", connect)
+    budget = {path}
+
+    with pytest.raises(BluetoothBondResetFailedError):
+        await async_request_bluetooth_credential(
+            object(),
+            "synthetic-user",
+            replace_existing_bond=True,
+            reset_bond_paths=budget,
+            reset_bond_path=path,
+        )
+
+    if session_mode == "missing":
+        connect.assert_not_awaited()
+    else:
+        connect.assert_awaited_once()
+        assert session.async_pair.await_count == 1
+    assert budget == {path}
+
+
+@pytest.mark.parametrize("bond_address", [None, TEST_ADDRESS])
+async def test_consumed_reset_budget_never_removes_or_contacts_a_paired_device(
+    monkeypatch, bond_address
+) -> None:
+    path = TARGET_PATH
+    discovery = _candidate(TEST_ADDRESS, path, fresh=True)
+    session = SimpleNamespace(
+        async_require_connection_agent=AsyncMock(),
+        async_has_bond=AsyncMock(return_value=True),
+        async_remove_bond=AsyncMock(),
+    )
+
+    @asynccontextmanager
+    async def agent(*_args):
+        yield session
+
+    connect = AsyncMock()
+    monkeypatch.setattr(bluetooth_pairing, "_async_bluez_pairing_agent", agent)
+    monkeypatch.setattr(
+        bluetooth_pairing,
+        "_async_matic_discoveries",
+        AsyncMock(return_value=[discovery]),
+    )
+    monkeypatch.setattr(bluetooth_pairing, "establish_connection", connect)
+
+    with pytest.raises(BluetoothBondResetFailedError, match="single reset attempt"):
+        await async_request_bluetooth_credential(
+            object(),
+            "synthetic-user",
+            replace_existing_bond=True,
+            bond_address=bond_address,
+            reset_bond_paths={path},
+            reset_bond_path=path,
+        )
+
+    session.async_has_bond.assert_awaited_once_with(path)
+    session.async_remove_bond.assert_not_awaited()
+    connect.assert_not_awaited()
+
+
+async def test_selected_saved_address_rejects_a_bond_reused_after_preflight(
+    monkeypatch,
+) -> None:
+    user_id = "40dd38c5-0492-49de-b333-41f16f67471e"
+    discovery = _candidate(TEST_ADDRESS, TARGET_PATH, fresh=True)
+    home = _install_two_robot_home(monkeypatch, user_id, [discovery])
+
+    async def reuse_bond(_path, *, replace_existing=False):
+        assert not replace_existing
+        home.session.reused_existing_bond = True
+
+    home.session.async_pair = reuse_bond
+    client = _credential_client(user_id)
+    monkeypatch.setattr(
+        bluetooth_pairing, "establish_connection", AsyncMock(return_value=client)
+    )
+
+    with pytest.raises(BluetoothBondResetFailedError, match="single reset attempt"):
+        await async_request_bluetooth_credential(
+            object(),
+            user_id,
+            replace_existing_bond=True,
+            bond_address=TEST_ADDRESS,
+            reset_bond_paths=set(),
+            reset_bond_path=TARGET_PATH,
+        )
+
+    assert home.removed == []
+    client.write_gatt_char.assert_not_awaited()
+
+
+@pytest.mark.parametrize("selected", [False, True])
+async def test_uncertain_pair_result_stops_before_gatt(monkeypatch, selected) -> None:
+    path = TARGET_PATH
+    discovery = _candidate(TEST_ADDRESS, path, fresh=True)
+    session = SimpleNamespace(
+        async_require_connection_agent=AsyncMock(),
+        async_has_bond=AsyncMock(return_value=False),
+        async_remove_bond=AsyncMock(),
+        async_pair=AsyncMock(),
+        reused_existing_bond=None,
+    )
+
+    @asynccontextmanager
+    async def agent(*_args):
+        yield session
+
+    class Client:
+        is_connected = False
+
+        def __init__(self) -> None:
+            self.write_gatt_char = AsyncMock()
+            self.read_gatt_char = AsyncMock()
+
+        @property
+        def services(self):
+            raise AssertionError(
+                "uncertain Pair result must stop before service discovery"
+            )
+
+    client = Client()
+    monkeypatch.setattr(bluetooth_pairing, "_async_bluez_pairing_agent", agent)
+    monkeypatch.setattr(
+        bluetooth_pairing,
+        "_async_matic_discoveries",
+        AsyncMock(return_value=[discovery]),
+    )
+    connect = AsyncMock(return_value=client)
+    monkeypatch.setattr(bluetooth_pairing, "establish_connection", connect)
+    error = (
+        BluetoothBondResetFailedError if selected else BluetoothPairingIncompleteError
+    )
+
+    with pytest.raises(error):
+        await async_request_bluetooth_credential(
+            object(),
+            "synthetic-user",
+            replace_existing_bond=True,
+            bond_address=TEST_ADDRESS,
+            reset_bond_paths=set(),
+            reset_bond_path=path if selected else None,
+        )
+
+    connect.assert_awaited_once()
+    client.write_gatt_char.assert_not_awaited()
+    client.read_gatt_char.assert_not_awaited()
+
+
+async def test_selected_device_address_change_before_grant_is_rejected(
+    monkeypatch,
+) -> None:
+    user_id = "40dd38c5-0492-49de-b333-41f16f67471e"
+    path = TARGET_PATH
+
+    class ChangingDevice:
+        def __init__(self) -> None:
+            self.details = {"path": path}
+            self.reads = 0
+
+        @property
+        def address(self) -> str:
+            self.reads += 1
+            return TEST_ADDRESS if self.reads <= 3 else OTHER_ADDRESS
+
+    discovery = SimpleNamespace(device=ChangingDevice(), fresh=True)
+    session = SimpleNamespace(
+        async_require_connection_agent=AsyncMock(),
+        async_has_bond=AsyncMock(return_value=False),
+        async_remove_bond=AsyncMock(),
+        async_pair=AsyncMock(),
+        reused_existing_bond=False,
+    )
+
+    @asynccontextmanager
+    async def agent(*_args):
+        yield session
+
+    client = _credential_client(user_id)
+    monkeypatch.setattr(bluetooth_pairing, "_async_bluez_pairing_agent", agent)
+    monkeypatch.setattr(
+        bluetooth_pairing,
+        "_async_matic_discoveries",
+        AsyncMock(return_value=[discovery]),
+    )
+    monkeypatch.setattr(
+        bluetooth_pairing, "establish_connection", AsyncMock(return_value=client)
+    )
+
+    with pytest.raises(BluetoothPairingIncompleteError, match="address changed"):
+        await async_request_bluetooth_credential(
+            object(),
+            user_id,
+            replace_existing_bond=True,
+            reset_bond_paths={path},
+            reset_bond_path=path,
+        )
+
+    client.write_gatt_char.assert_awaited_once()
+    client.read_gatt_char.assert_awaited_once()
+
+
+async def test_legacy_bond_race_requires_choice_before_gatt_write(monkeypatch) -> None:
+    path = "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF"
+    discovery = SimpleNamespace(
+        device=SimpleNamespace(
+            address=TEST_ADDRESS,
+            name="Robot\n" + ("x" * 100),
+            details={"path": path},
+        ),
+        fresh=True,
+    )
+    session = SimpleNamespace(
+        async_require_connection_agent=AsyncMock(),
+        async_has_bond=AsyncMock(return_value=False),
+        async_remove_bond=AsyncMock(),
+        async_pair=AsyncMock(),
+        reused_existing_bond=True,
+    )
+
+    @asynccontextmanager
+    async def agent(*_args):
+        yield session
+
+    client = SimpleNamespace(
+        is_connected=True,
+        services=SimpleNamespace(
+            characteristics={
+                1: SimpleNamespace(
+                    uuid=HERMES_TOKEN_CHARACTERISTIC, properties=["write"]
+                )
+            }
+        ),
+        write_gatt_char=AsyncMock(),
+        disconnect=AsyncMock(),
+    )
+    monkeypatch.setattr(bluetooth_pairing, "_async_bluez_pairing_agent", agent)
+    monkeypatch.setattr(
+        bluetooth_pairing,
+        "_async_matic_discoveries",
+        AsyncMock(return_value=[discovery]),
+    )
+    monkeypatch.setattr(
+        bluetooth_pairing, "establish_connection", AsyncMock(return_value=client)
+    )
+
+    with pytest.raises(BluetoothBondRecoveryRequiredError) as exc:
+        await async_request_bluetooth_credential(
+            object(),
+            "synthetic-user",
+            replace_existing_bond=True,
+            reset_bond_paths=set(),
+        )
+
+    [label] = exc.value.candidates.values()
+    assert label == f"Robot{'x' * 43} ({TEST_ADDRESS})"
+    session.async_has_bond.assert_awaited_once_with(path)
+    session.async_remove_bond.assert_not_awaited()
+    client.write_gatt_char.assert_not_awaited()
+    client.disconnect.assert_awaited_once()
 
 
 class _LocalScanner:
@@ -529,7 +915,7 @@ def _credential_client(user_id: str) -> SimpleNamespace:
     )
 
 
-@pytest.mark.parametrize("reused", [False, True, None])
+@pytest.mark.parametrize("reused", [False, True])
 async def test_grant_reports_the_issuing_candidates_passkey_bond(
     monkeypatch, reused
 ) -> None:
@@ -548,6 +934,7 @@ async def test_grant_reports_the_issuing_candidates_passkey_bond(
     session = SimpleNamespace(
         async_require_connection_agent=AsyncMock(),
         async_pair=pair,
+        async_has_bond=AsyncMock(return_value=False),
         reused_existing_bond=None,
     )
 
@@ -577,6 +964,13 @@ async def test_grant_reports_the_issuing_candidates_passkey_bond(
         "establish_connection",
         AsyncMock(return_value=_credential_client(user_id)),
     )
+
+    if reused:
+        with pytest.raises(BluetoothBondRecoveryRequiredError):
+            await async_request_bluetooth_credential(
+                object(), user_id, exchange, replace_existing_bond=True
+            )
+        return
 
     grant = await async_request_bluetooth_credential(
         object(), user_id, exchange, replace_existing_bond=True
@@ -669,9 +1063,12 @@ def _candidate(address: str, path: str, *, fresh: bool) -> SimpleNamespace:
 
 def _install_two_robot_home(monkeypatch, user_id, discoveries) -> SimpleNamespace:
     """Model BlueZ for a home whose other robot is already paired to the host."""
-    home = SimpleNamespace(bonded={OTHER_PATH}, contacted=[], removed=[])
+    home = SimpleNamespace(
+        bonded={OTHER_PATH}, contacted=[], removed=[], replace_flags=[]
+    )
 
     async def pair(path, *, replace_existing=False):
+        home.replace_flags.append(replace_existing)
         if path in home.bonded and replace_existing:
             home.bonded.discard(path)
             home.removed.append(path)
@@ -679,17 +1076,30 @@ def _install_two_robot_home(monkeypatch, user_id, discoveries) -> SimpleNamespac
         session.reused_existing_bond = path in home.bonded
         home.bonded.add(path)
 
+    async def has_bond(path):
+        return path in home.bonded
+
+    async def remove_bond(path):
+        home.bonded.discard(path)
+        home.removed.append(path)
+
     session = SimpleNamespace(
         async_require_connection_agent=AsyncMock(),
         async_pair=pair,
+        async_has_bond=has_bond,
+        async_remove_bond=remove_bond,
         reused_existing_bond=None,
     )
+    home.session = session
 
     @asynccontextmanager
     async def pairing_agent(address, passkey_exchange=None):
         del passkey_exchange
-        home.contacted.append(address)
         yield session
+
+    async def connect(_client_type, device, *_args, **_kwargs):
+        home.contacted.append(device.address)
+        return _credential_client(user_id)
 
     monkeypatch.setattr(bluetooth_pairing, "_async_bluez_pairing_agent", pairing_agent)
     monkeypatch.setattr(
@@ -698,9 +1108,7 @@ def _install_two_robot_home(monkeypatch, user_id, discoveries) -> SimpleNamespac
         AsyncMock(return_value=discoveries),
     )
     monkeypatch.setattr(
-        bluetooth_pairing,
-        "establish_connection",
-        AsyncMock(return_value=_credential_client(user_id)),
+        bluetooth_pairing, "establish_connection", AsyncMock(side_effect=connect)
     )
     return home
 
@@ -799,6 +1207,79 @@ async def test_replacement_with_one_robot_still_pairs_it(
     assert grant.address == TEST_ADDRESS
     assert grant.reused_existing_bond is False
     assert home.contacted == [TEST_ADDRESS]
+    assert home.replace_flags == [bond_address is not None]
+
+
+async def test_legacy_unbound_replacement_does_not_delete_other_fresh_bond(
+    monkeypatch,
+) -> None:
+    user_id = "40dd38c5-0492-49de-b333-41f16f67471e"
+    candidate = _candidate(OTHER_ADDRESS, OTHER_PATH, fresh=True)
+    newly_seen = _candidate(TEST_ADDRESS, TARGET_PATH, fresh=True)
+    home = _install_two_robot_home(monkeypatch, user_id, [candidate])
+    monkeypatch.setattr(
+        bluetooth_pairing,
+        "_async_matic_discoveries",
+        AsyncMock(
+            side_effect=[[candidate], [candidate, newly_seen], [candidate, newly_seen]]
+        ),
+    )
+
+    with pytest.raises(BluetoothBondRecoveryRequiredError) as exc:
+        await async_request_bluetooth_credential(
+            object(), user_id, replace_existing_bond=True
+        )
+
+    assert exc.value.candidates == {OTHER_PATH: f"Matic ({OTHER_ADDRESS})"}
+    assert home.contacted == []
+    assert home.replace_flags == []
+    assert home.removed == []
+    assert OTHER_PATH in home.bonded
+
+    budget = set()
+    with pytest.raises(BluetoothPairingResetError):
+        await async_request_bluetooth_credential(
+            object(),
+            user_id,
+            replace_existing_bond=True,
+            reset_bond_paths=budget,
+            reset_bond_path=OTHER_PATH,
+        )
+    assert budget == {OTHER_PATH}
+    assert home.removed == [OTHER_PATH]
+    assert home.contacted == []
+
+    grant = await async_request_bluetooth_credential(
+        object(),
+        user_id,
+        replace_existing_bond=True,
+        reset_bond_paths=budget,
+        reset_bond_path=OTHER_PATH,
+    )
+    assert grant.address == OTHER_ADDRESS
+    assert home.contacted == [OTHER_ADDRESS]
+    assert home.removed == [OTHER_PATH]
+
+
+async def test_missing_saved_address_never_replaces_a_fresh_candidate(
+    monkeypatch,
+) -> None:
+    user_id = "40dd38c5-0492-49de-b333-41f16f67471e"
+    home = _install_two_robot_home(
+        monkeypatch, user_id, [_candidate(OTHER_ADDRESS, OTHER_PATH, fresh=True)]
+    )
+
+    with pytest.raises(PairingModeRequiredError, match="saved Bluetooth"):
+        await async_request_bluetooth_credential(
+            object(),
+            user_id,
+            replace_existing_bond=True,
+            bond_address=TEST_ADDRESS,
+        )
+
+    assert home.contacted == []
+    assert home.removed == []
+    assert home.bonded == {OTHER_PATH}
 
 
 @pytest.mark.parametrize(

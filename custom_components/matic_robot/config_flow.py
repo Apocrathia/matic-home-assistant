@@ -391,6 +391,7 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._reset_bond_path: str | None = None
         self._bond_recovery_candidates: dict[str, str] = {}
         self._pairing_task: asyncio.Task[None] | None = None
+        self._pairing_runner_name: str | None = None
         self._pairing_checkpoint_task: asyncio.Task[None] | None = None
         self._passkey_exchange: BluetoothPasskeyExchange | None = None
         self._pairing_result: config_entries.ConfigFlowResult | None = None
@@ -409,6 +410,9 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 task.cancel()
         if self._passkey_exchange is not None:
             self._passkey_exchange.cancel()
+        self._bond_recovery_candidates.clear()
+        self._reset_bond_path = None
+        self._reset_bond_paths.clear()
 
     def _show_pairing_form(
         self,
@@ -611,6 +615,7 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @callback
     def _async_start_pairing(self, runner_name: str) -> None:
         """Launch the background pairing engine for this flow."""
+        self._pairing_runner_name = runner_name
         self._pairing_diagnostic = None
         self._pairing_retry_note = None
         self._pairing_update = asyncio.Event()
@@ -694,7 +699,13 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
         """Reset only the Bluetooth device explicitly selected by the user."""
-        if not self._bond_recovery_candidates or self._pairing_data is None:
+        runner_name = self._pairing_runner_name
+        if not self._bond_recovery_candidates or runner_name is None:
+            return self.async_abort(reason="pairing_session_expired")
+        if (
+            runner_name not in {"matic_robot_reauth", "matic_robot_recover_identity"}
+            and self._pairing_data is None
+        ):
             return self.async_abort(reason="pairing_session_expired")
         if (
             user_input is None
@@ -703,8 +714,12 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self._show_bond_recovery()
         self._reset_bond_path = user_input["bluetooth_device"]
         self._bond_recovery_candidates = {}
-        self._async_start_pairing("matic_robot_wait_for_pairing")
-        return self._async_pairing_progress("pair")
+        self._async_start_pairing(runner_name)
+        step_id = {
+            "matic_robot_reauth": "reauth_confirm",
+            "matic_robot_recover_identity": "recover_identity",
+        }.get(runner_name, "pair")
+        return self._async_pairing_progress(step_id)
 
     async def async_step_pairing_code(
         self, user_input: dict[str, Any] | None = None
@@ -757,6 +772,14 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._pairing_task.result()
             return self._pairing_result
         finally:
+            keep_reset_form = (
+                self._pairing_result is not None
+                and self._pairing_result.get("step_id") == "reset_bond"
+            )
+            keep_reset_budget = (
+                self._pairing_result is not None
+                and self._pairing_result.get("type") is FlowResultType.FORM
+            )
             if self._pairing_checkpoint_task is not None:
                 self._pairing_checkpoint_task.cancel()
             if self._passkey_exchange is not None:
@@ -766,6 +789,11 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._passkey_exchange = None
             self._pairing_result = None
             self._pairing_retry_note = None
+            if not keep_reset_form:
+                self._reset_bond_path = None
+                self._bond_recovery_candidates.clear()
+            if not keep_reset_budget:
+                self._reset_bond_paths.clear()
             self._pairing_ui_progress = False
             self._pairing_stage = "wait_for_pairing"
 
@@ -814,10 +842,42 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if entry.entry_id != entry_id and CONF_BLUETOOTH_ADDRESS in entry.data
         )
 
+    def _require_selected_grant_address(
+        self, grant: BluetoothCredentialGrant
+    ) -> BluetoothCredentialGrant:
+        """Bind a reset-authorized grant to the selected BlueZ path address."""
+        if self._reset_bond_path is None:
+            return grant
+        _adapter, separator, device = self._reset_bond_path.rpartition("/dev_")
+        if (
+            not separator
+            or re.fullmatch(r"(?:[0-9A-Fa-f]{2}_){5}[0-9A-Fa-f]{2}", device) is None
+            or grant.address is None
+            or grant.address.upper() != device.replace("_", ":").upper()
+        ):
+            raise BluetoothPairingIncompleteError(
+                "The credential came from a different Bluetooth device"
+            )
+        return grant
+
     async def _async_reauth_credential(
         self, entry: config_entries.ConfigEntry
     ) -> BluetoothCredentialGrant:
         """Request a replacement credential, renewing expired codes in place."""
+        if self._reset_bond_path is not None:
+            if self._pairing_runner_name == "matic_robot_recover_identity":
+                assert self._recovery_address is not None
+                await _async_recovery_identity(*self._recovery_address, entry.data)
+            else:
+                certificate = await async_fetch_peer_certificate(
+                    entry.data[CONF_HOST], entry.data[CONF_PORT]
+                )
+                validate_certificate(
+                    certificate,
+                    expected_hostname=entry.data[CONF_HOSTNAME],
+                    expected_serial=entry.data[CONF_SERIAL_NUMBER],
+                    expected_fingerprint=entry.data[CONF_CERTIFICATE_FINGERPRINT],
+                )
         excluded_addresses = self._other_bluetooth_addresses(entry.entry_id)
         last_error: MaticError = PairingModeRequiredError(
             "no reauthorization attempt completed"
@@ -827,7 +887,7 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 for _attempt in range(PAIRING_ATTEMPTS):
                     self._async_begin_pairing_attempt()
                     try:
-                        return await async_request_bluetooth_credential(
+                        grant = await async_request_bluetooth_credential(
                             self.hass,
                             self._pairing_user_id,
                             self._passkey_exchange,
@@ -835,10 +895,15 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             replace_existing_bond=True,
                             bond_address=entry.data.get(CONF_BLUETOOTH_ADDRESS),
                             excluded_addresses=excluded_addresses,
+                            reset_bond_paths=self._reset_bond_paths,
+                            reset_bond_path=self._reset_bond_path,
                         )
+                        return self._require_selected_grant_address(grant)
                     except BluetoothPairingResetError as err:
                         last_error = BluetoothPairingIncompleteError(str(err))
                         self._pairing_diagnostic = str(err)
+                    except BluetoothBondRecoveryRequiredError:
+                        raise
                     except (
                         BluetoothPairingIncompleteError,
                         PairingModeRequiredError,
@@ -875,6 +940,15 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._pairing_diagnostic = str(err)
             self._pairing_result = self._show_pairing_form(
                 "reauth_confirm", {"base": "multiple_robots_nearby"}
+            )
+        except BluetoothBondRecoveryRequiredError as err:
+            self._bond_recovery_candidates = err.candidates
+            self._pairing_diagnostic = str(err)
+            self._pairing_result = self._show_bond_recovery()
+        except BluetoothBondResetFailedError as err:
+            self._pairing_diagnostic = str(err)
+            self._pairing_result = self._show_pairing_form(
+                "reauth_confirm", {"base": "bond_reset_failed"}
             )
         except BluetoothPairingIncompleteError as err:
             self._pairing_diagnostic = str(err)
@@ -1094,6 +1168,14 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         except BluetoothCandidateAmbiguousError as err:
             self._pairing_diagnostic = str(err)
             error = "multiple_robots_nearby"
+        except BluetoothBondRecoveryRequiredError as err:
+            self._bond_recovery_candidates = err.candidates
+            self._pairing_diagnostic = str(err)
+            self._pairing_result = self._show_bond_recovery()
+            return
+        except BluetoothBondResetFailedError as err:
+            self._pairing_diagnostic = str(err)
+            error = "bond_reset_failed"
         except BluetoothPairingIncompleteError as err:
             self._pairing_diagnostic = str(err)
             error = self._pairing_retry_note or "pairing_incomplete"
@@ -1386,6 +1468,7 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             reset_bond_paths=self._reset_bond_paths,
             reset_bond_path=self._reset_bond_path,
         )
+        grant = self._require_selected_grant_address(grant)
         _LOGGER.debug("Received a robot-issued Bluetooth credential")
         return grant
 

@@ -5,19 +5,19 @@
   "cells": [
     {
       "cell": "R01-C01",
-      "verdict": "pending",
-      "staged_from": null,
+      "verdict": "approved",
+      "staged_from": "b6fed2fbd31d5712bc16652c585e9ca1ce2cd1db",
       "critique": null,
       "fixing_commit": null,
-      "approved_from": null
+      "approved_from": "b6fed2fbd31d5712bc16652c585e9ca1ce2cd1db"
     },
     {
       "cell": "R01-C02",
-      "verdict": "pending",
-      "staged_from": null,
+      "verdict": "approved",
+      "staged_from": "b6fed2fbd31d5712bc16652c585e9ca1ce2cd1db",
       "critique": null,
       "fixing_commit": null,
-      "approved_from": null
+      "approved_from": "b6fed2fbd31d5712bc16652c585e9ca1ce2cd1db"
     },
     {
       "cell": "R01-C03",

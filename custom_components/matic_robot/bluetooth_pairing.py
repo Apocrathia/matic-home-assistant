@@ -267,6 +267,29 @@ def _bluez_device_path(discovery: Any) -> str | None:
     return None
 
 
+def _bluez_path_address(path: str) -> str | None:
+    """Decode the Bluetooth address encoded in a BlueZ device object path."""
+    _adapter, separator, device = path.rpartition("/dev_")
+    if (
+        not separator
+        or re.fullmatch(r"(?:[0-9A-Fa-f]{2}_){5}[0-9A-Fa-f]{2}", device) is None
+    ):
+        return None
+    return device.replace("_", ":").upper()
+
+
+def _candidate_label(discovery: _MaticDiscovery) -> str:
+    """Build a bounded form label from untrusted advertisement fields."""
+    raw_name = (
+        getattr(discovery.device, "name", None)
+        or getattr(discovery, "name", None)
+        or "Matic"
+    )
+    safe_name = "".join(char for char in str(raw_name) if char.isprintable())
+    safe_name = " ".join(safe_name.split())[:48].strip() or "Matic"
+    return f"{safe_name} ({str(discovery.device.address).upper()})"
+
+
 def _is_matic_advertisement(info: Any) -> bool:
     """Return whether a BLE advertisement explicitly identifies Matic.
 
@@ -406,6 +429,15 @@ def _bind_replacement_candidate(
         bound = [d for d in discoveries if _same_address(d, (bond_address,))]
         if bound:
             return bound
+        if len([discovery for discovery in discoveries if discovery.fresh]) > 1:
+            raise BluetoothCandidateAmbiguousError(
+                "The saved Bluetooth address is not available and multiple "
+                "fresh Matic candidates are nearby"
+            )
+        raise PairingModeRequiredError(
+            "The saved Bluetooth address is not available; refusing to replace "
+            "another robot's bond"
+        )
     # A retained entry of a robot that is no longer advertising is not in
     # Pairing mode, so it is never the robot the user is pairing.
     advertising = [discovery for discovery in discoveries if discovery.fresh]
@@ -464,9 +496,10 @@ async def async_request_bluetooth_credential(
     """Request one Hermes credential through Matic's private GATT endpoint.
 
     Robots at ``excluded_addresses`` belong to other configured entries and are
-    never contacted. ``replace_existing_bond`` deletes an existing bond, so it
-    proceeds only with a single candidate: the one at ``bond_address``,
-    otherwise the only Matic heard advertising (in Pairing mode) during the scan.
+    never contacted. ``replace_existing_bond`` deletes an existing bond, so
+    destructive replacement is enabled only for a candidate matching
+    ``bond_address``. Legacy entries without a saved address may still pair
+    with their sole fresh candidate, but cannot authorize bond deletion.
     """
 
     def _stage(stage: str) -> None:
@@ -490,14 +523,18 @@ async def async_request_bluetooth_credential(
     ]
     if not discoveries:
         raise PairingModeRequiredError("No connectable Matic advertisement found")
-    if replace_existing_bond:
-        discoveries = _bind_replacement_candidate(discoveries, bond_address)
     if reset_bond_path is not None:
         discoveries = [
             discovery
             for discovery in discoveries
             if _bluez_device_path(discovery) == reset_bond_path
+            and getattr(discovery, "fresh", False)
         ]
+    if replace_existing_bond:
+        discoveries = _bind_replacement_candidate(discoveries, bond_address)
+    replace_bond = (
+        replace_existing_bond and bond_address is not None and reset_bond_path is None
+    )
 
     request = TokenRequest(user_id=user_id).SerializeToString()
     adapter_access_error: BaseException | None = None
@@ -516,11 +553,86 @@ async def async_request_bluetooth_credential(
                 _LOGGER.debug("Requesting a Bluetooth credential with OS pairing")
                 async with asyncio.timeout(BLUETOOTH_PAIRING_TIMEOUT_SECONDS):
                     bluez_device_path = _bluez_device_path(discovery)
+                    if reset_bond_path is not None and (
+                        bluez_device_path != reset_bond_path
+                        or _bluez_path_address(reset_bond_path)
+                        != str(discovery.device.address).upper()
+                    ):
+                        continue
                     if bluez_session is not None:
                         await bluez_session.async_require_connection_agent(
                             bluez_device_path
                         )
+                    if reset_bond_path is not None and (
+                        bluez_session is None
+                        or bluez_device_path is None
+                        or reset_bond_paths is None
+                    ):
+                        raise BluetoothBondResetFailedError(
+                            "The selected Bluetooth device no longer has a "
+                            "usable local BlueZ session"
+                        )
                     pair_with_bleak = bluez_session is None or bluez_device_path is None
+                    if (
+                        not pair_with_bleak
+                        and bluez_device_path == reset_bond_path
+                        and reset_bond_paths is not None
+                        and bluez_device_path not in reset_bond_paths
+                    ):
+                        assert bluez_session is not None
+                        assert bluez_device_path is not None
+                        # The explicit choice authorizes one removal of only
+                        # this currently discovered device, before connecting.
+                        reset_bond_paths.add(bluez_device_path)
+                        try:
+                            has_bond = await bluez_session.async_has_bond(
+                                bluez_device_path
+                            )
+                            if has_bond:
+                                await bluez_session.async_remove_bond(bluez_device_path)
+                        except (*BLEAK_RETRY_EXCEPTIONS, OSError) as err:
+                            _LOGGER.warning(
+                                "Matic selected Bluetooth bond recovery failed (%s)",
+                                _safe_bluetooth_error_summary(err),
+                            )
+                            raise BluetoothBondResetFailedError(
+                                "Could not reset the selected Bluetooth bond; "
+                                "start setup again to retry "
+                                f"({_safe_bluetooth_error_summary(err)})"
+                            ) from err
+                        if has_bond:
+                            raise BluetoothPairingResetError(
+                                "Previous Matic Bluetooth pairing was cleared; "
+                                "retrying with a fresh code"
+                            )
+                    if (
+                        reset_bond_path is not None
+                        and bluez_device_path is not None
+                        and reset_bond_path == bluez_device_path
+                        and bluez_session is not None
+                        and reset_bond_paths is not None
+                        and bluez_device_path in reset_bond_paths
+                        and await bluez_session.async_has_bond(bluez_device_path)
+                    ):
+                        raise BluetoothBondResetFailedError(
+                            "The selected Bluetooth bond remains paired after its "
+                            "single reset attempt"
+                        )
+                    if (
+                        replace_existing_bond
+                        and bond_address is None
+                        and not pair_with_bleak
+                    ):
+                        assert bluez_session is not None
+                        assert bluez_device_path is not None
+                        if await bluez_session.async_has_bond(bluez_device_path):
+                            # A legacy entry has no saved BLE identity. A sole
+                            # fresh candidate with an existing bond must be
+                            # explicitly selected before any GATT contact.
+                            recovery_candidates[bluez_device_path] = _candidate_label(
+                                discovery
+                            )
+                            continue
                     failure_stage = "Bluetooth connection"
                     _stage("connecting")
                     client = await establish_connection(
@@ -534,34 +646,6 @@ async def async_request_bluetooth_credential(
                         assert bluez_session is not None
                         assert bluez_device_path is not None
                         failure_stage = "Bluetooth pairing"
-                        if (
-                            bluez_device_path == reset_bond_path
-                            and reset_bond_paths is not None
-                            and bluez_device_path not in reset_bond_paths
-                        ):
-                            # One explicit removal attempt per device and flow.
-                            # Never fall through to another robot on failure.
-                            reset_bond_paths.add(bluez_device_path)
-                            try:
-                                async with asyncio.timeout(
-                                    BLUETOOTH_DISCONNECT_TIMEOUT_SECONDS
-                                ):
-                                    await client.disconnect()
-                                await bluez_session.async_remove_bond(bluez_device_path)
-                            except (*BLEAK_RETRY_EXCEPTIONS, OSError) as err:
-                                _LOGGER.warning(
-                                    "Matic stale Bluetooth bond recovery failed (%s)",
-                                    _safe_bluetooth_error_summary(err),
-                                )
-                                raise BluetoothBondResetFailedError(
-                                    "Could not reset the selected Bluetooth bond; "
-                                    "start setup again to retry "
-                                    f"({_safe_bluetooth_error_summary(err)})"
-                                ) from err
-                            raise BluetoothPairingResetError(
-                                "Previous Matic Bluetooth pairing was cleared; "
-                                "retrying with a fresh code"
-                            )
                         # Matic initiates security itself once a client connects
                         # (an SMP Security Request). Bond on the open GATT
                         # connection so BlueZ answers that request through the
@@ -571,8 +655,38 @@ async def async_request_bluetooth_credential(
                         # robot then cancels authentication.
                         await bluez_session.async_pair(
                             bluez_device_path,
-                            replace_existing=replace_existing_bond,
+                            replace_existing=replace_bond,
                         )
+                        if bluez_session.reused_existing_bond is None:
+                            if (
+                                reset_bond_path == bluez_device_path
+                                and reset_bond_paths is not None
+                                and bluez_device_path in reset_bond_paths
+                            ):
+                                raise BluetoothBondResetFailedError(
+                                    "BlueZ could not confirm a fresh bond after the "
+                                    "selected device's single reset attempt"
+                                )
+                            raise BluetoothPairingIncompleteError(
+                                "BlueZ could not confirm whether the Matic bond was "
+                                "created by this pairing attempt"
+                            )
+                        if bluez_session.reused_existing_bond:
+                            if (
+                                reset_bond_path is not None
+                                and reset_bond_path == bluez_device_path
+                                and reset_bond_paths is not None
+                                and bluez_device_path in reset_bond_paths
+                            ):
+                                raise BluetoothBondResetFailedError(
+                                    "The selected Bluetooth bond remained paired "
+                                    "after its single reset attempt"
+                                )
+                            if replace_existing_bond and bond_address is None:
+                                recovery_candidates[bluez_device_path] = (
+                                    _candidate_label(discovery)
+                                )
+                                continue
                     failure_stage = "GATT service discovery"
                     services = getattr(client, "services", None)
                     characteristics = list(
@@ -627,12 +741,12 @@ async def async_request_bluetooth_credential(
                             bluez_session is not None
                             and bluez_session.reused_existing_bond
                             and bluez_device_path is not None
+                            and discovery.fresh
                             and reset_bond_paths is not None
                             and bluez_device_path not in reset_bond_paths
                         ):
-                            recovery_candidates[bluez_device_path] = (
-                                f"{getattr(discovery.device, 'name', None) or 'Matic'} "
-                                f"({discovery.device.address})"
+                            recovery_candidates[bluez_device_path] = _candidate_label(
+                                discovery
                             )
                         raise
                     failure_stage = "credential response read"
@@ -645,6 +759,13 @@ async def async_request_bluetooth_credential(
                     )
                     if credential.app_id != user_id:
                         raise ValueError("Robot returned a credential for another user")
+                    if reset_bond_path is not None and (
+                        _bluez_path_address(reset_bond_path)
+                        != str(discovery.device.address).upper()
+                    ):
+                        raise BluetoothPairingIncompleteError(
+                            "The selected Bluetooth device address changed"
+                        )
                     # Read this candidate's facts before its agent context exits.
                     return BluetoothCredentialGrant(
                         credential,

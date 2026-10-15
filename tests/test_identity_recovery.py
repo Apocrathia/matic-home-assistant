@@ -16,6 +16,8 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.matic_robot import config_flow as flow_module
 from custom_components.matic_robot.bluetooth_pairing import (
+    BluetoothBondRecoveryRequiredError,
+    BluetoothBondResetFailedError,
     BluetoothCandidateAmbiguousError,
     BluetoothCredentialGrant,
     BluetoothPairingIncompleteError,
@@ -238,6 +240,8 @@ async def test_recovery_re_pins_after_fresh_pairing_and_clears_the_repair(
         "replace_existing_bond": True,
         "bond_address": None,
         "excluded_addresses": frozenset(),
+        "reset_bond_paths": flow._reset_bond_paths,
+        "reset_bond_path": None,
     }
     # Pre-flight and verification each fetch from the form's address.
     assert [call.args for call in robot.fetch.await_args_list] == [
@@ -257,6 +261,7 @@ async def test_recovery_re_pins_after_fresh_pairing_and_clears_the_repair(
 
 
 async def test_recovery_binds_pairing_to_this_robot_and_records_it(hass, robot) -> None:
+    flow = _flow(hass, robot)
     recorded, other, issued = (":".join((octet,) * 6) for octet in ("02", "06", "0A"))
     MockConfigEntry(
         domain=DOMAIN,
@@ -269,15 +274,77 @@ async def test_recovery_binds_pairing_to_this_robot_and_records_it(hass, robot) 
     )
     robot.grant_facts["address"] = issued
 
-    result = await _recover(_flow(hass, robot))
+    result = await _recover(flow)
 
     assert result["reason"] == "identity_recovered"
     assert robot.request_kwargs == {
         "replace_existing_bond": True,
         "bond_address": recorded,
         "excluded_addresses": frozenset({other}),
+        "reset_bond_paths": flow._reset_bond_paths,
+        "reset_bond_path": None,
     }
     assert robot.entry.data[CONF_BLUETOOTH_ADDRESS] == issued
+
+
+async def test_reset_bond_resumes_identity_recovery_and_refreshes_selected_host(
+    hass, robot
+) -> None:
+    flow = _flow(hass, robot)
+    path_address = ":".join(("0A",) * 6)
+    path = "/org/bluez/hci0/dev_" + path_address.replace(":", "_")
+    robot.grant_facts["address"] = path_address
+    robot.request_error = BluetoothBondRecoveryRequiredError(
+        {path: f"Kitchen ({path_address})"}
+    )
+    progress = await flow.async_step_recover_identity(NEW_ADDRESS)
+    assert progress["step_id"] == "recover_identity"
+    await flow._pairing_task
+
+    reset_form = await flow.async_step_finish()
+    assert reset_form["step_id"] == "reset_bond"
+    assert flow._recovery_address == ("192.0.2.9", 16320)
+    _assert_nothing_written(hass, robot)
+
+    robot.request_error = None
+    progress = await flow.async_step_reset_bond({"bluetooth_device": path})
+    assert progress["step_id"] == "recover_identity"
+    await progress["progress_task"]
+    progress = await flow.async_step_recover_identity()
+    assert progress["type"] is FlowResultType.SHOW_PROGRESS_DONE
+    assert progress["step_id"] == "pairing_code"
+    form = await flow.async_step_pairing_code()
+    assert form["step_id"] == "pairing_code"
+    await flow.async_step_pairing_code({"passkey": "012345"})
+    await flow._pairing_task
+    result = await flow.async_step_finish()
+
+    assert result["reason"] == "identity_recovered"
+    assert robot.entry.data[CONF_BLUETOOTH_ADDRESS] == path_address
+    assert robot.request_kwargs["reset_bond_path"] == path
+    assert robot.request_kwargs["reset_bond_paths"] is flow._reset_bond_paths
+    # Initial certificate check, refreshed post-choice check, final verification.
+    assert [call.args for call in robot.fetch.await_args_list] == [
+        ("192.0.2.9", 16320),
+        ("192.0.2.9", 16320),
+        ("192.0.2.9", 16320),
+    ]
+
+
+async def test_identity_recovery_surfaces_bond_reset_failure_without_writes(
+    hass, robot
+) -> None:
+    flow = _flow(hass, robot)
+    robot.request_error = BluetoothBondResetFailedError("cannot remove selected bond")
+
+    progress = await flow.async_step_recover_identity(NEW_ADDRESS)
+    assert progress["step_id"] == "recover_identity"
+    await flow._pairing_task
+    result = await flow.async_step_finish()
+
+    assert result["step_id"] == "recover_identity"
+    assert result["errors"] == {"base": "bond_reset_failed"}
+    _assert_nothing_written(hass, robot)
 
 
 async def test_recovery_rejects_a_malformed_code_and_keeps_the_prompt(

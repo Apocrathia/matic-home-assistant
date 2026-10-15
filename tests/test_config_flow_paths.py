@@ -78,7 +78,7 @@ async def test_initial_pairing_offers_explicit_bond_recovery_then_retries(
     flow = _flow(hass)
     flow._pairing_data = {"host": "192.0.2.1", "port": 16320}
     identity = PeerIdentity("00" * 32, "robot.invalid", "synthetic", "robot_server")
-    path = "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF"
+    path = "/org/bluez/hci0/dev_" + TEST_BLUETOOTH_ADDRESS.replace(":", "_")
     candidates = {path: "Synthetic Matic"}
     exchanges = []
 
@@ -87,6 +87,9 @@ async def test_initial_pairing_offers_explicit_bond_recovery_then_retries(
         if len(exchanges) == 1:
             assert kwargs["reset_bond_path"] is None
             raise BluetoothBondRecoveryRequiredError(candidates)
+        if reset_fails and len(exchanges) >= 3:
+            assert kwargs["reset_bond_path"] is None
+            raise PairingModeRequiredError("selected robot is no longer advertising")
         assert kwargs["reset_bond_path"] == path
         assert kwargs["reset_bond_paths"] is flow._reset_bond_paths
         if len(exchanges) == 2:
@@ -94,7 +97,7 @@ async def test_initial_pairing_offers_explicit_bond_recovery_then_retries(
             if reset_fails:
                 raise BluetoothBondResetFailedError("removal failed")
             raise BluetoothPairingResetError("bond cleared")
-        return TEST_GRANT
+        return replace(TEST_GRANT, address=TEST_BLUETOOTH_ADDRESS)
 
     def client_factory(*args, **kwargs):
         client = _ClientContext(_info(requires_auth=True))
@@ -141,6 +144,13 @@ async def test_initial_pairing_offers_explicit_bond_recovery_then_retries(
     if reset_fails:
         assert result["errors"] == {"base": "bond_reset_failed"}
         assert len(exchanges) == 2
+        assert flow._reset_bond_paths == {path}
+        monkeypatch.setattr(flow_module, "PAIRING_ATTEMPTS", 1)
+        flow._async_start_pairing("matic_robot_wait_for_pairing")
+        await flow._pairing_task
+        result = await flow.async_step_finish()
+        assert result["errors"] == {"base": "pairing_timeout"}
+        assert flow._reset_bond_paths == {path}
         return
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert len(exchanges) == 3
@@ -148,9 +158,109 @@ async def test_initial_pairing_offers_explicit_bond_recovery_then_retries(
     assert result["data"][CONF_HERMES_CREDENTIAL] == TEST_CREDENTIAL.to_storage()
 
 
+async def test_reset_bond_resumes_the_reauthentication_runner(
+    hass, monkeypatch
+) -> None:
+    flow = _flow(hass)
+    path = "/org/bluez/hci0/dev_" + TEST_BLUETOOTH_ADDRESS.replace(":", "_")
+    entry = SimpleNamespace(entry_id="entry", unique_id="synthetic", data=ENTRY_DATA)
+    flow._get_reauth_entry = lambda: entry
+    flow._async_reauth_credential = AsyncMock(
+        side_effect=[
+            BluetoothBondRecoveryRequiredError({path: "Synthetic Matic"}),
+            replace(TEST_GRANT, address=TEST_BLUETOOTH_ADDRESS),
+        ]
+    )
+    flow._async_verify_existing_robot = AsyncMock()
+    flow.async_set_unique_id = AsyncMock()
+    flow._abort_if_unique_id_mismatch = MagicMock()
+    flow.async_update_reload_and_abort = MagicMock(
+        return_value={"type": FlowResultType.ABORT, "reason": "reauth_successful"}
+    )
+
+    flow._async_start_pairing("matic_robot_reauth")
+    await flow._pairing_task
+    reset_form = await flow.async_step_finish()
+    assert reset_form["step_id"] == "reset_bond"
+
+    progress = await flow.async_step_reset_bond({"bluetooth_device": path})
+    assert progress["step_id"] == "reauth_confirm"
+    await flow._pairing_task
+    result = await flow.async_step_finish()
+
+    assert result["reason"] == "reauth_successful"
+    assert flow._async_reauth_credential.await_count == 2
+    assert flow._async_reauth_credential.await_args.args == (entry,)
+    assert flow._reset_bond_path is None
+
+
+async def test_reauth_reset_refreshes_the_pinned_certificate(hass, monkeypatch) -> None:
+    flow = _flow(hass)
+    path = "/org/bluez/hci0/dev_" + TEST_BLUETOOTH_ADDRESS.replace(":", "_")
+    flow._reset_bond_path = path
+    flow._pairing_runner_name = "matic_robot_reauth"
+    entry = SimpleNamespace(entry_id="entry", data=ENTRY_DATA)
+    fetch = AsyncMock(return_value=b"certificate")
+    validate = MagicMock(return_value=SimpleNamespace())
+    request = AsyncMock(
+        return_value=replace(TEST_GRANT, address=TEST_BLUETOOTH_ADDRESS)
+    )
+    monkeypatch.setattr(flow_module, "async_fetch_peer_certificate", fetch)
+    monkeypatch.setattr(flow_module, "validate_certificate", validate)
+    monkeypatch.setattr(flow_module, "async_request_bluetooth_credential", request)
+
+    grant = await flow._async_reauth_credential(entry)
+
+    assert grant.address == TEST_BLUETOOTH_ADDRESS
+    fetch.assert_awaited_once_with(ENTRY_DATA["host"], ENTRY_DATA["port"])
+    validate.assert_called_once_with(
+        b"certificate",
+        expected_hostname=ENTRY_DATA[CONF_HOSTNAME],
+        expected_serial=ENTRY_DATA[CONF_SERIAL_NUMBER],
+        expected_fingerprint=ENTRY_DATA[CONF_CERTIFICATE_FINGERPRINT],
+    )
+
+
+def test_reauth_rejects_a_grant_for_another_selected_device(hass) -> None:
+    flow = _flow(hass)
+    other_address = ":".join(("03",) * 6)
+    flow._reset_bond_path = "/org/bluez/hci0/dev_" + other_address.replace(":", "_")
+
+    with pytest.raises(BluetoothPairingIncompleteError, match="different Bluetooth"):
+        flow._require_selected_grant_address(TEST_GRANT)
+
+
+async def test_reauth_runner_surfaces_bond_reset_failure(hass) -> None:
+    flow = _flow(hass)
+    entry = SimpleNamespace(entry_id="entry", data=ENTRY_DATA)
+    flow._get_reauth_entry = lambda: entry
+    flow._async_reauth_credential = AsyncMock(
+        side_effect=BluetoothBondResetFailedError("cannot remove selected bond")
+    )
+
+    flow._async_start_pairing("matic_robot_reauth")
+    await flow._pairing_task
+
+    assert flow._pairing_result["errors"] == {"base": "bond_reset_failed"}
+
+
 async def test_bond_recovery_requires_a_live_candidate(hass) -> None:
     flow = _flow(hass)
     result = await flow.async_step_reset_bond({"bluetooth_device": "unknown"})
+    assert result["reason"] == "pairing_session_expired"
+
+
+async def test_initial_pairing_cannot_resume_bond_recovery_without_pairing_data(
+    hass,
+) -> None:
+    flow = _flow(hass)
+    flow._pairing_runner_name = "matic_robot_wait_for_pairing"
+    flow._bond_recovery_candidates = {"/org/bluez/hci0/dev_unknown": "Matic"}
+
+    result = await flow.async_step_reset_bond(
+        {"bluetooth_device": "/org/bluez/hci0/dev_unknown"}
+    )
+
     assert result["reason"] == "pairing_session_expired"
 
 
