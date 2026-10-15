@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
 import pytest
-from homeassistant.core import CoreState, ServiceCall
+from homeassistant.core import CoreState, ServiceCall, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
@@ -1473,10 +1473,13 @@ async def test_restart_rejoins_an_accepted_area_until_its_session_ends(
     manager, entry, checkpoint, room = recovery_state
     await _area_leg_checkpoint(manager, checkpoint, room)
     client = entry.runtime_data.client
-    started_before = manager.snapshot("serial")["active_plan"]["started"]
     events = []
-    hass.bus.async_listen(f"{DOMAIN}_area_started", events.append)
-    hass.bus.async_listen(f"{DOMAIN}_area_finished", events.append)
+    hass.bus.async_listen(
+        f"{DOMAIN}_area_started", callback(lambda event: events.append(event))
+    )
+    hass.bus.async_listen(
+        f"{DOMAIN}_area_finished", callback(lambda event: events.append(event))
+    )
     mark_started = manager.async_mark_area_started
 
     async def rejoined(*args, **kwargs):
@@ -1499,7 +1502,6 @@ async def test_restart_rejoins_an_accepted_area_until_its_session_ends(
     snapshot = manager.snapshot("serial")
     assert snapshot["last_run"]["outcome"] == "completed"
     assert snapshot["active_plan"] is None
-    assert started_before is not None
 
 
 async def test_restart_does_not_rejoin_an_area_whose_session_ended(

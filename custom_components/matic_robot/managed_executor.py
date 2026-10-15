@@ -1177,9 +1177,24 @@ async def _async_run_area_leg(
             await _async_wait_for_area_record(
                 session_history, dispatch.history_baseline, cancel_event
             )
-    except PlanCancelledError, RoomTakenOverError, asyncio.CancelledError:
-        # Stop owns its own STOP; a replaced task was never ours to stop.
+    except PlanCancelledError, asyncio.CancelledError:
+        # Stop owns its own STOP.
         raise
+    except RoomTakenOverError as err:
+        # A replaced task was never ours to stop.
+        if _shutdown_suspends_run(hass, manager, serial_number):
+            raise
+        await manager.async_mark_area_finished(serial_number, area, run_id=run_id)
+        hass.bus.async_fire(
+            f"{DOMAIN}_area_failed",
+            {**event_data, "reason_code": "native_task_taken_over"},
+            context=call.context,
+        )
+        raise _validation_error(
+            "The original native cleaning task could no longer be verified",
+            "room_taken_over",
+            {"room": area.name},
+        ) from err
     except Exception as err:
         # A graceful stop cannot upgrade a failed area once it has failed.
         finish_room_event.clear()

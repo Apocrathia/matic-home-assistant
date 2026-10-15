@@ -74,11 +74,11 @@ is refused while it is a plan's only item, and Matic Map names those plans.
 Matic Map lists a plan's areas in their place, and saving the plan there
 keeps them.
 
-When the plan runs, each area is a robot mission of its own, between the rooms
-around it. The run starts an area only when the robot is idle, rechecks that
-the area is unchanged and on the current map, and follows the area's own
-mission until it ends; the robot reports no per-area result, so an area counts
-as done when its mission ends and never changes room schedules. Stop with
+When the plan runs, each area is a part of its own, between the rooms around
+it. The run starts an area only when the robot is idle, checks again that the area
+is unchanged and on the current map, and follows that part until the robot
+ends it; the robot reports no per-area result, so an area counts as done when
+its part ends and never changes room schedules. Stop with
 "finish the current room" lets the current area finish first. The
 `area_started`, `area_finished` and `area_failed` events report each area.
 

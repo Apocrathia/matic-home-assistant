@@ -132,7 +132,7 @@ To restore them, downgrade to RC22.
   fields. Action errors are plain translated messages.
 - New device triggers: Room finished, Plan finished and Cleaning finished.
 - **Custom areas in plans**: plan actions take saved custom areas beside
-  rooms, or areas alone, and each area runs as its own robot mission in its
+  rooms, or areas alone, and each area runs as its own part of the run in its
   place ([details](actions.md#custom-areas-in-plans)). Earlier RCs can't open
   the updated plan storage.
 - The five blueprints are renamed "Matic: …", describe every input, count a

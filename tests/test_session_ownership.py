@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
 import pytest
-from homeassistant.core import ServiceCall
+from homeassistant.core import ServiceCall, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.util import dt as dt_util
 
@@ -2034,7 +2034,9 @@ async def _run_area_plan(
     """Run a plan with areas; room legs verify instantly, areas run for real."""
     events = [] if events is None else events
     for name in ("area_started", "area_finished", "area_failed", "plan_finished"):
-        hass.bus.async_listen(f"matic_robot_{name}", events.append)
+        hass.bus.async_listen(
+            f"matic_robot_{name}", callback(lambda event: events.append(event))
+        )
     checkpoints: list[dict] = []
     save_checkpoint = manager.async_set_recovery_checkpoint
 
@@ -2247,12 +2249,22 @@ async def test_replaced_area_session_is_unverified_without_stop(hass, fast_area_
     robot = _AreaRobot(hass)
     robot.during_area = [lambda: setattr(robot, "identity", REPLACEMENT)]
     sender = AsyncMock()
+    failed = []
+    hass.bus.async_listen(
+        "matic_robot_area_failed", callback(lambda event: failed.append(event.data))
+    )
 
-    with pytest.raises(RoomTakenOverError):
+    with pytest.raises(ServiceValidationError) as error:
         await _run_area_plan(
             hass, manager, robot, [ROOM, STUDY], MIXED_ENTRIES, sender=sender
         )
 
+    # It reads like a room takeover, naming the area, and stops nothing.
+    assert error.value.translation_key == "room_taken_over"
+    assert error.value.translation_placeholders == {"room": "Rug"}
+    assert isinstance(error.value.__cause__, RoomTakenOverError)
+    await hass.async_block_till_done()
+    assert [event["reason_code"] for event in failed] == ["native_task_taken_over"]
     sender.assert_not_awaited()
     assert len(robot.dispatched) == 1
     last_run = manager.snapshot("serial")["last_run"]
@@ -2260,6 +2272,28 @@ async def test_replaced_area_session_is_unverified_without_stop(hass, fast_area_
     assert last_run["reason_code"] == "native_task_taken_over"
     assert manager.snapshot("serial")["active_plan"] is None
     assert REPLACEMENT.decode() not in str(manager.snapshot("serial"))
+
+
+async def test_area_takeover_during_shutdown_leaves_the_run_suspended(
+    hass, fast_area_polls
+):
+    manager = _area_manager(hass)
+    robot = _AreaRobot(hass)
+    robot.during_area = [lambda: setattr(robot, "identity", REPLACEMENT)]
+
+    with (
+        patch(
+            "custom_components.matic_robot.managed_executor._shutdown_suspends_run",
+            return_value=True,
+        ),
+        pytest.raises(RoomTakenOverError),
+    ):
+        await _run_area_plan(
+            hass, manager, robot, [ROOM, STUDY], MIXED_ENTRIES, sender=AsyncMock()
+        )
+
+    # Shutdown is not a robot outcome: the area stays active for recovery.
+    assert manager.snapshot("serial")["active_plan"]["area_id"] == "rug"
 
 
 @pytest.mark.parametrize(
@@ -2337,7 +2371,9 @@ async def test_area_refused_before_start_sends_no_stop(
     )
     sender = AsyncMock()
     failed = []
-    hass.bus.async_listen("matic_robot_area_failed", failed.append)
+    hass.bus.async_listen(
+        "matic_robot_area_failed", callback(lambda event: failed.append(event))
+    )
 
     with pytest.raises(ServiceValidationError) as raised:
         await _run_area_plan(
@@ -2375,7 +2411,9 @@ async def test_unexpected_area_failure_stops_and_propagates(hass, fast_area_poll
     robot.refuse = HomeAssistantError("synthetic service failure")
     sender = AsyncMock()
     failed = []
-    hass.bus.async_listen("matic_robot_area_failed", failed.append)
+    hass.bus.async_listen(
+        "matic_robot_area_failed", callback(lambda event: failed.append(event))
+    )
 
     with pytest.raises(HomeAssistantError, match="synthetic service failure"):
         await _run_area_plan(hass, manager, robot, [], MIXED_ENTRIES[:1], sender=sender)
