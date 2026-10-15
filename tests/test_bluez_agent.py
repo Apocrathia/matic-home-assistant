@@ -185,6 +185,21 @@ async def test_pairing_session_reuses_an_existing_pairing() -> None:
     assert session.reused_existing_bond is False
 
 
+async def test_has_bond_is_a_read_only_paired_state_query() -> None:
+    bus = AsyncMock()
+    bus.call.return_value = _paired(True)
+    session = BlueZPairingSession(bus)
+    path = "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF"
+
+    assert await session.async_has_bond(path)
+
+    assert bus.call.await_count == 1
+    message = bus.call.await_args.args[0]
+    assert message.interface == "org.freedesktop.DBus.Properties"
+    assert message.member == "Get"
+    assert message.body == ["org.bluez.Device1", "Paired"]
+
+
 async def test_pairing_session_removes_existing_pairing_for_reauth() -> None:
     bus = AsyncMock()
     bus.call.side_effect = [_paired(True), _method_return()]

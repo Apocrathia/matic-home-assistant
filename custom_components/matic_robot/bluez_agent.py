@@ -196,6 +196,10 @@ class BlueZPairingSession:
         assert_reply(reply)
         return bool(reply.body[0].value)
 
+    async def async_has_bond(self, device_path: str) -> bool:
+        """Read whether this device currently has a BlueZ bond."""
+        return await self._async_is_paired(device_path)
+
     async def _async_wait_until_paired(self, device_path: str) -> None:
         """Wait for a bond that the robot itself initiated to finish."""
         # Paired lives in bluetoothd, so an in-process event cannot signal it;

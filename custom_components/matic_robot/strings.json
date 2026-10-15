@@ -650,10 +650,10 @@
         "submit": "Start pairing"
       },
       "reset_bond": {
-        "title": "Remove the robot's saved pairing?",
-        "description": "Home Assistant reused an earlier Bluetooth pairing that the robot rejected. Removing it from this device pairs again with a new six-digit code, so turn on Pairing mode in the Matic app first and close this dialog if you can't tell which robot to choose.",
+        "title": "Reset this Bluetooth pairing?",
+        "description": "The robot rejected a saved pairing, or this entry has no saved Bluetooth address to identify it. Home Assistant will remove only the selected device and request a fresh six-digit code. Continue only if its name and Bluetooth address identify the robot being recovered. Turn on Pairing mode in the Matic app first; close this dialog if you are unsure.",
         "data": {
-          "bluetooth_device": "Robot's saved pairing"
+          "bluetooth_device": "Robot name and Bluetooth address"
         },
         "submit": "Remove"
       },
