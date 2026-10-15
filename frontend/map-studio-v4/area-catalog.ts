@@ -59,4 +59,3 @@ export const parseAreasCatalog = (value: unknown, helpers: AreaCatalogHelpers): 
     selectedArea: selectedId(payload.selected_area, "invalid-selected-area"),
   };
 };
-
