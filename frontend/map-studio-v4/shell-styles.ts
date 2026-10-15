@@ -269,6 +269,9 @@ export const shellStyles = [tokens, base, controls, css`
     .dialog {
       --ms-local: var(--ms-surface-card);
       inline-size: min(24rem, 100%);
+      min-block-size: 0;
+      max-block-size: 100%;
+      overflow-y: auto;
       padding: var(--ms-space-5);
       color: var(--ms-text);
       background: var(--ms-local);

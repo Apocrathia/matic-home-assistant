@@ -259,7 +259,7 @@ test.describe("home by state", () => {
       await expect(group.getByRole("button")).toHaveCount(3);
       await expect(cards(gallery)).toHaveCount(2);
       await expect(cards(gallery).nth(0)).toHaveAccessibleName(/^Clean rooms Pick rooms and clean them now\./);
-      await expect(cards(gallery).nth(0)).toHaveClass(/ms-row--featured/);
+      await expect(cards(gallery).nth(0)).not.toHaveClass(/ms-row--featured/);
       await expect(cards(gallery).nth(1)).toHaveAccessibleName(/^Clean custom area Draw or choose a custom area/);
       expect(await shortcutsGroup(gallery).evaluate((element, other) => !!(element.compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING), await group.elementHandle())).toBe(true);
       await expect(gallery.getByRole("heading", { name: "Maps", level: 3 })).toBeVisible();
@@ -675,7 +675,7 @@ test.describe("the plan card", () => {
     await expect.poll(() => focusedText(page)).toBe("h2 Choose what to clean");
   });
 
-  test("a long plan name stays on one line and keeps its full name", async ({ page }) => {
+  test("a long shortcut name wraps in full without widening its card", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "ready", narrow: true });
     const short = await planCard(gallery).boundingBox();
     const name = "A very long plan name that goes on and on past the width of the card";
@@ -688,12 +688,12 @@ test.describe("the plan card", () => {
     await expect(planCard(gallery).locator("strong bdi")).toHaveText(name);
     const title = planCard(gallery).locator(".card-name");
     const widths = await title.evaluate((element) => ({ scroll: element.scrollWidth, client: element.clientWidth }));
-    expect(widths.scroll, JSON.stringify(widths)).toBeGreaterThan(widths.client);
+    expect(widths.scroll, JSON.stringify(widths)).toBeLessThanOrEqual(widths.client + 1);
     // The card itself stays inside the sheet.
     const sheet = await panelOf(gallery).boundingBox();
     const card = await planCard(gallery).boundingBox();
     expect(card.x + card.width).toBeLessThanOrEqual(sheet.x + sheet.width);
-    expect((await planCard(gallery).boundingBox()).height).toBe(short.height);
+    expect((await planCard(gallery).boundingBox()).height).toBeGreaterThan(short.height);
   });
 
   test("every home launcher takes focus back when its workflow closes (MS-KEY-01)", async ({ page }) => {

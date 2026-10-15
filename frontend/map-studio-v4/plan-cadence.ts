@@ -383,7 +383,8 @@ export const scheduleModel = (t: Translate, locale: string, input: ScheduleInput
       }
       : null,
     explanation: explanation(t, f, name),
-    scope: policy.scope,
+    scope: !hasSchedule(policy) && f.shared?.mopEveryN === 1 && !f.joinPending && !f.participating
+      ? "plan" : policy.scope,
     resettable: {
       mop: savedHas(saved?.cadenceProgress?.mopProgress, saved?.cadence?.doMopNext, "mop_progress_unverified"),
       coverage: savedHas(saved?.cadenceProgress?.coverageProgress, saved?.cadence?.doCoverageNext, "coverage_progress_unverified"),

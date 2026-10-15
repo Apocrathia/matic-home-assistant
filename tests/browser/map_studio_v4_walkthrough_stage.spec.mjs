@@ -31,6 +31,23 @@ test("readouts include the plan heading actions through display:contents", async
   expect(await accessibilityReadout(page)).toContain('button "More actions"');
 });
 
+test("a shared-progress reset fits a short zoomed viewport and keeps actions reachable", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 256 });
+  await openFrame(page, "steps=plan-cadence-shared:confirmResetCadence");
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  const box = await dialog.boundingBox();
+  expect(box.y).toBeGreaterThanOrEqual(0);
+  expect(box.y + box.height).toBeLessThanOrEqual(256);
+  for (const button of await dialog.getByRole("button").all()) {
+    await button.focus();
+    await button.scrollIntoViewIfNeeded();
+    const action = await button.boundingBox();
+    expect(action.y).toBeGreaterThanOrEqual(box.y);
+    expect(action.y + action.height).toBeLessThanOrEqual(box.y + box.height);
+  }
+});
+
 for (const [width, height] of [[390, 844], [1024, 768], [1440, 900]]) {
   test(`plan item names wrap and hidden reasons stay inside the page at ${width}`, async ({ page }) => {
     await page.setViewportSize({ width, height });

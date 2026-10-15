@@ -2547,7 +2547,8 @@ async def test_area_end_waiter_fails_closed_and_waits_out_a_return(hass, monkeyp
     await _async_wait_for_area_end(
         hass, "vacuum.matic", cancel, active, returning_then_home, ORIGINAL
     )
-    assert reads == ["cleaning", "returning", "docked"]
+    assert reads == ["cleaning", "returning"]
+    assert hass.states.get("vacuum.matic").state == "docked"
     active.assert_awaited_once()
 
     cancel.set()
@@ -2583,6 +2584,35 @@ async def test_area_end_does_not_credit_a_stop_error_or_unknown_ownership_gap(
         await _async_wait_for_area_end(
             hass, "vacuum.matic", cancel, None, reader, ORIGINAL
         )
+
+
+@pytest.mark.parametrize("change", ["stop", "error", "cleaning"])
+async def test_area_end_rechecks_state_after_active_session_read(
+    hass, fast_area_polls, change
+):
+    cancel = asyncio.Event()
+    hass.states.async_set("vacuum.matic", "docked")
+    reader = AsyncMock(side_effect=[ORIGINAL, b""])
+
+    async def active():
+        if change == "stop":
+            cancel.set()
+        else:
+            hass.states.async_set("vacuum.matic", change)
+        return False
+
+    if change == "cleaning":
+        await _async_wait_for_area_end(
+            hass, "vacuum.matic", cancel, active, reader, ORIGINAL
+        )
+        # A stale inactive response cannot end a mission that resumed.
+        assert reader.await_count == 2
+    else:
+        error = PlanCancelledError if change == "stop" else ServiceValidationError
+        with pytest.raises(error):
+            await _async_wait_for_area_end(
+                hass, "vacuum.matic", cancel, active, reader, ORIGINAL
+            )
 
 
 async def test_area_record_waiter_is_bounded_and_honours_cancel(monkeypatch):

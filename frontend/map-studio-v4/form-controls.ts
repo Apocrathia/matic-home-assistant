@@ -42,7 +42,7 @@ box-shadow: var(--ms-shadow-1);
 transition: translate var(--ms-fast) var(--ms-ease);
 }
 .ms-switch[aria-checked="true"]::before { border-color: var(--ms-resolved-indicator, var(--ms-accent)); background: var(--ms-resolved-indicator, var(--ms-accent)); }
-.ms-switch[aria-checked="true"]::after { translate: 1.25rem -50%; background: var(--ms-on-accent); }
+.ms-switch[aria-checked="true"]::after { translate: 1.25rem -50%; background: var(--ms-resolved-on-indicator, var(--ms-on-accent)); }
 .ms-switch:focus-visible { outline: 0; }
 .ms-switch:focus-visible::before { outline: 2px solid var(--ms-resolved-indicator, var(--ms-accent)); outline-offset: 2px; }
 .ms-switch:disabled, .ms-switch[aria-disabled="true"] { cursor: default; opacity: 0.55; }

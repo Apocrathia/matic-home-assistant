@@ -581,6 +581,8 @@ test.describe("Schedule block", () => {
     const mop = schedule.getByRole("spinbutton", { name: "Mop every clean", exact: true });
     await expect(mop).toHaveValue("1");
     await expect(mop).toHaveAccessibleDescription(/This saved setting mops every clean/);
+    await expect(gallery.getByRole("combobox", { name: "Cleaning mode for Kitchen" }))
+      .toHaveAccessibleDescription("Turn the mopping schedule off to change the cleaning mode.");
     const before = (await snapshot(page)).planDraft;
     await mop.focus();
     await mop.press("Tab");
@@ -656,7 +658,7 @@ test.describe("Schedule block", () => {
 
     const shared = await loadGallery(page, { scenario: "plan-cadence-shared" });
     await expect(shared.getByRole("combobox", { name: "Cleaning mode for Kitchen" }))
-      .toHaveAccessibleDescription("Vacuum is the usual clean; mopping is added when due. Turn occasional mopping off to choose Vacuum + mop for every clean.");
+      .toHaveAccessibleDescription("Turn the mopping schedule off to change the cleaning mode.");
   });
 
   test("a save in flight holds every schedule control", async ({ page }) => {
@@ -793,9 +795,11 @@ test.describe("next clean, Advanced and joining", () => {
     await patchState(page, `({ ...s, resources: { ...s.resources, plans: { ...s.resources.plans, value: { ...s.resources.plans.value, rooms: s.resources.plans.value.rooms.map(r => r.roomId !== "room-c" ? r : { ...r, sharedCadence: { ...r.sharedCadence, mopEveryN: 1 } }) } } } })`);
     const schedule = gallery.getByRole("group", { name: "Smart cleaning for Office" });
     await expect(schedule.getByText(/New smart cleaning stays in this plan/)).toBeVisible();
+    await schedule.getByText("Advanced", { exact: true }).click();
+    await expect(schedule.getByRole("radio", { name: "In this plan only" })).toBeChecked();
+    await expect(schedule.getByRole("radio", { name: "Across all plans (recommended)" })).not.toBeChecked();
     await schedule.getByRole("button", { name: "Increase Occasional mopping", exact: true }).click();
     expect(await officeCadence(page)).toMatchObject({ scope: "plan", mopEveryN: 2, coverageEveryN: null });
-    await schedule.getByText("Advanced", { exact: true }).click();
     await schedule.getByRole("radio", { name: "Across all plans (recommended)" }).check();
     expect(await officeCadence(page)).toEqual({ ...shared, mopEveryN: 1 });
     await expect(schedule.getByRole("spinbutton", { name: "Mop every clean", exact: true })).toHaveAttribute("readonly", "");

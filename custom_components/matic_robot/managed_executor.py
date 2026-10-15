@@ -1039,12 +1039,22 @@ async def _async_wait_for_area_end(
             raise RoomTakenOverError("The native cleaning task was replaced")
         else:
             unknown_reads = 0
-            if (
-                state is not None
-                and state.state in {"docked", "idle"}
-                and await _async_active_session_state(active_session) is False
-            ):
-                return
+            if current is not None and current.state in {"docked", "idle"}:
+                active = await _async_active_session_state(active_session)
+                # The robot can stop, fail or resume during this second read.
+                if cancel_event.is_set():
+                    raise PlanCancelledError
+                current = hass.states.get(entity_id)
+                if current is not None and current.state == "error":
+                    raise _validation_error(
+                        "The selected Matic robot reported an error", "robot_error"
+                    )
+                if (
+                    active is False
+                    and current is not None
+                    and current.state in {"docked", "idle"}
+                ):
+                    return
         with suppress(TimeoutError):
             async with asyncio.timeout(ROOM_STATUS_REFRESH_SECONDS):
                 await cancel_event.wait()

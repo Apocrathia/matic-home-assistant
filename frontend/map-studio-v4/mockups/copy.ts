@@ -103,7 +103,7 @@ export const COPY = {
   v4_notice_plan_on: "Plan turned on",
   v4_next_run_preview: "Next run",
   v4_next_run_after_active: "After this run",
-  v4_plan_rooms_heading: "Rooms in this plan",
+  v4_plan_rooms_heading: "In this plan",
   v4_plan_rotation_settings: "Longest-waiting rooms and custom areas first, checked again when you run the plan.",
   v4_part_break: "Part {number} starts here; the robot may stop at the dock first",
   v4_needs_attention_chip: "Needs attention", // (literal) plan.md §3 row chip
@@ -277,7 +277,7 @@ export const COPY = {
   v4_rooms_busy: "Can't change rooms until the robot finishes or stops.", // home-rooms.md §6
   v4_reason_plan_saving: "Waiting for Home Assistant to save the plan.", // plan.md §6
   v4_reason_plan_switch_busy: "Can't change this until the robot finishes.", // plan.md §6
-  v4_cadence_clear_mop_to_change_normal: "Vacuum is the usual clean; mopping is added when due. Turn occasional mopping off to choose Vacuum + mop for every clean.", // room-schedule.md §6
+  v4_cadence_clear_mop_to_change_normal: "Turn the mopping schedule off to change the cleaning mode.", // room-schedule.md §6
 } as const;
 
 export type CopyKey = keyof typeof COPY;

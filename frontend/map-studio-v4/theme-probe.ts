@@ -25,7 +25,7 @@ type PaletteKey = Exclude<keyof CanvasPalette, "forced">;
 // (design-system.md §7).
 const SOURCES: Readonly<Record<PaletteKey, readonly [color: string, forced: string, fallback: Channel]>> = {
   accent: ["var(--ms-resolved-indicator, var(--ms-accent))", "Highlight", [6, 120, 206]],
-  onAccent: ["var(--ms-on-accent)", "HighlightText", [255, 255, 255]],
+  onAccent: ["var(--ms-resolved-on-indicator, var(--ms-on-accent))", "HighlightText", [255, 255, 255]],
   text: ["var(--ms-text)", "CanvasText", [38, 50, 56]],
   quiet: ["var(--ms-text-quiet)", "GrayText", [75, 92, 105]],
   plate: ["var(--ms-surface-card)", "Canvas", [250, 252, 253]],

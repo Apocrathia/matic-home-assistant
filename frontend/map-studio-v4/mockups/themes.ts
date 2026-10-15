@@ -41,7 +41,7 @@ export const HA_THEMES: Readonly<Record<ThemeName, Readonly<Record<string, strin
 
 /**
  * design-system.md Decision 1 with HA's default palette (§4 :22, §5 :61-62,
- * §10 Decision 1): the six `--ms-resolved-*` values the shell would write.
+ * §10 Decision 1): the resolved `--ms-resolved-*` values the shell would write.
  * Off, the resolved tokens fall back to HA's own colours.
  */
 export const D1_RESOLVED: Readonly<Record<ThemeName, Readonly<Record<string, string>>>> = {
@@ -51,7 +51,8 @@ export const D1_RESOLVED: Readonly<Record<ThemeName, Readonly<Record<string, str
     "--ms-resolved-danger-fill": "#d04134",
     "--ms-resolved-on-danger-fill": "#ffffff",
     "--ms-resolved-indicator": "#008bb3",
-    "--ms-resolved-danger-text": "#d04134",
+    "--ms-resolved-on-indicator": "#000000",
+    "--ms-resolved-danger-text": "#8e2c24",
   },
   dark: {
     "--ms-resolved-accent-fill": "#007b9f",
@@ -59,7 +60,8 @@ export const D1_RESOLVED: Readonly<Record<ThemeName, Readonly<Record<string, str
     "--ms-resolved-danger-fill": "#d04134",
     "--ms-resolved-on-danger-fill": "#ffffff",
     "--ms-resolved-indicator": "#009ac7",
-    "--ms-resolved-danger-text": "#df574b",
+    "--ms-resolved-on-indicator": "#000000",
+    "--ms-resolved-danger-text": "#eb9891",
   },
 };
 

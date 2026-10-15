@@ -1242,7 +1242,7 @@ test.describe("Map Studio v0.4 foundation", () => {
   test("a paused plan lists its rooms and turns on from the switch", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "plan-run-paused" });
     await expect(gallery.getByText("3 rooms", { exact: true })).toBeVisible();
-    await expect(gallery.getByRole("heading", { name: "Rooms in this plan", level: 3 })).toBeVisible();
+    await expect(gallery.getByRole("heading", { name: "In this plan", level: 3 })).toBeVisible();
     await expect(gallery.locator("ul.run-list > li")).toHaveText(["Kitchen Vacuum · Optimal", "Living room Vacuum · Optimal", "Office Vacuum · Optimal"]);
     await expect(gallery.getByRole("switch", { name: "Plan enabled" })).toHaveAttribute("aria-checked", "false");
     await expect(gallery.getByRole("button", { name: "Try again", exact: true })).toHaveCount(0);
@@ -5492,7 +5492,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     const quick = gallery.getByRole("group", { name: "Cleaning choices" }).getByRole("button");
     await expect(quick).toHaveCount(3);
     await expect(quick.nth(0)).toHaveAccessibleName(/^Clean rooms Pick rooms and clean them now\./);
-    await expect(quick.nth(0)).toHaveClass(/ms-row--featured/);
+    await expect(quick.nth(0)).not.toHaveClass(/ms-row--featured/);
     // The default plan pinned as a one-tap shortcut under Shortcuts, then the
     // custom-area card and the Your plans row (UX9 owner ruling).
     await expect(gallery.getByRole("group", { name: "Shortcuts" }).getByRole("button")).toHaveAccessibleName(/^Run Daily clean 3 rooms/);
@@ -5886,7 +5886,7 @@ test.describe("Map Studio v0.4 foundation", () => {
 
     const response = await gallery.evaluate(async (element) => {
       const shell = element.shadowRoot.querySelector("matic-map-shell-v4");
-      const rooms = shell.shadowRoot.querySelector(".quick-actions button.ms-row--featured");
+      const rooms = shell.shadowRoot.querySelector('[data-launcher="rooms"]');
       const started = performance.now();
       rooms.click();
       await shell.updateComplete;
@@ -10353,6 +10353,18 @@ test.describe("Map Studio resolved theme colours", () => {
     return `rgb(${red}, ${green}, ${blue})`;
   }, property);
 
+  test("checked switches keep their knob distinct from a custom theme's indicator", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-saved-intelligent" });
+    const toggle = gallery.getByRole("switch", { name: "Plan enabled", exact: true });
+    for (const vars of [HA_LIGHT, HA_DARK, { ...HA_LIGHT, "--primary-color": "#777777", "--text-primary-color": "#777777" }]) {
+      await theme(page, vars);
+      await expect.poll(async () => {
+        const colors = await toggle.evaluate((element) => ["::before", "::after"].map((pseudo) => getComputedStyle(element, pseudo).backgroundColor));
+        return ratio(...colors);
+      }).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
   test("the focus ring reaches 3:1 on both surfaces and danger text 4.5:1 on the card", async ({ page }) => {
     await page.setViewportSize({ width: 1024, height: 768 });
     const gallery = await loadGallery(page, { scenario: "draw" });
@@ -10372,20 +10384,30 @@ test.describe("Map Studio resolved theme colours", () => {
       const color = await ring();
       return { color, sunken: ratio(color, "rgb(229, 229, 229)"), card: ratio(color, "rgb(255, 255, 255)") };
     }, "#009ac7 is 2.59:1 on #e5e5e5").toEqual({ color: "rgb(0, 139, 179)", sunken: 3.12, card: 3.93 });
-    await expect.poll(async () => {
-      const color = await style(feedback, "color");
-      return { color, card: ratio(color, "rgb(255, 255, 255)") };
-    }, "#db4437 is 4.29:1 on #fff").toEqual({ color: "rgb(208, 65, 52)", card: 4.68 });
+    await expect.poll(async () => ratio(await style(feedback, "color"), "rgb(255, 255, 255)")).toBeGreaterThanOrEqual(4.5);
 
     await theme(page, HA_DARK);
     await expect.poll(async () => {
       const color = await ring();
       return { color, sunken: ratio(color, "rgb(40, 40, 40)"), card: ratio(color, "rgb(28, 28, 28)") };
     }, "a passing indicator is kept").toEqual({ color: "rgb(0, 154, 199)", sunken: 4.53, card: 5.23 });
-    await expect.poll(async () => {
-      const color = await style(feedback, "color");
-      return { color, card: ratio(color, "rgb(28, 28, 28)") };
-    }, "#db4437 is 3.97:1 on #1c1c1c").toEqual({ color: "rgb(223, 87, 75)", card: 4.55 });
+    await expect.poll(async () => ratio(await style(feedback, "color"), "rgb(28, 28, 28)")).toBeGreaterThanOrEqual(4.5);
+  });
+
+  test("Delete area text keeps contrast at rest, hover and press in both themes", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "area-review-saved" });
+    const button = gallery.getByRole("button", { name: "Delete", exact: true });
+    for (const vars of [HA_LIGHT, HA_DARK]) {
+      await theme(page, vars);
+      const check = async () => expect.poll(async () => ratio(await paint(button, "color"), await paint(button, "backgroundColor"))).toBeGreaterThanOrEqual(4.5);
+      await check();
+      await button.hover();
+      await check();
+      await page.mouse.down();
+      await check();
+      await page.mouse.move(0, 0);
+      await page.mouse.up();
+    }
   });
 
   // The indicator is checked on every surface it sits on. A light card over
@@ -10479,14 +10501,16 @@ test.describe("Map Studio resolved theme colours", () => {
       for (const [name, value] of Object.entries({
         "--ms-accent": "#009ac7",
         "--ms-resolved-indicator": "rgba(0,139,179,1)",
+        "--ms-on-accent": "#008bb3",
+        "--ms-resolved-on-indicator": "#000000",
         "--ms-surface-card": "rgba(28, 28, 28, 0.5)",
         "--ms-surface-sunken": "rgba(40, 40, 40, 0.8)",
       })) host.style.setProperty(name, value);
       document.body.append(host);
-      const { accent, plate, roomFill } = readCanvasPalette(host);
-      return { accent, plate, roomFill };
+      const { accent, onAccent, plate, roomFill } = readCanvasPalette(host);
+      return { accent, onAccent, plate, roomFill };
     });
-    expect(palette).toEqual({ accent: [0, 139, 179], plate: [28, 28, 28], roomFill: [40, 40, 40] });
+    expect(palette).toEqual({ accent: [0, 139, 179], onAccent: [0, 0, 0], plate: [28, 28, 28], roomFill: [40, 40, 40] });
   });
 
   // design-system.md §3 and §7: every selection and checked state reads the

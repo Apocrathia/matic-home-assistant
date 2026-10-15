@@ -78,7 +78,7 @@ export class MaticMapWorkflowV4 extends LitElement {
 
   static override styles = [tokens, base, controls, formControls, css`
 :host { display: block; min-inline-size: 0; container-type: inline-size; }
-.ms-row--danger { color: var(--ms-danger); }
+.ms-row--danger { color: var(--ms-resolved-danger-text, var(--ms-danger)); }
 .sr-only { position: absolute; overflow: hidden; inline-size: 1px; block-size: 1px; margin: -1px; clip-path: inset(50%); white-space: nowrap; }
 button, select, input[type="checkbox"] { cursor: pointer; }
 .stack { display: grid; gap: var(--ms-space-3); }
