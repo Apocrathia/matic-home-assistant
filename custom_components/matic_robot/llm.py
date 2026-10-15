@@ -651,7 +651,7 @@ class MaticGetPlanTool(_MaticTool):
         "Returns a read-only preview of the next run of the selected or named "
         "saved plan: room and custom area order, each one's settings, and where "
         "a settings change or a custom area splits the run into separate "
-        "cleaning passes. A plan with a custom area can't run yet."
+        "cleaning passes."
     )
     annotations = _READ_ONLY
     parameters = llm.Tool.parameters.extend(
@@ -791,8 +791,6 @@ class MaticGetPlanTool(_MaticTool):
                         "run_behavior": preview["run_behavior"],
                         "return_to_base": preview["return_to_base"],
                     },
-                    # Plans with custom areas can be previewed but not run yet.
-                    **({"runnable": False} if "area_count" in preview else {}),
                     "rotation": rotation,
                     "settings_boundary_count": max(0, len(groups) - 1),
                     "legs": [

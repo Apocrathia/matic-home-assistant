@@ -252,12 +252,15 @@ def encode_custom_coverage_command(
     cleaning_mode: CleaningMode = CleaningMode.BOTH,
     coverage_setting: CoverageSetting = CoverageSetting.OPTIMAL,
     command_id_factory: Callable[[], UUID] = uuid4,
+    session_id: UUID | None = None,
 ) -> bytes:
     """Encode an official-app-compatible drawn-circle coverage command.
 
     Circle coordinates use the same robot map coordinate system as room
     boundaries. A fresh synthetic partition ID is required by the custom-area
-    target and contains no robot identity.
+    target and contains no robot identity. A managed plan pins the field-6
+    session identity, as it does for room coverage, so it can recognise its
+    own mission; otherwise that identity is generated like the other IDs.
     """
     if not 0 <= mission_id <= 0xFFFFFFFF:
         raise ValueError("mission_id must fit in an unsigned 32-bit integer")
@@ -309,7 +312,15 @@ def encode_custom_coverage_command(
         _field(2, _field(2, _field(1, b"")))
         + _field(3, _fixed32(2, mission_id))
         + _field(5, goals)
-        + _field(6, _field(2, _wrapped_uuid(str(command_id_factory()))))
+        + _field(
+            6,
+            _field(
+                2,
+                _wrapped_uuid(
+                    str(session_id if session_id is not None else command_id_factory())
+                ),
+            ),
+        )
         + _field(7, _field(1, _wrapped_uuid(str(command_id_factory()))))
     )
     return _field(15, _field(1, _field(3, coverage)))

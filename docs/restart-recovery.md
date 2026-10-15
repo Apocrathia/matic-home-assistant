@@ -59,6 +59,9 @@ at the dock. A replacement command, expiry, or ownership mismatch retires it.
 - Missing floor evidence, malformed checkpoints, and old runs without checkpoints
   cannot resume cleaning. Previously cancelled runs are not resumed.
 - If every requested room was already durably verified, recovery preserves completion.
+- A plan's custom area rejoins only its own still-running mission. An area
+  whose mission ended while Home Assistant was offline leaves the run
+  unverified, and the remaining queue needs a fresh start.
 
 Reconnection is bounded. Inconclusive recovery leaves unrelated native missions
 alone and retains only the results it can verify.

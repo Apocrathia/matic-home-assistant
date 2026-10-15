@@ -1052,7 +1052,7 @@ async def test_plan_tool_previews_custom_areas_in_run_order(hass) -> None:
         return result.data
 
     mixed = await plan_preview("mixed")
-    assert mixed["runnable"] is False
+    assert "runnable" not in mixed
     # Each area is a pass of its own; the rooms between them share one.
     assert mixed["settings_boundary_count"] == 2
     assert mixed["legs"][0] == _area_leg(
@@ -1074,7 +1074,7 @@ async def test_plan_tool_previews_custom_areas_in_run_order(hass) -> None:
     assert not _INTERNAL_TERMS.search(json.dumps(mixed["legs"][0]["custom_area"]))
 
     spots = await plan_preview("spots")
-    assert spots["runnable"] is False
+    assert "runnable" not in spots
     assert spots["settings_boundary_count"] == 1
     assert spots["legs"] == [
         _area_leg(1, "mat", "Mat", "vacuum", "firmware_may_touch_dock"),

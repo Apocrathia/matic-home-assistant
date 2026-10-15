@@ -17,6 +17,7 @@ from custom_components.matic_robot.client.models import FloorPlan, Room
 from custom_components.matic_robot.const import DOMAIN, MAX_ROOM_SEQUENCE_SIZE
 from custom_components.matic_robot.plans import (
     AreaInUseError,
+    AreaLeg,
     CleaningPlanManager,
     CleaningRoom,
     DuplicatePlanAreaError,
@@ -25,11 +26,15 @@ from custom_components.matic_robot.plans import (
     PlanAreaMapChangedError,
     PlanAreaMissingError,
     PlanDisabledError,
+    _dispatching_room_leg,
+    checkpoint_legs,
     entry_mission_boundaries,
     leg_groups,
     plan_area_fingerprint,
     plan_entries,
     plan_floor_token,
+    plan_legs,
+    run_entries,
 )
 from custom_components.matic_robot.room_sequence import saved_plan_preview_token
 from custom_components.matic_robot.services import (
@@ -1023,30 +1028,110 @@ def test_plan_request_errors_translate_area_failures() -> None:
     assert limit.translation_placeholders == {"limit": str(MAX_ROOM_SEQUENCE_SIZE)}
 
 
-@pytest.mark.parametrize("service", ["run_selected_plan", "intelligent_clean"])
-async def test_running_a_plan_with_an_area_fails_closed(hass, service: str) -> None:
+@pytest.mark.parametrize(
+    "service", ["run_selected_plan", "intelligent_clean", "clean_entire_plan"]
+)
+@pytest.mark.parametrize("plan", ["Mixed", "Spots"])
+async def test_running_a_plan_with_areas_hands_its_run_order_to_the_executor(
+    hass, service: str, plan: str
+) -> None:
     floor = _floor()
     manager = await _mixed_manager(hass, floor)
+    await manager.async_save_plan(
+        SERIAL,
+        "spots",
+        {
+            "name": "Spots",
+            "rooms": [],
+            "entries": [_area_entry("rug"), _area_entry("mat")],
+        },
+        select=False,
+    )
     services = await _registered_services(hass, manager)
+    entry = SimpleNamespace(
+        entry_id="entry",
+        runtime_data=SimpleNamespace(
+            coordinator=MagicMock(data=SimpleNamespace(floor_plan=floor)),
+            client=MagicMock(),
+            slam_map=SimpleNamespace(
+                floor_plan_is_current=MagicMock(return_value=True)
+            ),
+        ),
+    )
 
     with (
         patch(
             "custom_components.matic_robot.services._saved_plan_context",
-            return_value=_context(floor),
+            return_value=("vacuum.test", entry, SERIAL, dict(ROOM_MAP)),
         ),
         patch(
             "custom_components.matic_robot.services._async_execute_rooms",
             AsyncMock(),
         ) as execute,
-        pytest.raises(ServiceValidationError) as raised,
     ):
         await _registered_handler(services, service)(
-            _call(hass, service, {"plan": "Mixed"})
+            _call(hass, service, {"plan": plan})
         )
 
-    assert raised.value.translation_key == "plan_areas_not_supported_yet"
-    execute.assert_not_awaited()
+    execute.assert_awaited_once()
+    rooms = execute.await_args.args[5]
+    entries = execute.await_args.kwargs["entries"]
+    kwargs = execute.await_args.kwargs
+    # Every area entry carries its fingerprint, in the preview's run order.
+    assert all(
+        entry["binding_fingerprint"]
+        == plan_area_fingerprint(manager.areas(SERIAL)[entry["area_id"]])
+        for entry in entries
+        if entry["kind"] == "area"
+    )
+    assert [entry["room_id"] for entry in entries if entry["kind"] == "room"] == [
+        room.room_id for room in rooms
+    ]
+    if plan == "Spots":
+        assert rooms == []
+        assert [entry["area_id"] for entry in entries] == ["rug", "mat"]
+    else:
+        assert {room.room_id for room in rooms} == set(ROOM_MAP)
+        assert [entry["kind"] for entry in entries].count("area") == 2
+    assert kwargs["floor_token"] == plan_floor_token(floor)
+    assert kwargs["floor_is_current"]() is True
+    kwargs["validate_prepared_run"]()
     assert manager.snapshot(SERIAL)["active_plan"] is None
+
+
+async def test_running_a_room_only_plan_keeps_its_legacy_executor_call(hass) -> None:
+    floor = _floor()
+    manager = await _manager(hass, floor)
+    await manager.async_save_plan(
+        SERIAL, "home", {"name": "Home", "rooms": [_room("room-kitchen")]}
+    )
+    services = await _registered_services(hass, manager)
+    entry = SimpleNamespace(
+        entry_id="entry",
+        runtime_data=SimpleNamespace(
+            coordinator=MagicMock(data=SimpleNamespace(floor_plan=floor)),
+            client=MagicMock(),
+            slam_map=SimpleNamespace(
+                floor_plan_is_current=MagicMock(return_value=True)
+            ),
+        ),
+    )
+    with (
+        patch(
+            "custom_components.matic_robot.services._saved_plan_context",
+            return_value=("vacuum.test", entry, SERIAL, dict(ROOM_MAP)),
+        ),
+        patch(
+            "custom_components.matic_robot.services._async_execute_rooms",
+            AsyncMock(),
+        ) as execute,
+    ):
+        await _registered_handler(services, "run_selected_plan")(
+            _call(hass, "run_selected_plan", {"plan": "Home"})
+        )
+
+    assert execute.await_args.kwargs["entries"] is None
+    assert [room.room_id for room in execute.await_args.args[5]] == ["room-kitchen"]
 
 
 async def test_preview_plan_service_returns_typed_entries(hass) -> None:
@@ -1079,3 +1164,179 @@ def test_move_reaches_every_position_of_a_full_mixed_plan() -> None:
     assert MOVE_PLAN_ROOM_SCHEMA({**move, "new_position": full})["new_position"] == full
     with pytest.raises(probatio.Invalid):
         MOVE_PLAN_ROOM_SCHEMA({**move, "new_position": full + 1})
+
+
+# Run legs ------------------------------------------------------------------
+
+_FINGERPRINT = "f" * 64
+
+
+def _run_area(area_id: str, mode: str = "vacuum", coverage: str = "quick") -> dict:
+    return {
+        "kind": "area",
+        "area_id": area_id,
+        "name": area_id.title(),
+        "cleaning_mode": mode,
+        "coverage_setting": coverage,
+        "fingerprint": _FINGERPRINT,
+    }
+
+
+def _rooms() -> list[CleaningRoom]:
+    return [
+        CleaningRoom("room-kitchen", "Kitchen", "vacuum", "standard"),
+        CleaningRoom("room-study", "Study", "mop", "standard"),
+        CleaningRoom("room-hall", "Hall", "vacuum", "standard"),
+    ]
+
+
+def test_run_entries_keep_room_only_plans_on_their_legacy_checkpoint() -> None:
+    assert run_entries(None) is None
+    assert run_entries("corrupt") is None
+    assert run_entries([_room_entry("room-kitchen"), "corrupt"]) is None
+
+    preview_entries = [
+        {"kind": "room", "room_id": "room-kitchen", "name": "Kitchen"},
+        {
+            "kind": "area",
+            "area_id": "rug",
+            "name": "Rug",
+            "cleaning_mode": "vacuum",
+            "coverage_setting": "quick",
+            "binding_status": "current",
+            "binding_fingerprint": _FINGERPRINT,
+        },
+    ]
+    assert run_entries(preview_entries) == [
+        {"kind": "room", "room_id": "room-kitchen"},
+        {**_run_area("rug"), "name": "Rug"},
+    ]
+
+
+def test_plan_legs_split_rooms_at_every_area_in_entry_order() -> None:
+    rooms = _rooms()
+    # Without areas the legs are exactly the room groups.
+    assert plan_legs(rooms, None, mixed_settings=True) == list(
+        leg_groups(rooms, mixed_settings=True)
+    )
+    assert plan_legs(rooms, None, preserve_legacy_settings=True) == list(
+        leg_groups(rooms, preserve_legacy_settings=True)
+    )
+
+    entries = [
+        _run_area("rug"),
+        _room_entry("room-kitchen"),
+        _room_entry("room-study"),
+        _run_area("mat", "vacuum_and_mop", "heavy_duty"),
+        _room_entry("room-hall"),
+    ]
+    legs = plan_legs(rooms, entries, mixed_settings=True)
+    assert legs == [
+        AreaLeg("rug", "Rug", "vacuum", "quick", _FINGERPRINT),
+        rooms[:2],
+        AreaLeg("mat", "Mat", "vacuum_and_mop", "heavy_duty", _FINGERPRINT),
+        rooms[2:],
+    ]
+    # Legacy settings boundaries still split the rooms between two areas.
+    assert plan_legs(rooms, entries, preserve_legacy_settings=True)[1:3] == [
+        rooms[:1],
+        rooms[1:2],
+    ]
+    assert plan_legs([], [_run_area("rug"), _run_area("mat")]) == [
+        AreaLeg("rug", "Rug", "vacuum", "quick", _FINGERPRINT),
+        AreaLeg("mat", "Mat", "vacuum", "quick", _FINGERPRINT),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("room_count", "entries", "message"),
+    [
+        (0, "corrupt", "invalid"),
+        (0, ["corrupt"], "invalid"),
+        (0, [{"kind": "zone"}], "invalid"),
+        # Room entries must name the run's rooms, in order, exactly once.
+        (1, [_room_entry("room-study")], "do not match"),
+        (1, [_room_entry("room-kitchen")] * 2, "do not match"),
+        (2, [_room_entry("room-kitchen")], "do not match"),
+        (
+            0,
+            [{key: value for key, value in _run_area("rug").items() if key != "name"}],
+            "invalid",
+        ),
+        (0, [{**_run_area("rug"), "extra": "x"}], "invalid"),
+        (0, [{**_run_area("rug"), "name": ""}], "invalid"),
+        (0, [{**_run_area("rug"), "name": 1}], "invalid"),
+        (0, [_run_area("rug", "steam")], "invalid"),
+        (0, [_run_area("rug", "vacuum", "deep")], "invalid"),
+        (0, [{**_run_area("rug"), "fingerprint": "f" * 63}], "invalid"),
+    ],
+)
+def test_plan_legs_reject_entries_that_do_not_describe_the_run(
+    room_count, entries, message
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        plan_legs(_rooms()[:room_count], entries)
+
+
+def test_checkpoint_legs_rebuild_the_runs_legs() -> None:
+    rooms = _rooms()
+    checkpoint = {
+        "rooms": [
+            {
+                "room_id": room.room_id,
+                "name": room.name,
+                "cleaning_mode": room.cleaning_mode,
+                "coverage_setting": room.coverage_setting,
+            }
+            for room in rooms
+        ],
+        "mixed_settings": True,
+        "entries": [
+            _room_entry("room-kitchen"),
+            _run_area("rug"),
+            _room_entry("room-study"),
+            _room_entry("room-hall"),
+        ],
+    }
+    assert checkpoint_legs(checkpoint) == [
+        rooms[:1],
+        AreaLeg("rug", "Rug", "vacuum", "quick", _FINGERPRINT),
+        rooms[1:],
+    ]
+    legacy = {**checkpoint, "mixed_settings": False}
+    legacy.pop("entries")
+    assert checkpoint_legs(legacy) == list(
+        leg_groups(rooms, preserve_legacy_settings=True)
+    )
+
+
+@pytest.mark.parametrize(
+    ("entries", "leg_index", "dispatching"),
+    [
+        (None, 0, True),
+        (None, 1, False),
+        ([_room_entry("room-kitchen"), _run_area("rug")], 0, True),
+        ([_room_entry("room-kitchen"), _run_area("rug")], 1, False),
+        ([_room_entry("room-kitchen"), _run_area("rug")], 2, False),
+        ([_room_entry("room-kitchen"), _run_area("rug")], -1, False),
+        ([_room_entry("room-kitchen"), _run_area("rug")], True, False),
+        ([_run_area("rug")], 0, False),
+        ("corrupt", 0, False),
+    ],
+)
+def test_only_a_room_leg_is_a_mixed_dispatch(entries, leg_index, dispatching) -> None:
+    checkpoint = {
+        "rooms": [
+            {
+                "room_id": "room-kitchen",
+                "name": "Kitchen",
+                "cleaning_mode": "vacuum",
+                "coverage_setting": "standard",
+            }
+        ],
+        "mixed_settings": True,
+        "leg_index": leg_index,
+    }
+    if entries is not None:
+        checkpoint["entries"] = entries
+    assert _dispatching_room_leg(checkpoint) is dispatching

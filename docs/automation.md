@@ -108,6 +108,9 @@ Each event's type is `matic_robot_` plus the name in the second column.
 | Room stopped early | `room_interrupted` | room fields, `reason_code`, `cause` |
 | Room ended unconfirmed | `room_ended_unverified` | room fields, `reason_code`, `cause` |
 | Room confirmed late | `room_reconciled` | room fields, `reason_code`, `cause` |
+| Plan area started | `area_started` | `entity_id`, `plan_id`, `run_id`, `area_id`, `area`, `cleaning_mode`, `coverage_setting` |
+| Plan area finished | `area_finished` | area fields |
+| Plan area failed | `area_failed` | area fields, `reason_code` |
 | Plan finished | `plan_finished` | `entity_id`, `plan_id`, `run_id`, `outcome`, `reason_code`, `cause`, times, room counts |
 | Plan docked | `plan_docked` | `entity_id`, `plan_id`, `run_id`, `outcome`, `docked_at` |
 | Cleaning finished | `cleaning_finished` | `device_id`, `entry_id`, `started_at`, `ended_at`, `duration_seconds`, `rooms`, `completed_rooms` |

@@ -1315,6 +1315,36 @@ def test_next_room_preview_hides_stale_plan_errors() -> None:
     entry.runtime_data.cleaning_plans.preview.assert_not_called()
 
 
+def test_plan_entities_preview_custom_areas_on_the_current_map() -> None:
+    entry = _entry()
+    floor = entry.runtime_data.coordinator.data.floor_plan
+    preview = entry.runtime_data.cleaning_plans.preview
+    next_room = sensor.MaticNextCleaningRoomSensor(entry)
+    plan_button = button.MaticPlanButton(entry, "run_selected_plan")
+
+    # A plan can start with a custom area, or hold areas alone.
+    preview.return_value = {
+        "rooms": [{"name": "Kitchen", "room_id": "room-1"}],
+        "entries": [
+            {"kind": "area", "area_id": "rug", "name": "Rug"},
+            {"kind": "room", "room_id": "room-1", "name": "Kitchen"},
+        ],
+    }
+    assert next_room.native_value == "Rug"
+    assert plan_button.available is True
+    assert all(call.kwargs["floor_plan"] is floor for call in preview.call_args_list)
+    preview.return_value = {
+        "rooms": [],
+        "entries": [{"kind": "area", "area_id": "mat", "name": "Mat"}],
+    }
+    assert next_room.native_value == "Mat"
+    # Previews without entries keep their room order.
+    preview.return_value = {"rooms": [{"name": "Study", "room_id": "room-2"}]}
+    assert next_room.native_value == "Study"
+    preview.return_value = {"rooms": [], "entries": []}
+    assert next_room.native_value is None
+
+
 async def test_storage_backed_sensors_track_history_and_stay_available() -> None:
     entry = _entry()
     history = entry.runtime_data.cleaning_plans

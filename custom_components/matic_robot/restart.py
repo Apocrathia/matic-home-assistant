@@ -31,7 +31,7 @@ from .managed_executor import (
     _schedule_managed_dock_after_stop,
     _shutdown_suspends_run,
 )
-from .plans import CleaningRoom, leg_groups, plan_floor_token
+from .plans import AreaLeg, CleaningRoom, checkpoint_legs, plan_floor_token
 from .room_coherence import current_floor_plan, room_completion_names_are_current
 
 if TYPE_CHECKING:
@@ -258,8 +258,14 @@ async def async_recover_managed_run(
                 return
         rooms = [CleaningRoom(**room) for room in checkpoint["rooms"]]
         room_ids = {room.room_id for room in rooms}
+        legs = checkpoint_legs(checkpoint)
+        area_legs = {
+            index for index, leg in enumerate(legs) if isinstance(leg, AreaLeg)
+        }
+        finished_areas = set(checkpoint.get("finished_area_legs", []))
         if (
             rooms
+            and not area_legs
             and len(room_ids) == len(rooms) == run["room_count"]
             and room_ids == set(checkpoint.get("completed_room_ids", []))
             and run["completed_room_count"] == len(rooms)
@@ -268,11 +274,6 @@ async def async_recover_managed_run(
             # normal finalizer cannot erase an already verified completion.
             reason = "all_rooms_verified"
             return
-        legs = leg_groups(
-            rooms,
-            mixed_settings=checkpoint.get("mixed_settings") is True,
-            preserve_legacy_settings=checkpoint.get("mixed_settings") is not True,
-        )
         leg_index = checkpoint.get("leg_index")
         if (
             not isinstance(leg_index, int)
@@ -283,13 +284,23 @@ async def async_recover_managed_run(
                 and (
                     leg_index == 0
                     or not {
-                        room.room_id for leg in legs[:leg_index] for room in leg
+                        room.room_id
+                        for leg in legs[:leg_index]
+                        if isinstance(leg, list)
+                        for room in leg
                     }.issubset(set(checkpoint.get("completed_room_ids", [])))
+                    or not {index for index in area_legs if index < leg_index}.issubset(
+                        finished_areas
+                    )
                 )
             )
         ):
             return
         leg = legs[leg_index]
+        if isinstance(leg, AreaLeg) and (verifying or mixed_dispatch):
+            # An area is its own mission: it is never verified from history
+            # and never part of a mixed room dispatch.
+            return
         expected = (
             mixed_initial_hash
             if mixed_dispatch
@@ -516,6 +527,7 @@ async def async_recover_managed_run(
             # The mission end was observed and persisted before shutdown. Resume
             # only its bounded evidence observer, never dispatch another leg.
             assert verification_deadline is not None
+            assert isinstance(leg, list)
             remaining = (verification_deadline - dt_util.utcnow()).total_seconds()
             if remaining <= 0:
                 reason = "restart_verification_expired"
@@ -603,7 +615,7 @@ async def async_recover_managed_run(
                     )
             reason = (
                 "all_rooms_verified"
-                if room_ids == completed_ids
+                if room_ids == completed_ids and area_legs <= finished_areas
                 else "restart_remaining_queue_unverified"
             )
             return
@@ -635,7 +647,7 @@ async def async_recover_managed_run(
             get_activity_run_id=runtime.client.activity_journal.current_run_id,
             recovery=run,
             recovered_dispatch=_PreparedRoomDispatch(
-                tuple(leg),
+                () if isinstance(leg, AreaLeg) else tuple(leg),
                 baseline,
                 dispatched_at,
                 native_identity=identity,

@@ -119,6 +119,33 @@ def test_heavy_duty_custom_vacuum_matches_official_encoder_byte_for_byte() -> No
     )
 
 
+def test_custom_coverage_pins_a_managed_session_in_field_six() -> None:
+    """A managed area start carries its own session UUID, nothing else changes."""
+    official = list(_official_custom_ids(OFFICIAL_CUSTOM_VACUUM))
+    session = official[-2]
+    generated = iter([*official[:-2], official[-1]])
+    calls = 0
+
+    def factory() -> UUID:
+        nonlocal calls
+        calls += 1
+        return next(generated)
+
+    payload = encode_custom_coverage_command(
+        mission_id=42,
+        circles=((-2.0, -1.0, 0.4), (-2.0, -1.2, 0.4), (-2.0, -1.4, 0.4)),
+        cleaning_mode=CleaningMode.VACUUM,
+        coverage_setting=CoverageSetting.STANDARD,
+        command_id_factory=factory,
+        session_id=session,
+    )
+
+    assert payload == OFFICIAL_CUSTOM_VACUUM
+    assert UUID(uuid_string(first_bytes(_coverage(payload), 6))) == session
+    # Every identifier but the pinned session still comes from the factory.
+    assert calls == len(official) - 1
+
+
 @pytest.mark.parametrize("kind", ("rooms", "custom"))
 @pytest.mark.parametrize("mode", CleaningMode)
 @pytest.mark.parametrize(

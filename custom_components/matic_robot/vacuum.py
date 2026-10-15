@@ -17,6 +17,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import MaticConfigEntry
+from .area_binding import AreaBindingStatus, area_binding_status
 from .client.commands import CleaningMode, CoverageSetting, UserCommand
 from .client.exceptions import CoverageGuardError, MaticError
 from .client.models import FloorPlan, RobotActivity, Room
@@ -26,6 +27,7 @@ from .plans import (
     PLAN_FLOOR_TOKEN,
     PLAN_MOTION_TOKEN,
     PLAN_SESSION_ID,
+    plan_area_fingerprint,
     plan_floor_token,
     resolve_room_reference,
 )
@@ -432,6 +434,91 @@ class MaticVacuum(MaticEntity, StateVacuumEntity):
                 )
             await self.coordinator.async_request_refresh()
 
+    async def _async_clean_plan_area(
+        self,
+        area_id: str,
+        fingerprint: str,
+        *,
+        cleaning_mode: CleaningMode,
+        coverage_setting: CoverageSetting,
+        motion_token: int,
+        expected_floor_token: str,
+        managed_session_id: UUID,
+    ) -> None:
+        """Start one managed plan's custom area as its own owned mission.
+
+        The area is checked again under the managed command lock: it must
+        still be the geometry the run was prepared with, on the current map.
+        """
+        serial_number = self.coordinator.data.info.serial_number
+        request_generation = self._plans.motion_generation(serial_number)
+        request_admission_epoch = self._plans.command_admission_epoch(serial_number)
+        await self._async_ensure_stop_settled(serial_number)
+        self._require_motion_generation(serial_number, request_generation)
+        self._plans.require_command_admission(
+            serial_number, expected_epoch=request_admission_epoch
+        )
+        async with self._plans.managed_command(serial_number, motion_token):
+            await self._async_ensure_stop_settled(serial_number)
+            self._require_motion_generation(serial_number, request_generation)
+            floor_plan = self._current_floor_plan(expected_floor_token)
+            area = self._plans.areas(serial_number).get(area_id)
+            if not isinstance(area, dict):
+                raise _validation_error(
+                    "A custom area in this plan was deleted", "plan_area_missing"
+                )
+            if (
+                plan_area_fingerprint(area) != fingerprint
+                or area_binding_status(area, floor_plan)
+                is not AreaBindingStatus.CURRENT
+            ):
+                raise _validation_error(
+                    "A custom area in this plan changed or is not on this map",
+                    "area_map_changed",
+                )
+            try:
+                circles = [
+                    (float(c["x"]), float(c["y"]), float(c["radius"]))
+                    for c in area["circles"]
+                ]
+            except (KeyError, TypeError, ValueError) as err:
+                raise _validation_error(
+                    "The saved custom area is invalid", "invalid_area"
+                ) from err
+
+            def require_current_dispatch() -> None:
+                self._require_motion_generation(serial_number, request_generation)
+                self._current_floor_plan(expected_floor_token)
+                if self._plans.cancellation_event(serial_number).is_set():
+                    raise HomeAssistantError(
+                        "Managed coverage was stopped before dispatch",
+                        translation_domain=DOMAIN,
+                        translation_key="coverage_stopped_before_start",
+                    )
+
+            try:
+                await self.coordinator.client.async_start_custom_coverage(
+                    floor_plan,
+                    circles,
+                    cleaning_mode=cleaning_mode,
+                    coverage_setting=coverage_setting,
+                    session_id=managed_session_id,
+                    require_current=require_current_dispatch,
+                )
+            except CoverageGuardError as err:
+                raise ServiceValidationError(
+                    err.safe_message,
+                    translation_domain=DOMAIN,
+                    translation_key=err.reason_code,
+                ) from err
+            except (MaticError, ValueError) as err:
+                raise HomeAssistantError(
+                    "The robot could not start the custom-area clean",
+                    translation_domain=DOMAIN,
+                    translation_key="robot_command_failed",
+                ) from err
+            await self.coordinator.async_request_refresh()
+
     async def async_start(self, **kwargs: object) -> None:
         """Resume a paused task or start a full-floor clean."""
         if self.coordinator.data.operational.paused:
@@ -830,6 +917,39 @@ class MaticVacuum(MaticEntity, StateVacuumEntity):
             options["expected_floor_token"] = self._floor_token(params)
             options["managed_session_id"] = managed_session_id
             await self._async_clean_rooms(self._resolve_rooms(identifiers), **options)
+            return
+        if normalized == "clean_plan_area":
+            # Integration-private: only a managed plan run sends this, with
+            # its motion token, session ID and floor binding.
+            motion_token = self._motion_token(params)
+            managed_session_id = self._managed_session_id(params)
+            floor_token = self._floor_token(params)
+            area = (params or {}).get("area") if isinstance(params, dict) else None
+            fingerprint = (
+                (params or {}).get("fingerprint") if isinstance(params, dict) else None
+            )
+            if (
+                motion_token is None
+                or managed_session_id is None
+                or floor_token is None
+                or not isinstance(area, str)
+                or not area
+                or not isinstance(fingerprint, str)
+            ):
+                raise _validation_error(
+                    "A plan's custom area needs its managed run",
+                    "invalid_plan_command",
+                )
+            options = self._clean_options(params)
+            await self._async_clean_plan_area(
+                area,
+                fingerprint,
+                cleaning_mode=options["cleaning_mode"],
+                coverage_setting=options["coverage_setting"],
+                motion_token=motion_token,
+                expected_floor_token=floor_token,
+                managed_session_id=managed_session_id,
+            )
             return
         raise _validation_error(
             "Unsupported Matic command. Use start, clean_all, clean_rooms, "

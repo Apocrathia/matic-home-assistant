@@ -1903,16 +1903,28 @@ class MaticHermesClient(AbstractAsyncContextManager["MaticHermesClient"]):
         *,
         cleaning_mode: CleaningMode,
         coverage_setting: CoverageSetting,
+        session_id: UUID | None = None,
+        require_current: Callable[[], None] | None = None,
     ) -> None:
-        """Start an official drawn-circle custom-area coverage command."""
+        """Start an official drawn-circle custom-area coverage command.
+
+        A managed plan passes the session ID it will recognise as its own
+        mission; that start also requires an idle native session first, as a
+        tracked room start does.
+        """
+        payload = encode_custom_coverage_command(
+            mission_id=floor_plan.mission_id,
+            circles=circles,
+            cleaning_mode=cleaning_mode,
+            coverage_setting=coverage_setting,
+            session_id=session_id,
+        )
+        if session_id is not None:
+            await self._async_require_idle_native_session()
+        if require_current is not None:
+            require_current()
         await self._async_send_user_payload(
-            encode_custom_coverage_command(
-                mission_id=floor_plan.mission_id,
-                circles=circles,
-                cleaning_mode=cleaning_mode,
-                coverage_setting=coverage_setting,
-            ),
-            command_name="START_CUSTOM_COVERAGE",
+            payload, command_name="START_CUSTOM_COVERAGE"
         )
 
     async def async_set_binary_setting(self, setting: str, enabled: bool) -> None:

@@ -57,6 +57,7 @@ from custom_components.matic_robot.client.proto.hermes_pb2 import (
     KabukiOutputWire,
     SequenceId,
 )
+from custom_components.matic_robot.client.wire import first_bytes, uuid_string
 from tests.test_mission import _labeled as _labeled_floor
 from tests.test_mission import _state as _mission_client_state
 from tests.wire_builders import _bfield, _fixed64, _vfield
@@ -1961,6 +1962,65 @@ async def test_start_coverage_rechecks_owner_after_native_preflight() -> None:
         )
 
     assert order == ["preflight", "admission"]
+    client._async_send_user_payload.assert_not_awaited()
+
+
+@pytest.mark.parametrize("managed", [False, True])
+async def test_custom_coverage_preflights_a_managed_session_before_sending(
+    managed,
+) -> None:
+    client = MaticHermesClient("robot.invalid", 16320)
+    order: list[str] = []
+
+    async def preflight() -> bytes:
+        order.append("preflight")
+        return b""
+
+    async def send(payload, *, command_name) -> None:
+        order.append(command_name)
+
+    client._async_require_idle_native_session = AsyncMock(side_effect=preflight)
+    client._async_send_user_payload = AsyncMock(side_effect=send)
+    session = UUID("44444444-4444-4444-8444-444444444444")
+
+    await client.async_start_custom_coverage(
+        FloorPlan(1, "00000000-0000-0000-0000-000000000001", b"partition", ()),
+        [(0.0, 0.0, 0.35)],
+        cleaning_mode=CleaningMode.VACUUM,
+        coverage_setting=CoverageSetting.QUICK,
+        session_id=session if managed else None,
+        require_current=(lambda: order.append("admission")) if managed else None,
+    )
+
+    assert order == (
+        ["preflight", "admission", "START_CUSTOM_COVERAGE"]
+        if managed
+        else ["START_CUSTOM_COVERAGE"]
+    )
+    payload = client._async_send_user_payload.await_args.args[0]
+    coverage = first_bytes(first_bytes(first_bytes(payload, 15), 1), 3)
+    assert (uuid_string(first_bytes(coverage, 6)) == str(session)) is managed
+
+
+async def test_custom_coverage_rechecks_owner_after_native_preflight() -> None:
+    client = MaticHermesClient("robot.invalid", 16320)
+    client._async_require_idle_native_session = AsyncMock(return_value=b"")
+    client._async_send_user_payload = AsyncMock()
+
+    def require_current() -> None:
+        assert client._async_require_idle_native_session.await_count == 1
+        raise RuntimeError("command admission closed")
+
+    with pytest.raises(RuntimeError, match="command admission closed"):
+        await client.async_start_custom_coverage(
+            FloorPlan(1, "00000000-0000-0000-0000-000000000001", b"partition", ()),
+            [(0.0, 0.0, 0.35)],
+            cleaning_mode=CleaningMode.VACUUM,
+            coverage_setting=CoverageSetting.QUICK,
+            session_id=UUID("44444444-4444-4444-8444-444444444444"),
+            require_current=require_current,
+        )
+
     client._async_send_user_payload.assert_not_awaited()
 
 

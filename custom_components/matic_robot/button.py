@@ -134,6 +134,7 @@ class MaticPlanButton(_MaticFloorBoundButton):
                     room.id: room_cadence_identity(floor_plan, room.id)
                     for room in floor_plan.rooms
                 },
+                floor_plan=floor_plan,
             )
         except KeyError, ValueError:
             return False
