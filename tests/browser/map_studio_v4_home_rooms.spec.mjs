@@ -1016,7 +1016,7 @@ for (const narrow of [true, false]) {
       await expect(checkLines(gallery)).toHaveText([
         "Mop due in Kitchen",
         "Heavy duty vacuum due in Living room",
-        "The robot cleans these rooms in 2 parts and may stop at the dock between parts.",
+        "The robot cleans in 2 parts and may stop at the dock between parts.",
       ]);
       const lines = await checkLines(gallery).first().boundingBox();
       const rows = await roomsGroup(gallery).boundingBox();

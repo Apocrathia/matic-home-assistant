@@ -190,7 +190,8 @@ test.describe("plan Edit with custom areas", () => {
     await list.getByRole("checkbox", { name: "Include Entryway", exact: true }).click();
     expect(await primary(page)).toMatchObject({ label: "Save", enabled: true });
     await list.getByRole("checkbox", { name: "Include Under the dining table", exact: true }).click();
-    expect(await primary(page)).toMatchObject({ label: "Save", enabled: false, reasonKey: "v4_reason_save_plan" });
+    expect(await primary(page)).toMatchObject({ label: "Save", enabled: false, reasonKey: "v4_reason_save_plan",
+      reason: "Can't save until the plan has a name and at least one room or custom area." });
   });
 
   test("an area deleted or drawn on another map needs attention, and one drawn elsewhere holds Save", async ({ page }) => {
@@ -289,13 +290,14 @@ test.describe("Run and home with custom areas", () => {
     await expect(gallery.getByText("3 rooms · 2 custom areas", { exact: true })).toBeVisible();
     await expect(gallery.locator("ol.run-list > li bdi")).toHaveText(["Kitchen", "Entryway", "Living room", "Office", "Under the dining table"]);
     await expect(gallery.locator("ol.run-list > li[data-break]")).toHaveCount(3);
-    await expect(gallery.getByText("The robot cleans these rooms in 4 parts and may stop at the dock between parts.", { exact: true })).toBeVisible();
+    await expect(gallery.getByText("The robot cleans in 4 parts and may stop at the dock between parts.", { exact: true })).toBeVisible();
   });
 
   test("a plan of areas alone lists them and no rooms", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "plan-run-areas-only" });
     await expect(gallery.getByText("2 custom areas", { exact: true })).toBeVisible();
     await expect(gallery.getByText("0 rooms", { exact: true })).toHaveCount(0);
+    await expect(gallery.getByText("The robot cleans in 2 parts and may stop at the dock between parts.", { exact: true })).toBeVisible();
     await expect(gallery.locator("ol.run-list > li bdi")).toHaveText(["Entryway", "Under the dining table"]);
   });
 

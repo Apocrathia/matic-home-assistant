@@ -707,7 +707,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(rows.nth(1)).toHaveText("Part 2 starts here; the robot may stop at the dock first Kitchen Vacuum · Quick");
     await expect(gallery.getByText("Mop due in Living room", { exact: true })).toBeVisible();
     await expect(gallery.getByText("Quick vacuum due in Kitchen", { exact: true })).toBeVisible();
-    await expect(gallery.getByText("The robot cleans these rooms in 2 parts and may stop at the dock between parts.", { exact: true })).toBeVisible();
+    await expect(gallery.getByText("The robot cleans in 2 parts and may stop at the dock between parts.", { exact: true })).toBeVisible();
     // plan.md §6 (v4_action_run_plan_named): Run plan is named with the plan.
     await expect(gallery.getByRole("button", { name: "Run plan Daily clean", exact: true })).toBeEnabled();
   });
@@ -1197,7 +1197,7 @@ test.describe("Map Studio v0.4 foundation", () => {
 
     await gallery.evaluate((element) => element.setScenario("plan-run-parts"));
     await settleWorkspace(gallery);
-    await expect(gallery.getByText("The robot cleans these rooms in 2 parts and may stop at the dock between parts.", { exact: true })).toBeVisible();
+    await expect(gallery.getByText("The robot cleans in 2 parts and may stop at the dock between parts.", { exact: true })).toBeVisible();
     await expect(gallery.getByText("Mop due in Kitchen", { exact: true })).toBeVisible();
     const rows = gallery.locator("ol.run-list > li");
     await expect(rows).toHaveText([
@@ -1229,7 +1229,7 @@ test.describe("Map Studio v0.4 foundation", () => {
       "Part 3 starts here; the robot may stop at the dock first 3 Hall runner Vacuum · Optimal",
     ]);
     await expect(gallery.getByText("1 room · 2 custom areas", { exact: true })).toBeVisible();
-    await expect(gallery.getByText("The robot cleans these rooms in 3 parts and may stop at the dock between parts.", { exact: true })).toBeVisible();
+    await expect(gallery.getByText("The robot cleans in 3 parts and may stop at the dock between parts.", { exact: true })).toBeVisible();
     // A plan with custom areas runs like any other.
     await expect(gallery.getByRole("button", { name: /^Run plan/ })).toBeEnabled();
 

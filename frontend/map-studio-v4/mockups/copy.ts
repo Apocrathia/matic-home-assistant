@@ -58,7 +58,7 @@ export const COPY = {
   heavy_duty: "Heavy duty",
   v4_include_due_schedule: "Include scheduled work that's due",
   v4_include_due_schedule_hint: "Turn off to use only your settings. Skipped work stays due for the next clean.",
-  v4_room_parts: "The robot cleans these rooms in {count} parts and may stop at the dock between parts.",
+  v4_room_parts: "The robot cleans in {count} parts and may stop at the dock between parts.",
   v4_room_preview_loading: "Checking settings…",
   v4_room_preview_unavailable: "Home Assistant couldn't check the room settings.",
   v4_reason_clean_rooms_empty: "Can't start until you choose a named room.",
@@ -158,7 +158,7 @@ export const COPY = {
   v4_action_done: "Done",
   v4_cancel: "Cancel",
   v4_plan_save_after_work: "You can save when the robot finishes.",
-  v4_reason_save_plan: "Can't save until the plan has a name and at least one room.",
+  v4_reason_save_plan: "Can't save until the plan has a name and at least one room or custom area.",
 
   // room-schedule.md §6
   v4_room_schedule: "Schedule",

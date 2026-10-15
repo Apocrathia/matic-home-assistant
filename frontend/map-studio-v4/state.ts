@@ -1315,7 +1315,7 @@ export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction | NoBu
               }
               : areaAttention
                 ? { reason: "Can't save until you remove the custom areas that need attention.", reasonKey: "v4_reason_save_plan_areas" }
-                : { reason: "Can't save until the plan has a name and at least one room.", reasonKey: "v4_reason_save_plan" }),
+                : { reason: "Can't save until the plan has a name and at least one room or custom area.", reasonKey: "v4_reason_save_plan" }),
       };
     }
     const plan = state.resources.plans.value?.plans.find((candidate) => candidate.id === state.planDraft.id);

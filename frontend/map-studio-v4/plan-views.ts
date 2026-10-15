@@ -350,7 +350,7 @@ export class MaticPlanViewsV4 extends LitElement {
           ? this.#t("v4_next_run_after_active", "After this run")
           : this.#t("v4_next_run_preview", "Next run")}</h3>
       ${ready && !ordered ? html`<p class="quiet">${this.#t("v4_plan_rotation_settings", "Longest-waiting rooms first, checked again when you run the plan.")}</p>` : nothing}
-      ${boundaries.length ? html`<p class="quiet">${this.#t("v4_room_parts", "The robot cleans these rooms in {count} parts and may stop at the dock between parts.", {
+      ${boundaries.length ? html`<p class="quiet">${this.#t("v4_room_parts", "The robot cleans in {count} parts and may stop at the dock between parts.", {
         count: this.#count(boundaries.length + 1),
       })}</p>` : nothing}
       ${problem ? html`<p class="problem">${this.#t(problem.reasonKey, problem.reason)}</p>

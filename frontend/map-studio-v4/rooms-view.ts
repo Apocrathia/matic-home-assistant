@@ -318,7 +318,7 @@ export class MaticRoomsViewV4 extends LitElement {
     return html`
       <div class="check-lines">
         ${due.map((line) => html`<p class="line" data-tone="due">${icon(iconDue)}<span>${line}</span></p>`)}
-        ${boundaries ? html`<p class="line" data-tone="info">${icon(iconDue)}<span>${t("v4_room_parts", "The robot cleans these rooms in {count} parts and may stop at the dock between parts.", { count: formatNumber(state.locale, boundaries + 1) })}</span></p>` : nothing}
+        ${boundaries ? html`<p class="line" data-tone="info">${icon(iconDue)}<span>${t("v4_room_parts", "The robot cleans in {count} parts and may stop at the dock between parts.", { count: formatNumber(state.locale, boundaries + 1) })}</span></p>` : nothing}
         ${failed ? html`
           <p class="line" data-tone="warning">${icon(iconNoticeWarning)}<span>${t("v4_room_preview_unavailable", "Home Assistant couldn't check the room settings.")}</span>
             <button class="ms-btn ms-btn--sm ms-btn--secondary" type="button" @click=${() => this.#intent({ type: "retry-room-preview" })}>${t("v4_retry", "Try again")}</button>
