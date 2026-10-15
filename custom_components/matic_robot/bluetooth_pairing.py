@@ -406,6 +406,10 @@ def _bind_replacement_candidate(
         bound = [d for d in discoveries if _same_address(d, (bond_address,))]
         if bound:
             return bound
+        raise BluetoothCandidateAmbiguousError(
+            "The saved Bluetooth address is not available; refusing to replace "
+            "another robot's bond"
+        )
     # A retained entry of a robot that is no longer advertising is not in
     # Pairing mode, so it is never the robot the user is pairing.
     advertising = [discovery for discovery in discoveries if discovery.fresh]
@@ -464,9 +468,10 @@ async def async_request_bluetooth_credential(
     """Request one Hermes credential through Matic's private GATT endpoint.
 
     Robots at ``excluded_addresses`` belong to other configured entries and are
-    never contacted. ``replace_existing_bond`` deletes an existing bond, so it
-    proceeds only with a single candidate: the one at ``bond_address``,
-    otherwise the only Matic heard advertising (in Pairing mode) during the scan.
+    never contacted. ``replace_existing_bond`` deletes an existing bond, so
+    destructive replacement is enabled only for a candidate matching
+    ``bond_address``. Legacy entries without a saved address may still pair
+    with their sole fresh candidate, but cannot authorize bond deletion.
     """
 
     def _stage(stage: str) -> None:
@@ -492,6 +497,7 @@ async def async_request_bluetooth_credential(
         raise PairingModeRequiredError("No connectable Matic advertisement found")
     if replace_existing_bond:
         discoveries = _bind_replacement_candidate(discoveries, bond_address)
+    replace_bond = replace_existing_bond and bond_address is not None
     if reset_bond_path is not None:
         discoveries = [
             discovery
@@ -571,7 +577,7 @@ async def async_request_bluetooth_credential(
                         # robot then cancels authentication.
                         await bluez_session.async_pair(
                             bluez_device_path,
-                            replace_existing=replace_existing_bond,
+                            replace_existing=replace_bond,
                         )
                     failure_stage = "GATT service discovery"
                     services = getattr(client, "services", None)

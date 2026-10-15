@@ -669,9 +669,12 @@ def _candidate(address: str, path: str, *, fresh: bool) -> SimpleNamespace:
 
 def _install_two_robot_home(monkeypatch, user_id, discoveries) -> SimpleNamespace:
     """Model BlueZ for a home whose other robot is already paired to the host."""
-    home = SimpleNamespace(bonded={OTHER_PATH}, contacted=[], removed=[])
+    home = SimpleNamespace(
+        bonded={OTHER_PATH}, contacted=[], removed=[], replace_flags=[]
+    )
 
     async def pair(path, *, replace_existing=False):
+        home.replace_flags.append(replace_existing)
         if path in home.bonded and replace_existing:
             home.bonded.discard(path)
             home.removed.append(path)
@@ -799,6 +802,47 @@ async def test_replacement_with_one_robot_still_pairs_it(
     assert grant.address == TEST_ADDRESS
     assert grant.reused_existing_bond is False
     assert home.contacted == [TEST_ADDRESS]
+    assert home.replace_flags == [bond_address is not None]
+
+
+async def test_legacy_unbound_replacement_does_not_delete_other_fresh_bond(
+    monkeypatch,
+) -> None:
+    user_id = "40dd38c5-0492-49de-b333-41f16f67471e"
+    home = _install_two_robot_home(
+        monkeypatch, user_id, [_candidate(OTHER_ADDRESS, OTHER_PATH, fresh=True)]
+    )
+
+    grant = await async_request_bluetooth_credential(
+        object(), user_id, replace_existing_bond=True
+    )
+
+    assert grant.address == OTHER_ADDRESS
+    assert home.contacted == [OTHER_ADDRESS]
+    assert home.replace_flags == [False]
+    assert home.removed == []
+    assert OTHER_PATH in home.bonded
+
+
+async def test_missing_saved_address_never_replaces_a_fresh_candidate(
+    monkeypatch,
+) -> None:
+    user_id = "40dd38c5-0492-49de-b333-41f16f67471e"
+    home = _install_two_robot_home(
+        monkeypatch, user_id, [_candidate(OTHER_ADDRESS, OTHER_PATH, fresh=True)]
+    )
+
+    with pytest.raises(BluetoothCandidateAmbiguousError, match="saved Bluetooth"):
+        await async_request_bluetooth_credential(
+            object(),
+            user_id,
+            replace_existing_bond=True,
+            bond_address=TEST_ADDRESS,
+        )
+
+    assert home.contacted == []
+    assert home.removed == []
+    assert home.bonded == {OTHER_PATH}
 
 
 @pytest.mark.parametrize(
