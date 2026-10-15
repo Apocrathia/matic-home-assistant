@@ -2470,6 +2470,38 @@ async def test_immediate_stop_during_an_area_cancels_without_area_stop(
     assert manager.snapshot("serial")["active_plan"] is None
 
 
+@pytest.mark.parametrize("phase", ["accepted", "finished"])
+async def test_stop_before_area_history_commit_cancels_without_completion(
+    hass, fast_area_polls, monkeypatch, phase
+):
+    manager = _area_manager(hass)
+    robot = _AreaRobot(hass)
+    sender = AsyncMock()
+    method = f"async_mark_area_{phase}"
+    commit = getattr(manager, method)
+    decisions = []
+
+    async def stop_before_commit(*args, **kwargs):
+        decisions.append(manager.request_stop("serial"))
+        return await commit(*args, **kwargs)
+
+    monkeypatch.setattr(manager, method, stop_before_commit)
+    events, _ = await _run_area_plan(
+        hass, manager, robot, [ROOM, STUDY], MIXED_ENTRIES, sender=sender
+    )
+
+    assert [decision.behavior for decision in decisions] == ["immediate"]
+    assert _event_names(events) == [("area_started", "rug"), ("plan_finished", None)]
+    assert events[-1].data["outcome"] == "cancelled"
+    assert events[-1].data["reason_code"] == "managed_stop"
+    history = manager._robot("serial")["area_history"].get("rug", {})
+    assert "last_completed" not in history
+    assert history.get("started_runs", 0) == (1 if phase == "finished" else 0)
+    sender.assert_not_awaited()
+    assert len(robot.dispatched) == 1
+    assert manager.snapshot("serial")["active_plan"] is None
+
+
 @pytest.mark.parametrize("last_leg", [False, True])
 async def test_after_room_stop_during_an_area_finishes_the_area(
     hass, fast_area_polls, last_leg

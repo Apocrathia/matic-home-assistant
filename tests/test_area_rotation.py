@@ -144,6 +144,44 @@ async def test_wrong_fingerprint_or_stale_run_cannot_complete_an_area(hass):
         assert record["completed_runs"] == 1
 
 
+async def test_removal_while_area_history_waits_cannot_recreate_robot(hass):
+    manager = await _mixed_manager(hass, _floor())
+    area = _leg(manager)
+    await _begin(manager, area)
+    await _accept(manager, area)
+    manager._store.async_save.reset_mock()
+    async with manager._store_lock:
+        completion = asyncio.create_task(_complete(manager, area))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        removal = asyncio.create_task(manager.async_remove_robot(SERIAL))
+        await asyncio.sleep(0)
+        assert SERIAL in manager._removed_robots
+        assert not completion.done()
+    assert not await completion
+    await removal
+    assert SERIAL not in manager._data["robots"]
+    manager._store.async_save.assert_awaited_once()
+
+
+async def test_deleting_area_erases_shared_and_plan_history(hass):
+    manager = await _mixed_manager(hass, _floor())
+    area = _leg(manager)
+    await _begin(manager, area)
+    await _accept(manager, area)
+    await _complete(manager, area)
+    await manager.async_finish_run(SERIAL, "run", "completed", "all_rooms_verified", 3)
+    assert all(record["completed_runs"] == 1 for record in _history(manager))
+    await manager.async_delete_area(SERIAL, area.area_id)
+    robot = manager._robot(SERIAL)
+    assert area.area_id not in robot["area_history"]
+    assert all(
+        area.area_id not in rotation.get("areas", {})
+        for rotation in robot["rotations"].values()
+    )
+    assert area.area_id not in manager.areas(SERIAL)
+
+
 @pytest.mark.parametrize("recoverable", [False, True])
 async def test_area_history_survives_restart_without_inventing_completion(
     hass, recoverable
