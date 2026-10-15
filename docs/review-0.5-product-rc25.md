@@ -20,8 +20,12 @@ installation and generated-bundle parity. No P0/P1 findings were identified.
 
 | Finding | Disposition and evidence |
 |---|---|
-| P2: replacement pairing can delete another robot's bond before credential verification | Repair `d2399172cffbfd5f8dc845f534d777bffcbc0b70`: require the saved Bluetooth address before destructive replacement; legacy entries without an address use non-destructive pairing. All 23 client files (9,384 lines), the full repair diff and changed test file were independently re-reviewed with no findings. Focused Bluetooth/BlueZ tests: 132 passed; Ruff and formatting passed. |
+| P2: replacement pairing can delete another robot's bond before credential verification | Published repair [a9347abcef0c0b1d64e2ed269cd77a51d664b850](https://github.com/ProspectOre/matic-home-assistant/commit/a9347abcef0c0b1d64e2ed269cd77a51d664b850): require the saved Bluetooth address before destructive replacement; legacy entries without an address use non-destructive pairing. All 23 client files (9,384 lines), the full repair diff and changed test file were independently re-reviewed with no findings. Focused Bluetooth/BlueZ tests: 132 passed; Ruff and formatting passed. |
 | P2: performance collector cannot reach the v0.4.5 baseline room list | [PR #266](https://github.com/ProspectOre/matic-home-assistant/pull/266), merge `771084d509921e7e525e708b23ae9017aa55da8e`, accepts both One-time clean and Clean rooms. Independent source review covered the repair; regular review and required CI passed. The [performance receipt](performance-0.5-rc24.md) binds actual measurements to the private collector's identical locator fix. |
+
+The independent client review's frozen checkout and the published Bluetooth
+repair have identical complete Git trees: `21edbc14c2167835cbf4ffb089d3107aebea8369`.
+The final candidate comparison rechecks every client file against that review.
 
 An area-session completion concern was withdrawn after tracing the area-specific
 contract and an independent adjudication: areas record `owned_session_ended`,
