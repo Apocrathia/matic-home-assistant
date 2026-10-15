@@ -8,9 +8,10 @@ import type {
   PlansCatalog,
   RoomCadencePolicy,
   RoomCadenceProgress,
+  SavedArea,
   SavedPlan,
 } from "./backend-contracts";
-import type { DialogKind, PlanView, WorkspaceNotice, WorkspaceState } from "./contracts";
+import { notice, type DialogKind, type PlanView, type WorkspaceNotice, type WorkspaceState } from "./contracts";
 import { draftForPlan, initialWorkspaceState, manualRoomPreviewKey } from "./state";
 import {
   syntheticAreas,
@@ -88,7 +89,15 @@ export type GalleryScenario =
   | "home-pins-error"
   | "areas-list"
   | "areas-empty"
-  | "areas-stale";
+  | "areas-stale"
+  | "plan-run-areas"
+  | "plan-run-areas-only"
+  | "plan-edit-areas"
+  | "plan-edit-areas-rotation"
+  | "plan-edit-area-stale"
+  | "areas-in-plans"
+  | "area-delete-refused"
+  | "home-shortcut-areas";
 
 const verified = (): WorkspaceState => ({
   ...initialWorkspaceState(),
@@ -229,6 +238,57 @@ const planWithRooms = (
   roomOrder: rooms.map((room) => room.roomId),
   nextRunPreview: previewFor(rooms),
   ...overrides,
+});
+
+// Custom areas in plans: the plans list sends each plan's run order as
+// entries, a room or a custom area with its own settings and name.
+const roomEntry = (roomId: string) => ({ kind: "room", room_id: roomId });
+const areaEntry = (area: SavedArea) => ({
+  kind: "area", area_id: area.id, name: area.name, cleaning_mode: area.cleaningMode, coverage_setting: area.coverageSetting,
+});
+const areaStep = (area: SavedArea) => ({
+  areaId: area.id, name: area.name, cleaningMode: area.cleaningMode, coverageSetting: area.coverageSetting, cadenceReasons: [],
+});
+const galleryArea = (id: string): SavedArea => requireFixture(galleryAreas().areas.find((area) => area.id === id), "area");
+
+/**
+ * Daily clean with Entryway after Kitchen and the dining table last. Rooms
+ * and areas never share a part, and each area is a part of its own, so the
+ * next run has four parts.
+ */
+const areasPlan = (runBehavior: SavedPlan["runBehavior"]): SavedPlan => {
+  const daily = savedDailyPlan();
+  const [kitchen, living, office] = previewFor(daily.rooms).rooms;
+  const entryway = galleryArea("entryway");
+  const dining = galleryArea("dining");
+  return {
+    ...daily,
+    runBehavior,
+    entries: [roomEntry("room-a"), areaEntry(entryway), roomEntry("room-b"), roomEntry("room-c"), areaEntry(dining)],
+    nextRunPreview: previewFor(daily.rooms, {
+      steps: [kitchen, areaStep(entryway), living, office, areaStep(dining)].filter((step) => step !== undefined),
+      missionBoundaries: [1, 2, 4],
+    }),
+    nextRunEstimateSeconds: null,
+  };
+};
+
+/** "Spots": a plan of two custom areas and no rooms, in Saved order. */
+const spotsPlan = (): SavedPlan => {
+  const entryway = galleryArea("entryway");
+  const dining = galleryArea("dining");
+  return {
+    ...planWithRooms({ ...savedDailyPlan(), id: "spots", name: "Spots", runBehavior: "ordered" }, []),
+    entries: [areaEntry(entryway), areaEntry(dining)],
+    nextRunPreview: previewFor([], { steps: [areaStep(entryway), areaStep(dining)], missionBoundaries: [1] }),
+    nextRunEstimateSeconds: null,
+  };
+};
+
+/** The gallery's areas catalog beside a plans catalog. */
+const withAreas = (state: WorkspaceState): WorkspaceState => ({
+  ...state,
+  resources: { ...state.resources, areas: { status: "ready", value: galleryAreas(), problem: null } },
 });
 
 const sharedCadencePolicy = (): RoomCadencePolicy => ({
@@ -803,6 +863,47 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
     }
     case "rooms-empty":
       return { ...withPlans(state, { ...syntheticPlans(), rooms: [], plans: [], selectedPlan: null }), workflow: "rooms" };
+    // Custom areas in plans. Run lists the areas in their places and parts.
+    case "plan-run-areas":
+      return openPlan(withAreas(state), areasPlan("ordered"), "run");
+    case "plan-run-areas-only":
+      return openPlan(withAreas(state), spotsPlan(), "run", catalogWith([savedDailyPlan(), spotsPlan()]));
+    // Edit orders areas among the rooms in Saved order; in Intelligent
+    // rotation they keep their places and show no numbers.
+    case "plan-edit-areas":
+      return openPlan(withAreas(state), areasPlan("ordered"), "edit");
+    case "plan-edit-areas-rotation":
+      return openPlan(withAreas(state), areasPlan("intelligent"), "edit");
+    case "plan-edit-area-stale": {
+      // Porch mat was drawn on another map and Old rug was deleted: both
+      // need attention, and the changed plan can't save until they go.
+      const plan = areasPlan("ordered");
+      const entries = [...plan.entries as unknown[], areaEntry(galleryArea("porch")),
+        { kind: "area", area_id: "old-rug", name: "Old rug", cleaning_mode: "vacuum", coverage_setting: "quick" }];
+      const edited = openPlan(withAreas(state), { ...plan, entries }, "edit");
+      return { ...edited, planDraft: { ...edited.planDraft, dirty: true } };
+    }
+    case "areas-in-plans": {
+      // Entryway and the dining table are in two plans each; Weekend refresh has rooms only.
+      const weekend = { ...savedDailyPlan(), id: "weekend", name: "Weekend refresh" };
+      return { ...withAreas(withPlans(state, catalogWith([areasPlan("ordered"), spotsPlan(), weekend]))), workflow: "areas" };
+    }
+    case "area-delete-refused": {
+      // Delete was refused: Entryway is all that "Entryway only" cleans.
+      const only = { ...spotsPlan(), id: "entryway-only", name: "Entryway only", entries: [areaEntry(galleryArea("entryway"))] };
+      const review = createGalleryState("area-review-saved");
+      return {
+        ...withAreas(withPlans(review, catalogWith([savedDailyPlan(), only]))),
+        notice: notice("error", "v4_notice_area_in_plans_one", "Can't delete this area because it's all that {plans} cleans. Edit or delete that plan first.", {
+          plans: "\"Entryway only\"",
+        }),
+      };
+    }
+    case "home-shortcut-areas": {
+      // A pinned plan of rooms and areas, and one of areas alone.
+      const plans = withAreas(withPlans(state, catalogWith([areasPlan("intelligent"), spotsPlan()])));
+      return { ...plans, homePins: { status: "ready", pins: [{ kind: "plan", id: "daily" }, { kind: "plan", id: "spots" }] } };
+    }
   }
 };
 
@@ -952,6 +1053,14 @@ export const GALLERY_SCENARIOS: readonly GalleryScenario[] = [
   "areas-list",
   "areas-empty",
   "areas-stale",
+  "plan-run-areas",
+  "plan-run-areas-only",
+  "plan-edit-areas",
+  "plan-edit-areas-rotation",
+  "plan-edit-area-stale",
+  "areas-in-plans",
+  "area-delete-refused",
+  "home-shortcut-areas",
 ];
 
 /** Every dialog the shell can show; the UX audit captures each one. */

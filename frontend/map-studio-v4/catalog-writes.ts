@@ -18,7 +18,6 @@ export interface CatalogWriteHelpers {
   readonly initialWorkspaceState: typeof import("./state").initialWorkspaceState;
   readonly draftForPlan: typeof import("./state").draftForPlan;
   readonly hasStoppableWork: typeof import("./state").hasStoppableWork;
-  readonly hasSavedArea: typeof import("./state").hasSavedArea;
 }
 
 /**
@@ -147,6 +146,8 @@ export const deleteArea = async (context: CatalogWriteContext): Promise<void> =>
       store.patch({ workflow: "areas" });
     }
     await context.effects.loadAreas();
+    // Home Assistant took the area out of every plan that cleaned it.
+    if (current()) await context.effects.loadPlans({ force: true, inPlace: true });
   } catch (error) {
     if (!isAbort(error) && current()) store.patch({ command: "idle", notice: context.failure });
   }
@@ -154,16 +155,15 @@ export const deleteArea = async (context: CatalogWriteContext): Promise<void> =>
 
 export const savePlan = async (context: CatalogWriteContext): Promise<void> => {
   const { state, store, effects } = context;
-  const { notice, canEditCoordinates, parseSavedPlanId, BackendError, hasSavedArea } = context.helpers;
+  const { notice, canEditCoordinates, parseSavedPlanId, BackendError } = context.helpers;
   const draft = state.planDraft;
   const plans = state.resources.plans.value;
-  const savedPlan = plans?.plans.find((plan) => plan.id === draft.id);
-  if (!plans || !draft.name.trim() || !canEditCoordinates(state)) return;
-  if (!draft.rooms.length && !hasSavedArea(savedPlan?.entries)) return;
+  // A plan of custom areas alone has no rooms and still saves.
+  if (!plans || !draft.name.trim() || (!draft.rooms.length && !draft.areas.length) || !canEditCoordinates(state)) return;
   if (!draftIsLive(state, store.value)) return;
   let savedId = draft.id;
   // Home Assistant makes a new plan the default only when none exists.
-  const request = planSaveRequest(draft, plans.selectedPlan === draft.id, savedPlan?.entries);
+  const request = planSaveRequest(draft, plans.selectedPlan === draft.id);
   const saved = await serviceMutation(context, "save_plan", request, notice("success", "v4_notice_plan_saved", "Plan saved"), (response) => {
     const acknowledgedId = response === undefined && draft.id ? draft.id : parseSavedPlanId(response);
     if (draft.id && acknowledgedId !== draft.id) throw new BackendError("invalid-plan-save-response");
@@ -172,10 +172,10 @@ export const savePlan = async (context: CatalogWriteContext): Promise<void> => {
   if (saved) {
     // A save may finish after Back/discard or after another editor opens.
     // Refresh the catalog in every case, but reconcile only the same draft.
-    // Rooms the save took out are gone from the plan: their parked settings
-    // must not come back if the refresh fails and the room is ticked again.
+    // Rooms and areas the save took out are gone from the plan: their parked
+    // settings must not come back if the refresh fails and one is ticked again.
     const savedDraft = store.value.workflow === "plan"
-      && store.value.planDraft === draft ? { ...draft, id: savedId, dirty: false, parkedRooms: [] } : null;
+      && store.value.planDraft === draft ? { ...draft, id: savedId, dirty: false, parkedRooms: [], parkedAreas: [] } : null;
     if (savedDraft) {
       store.patch({
         planDraft: savedDraft,
@@ -267,7 +267,7 @@ export const setPlanEnabled = async (context: CatalogWriteContext, enabled: bool
     return;
   }
   const sent = catalog && plan
-    ? await writer.send("save_plan", planSaveRequest({ ...draftForPlan(plan), enabled }, catalog.selectedPlan === id, plan.entries))
+    ? await writer.send("save_plan", planSaveRequest({ ...draftForPlan(plan), enabled }, catalog.selectedPlan === id))
     : writer.current() ? false : null;
   if (sent === null) return;
   store.patch({
@@ -292,46 +292,39 @@ const refreshPlansAfterWrite = (context: CatalogWriteContext) => {
 };
 
 /**
- * The draft's rooms with the saved plan's custom areas kept in their places.
- * A save replaces the whole plan, and the editor shows rooms only, so an area
- * left out would be deleted. Each area keeps its saved position, and the
- * draft's rooms fill the room places in order; extra rooms go last.
+ * The one `save_plan` request shape, for Save and the Run switch. `rooms` is
+ * the draft's run order: its rooms, with each custom area after its slot's
+ * rooms (plan-copy.ts draftSteps, kept here so this module imports nothing).
+ * A save replaces the whole plan, so every area the draft holds is sent, with
+ * its settings; parked rooms and areas never are.
  */
-const withSavedAreas = (rooms: readonly Record<string, unknown>[], entries: unknown): Record<string, unknown>[] => {
-  const queue = [...rooms];
-  const placed = (Array.isArray(entries) ? entries : []).flatMap((value: unknown) => {
-    const entry = (value ?? {}) as Record<string, unknown>;
-    if (entry.kind !== "area") return queue.splice(0, 1);
-    return typeof entry.area_id === "string" ? [{
-      area: entry.area_id,
-      ...(typeof entry.cleaning_mode === "string" ? { cleaning_mode: entry.cleaning_mode } : {}),
-      ...(typeof entry.coverage_setting === "string" ? { coverage_setting: entry.coverage_setting } : {}),
-    }] : [];
-  });
-  return [...placed, ...queue];
-};
-
-/** The one `save_plan` request shape, for Save and the Run switch. Parked rooms are never sent. */
-const planSaveRequest = (draft: PlanDraft, select: boolean, entries: unknown): Record<string, unknown> => ({
+const planSaveRequest = (draft: PlanDraft, select: boolean): Record<string, unknown> => ({
   ...(draft.id ? { plan_id: draft.id } : {}),
   name: draft.name.trim(),
   enabled: draft.enabled,
   run_behavior: draft.runBehavior,
-  rooms: withSavedAreas(draft.rooms.map((room) => ({
-    room: room.roomId,
-    cleaning_mode: room.cleaningMode,
-    coverage_setting: room.coverageSetting,
-    ...(room.cadence ? {
-      cadence: {
-        scope: room.cadence.scope,
-        mop_every_n: room.cadence.mopEveryN,
-        coverage_every_n: room.cadence.coverageEveryN,
-        periodic_coverage_setting: room.cadence.periodicCoverageSetting,
-        do_mop_next: room.cadence.doMopNext,
-        do_coverage_next: room.cadence.doCoverageNext,
-      },
-    } : {}),
-  })), entries),
+  rooms: [...draft.rooms, null].flatMap((room, at) => [
+    ...draft.areas.filter((area) => Math.min(area.slot, draft.rooms.length) === at).map((area) => ({
+      area: area.areaId,
+      cleaning_mode: area.cleaningMode,
+      coverage_setting: area.coverageSetting,
+    })),
+    ...room ? [{
+      room: room.roomId,
+      cleaning_mode: room.cleaningMode,
+      coverage_setting: room.coverageSetting,
+      ...(room.cadence ? {
+        cadence: {
+          scope: room.cadence.scope,
+          mop_every_n: room.cadence.mopEveryN,
+          coverage_every_n: room.cadence.coverageEveryN,
+          periodic_coverage_setting: room.cadence.periodicCoverageSetting,
+          do_mop_next: room.cadence.doMopNext,
+          do_coverage_next: room.cadence.doCoverageNext,
+        },
+      } : {}),
+    }] : [],
+  ]),
   return_to_base: draft.returnToBase,
   finish_current_room: draft.finishCurrentRoom,
   finish_current_room_threshold: draft.finishCurrentRoomThreshold,

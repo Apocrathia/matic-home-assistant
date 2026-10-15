@@ -44,7 +44,7 @@ state. A cell ID with settings other than its own is an error too, and the banne
 | ID | Journey | Row part | What to check |
 |---|---|---|---|
 | R01 | Home, plan shortcut and Your plans | `steps=home-plan-due,home-plan-paused,home-plan-blocked,ready` | The task cards, the pinned plan's due lines in full and the Your plans row last. |
-| R02 | Plan pick, run, edit, save and delete | `steps=plans,plan-saved-intelligent,plan-saved-ordered,plan-run-parts,plan-run-paused,plan-run-blocked,plan-edit-ordered,plan-dirty,plan-dirty:discardDraft,plan-new,plan-saved-intelligent:confirmDeletePlan` | Picker to Run to Edit; numbers only in Saved order; Save, Cancel and Delete ask only when data would be lost. |
+| R02 | Plan pick, run, edit, save and delete | `steps=plans,plan-saved-intelligent,plan-saved-ordered,plan-run-parts,plan-run-paused,plan-run-blocked,plan-run-areas,plan-run-areas-only,plan-edit-ordered,plan-edit-areas,plan-edit-areas-rotation,plan-edit-area-stale,plan-dirty,plan-dirty:discardDraft,plan-new,plan-saved-intelligent:confirmDeletePlan` | Picker to Run to Edit; numbers only in Saved order; custom areas sit among the rooms, keep their places in Intelligent rotation and say what they need; Save, Cancel and Delete ask only when data would be lost. |
 | R03 | Room schedules | `steps=plan-cadence-shared,plan-schedule-available,plan-schedule-joining,plan-schedule-conflict,plan-cadence-blocked,plan-cadence-shared:confirmResetCadence` | Each schedule row says when work is due; sharing, joining and Reset read plainly. |
 | R04 | Rooms view | `steps=rooms,rooms-ready,rooms-busy,rooms-failed,rooms-empty,room-limit` | Map and list stay in step; each disabled Clean says why. |
 | R05 | Custom areas: draw, review, redraw, delete | `steps=draw,draw-points,draw-saved,area-review-new,area-review-saved,draw-redraw,area-review-rebind,area-review-stale,area-review-rebind:confirmDeleteArea` | One tool row, one hint, Cancel beside the primary; review titles and Delete last. |
@@ -54,8 +54,8 @@ state. A cell ID with settings other than its own is an error too, and the banne
 | R09 | Stop, pending and held states | `steps=cleaning,starting-command,starting,stopping-command,stopping,paused,returning,recharging,task-in-progress` | Stop is always reachable when it applies; held controls say why. |
 | R10 | Offline, locating, error and access states | `steps=ha-offline,robot-offline,transition,problem,map-unavailable,map-limited,access,unsupported` | Each state says what is true, what it stops and one next action. |
 | R11 | Setup and first clean | `steps=empty,multi-robot,rooms,rooms-ready` | No robot leads to Open integration; the first clean reads as one obvious path. |
-| R12 | Your areas | `steps=areas-list,areas-stale,areas-empty,area-review-saved,draw` | Each row shows its setting and what a changed map needs; New area, last, is the one way into Draw; Back returns to the list. |
-| R13 | Home shortcuts | `steps=home-shortcuts,home-plan-due-full,home-unpinned,home-shortcut-blocked,home-shortcut-running,home-pins-error,plan-saved-intelligent` | One tap runs a pinned plan or area; a held one says why; there is no separate Open; Show on home pins and unpins. |
+| R12 | Your areas | `steps=areas-list,areas-stale,areas-in-plans,areas-empty,area-review-saved,area-delete-refused,draw` | Each row shows its setting, the plans that clean it and what a changed map needs; a refused Delete names the plan to change; New area, last, is the one way into Draw; Back returns to the list. |
+| R13 | Home shortcuts | `steps=home-shortcuts,home-shortcut-areas,home-plan-due-full,home-unpinned,home-shortcut-blocked,home-shortcut-running,home-pins-error,plan-saved-intelligent` | One tap runs a pinned plan or area; a plan with custom areas counts them; a held one says why; there is no separate Open; Show on home pins and unpins. |
 
 ## Setups (columns)
 

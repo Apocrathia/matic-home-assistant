@@ -9,8 +9,8 @@
     {
       "id": "R02",
       "journey": "Plan pick, run, edit, save and delete",
-      "steps": ["plans", "plan-saved-intelligent", "plan-saved-ordered", "plan-run-parts", "plan-run-paused", "plan-run-blocked", "plan-edit-ordered", "plan-dirty", "plan-dirty:discardDraft", "plan-new", "plan-saved-intelligent:confirmDeletePlan"],
-      "check": "Picker to Run to Edit; numbers only in Saved order; Save, Cancel and Delete ask only when data would be lost"
+      "steps": ["plans", "plan-saved-intelligent", "plan-saved-ordered", "plan-run-parts", "plan-run-paused", "plan-run-blocked", "plan-run-areas", "plan-run-areas-only", "plan-edit-ordered", "plan-edit-areas", "plan-edit-areas-rotation", "plan-edit-area-stale", "plan-dirty", "plan-dirty:discardDraft", "plan-new", "plan-saved-intelligent:confirmDeletePlan"],
+      "check": "Picker to Run to Edit; numbers only in Saved order; custom areas sit among the rooms, keep their places in Intelligent rotation and say what they need; Save, Cancel and Delete ask only when data would be lost"
     },
     {
       "id": "R03",
@@ -69,14 +69,14 @@
     {
       "id": "R12",
       "journey": "Your areas",
-      "steps": ["areas-list", "areas-stale", "areas-empty", "area-review-saved", "draw"],
-      "check": "Each row shows its setting and what a changed map needs; New area, last, is the one way into Draw; Back returns to the list"
+      "steps": ["areas-list", "areas-stale", "areas-in-plans", "areas-empty", "area-review-saved", "area-delete-refused", "draw"],
+      "check": "Each row shows its setting, the plans that clean it and what a changed map needs; a refused Delete names the plan to change; New area, last, is the one way into Draw; Back returns to the list"
     },
     {
       "id": "R13",
       "journey": "Home shortcuts",
-      "steps": ["home-shortcuts", "home-plan-due-full", "home-unpinned", "home-shortcut-blocked", "home-shortcut-running", "home-pins-error", "plan-saved-intelligent"],
-      "check": "One tap runs a pinned plan or area; a held one says why; no separate Open button; Show on home pins and unpins"
+      "steps": ["home-shortcuts", "home-shortcut-areas", "home-plan-due-full", "home-unpinned", "home-shortcut-blocked", "home-shortcut-running", "home-pins-error", "plan-saved-intelligent"],
+      "check": "One tap runs a pinned plan or area; a plan with custom areas counts them; a held one says why; no separate Open button; Show on home pins and unpins"
     }
   ],
   "columns": [

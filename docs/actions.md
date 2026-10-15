@@ -71,16 +71,19 @@ between two areas. A preview splits the run at every switch between rooms and
 an area, and is refused (`area_missing`, `area_map_changed`) when an area was
 deleted or the map changed. Deleting an area removes it from every plan; it
 is refused while it is a plan's only item, and Matic Map names those plans.
-Matic Map lists a plan's areas in their place, and saving the plan there
-keeps them.
+In Matic Map, a plan's Edit adds saved areas drawn on the current map,
+orders them among the rooms in Saved order, sets each one's cleaning mode and
+vacuum coverage, and removes them. An area that was deleted or drawn on
+another map is marked Needs attention, since saving refuses it. Your areas
+lists the plans that clean each area.
 
 When the plan runs, each area is a part of its own, between the rooms around
-it. The run starts an area only when the robot is idle, checks again that the area
-is unchanged and on the current map, and follows that part until the robot
-ends it; the robot reports no per-area result, so an area counts as done when
-its part ends and never changes room schedules. Stop with
-"finish the current room" lets the current area finish first. The
-`area_started`, `area_finished` and `area_failed` events report each area.
+it. The run starts an area only when the robot is idle, checks again that the
+area is unchanged and on the current map, and follows that part until the
+robot ends it; the robot reports no per-area result, so an area counts as done
+when its part ends and never changes room schedules. Stop with "finish the
+current room" lets the current area finish first. The `area_started`,
+`area_finished` and `area_failed` events report each area.
 
 ## Advanced actions
 
