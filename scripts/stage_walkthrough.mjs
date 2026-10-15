@@ -12,7 +12,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { FRAME_PATH, cellHash, cellIds, cellUrl, findCell, startStaging } from "./walkthrough.mjs";
+import { FRAME_PATH, accessibilityReadout, cellHash, cellIds, cellUrl, findCell, startStaging } from "./walkthrough.mjs";
 
 const args = process.argv.slice(2);
 const flag = (name) => args.includes(name);
@@ -70,8 +70,8 @@ const [width, height] = ["w", "h"].map((key) => Number(new URLSearchParams(cellH
 const print = flag("--print");
 
 if (cell.column.stage === "readout" && !print) {
-  // The accessibility tree a screen reader reads, names and roles as text,
-  // for every step of the journey. --print launches no browser at all.
+  // Browser accessibility snapshots, names and roles as text, for every step.
+  // These supplement the Safari check; --print launches no browser at all.
   const { webkit } = await import("@playwright/test");
   const browser = await webkit.launch();
   const page = await browser.newPage({ viewport: { width: width ?? 390, height: height ?? 844 } });
@@ -80,7 +80,7 @@ if (cell.column.stage === "readout" && !print) {
     await page.goto(`${cellUrl(staging.origins[0], id, FRAME_PATH)}&step=${index + 1}`);
     await page.locator("html[data-stage-ready]").waitFor({ state: "attached" });
     out(`Step ${index + 1} of ${cell.row.steps.length}, ${step}: accessibility tree (names and roles):`);
-    out(await page.locator("body").ariaSnapshot());
+    out(await accessibilityReadout(page));
   }
   await browser.close();
 }

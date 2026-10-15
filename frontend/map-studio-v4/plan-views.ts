@@ -70,7 +70,7 @@ export class MaticPlanViewsV4 extends LitElement {
 .run-row:last-child { border-block-end: 0; }
 .run-row[data-break] { margin-block-start: var(--ms-space-3); padding-block-start: var(--ms-space-3); border-block-start: 2px dashed var(--ms-line-strong); }
 .row-lines { display: grid; flex: 1; gap: 0.125rem; min-inline-size: 0; }
-.row-lines bdi { overflow: hidden; font-weight: var(--ms-w-bold); text-overflow: ellipsis; white-space: nowrap; }
+.row-lines bdi { font-weight: var(--ms-w-bold); overflow-wrap: anywhere; }
 .row-lines small { color: color-mix(in srgb, var(--ms-text) 78%, var(--ms-local, var(--ms-surface-card))); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
 .row-lines .ms-chip { justify-self: start; }
 .pos-badge { display: grid; flex: none; place-items: center; inline-size: 1.5rem; block-size: 1.5rem; border-radius: 50%; background: color-mix(in srgb, var(--ms-accent) 12%, var(--ms-surface-card)); font-size: var(--ms-t-xs); font-weight: var(--ms-w-bold); font-variant-numeric: tabular-nums; }
@@ -80,7 +80,7 @@ export class MaticPlanViewsV4 extends LitElement {
 .pin-setting:empty { display: none; }
 .switch-copy { display: grid; flex: 1; gap: 0.125rem; min-inline-size: 0; font-size: var(--ms-t-md); }
 .switch-copy small, .reason { margin: 0; color: var(--ms-text-quiet); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
-.sr-only { position: absolute; overflow: hidden; inline-size: 1px; block-size: 1px; margin: -1px; padding: 0; border: 0; clip-path: inset(50%); white-space: nowrap; }
+.sr-only { position: absolute; inset-block-start: 0; inset-inline-start: 0; overflow: hidden; inline-size: 1px; block-size: 1px; margin: -1px; padding: 0; border: 0; clip-path: inset(50%); white-space: nowrap; }
 /* Edit (plan.md §3, ported from mockups/plan.ts). */
 .edit { display: grid; gap: var(--ms-space-3); }
 .order { display: grid; gap: var(--ms-space-1); margin: 0; padding: 0; border: 0; font-size: var(--ms-t-sm); }

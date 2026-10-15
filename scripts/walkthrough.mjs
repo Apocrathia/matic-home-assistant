@@ -33,6 +33,23 @@ export function cellHash(id) {
 
 export const cellUrl = (origin, id, path = STAGE_PATH) => `${origin}${path}#${cellHash(id)}`;
 
+/** Supplement whole-page snapshots when shadow/display:contents controls are omitted. */
+export async function accessibilityReadout(page) {
+  const tree = await page.locator("body").ariaSnapshot();
+  const lines = new Set(tree.split("\n").map((line) => line.trim()));
+  const supplement = [];
+  const controls = page.locator('button,input,select,textarea,a[href],[role="button"],[role="switch"],[role="checkbox"],[role="menuitem"],[role="slider"]');
+  for (const control of await controls.all()) {
+    if (!await control.isVisible()) continue;
+    const snapshot = await control.ariaSnapshot();
+    const first = snapshot.split("\n")[0]?.trim();
+    if (first && !lines.has(first)) supplement.push(snapshot);
+  }
+  return tree + (supplement.length
+    ? `\n\nDirect control snapshots supplementing whole-page capture omissions:\n${supplement.join("\n")}`
+    : "");
+}
+
 /** This computer's IPv4 addresses on its local networks. */
 export const lanAddresses = () =>
   Object.values(networkInterfaces()).flat()
