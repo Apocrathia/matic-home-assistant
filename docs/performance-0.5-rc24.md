@@ -19,6 +19,8 @@ Path-sorted compiled JavaScript names and bytes, SHA-256:
 | Control bundle | `55fdd0680408a32fcf72a1478bb88445505185a6047317312ebf0e67d7c52752` |
 | Desktop collector | `27b46b751b896c949394d5c5145f6b0d8aedd1bf89779f1dd7185b8239eaceaf` |
 | Android collector | `96e42d4e8d9974bd02204e823a6e581e6482cc52c80a90e7b3b834160753d833` |
+| Resource collector | `d3f19ddc20fe436b979f09cbe6de367e2c089fd01b3fc14eaca1a737bdeb699a` |
+| Frame capture harness | `deb4c8f257514cc75665da8e99c7148c03227d93ee6f81df981d5aebc2979e81` |
 
 ## Desktop input
 
@@ -75,20 +77,39 @@ unpinned Home does not. The synthetic pinned gallery initially requested
 This conditional traffic is not relabeled as static startup. Existing tests
 cover the conditional loading contract; neither size limit was broadened.
 
-## Sustained resources and remaining measurements
+## Sustained resources
 
 A separate headed run used the same 1.5-million-source-point scene for three
 minutes per build, 12 post-GC checkpoints and five unmount/remounts each.
-Scene hashes matched; both used WebGL2. Auto detail rendered 1,500,000 points
-on the control and 131,072 on RC24, so this is not equal rendered work.
+Scene hashes matched; both used WebGL2. RC24's initial adaptive view rendered
+131,072 points, then all 12 timed checkpoints reported 1,500,000, as did the
+control. Checkpoints do not establish identical work in every frame.
 Post-GC checkpoint heap ranged 2.67–2.73 MB on control and 3.23–3.33 MB on
 RC24. Renderer-page task duration was 8.14/12.18 seconds; script duration
 2.84/3.68 seconds. These are CDP page proxies, not whole-process CPU/GPU use.
 All lifecycles completed and DOM/listener counts returned to consistent
-per-build values. This bounds the observation window, not all future retention.
+per-build values. RC24's remounted heap rose from 2,962,320 to 3,118,744 B
+across five cycles; stable DOM counts alone do not qualify retained memory.
+No GPU allocation balance or agreed heap-retention pass is claimed.
 
-A separate 60-second numeric-only desktop frame trace completed with 3,600
-scheduled drag moves and no page errors. Tracker interpretation remains open;
-no presented-FPS pass is recorded here. GPU allocation/retention,
-supported-phone behavior, slow-device stalls, live HA traffic and transport
-recovery/budgets remain open. Production live transport stays OFF.
+## Traced desktop frames
+
+A separate headed 60-second numeric-only trace used the same scene and bundles,
+a 920×680 WebGL2 canvas, 3,600 scheduled right-drag moves and no forced GC.
+No page errors occurred. Independent counter inspection matched 11 complete
+CanvasAnimation tracker spans wholly inside the start/end markers. Each span
+reported 300–301 expected frames and zero V3/V4 drops; V3 and V4 describe the
+same frames and are not added. Produced frames = expected minus V4 drops.
+
+Per-span produced rates were 59.703–59.728/s, each above the scoped ≥55 target.
+Adjacent tracker spans overlap slightly, so their durations/rates are not summed.
+One unfinished tail had no counters and is excluded. This is the
+[Chromium tracker method](performance-0.5-diagnostics.md#presented-frame-diagnostic),
+a browser compositor estimate for this workload, not physical scanout or mobile
+FPS. Raw trace SHA-256: `126073889ca390d136874ba98020f85b869c959074198608b25d993b35a51cf6`.
+
+## Remaining measurements
+
+GPU allocation/retention, agreed retained-heap bounds, supported-phone behavior,
+mobile presented FPS, slow-device stalls, live HA traffic and transport recovery
+remain open. Production live transport stays OFF.

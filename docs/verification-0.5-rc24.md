@@ -45,7 +45,7 @@ not a performed restore. Independent host recovery access still needs verificati
 
 ## Qualification ledger
 
-Status snapshot: October 15, 2026, 9:13 AM PDT. Later evidence must identify
+Status snapshot: October 15, 2026, 9:18 AM PDT. Later evidence must identify
 its candidate and scope before changing a gate.
 
 | Gate | Status and evidence needed |
@@ -56,7 +56,7 @@ its candidate and scope before changing a gate.
 | Runtime recovery and guards | Pending on RC24: idle reload/restart, live setting confirmation/failure paths, reconnect, authorization loss, stale/wrong-floor and history/area recovery. |
 | Owner acceptance | All [117 verdicts](owner-walkthrough-0.5-ledger.json) remain pending. R01-C01 was staged; no owner verdict received. Synthetic execution is not approval. |
 | Devices and accessibility | RC24 synthetic Android latency passes its named budget; live iPhone/iPad/Android, keyboard/native zoom, VoiceOver/NVDA and Windows High Contrast remain open. |
-| Performance | [Exact-candidate lab receipt](performance-0.5-rc24.md): desktop and Android p95 pass. Sustained resource and presented-frame qualification remain separate. |
+| Performance | [Exact-candidate lab receipt](performance-0.5-rc24.md): desktop and Android p95 pass; traced desktop intervals meet ≥55 produced frames/s. Retained heap/GPU, mobile frames and live traffic remain open. |
 | Live transport | Default OFF. Loss/reconnect/fallback, queues and resource/traffic qualification are still required before switchover. |
 | Room and custom-area execution | Pending: supervised matching-session completion/dock and a separate active-area Stop run; [run sheet](owner-gate-f-run-sheet.md). |
 | Cadence and recovery | Pending: private/shared N=1/N=3, mode-specific and causal coverage credit, pause/restart/low-charge, guarded failure and map transitions. |
