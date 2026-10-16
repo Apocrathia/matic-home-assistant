@@ -1,11 +1,13 @@
 # Owner walkthrough for 0.5
 
-The owner signs off the 0.5 interface by looking at it, one cell at a time. The agent stages every cell of the
-matrix below live in a browser; the owner only answers **Approve** or **Critique**. Nobody hand-tests a script,
-and there are no screenshots or recordings: each cell is the real Matic Map code running on synthetic data.
+The agent inspects every cell of the 0.5 interface autonomously. The owner requested "finish e2e by yourself"
+and reconfirmed automated cell-by-cell inspection on October 15, 2026. This supersedes the earlier per-cell
+Approve/Critique procedure and does not require one owner response per cell. No screenshots or recordings are
+taken: each cell is the real Matic Map code running on synthetic data.
 
-Gate E6 in [acceptance-0.5.md](acceptance-0.5.md) links here. **Stable waits until every cell is approved.**
-A release candidate can ship before that; stable cannot.
+Gate E6 in [acceptance-0.5.md](acceptance-0.5.md) links here. Stable waits for completed candidate inspection,
+resolved findings and the separate live, physical, device and final release acceptance gates. Automated checks
+do not create owner verdicts. Earlier owner replies remain historical evidence in the ledger.
 
 ## What is staged
 
@@ -22,9 +24,10 @@ size gets. Without a size the frame fills the window.
 1. Build the review bundle once per change: `npm run build:map-studio-v4`.
 2. Stage the cell: `npm run stage:walkthrough -- R01-C01`. The script serves the bundle on
    `http://127.0.0.1:4180`, prints the cell, what to try and its URL, and opens it in Safari.
-3. Post one short message: "Cell 29 of 117: Rooms view at phone landscape. Try: map and list stay in step; each
-   disabled Clean says why. Approve or critique?"
-4. Wait for the answer, record it in the ledger, then stage the next cell. Ctrl-C stops the server.
+3. Inspect every listed step, checking the cell, state, dimensions, copy, control reachability and overflow.
+   Record the source commit and results; report failures and fix them before repeating affected checks.
+4. Continue through the matrix without per-cell owner prompts. Keep physical/device checks separate from their
+   emulated counterparts. Ctrl-C stops the server.
 
 Other forms: `npm run stage:walkthrough -- --list` prints every cell with its hash; `--print` prints the URL without
 opening a browser; `--port 4181` picks another port.
@@ -81,26 +84,26 @@ state. A cell ID with settings other than its own is an error too, and the banne
   translation; a clipped bracket is a layout that will clip a real language. `dir=rtl` mirrors the layout.
 - **Forced colours (C08).** Safari on the Mac has no forced-colours mode, so the script opens Chromium with forced
   colours and reduced motion emulated; the page warns when a browser has them off. Windows High Contrast on a real
-  Windows machine is checked by hand for the primary and Stop buttons (`design-system.md` MS-DS-01, MS-DS-02) before
-  the cell is approved.
-- **Read-out (C09).** The agent posts the accessibility trees the script prints with the cell, one per step: each
-  control's role and name, as a screen reader announces them. The owner can also turn on VoiceOver in the Safari frame.
+  Windows machine remains a separate device check for the primary and Stop buttons (`design-system.md` MS-DS-01,
+  MS-DS-02); emulation does not close it.
+- **Read-out (C09).** The agent inspects the accessibility trees the script prints, one per step: each control's
+  role and name. Actual VoiceOver/NVDA usability remains a separate assistive-technology check.
 - **Setup (R11).** At desktop (R11-C04) the agent also opens Settings > Devices & services > Add integration > Matic
   in the owner's signed-in Safari to show the first setup screen, then closes it. Nothing is submitted, and no cell
   ever sends a robot command.
 
-## Approve or critique
+## Findings and optional owner feedback
 
-- **Approve:** the cell is recorded as approved with the commit it was staged from.
-- **Critique:** the owner says what is wrong in their own words. The agent records it, fixes it, rebuilds and stages
-  the same cell again for re-approval. A fix can change other cells: every approved cell whose journey or setup the
-  fix touches is staged again too.
-- After the last cell is approved, any later change to the shipped interface reopens the cells it touches.
+- Record automated inspection results separately from explicit owner feedback; never label an automated pass an
+  owner approval. Optional owner Approve/Critique replies retain their exact source and wording.
+- Fix inspection findings and owner critiques, rebuild, and repeat every affected journey or setup.
+- Later interface changes invalidate affected inspection results. Retain older results with their source commit.
 
 ### Ledger
 
-The agent keeps one [ledger line per cell](owner-walkthrough-0.5-ledger.json): cell ID, verdict, critique (if any), the fixing commit and the re-approval.
-The release PR carries the ledger; stable is not tagged while any line is open.
+The [ledger](owner-walkthrough-0.5-ledger.json) preserves historical owner verdicts and separately records candidate
+inspection evidence. The release PR carries the source-bound results and unresolved findings. An absent optional
+owner verdict is not a requirement to send another per-cell prompt.
 
 ## Limits
 
