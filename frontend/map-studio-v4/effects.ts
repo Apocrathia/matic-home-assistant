@@ -12,6 +12,8 @@ import {
   type Workflow,
 } from "./contracts";
 import {
+  entryFloorKey,
+  entryMissionKey,
   parseSavedPlanId,
   type HistoryFloor,
   type HistorySnapshot,
@@ -113,28 +115,17 @@ const coverageGuardNotice = (error: unknown): WorkspaceNotice | null => {
     : null;
 };
 
-const entryFloorKey = (entry: MapEntry): string => [
-  entry.selectedFloorOrdinal ?? "none",
-  entry.mapFloorOrdinal ?? "none",
-  entry.mapFloorCoherent ? "coherent" : "transition",
-].join(":");
-
-const entryMissionKey = (entry: MapEntry): string => [
-  entry.mapFloorOrdinal ?? "none",
-  entry.mapSessionVerified ? "verified" : "unverified",
-  entry.mapSessionKey ?? "no-session",
-].join(":");
-
 const entryBoundaryKey = (entry: MapEntry): string => [
   entry.entryId,
-  entry.selectedFloorOrdinal ?? "none",
-  entry.mapFloorOrdinal ?? "none",
+  entry.selectedFloorOrdinal ?? 0,
+  entry.mapFloorOrdinal ?? 0,
 ].join("|");
 
 const entryCoherenceIdentity = (entry: MapEntry): string => [
   entry.entryId,
   entryFloorKey(entry),
   entryMissionKey(entry),
+  entry.mapSceneEpoch ?? "",
 ].join("|");
 
 const entryIdentity = (entry: MapEntry): string => [
@@ -1254,14 +1245,12 @@ export class EffectController {
         });
         return;
       }
-      const deltaOwnsContent = Boolean(selected && currentEntry
-        && entryCoherenceIdentity(selected) === entryCoherenceIdentity(currentEntry)
-        && this.#ownsLiveDelta(currentEntry));
+      const sameIdentity = Boolean(selected && currentEntry
+        && entryCoherenceIdentity(selected) === entryCoherenceIdentity(currentEntry));
+      const deltaOwnsContent = Boolean(sameIdentity && currentEntry && this.#ownsLiveDelta(currentEntry));
       if (selected
         && currentEntry
-        && entryBoundaryKey(selected) === entryBoundaryKey(currentEntry)
-        && entryFloorKey(selected) === entryFloorKey(currentEntry)
-        && entryMissionKey(selected) === entryMissionKey(currentEntry)
+        && sameIdentity
         && (deltaOwnsContent
           || selected.mapRevision < currentEntry.mapRevision
           || (!force && this.#controllers.has("scene")))) {
@@ -1291,8 +1280,7 @@ export class EffectController {
       }
       const identity = entryIdentity(selected);
       const currentStamp = this.#coherence.current();
-      const sameVerifiedFrame = Boolean(currentStamp && currentEntry
-        && entryCoherenceIdentity(selected) === entryCoherenceIdentity(currentEntry)
+      const sameVerifiedFrame = Boolean(currentStamp && sameIdentity
         && selected.mapFloorCoherent && selected.mapSessionVerified);
       if ((!force || preserveGeneration) && (identity === this.#entryIdentity
         || sameVerifiedFrame)) {
@@ -1823,6 +1811,14 @@ export class EffectController {
         || !this.#store.value.map.floorCoherent) return;
       if (!pose.floorCoherent || pose.mapSessionKey === null
         || pose.mapSessionKey !== currentEntry.mapSessionKey) {
+        // The pose endpoint binds its map revision when the response is
+        // created. A coherent delta can admit a newer map while that response
+        // is in flight, so an older mismatch says nothing about the current
+        // floor/session and must not revoke the newly admitted frame.
+        if (pose.sceneEpoch != null
+          && pose.sceneEpoch === currentEntry.mapSceneEpoch
+          && pose.sceneRevision != null
+          && pose.sceneRevision < currentEntry.mapRevision) return;
         this.#store.patch({
           resources: { ...this.#store.value.resources, pose: resource("idle", null) },
           map: { ...this.#store.value.map, exactPose: false },

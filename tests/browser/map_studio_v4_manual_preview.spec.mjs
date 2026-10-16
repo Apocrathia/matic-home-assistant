@@ -41,8 +41,8 @@ async function setupEffects(page, { initialPreview = null, previewProvider } = {
       manualRoomPreview: initialPreview
         ? { status: "ready", value: {
             key: manualRoomPreviewKey(base),
-            generation: base.generation, floorKey: "1:1:coherent",
-            missionKey: `1:verified:${"a".repeat(64)}`, preview: initialPreview,
+            generation: base.generation, floorKey: "1:1:true",
+            missionKey: `1:true:${"a".repeat(64)}`, preview: initialPreview,
           }, problem: null }
         : { status: "idle", value: null, problem: null },
     };

@@ -32,6 +32,7 @@ export interface MapEntry {
   readonly areasUrl: string;
   readonly plansUrl: string;
   readonly mapRevision: number;
+  readonly mapSceneEpoch: string | null;
   readonly mapFloorCoherent: boolean;
   readonly mapSessionVerified: boolean;
   readonly mapSessionKey: string | null;
@@ -54,6 +55,20 @@ export interface MapEntry {
   readonly bootstrapStructureSeen: boolean;
   readonly bootstrapFailures: number;
 }
+
+// These private keys are shared by preview production and admission. Floor
+// ordinals are positive, so zero represents an absent floor without collision.
+export const entryFloorKey = (entry: MapEntry): string => [
+  entry.selectedFloorOrdinal ?? 0,
+  entry.mapFloorOrdinal ?? 0,
+  entry.mapFloorCoherent,
+].join(":");
+
+export const entryMissionKey = (entry: MapEntry): string => [
+  entry.mapFloorOrdinal ?? 0,
+  entry.mapSessionVerified,
+  entry.mapSessionKey ?? "",
+].join(":");
 
 export interface SceneRoom {
   readonly id: string;
@@ -94,6 +109,8 @@ export interface PoseModel {
   readonly position: readonly [number, number] | null;
   readonly source: string;
   readonly revision: number;
+  readonly sceneRevision: number | null;
+  readonly sceneEpoch: string | null;
   readonly poseRevision: number;
   readonly floorCoherent: boolean;
   readonly mapSessionKey: string | null;
@@ -305,7 +322,7 @@ const boundedString = (value: unknown, maximum: number, code: string): string =>
   return text;
 };
 
-// The plan or area native entities use; absent or null means none.
+// Nullable opaque identities; absent or null means none.
 const selectedId = (value: unknown, code: string): string | null =>
   value === null || value === undefined ? null : boundedString(value, 128, code);
 
@@ -437,6 +454,7 @@ export const parseCatalog = (value: unknown): readonly MapEntry[] => {
       areasUrl: privatePath(entry.areas_url, "invalid-areas-url"),
       plansUrl: privatePath(entry.plans_url, "invalid-plans-url"),
       mapRevision,
+      mapSceneEpoch: selectedId(entry.map_scene_epoch, "invalid-scene-epoch"),
       mapFloorCoherent: booleanValue(entry.map_floor_coherent, "invalid-floor-coherence"),
       mapSessionVerified: booleanValue(entry.map_session_verified, "invalid-session-state"),
       mapSessionKey: mapSessionKey(entry.map_session_key),
@@ -816,6 +834,9 @@ export const parsePose = (value: unknown): PoseModel => {
     position,
     source: boundedString(payload.source, 64, "invalid-pose-source"),
     revision: boundedInteger(payload.revision, 0, Number.MAX_SAFE_INTEGER, "invalid-pose-revision"),
+    sceneRevision: payload.scene_revision == null ? null
+      : boundedInteger(payload.scene_revision, 0, Number.MAX_SAFE_INTEGER, "invalid-pose-revision"),
+    sceneEpoch: selectedId(payload.scene_epoch, "invalid-scene-epoch"),
     poseRevision: boundedInteger(payload.pose_revision, 0, Number.MAX_SAFE_INTEGER, "invalid-pose-sequence"),
     floorCoherent: booleanValue(payload.map_floor_coherent, "invalid-pose-floor"),
     mapSessionKey: mapSessionKey(payload.map_session_key),
