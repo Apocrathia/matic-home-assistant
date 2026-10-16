@@ -65,6 +65,7 @@ import "./map-canvas";
 import { translate } from "./localize";
 import { needsDraftConfirmation } from "./draft-navigation";
 import {
+  canShowLiveMap,
   deleteSubject,
   hasStoppableWork,
   initialWorkspaceState,
@@ -234,7 +235,7 @@ const homeCopy = (kind: HomeKind, state: WorkspaceState, t: (key: string, fallba
     case "offline":
       return { title: t("v4_robot_offline_title", "Robot offline"), description: t("v4_robot_offline_body", "Showing the last known map. Cleaning comes back when the robot reconnects.") };
     case "reconnecting":
-      return { title: t("v4_reconnecting_title", "Reconnecting to Home Assistant"), description: t("v4_reconnecting_body", "Cleaning controls come back when Home Assistant reconnects.") };
+      return { title: t("v4_reconnecting_title", "Reconnecting to Home Assistant"), description: t("v4_reconnecting_body", "Waiting for Home Assistant to reconnect.") };
     case "administrator":
       return { title: t("v4_admin_title", "Administrator access required"), description: t("v4_admin_body", "Ask a Home Assistant administrator to open this map.") };
     case "robot-unavailable":
@@ -243,7 +244,7 @@ const homeCopy = (kind: HomeKind, state: WorkspaceState, t: (key: string, fallba
       return {
         title: t("v4_saved_map_read_only_title", "Saved map is read only"),
         description: state.dataMode === "live"
-          ? t("v4_map_recovery_automatic", "Cleaning controls return automatically when the live map is ready.")
+          ? t("v4_map_recovery_automatic", "Cleaning becomes available automatically when the live map is ready.")
           : t("v4_saved_map_read_only_detail", "Return to the live map to choose rooms, run a plan, or draw a custom area."),
       };
     case "setup":
@@ -1567,14 +1568,15 @@ export class MaticMapShellV4 extends LitElement {
       `;
     };
     switch (kind) {
-      case "reconnecting":
       case "administrator":
       case "robot-unavailable":
       case "setup":
         return nothing;
+      case "reconnecting":
       case "offline":
       case "read-only":
-        return maps(false);
+        if (canShowLiveMap(state) && state.host.robotCount > 0 && !isSelectedRobotUnavailable(state)) break;
+        return kind === "reconnecting" ? nothing : maps(false);
       case "problem":
         return html`
           <div class="home-actions">

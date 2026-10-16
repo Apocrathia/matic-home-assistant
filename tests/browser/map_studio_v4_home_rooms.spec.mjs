@@ -375,17 +375,66 @@ test.describe("home by state", () => {
     await expect(cards(gallery).nth(0)).toHaveAccessibleDescription(/can't confirm it well enough/);
   });
 
-  test("robot offline keeps Maps and nothing else (H9)", async ({ page }) => {
+  test("robot offline retains disabled cleaning choices and Maps", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "robot-offline" });
     await expect(gallery.getByRole("heading", { name: "Robot offline", level: 2 })).toBeVisible();
     await expect(panelOf(gallery).locator(".panel-description")).toHaveText("Showing the last known map. Cleaning comes back when the robot reconnects.");
-    await expect(gallery.getByRole("group", { name: "Cleaning choices" })).toHaveCount(0);
+    await expect(gallery.getByRole("group", { name: "Cleaning choices" }).getByRole("button")).toHaveCount(3);
+    await expect(cards(gallery).nth(0)).toHaveAttribute("aria-disabled", "true");
+    await expect(cards(gallery).nth(1)).toHaveAttribute("aria-disabled", "true");
+    await expect(plansRow(gallery)).toHaveAttribute("aria-disabled", "true");
     await expect(mapsRows(gallery)).toHaveCount(2);
-    await expect(panelOf(gallery).locator("h3")).toHaveText(["Maps"]);
+  });
+
+  for (const kind of ["reconnecting", "offline", "read-only"]) {
+    test(`${kind} retains the map and view controls, holds cleaning, then recovers`, async ({ page }) => {
+      const gallery = await loadGallery(page);
+      await recordActions(page);
+      await gallery.evaluate((element, kind) => {
+        const state = element.getWorkspaceSnapshot();
+        element.__beforeRecovery = state;
+        element.replaceWorkspaceState({ ...state,
+          host: { ...state.host, connected: kind !== "reconnecting", robotConnected: kind !== "offline" },
+          coherence: "verifying",
+          floor: { ...state.floor, readOnly: true },
+          map: { ...state.map, exactPose: false },
+          notice: kind === "read-only" ? { tone: "warning", key: "v4_notice_saved_map", fallback: "Showing the saved map." } : null,
+        });
+      }, kind);
+      const choices = gallery.getByRole("group", { name: "Cleaning choices" }).getByRole("button");
+      await expect(choices).toHaveCount(3);
+      for (const choice of await choices.all()) {
+        await expect(choice).toHaveAttribute("aria-disabled", "true");
+        await choice.click({ force: true });
+      }
+      expect(await actions(page)).toEqual([]);
+      expect((await snapshot(page)).workflow).toBe("none");
+      const map = gallery.locator("matic-map-canvas-v4");
+      await expect(map.locator(".scene-window")).toBeVisible();
+      await expect(map.locator(".map-message")).toHaveCount(0);
+      await expect(map.getByRole("button", { name: "Fit the whole map on screen" })).toBeVisible();
+      await expect(map.getByRole("button", { name: "How to move the map" })).toBeVisible();
+      await map.getByRole("button", { name: "2D", exact: true }).click();
+      expect((await snapshot(page)).view).toBe("top");
+      expect(await actions(page)).toEqual([]);
+      await gallery.evaluate(element => element.replaceWorkspaceState(element.__beforeRecovery));
+      for (const choice of await choices.all()) await expect(choice).not.toHaveAttribute("aria-disabled", "true");
+      await expect(gallery.getByRole("heading", { name: "Choose what to clean", level: 2 })).toBeVisible();
+    });
+  }
+
+  test("reconnecting without a retained map keeps the cold-start explanation", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "ha-offline" });
+    const state = await snapshot(page);
+    await patchState(gallery, { map: { ...state.map, available: false } });
+    await expect(gallery.getByRole("heading", { name: "Reconnecting to Home Assistant", level: 2 })).toBeVisible();
+    await expect(panelOf(gallery).locator(".panel-description")).toHaveText("Waiting for Home Assistant to reconnect.");
+    await expect(gallery.getByRole("group", { name: "Cleaning choices" })).toHaveCount(0);
+    await expect(mapsRows(gallery)).toHaveCount(0);
+    await expect(gallery.locator(".map-message")).toHaveText("Reconnecting");
   });
 
   for (const [scenario, title, body] of [
-    ["ha-offline", "Reconnecting to Home Assistant", "Cleaning controls come back when Home Assistant reconnects."],
     ["access", "Administrator access required", "Ask a Home Assistant administrator to open this map."],
     ["empty", "Set up your robot", "Add the Matic (Unofficial) integration to see a map here."],
   ]) {

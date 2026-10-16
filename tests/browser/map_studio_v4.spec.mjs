@@ -2277,7 +2277,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(gallery.getByRole("button", { name: "Stop cleaning", exact: true }).first()).toBeEnabled();
   });
   for (const retained of [false, true]) {
-    test(`keeps a ${retained ? "retained" : "saved"} map visible during live revalidation`, async ({ page }, testInfo) => {
+    test(`keeps a ${retained ? "retained" : "saved"} map visible during live revalidation`, async ({ page }) => {
       await loadEffectHarness(page);
       const result = await page.evaluate(async (retained) => {
         const { EffectController, WorkspaceStore, createGalleryState } = await import("/plan-recovery-test.js");
@@ -2346,13 +2346,17 @@ test.describe("Map Studio v0.4 foundation", () => {
         gallery.replaceWorkspaceState(window.__pausedMapState);
       }, GALLERY_TAG);
       await expect(page.locator(GALLERY_TAG).locator(".scene-window")).toBeVisible();
-      // The card names the state once; the sheet's slot carries the dated notice.
+      // The status strip carries locating; the saved-map branch also has its dated notice.
+      const visibleGallery = page.locator(GALLERY_TAG);
+      await expect(visibleGallery.locator(".map-message")).toHaveCount(0);
+      await expect(visibleGallery.locator(".status-copy strong")).toHaveText("Locating");
       if (!retained) {
-        await expect(page.locator(GALLERY_TAG).locator(".map-message")).toHaveText("Saved map is read only");
-        await expect(page.locator(GALLERY_TAG).locator("[data-notice-slot]")).toContainText("Showing the saved map from");
+        await expect(visibleGallery.locator("[data-notice-slot]")).toContainText("Showing the saved map from");
+        await expect(visibleGallery.locator(".root > .sr-only[aria-live=polite]")).toContainText("Showing the saved map from");
+      } else {
+        await expect(visibleGallery.locator(".root > .sr-only[aria-live=polite]")).toContainText("Locating");
       }
-      else await expect(page.locator(GALLERY_TAG).getByText("Locating the current map").first()).toBeVisible();
-      await page.screenshot({ path: testInfo.outputPath(`${retained ? "retained" : "saved"}-map.png`) });
+      await expect(visibleGallery.locator("matic-map-canvas-v4 .scene-window")).toHaveAttribute("aria-label", /Saved read-only map/);
 
     });
   }
@@ -5848,6 +5852,10 @@ test.describe("Map Studio v0.4 foundation", () => {
     // toolbar was updated and this was missed, and nothing failed because the
     // other assertions on .map-message only check presence and text.
     const gallery = await loadGallery(page, { scenario: "ha-offline" });
+    const state = await snapshot(page);
+    await gallery.evaluate((element, map) => element.replaceWorkspaceState({
+      ...element.getWorkspaceSnapshot(), map: { ...map, available: false },
+    }), state.map);
     const message = gallery.locator("matic-map-canvas-v4 .map-message");
     await expect(message).toBeVisible();
     const surface = await message.evaluate((element) => {
@@ -7111,6 +7119,10 @@ test.describe("Map Studio v0.4 foundation", () => {
 test.describe("Map Studio v0.4 on touch @mobile", () => {
   test("keeps offline status above the bottom sheet", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "ha-offline", narrow: true });
+    const state = await snapshot(page);
+    await gallery.evaluate((element, map) => element.replaceWorkspaceState({
+      ...element.getWorkspaceSnapshot(), map: { ...map, available: false },
+    }), state.map);
     await settleSheet(gallery);
     const message = await gallery.locator(".map-message").boundingBox();
     const sheet = await gallery.locator(".mobile-sheet").boundingBox();

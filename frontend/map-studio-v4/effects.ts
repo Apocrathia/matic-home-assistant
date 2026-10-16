@@ -135,6 +135,7 @@ const entryCoherenceIdentity = (entry: MapEntry): string => [
   entry.entryId,
   entryFloorKey(entry),
   entryMissionKey(entry),
+  entry.mapSceneEpoch ?? "",
 ].join("|");
 
 const entryIdentity = (entry: MapEntry): string => [
@@ -1262,6 +1263,7 @@ export class EffectController {
         && entryBoundaryKey(selected) === entryBoundaryKey(currentEntry)
         && entryFloorKey(selected) === entryFloorKey(currentEntry)
         && entryMissionKey(selected) === entryMissionKey(currentEntry)
+        && selected.mapSceneEpoch === currentEntry.mapSceneEpoch
         && (deltaOwnsContent
           || selected.mapRevision < currentEntry.mapRevision
           || (!force && this.#controllers.has("scene")))) {
@@ -1823,6 +1825,14 @@ export class EffectController {
         || !this.#store.value.map.floorCoherent) return;
       if (!pose.floorCoherent || pose.mapSessionKey === null
         || pose.mapSessionKey !== currentEntry.mapSessionKey) {
+        // The pose endpoint binds its map revision when the response is
+        // created. A coherent delta can admit a newer map while that response
+        // is in flight, so an older mismatch says nothing about the current
+        // floor/session and must not revoke the newly admitted frame.
+        if (pose.sceneEpoch !== null
+          && pose.sceneEpoch === currentEntry.mapSceneEpoch
+          && pose.sceneRevision !== null
+          && pose.sceneRevision < currentEntry.mapRevision) return;
         this.#store.patch({
           resources: { ...this.#store.value.resources, pose: resource("idle", null) },
           map: { ...this.#store.value.map, exactPose: false },

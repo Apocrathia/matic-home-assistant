@@ -64,6 +64,20 @@ test.describe("help (map-surfaces.md §5 Help, §11 MS-HELP-01/02)", () => {
       const gallery = await loadGallery(page, { scenario });
       await expect(helpButton(gallery), scenario).toHaveCount(0);
     }
+
+    const retained = await loadGallery(page, { scenario: "ready" });
+    const state = await snapshot(page);
+    await patchState(retained, {
+      coherence: "verifying",
+      map: { ...state.map, exactPose: false },
+    });
+    const canvas = canvasOf(retained);
+    await expect(canvas.locator(".scene-window")).toBeVisible();
+    await expect(canvas.locator(".map-message")).toHaveCount(0);
+    await expect(retained.locator(".status-copy strong")).toHaveText("Locating");
+    await expect(canvas.getByRole("button", { name: "Fit the whole map on screen" })).toBeVisible();
+    await expect(canvas.getByRole("button", { name: "Room names" })).toBeVisible();
+    await expect(helpButton(retained)).toBeVisible();
   });
 
   test("a fine pointer reads Trackpad, Mouse and Keyboard rows for the one gesture model", async ({ page }) => {
@@ -268,7 +282,7 @@ test.describe("Full map (map-surfaces.md §5 Full map, §11 MS-FULL-01…04)", (
     await expect(toggle).toBeFocused();
   });
 
-  test("a working robot keeps Stop in the HUD and Locating keeps Stop and Exit only with the canvas card", async ({ page }) => {
+  test("a working robot keeps Stop in the HUD and cold-start Locating keeps Stop and Exit with its canvas explanation", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "cleaning", viewport: { width: 1024, height: 768 } });
     await fullMapToggle(gallery).click();
     const hud = hudOf(gallery);

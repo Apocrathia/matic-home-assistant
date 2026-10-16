@@ -497,13 +497,14 @@ export class MaticMapCanvasV4 extends LitElement {
     };
   }
 
-  // The card names the state once (shell.md §4 MS-HOST-01/05); the sheet
-  // carries the sentence, the date and the next step.
-  #message(): string | null {
+  // The status strip and sheet explain recovery. Keep a retained scene
+  // unobstructed; a centered message is for an absent map or a blocking problem.
+  #message(showScene: boolean): string | null {
     const state = this.state;
-    if (!state.host.connected) return this.#t("v4_reconnecting", "Reconnecting");
+    if (!state.host.connected && !showScene) return this.#t("v4_reconnecting", "Reconnecting");
     if (!state.host.administrator) return this.#t("v4_admin_required", "Administrator access required");
     if (state.host.robotCount === 0) return this.#t("v4_no_robot", "No robot set up");
+    if (showScene && state.activity !== "problem") return null;
     if (state.dataMode === "live" && state.floor.readOnly && state.map.available && state.notice?.key === "v4_notice_saved_map") {
       return this.#t("v4_saved_map_read_only_title", "Saved map is read only");
     }
@@ -520,7 +521,7 @@ export class MaticMapCanvasV4 extends LitElement {
     return null;
   }
 
-  #renderRail(showScene: boolean, locating: boolean) {
+  #renderRail(showScene: boolean) {
     const state = this.state;
     const narrow = this.narrow;
     const draw = state.workflow === "draw";
@@ -535,8 +536,8 @@ export class MaticMapCanvasV4 extends LitElement {
     const showView = showScene && !draw && state.workflow !== "areaReview";
     const showAppearance = showView && !narrow && state.view === "top";
     const showCamera = showView && state.view === "three";
-    const showTools = showScene && !locating;
-    const showExtras = showScene && !locating;
+    const showTools = showScene;
+    const showExtras = showScene;
     const showLabels = showExtras && !narrow && !draw;
 
     return html`
@@ -594,7 +595,6 @@ export class MaticMapCanvasV4 extends LitElement {
 
         ${showTools ? html`
           <div class="map-tools ms-surface ms-surface--floating ms-segment" role="group" aria-label=${this.#t("v4_map_tools", "Map tools")}>
-            ${!locating ? html`
               <button
                 class="fit ms-btn"
                 type="button"
@@ -605,7 +605,6 @@ export class MaticMapCanvasV4 extends LitElement {
                 }}
                 title=${this.#t("v4_fit_map", "Fit map")}
               >${icon(iconFit)}<span class="ms-btn__label">${this.#t("v4_fit_map", "Fit map")}</span></button>
-            ` : nothing}
           </div>
         ` : nothing}
         ${showExtras ? html`
@@ -672,10 +671,9 @@ export class MaticMapCanvasV4 extends LitElement {
   protected override render() {
     const state = this.state;
     const scale = mapScale(state);
-    const message = this.#message();
     const showScene = state.map.available && (canShowLiveMap(state) || state.dataMode === "history");
+    const message = this.#message(showScene);
     const showDraw = state.workflow === "draw" && showScene;
-    const locating = state.coherence === "verifying" || state.coherence === "booting";
     return html`
       <section
         class="map-root"
@@ -689,7 +687,7 @@ export class MaticMapCanvasV4 extends LitElement {
         @keydown=${this.#keyboard}
         @pointerdown=${this.#cancelSecondaryPointer}
       >
-        ${this.#renderRail(showScene, locating)}
+        ${this.#renderRail(showScene)}
         <slot name="scrim"></slot>
 
         <div

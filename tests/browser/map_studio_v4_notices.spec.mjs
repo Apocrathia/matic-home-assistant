@@ -949,6 +949,10 @@ test("slot, toast and canvas chip carry no live role", async ({ page }) => {
   }
 
   const offline = await loadGallery(page, { scenario: "ha-offline" });
+  const map = await offline.evaluate((element) => element.getWorkspaceSnapshot().map);
+  await offline.evaluate((element, availability) => element.replaceWorkspaceState({
+    ...element.getWorkspaceSnapshot(), map: { ...availability, available: false },
+  }), map);
   const chip = offline.locator("matic-map-canvas-v4 .map-message");
   await expect(chip).toBeVisible();
   expect(await chip.evaluate((element) => [element.getAttribute("role"), element.getAttribute("aria-live")]))

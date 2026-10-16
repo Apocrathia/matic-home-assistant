@@ -32,6 +32,7 @@ export interface MapEntry {
   readonly areasUrl: string;
   readonly plansUrl: string;
   readonly mapRevision: number;
+  readonly mapSceneEpoch: string | null;
   readonly mapFloorCoherent: boolean;
   readonly mapSessionVerified: boolean;
   readonly mapSessionKey: string | null;
@@ -94,6 +95,8 @@ export interface PoseModel {
   readonly position: readonly [number, number] | null;
   readonly source: string;
   readonly revision: number;
+  readonly sceneRevision: number | null;
+  readonly sceneEpoch: string | null;
   readonly poseRevision: number;
   readonly floorCoherent: boolean;
   readonly mapSessionKey: string | null;
@@ -437,6 +440,8 @@ export const parseCatalog = (value: unknown): readonly MapEntry[] => {
       areasUrl: privatePath(entry.areas_url, "invalid-areas-url"),
       plansUrl: privatePath(entry.plans_url, "invalid-plans-url"),
       mapRevision,
+      mapSceneEpoch: entry.map_scene_epoch == null
+        ? null : boundedString(entry.map_scene_epoch, 128, "invalid-map-scene-epoch"),
       mapFloorCoherent: booleanValue(entry.map_floor_coherent, "invalid-floor-coherence"),
       mapSessionVerified: booleanValue(entry.map_session_verified, "invalid-session-state"),
       mapSessionKey: mapSessionKey(entry.map_session_key),
@@ -816,6 +821,10 @@ export const parsePose = (value: unknown): PoseModel => {
     position,
     source: boundedString(payload.source, 64, "invalid-pose-source"),
     revision: boundedInteger(payload.revision, 0, Number.MAX_SAFE_INTEGER, "invalid-pose-revision"),
+    sceneRevision: payload.scene_revision == null ? null
+      : boundedInteger(payload.scene_revision, 0, Number.MAX_SAFE_INTEGER, "invalid-pose-scene-revision"),
+    sceneEpoch: payload.scene_epoch == null ? null
+      : boundedString(payload.scene_epoch, 128, "invalid-pose-scene-epoch"),
     poseRevision: boundedInteger(payload.pose_revision, 0, Number.MAX_SAFE_INTEGER, "invalid-pose-sequence"),
     floorCoherent: booleanValue(payload.map_floor_coherent, "invalid-pose-floor"),
     mapSessionKey: mapSessionKey(payload.map_session_key),
