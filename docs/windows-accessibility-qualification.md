@@ -60,7 +60,7 @@ The run result includes at most 24 bounded browser readiness diagnostics. These
 identify the last completed synthetic fixture stage, forced-colors and scene
 readbacks, Edge version when available, and a sanitized stage error when
 startup fails. Diagnostic paths are redacted and the temporary task directory,
-including raw redirected Node logs, is removed after the summary is emitted.
+including raw redirected Node logs, is removed before the summary is emitted.
 
 ## Sources
 
