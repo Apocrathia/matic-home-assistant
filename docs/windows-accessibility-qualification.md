@@ -10,8 +10,13 @@ The job uses the committed Map Studio bundle and the synthetic local fixture.
 It has `contents: read`, uses no Home Assistant credentials or live services,
 and does not publish screenshots, video, traces, audio, transcripts, or browser
 artifacts. It downloads the official NVDA 2026.2 stable installer, verifies its
-published SHA-256 and Authenticode signer, creates a temporary portable copy,
-and disables add-ons and logging.
+published SHA-256 and Authenticode signer, creates a temporary portable copy
+with a fresh profile, and disables logging. The test-only passive plugin is
+loaded through NVDA's enabled scratchpad directory; the harness leaves
+`--disable-addons` off because the pinned NVDA 2026.2
+[`addDirsToPythonPackagePath`](https://github.com/nvaccess/nvda/blob/release-2026.2/source/addonHandler/packaging.py#L34-L45)
+returns before adding scratchpad paths when that option is set. The profile is
+fresh and contains no installed add-ons.
 
 The PowerShell harness reads the initial Windows High Contrast flag, sets and
 reads back `HCF_HIGHCONTRASTON` with `SystemParametersInfo`, then restores and
@@ -24,7 +29,10 @@ observes the documented `speech.extensions.pre_speechQueued` action and
 injects, or cancels speech. The pilot requires a matching NVDA-generated
 synthetic phrase after actual Tab navigation and after Insert+Tab. The plugin
 records only short segments containing a small allowlist of fixture phrases,
-with timestamp, NVDA PID, Edge module, phase, and plugin source hash. Its JSONL
+with a UTC timestamp, NVDA PID, Edge module, phase, and plugin source hash.
+Speech callbacks qualify only when their timestamp is later than the recorded
+OS-key-injection boundary for that phase; both timestamps use the Windows UTC
+wall clock and are compared as integer nanoseconds. Its JSONL
 receipt is job-temporary and deleted during cleanup. The machine-readable
 workflow line reports only bounded synthetic phrase matches, versions,
 booleans, counts, and status.

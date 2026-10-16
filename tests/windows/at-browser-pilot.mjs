@@ -84,9 +84,19 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 700));
   const events = (await readText("events.jsonl"))
     .split(/\r?\n/u).filter(Boolean).map((line) => JSON.parse(line));
+  const boundaries = (await readText("key-boundaries.jsonl"))
+    .split(/\r?\n/u).filter(Boolean).map((line) => JSON.parse(line));
+  const boundaryByPhase = new Map(boundaries.map((boundary) => [boundary.phase, BigInt(boundary.timeNs)]));
+  const afterBoundary = (event) => {
+    const boundary = boundaryByPhase.get(event.phase);
+    return boundary !== undefined && /^\d+$/u.test(event.timeNs)
+      && BigInt(event.timeNs) > boundary;
+  };
   const loaded = events.some((event) => event.kind === "loaded");
-  const reportSpeech = events.filter((event) => event.phase === "nvda-report" && event.kind === "speech");
-  const tabSpeech = events.filter((event) => /^tab-[1-8]$/u.test(event.phase) && event.kind === "speech");
+  const reportSpeech = events.filter((event) => event.phase === "nvda-report"
+    && event.kind === "speech" && afterBoundary(event));
+  const tabSpeech = events.filter((event) => /^tab-[1-8]$/u.test(event.phase)
+    && event.kind === "speech" && afterBoundary(event));
   const tabFocusEvents = events.filter((event) => /^tab-[1-8]$/u.test(event.phase) && event.kind === "focus");
   const observedTerms = (records) => new Set(records.flatMap((event) => event.segments || []));
   const correlatedToNvdaFocus = (records) => records.some((event) => event.focusName

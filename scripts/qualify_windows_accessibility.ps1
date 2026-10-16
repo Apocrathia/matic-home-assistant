@@ -148,10 +148,12 @@ enabled = False
 
     $phaseFile = Join-Path $pilotDir 'phase.json'
     $eventFile = Join-Path $pilotDir 'events.jsonl'
+    $boundaryFile = Join-Path $pilotDir 'key-boundaries.jsonl'
+    Set-Content -LiteralPath $boundaryFile -Value '' -NoNewline -Encoding utf8
     $env:NVDA_PILOT_PHASE_FILE = $phaseFile
     $env:NVDA_PILOT_EVENT_FILE = $eventFile
     $env:NVDA_PILOT_DIR = $pilotDir
-    $nvdaProcess = Start-Process -FilePath $nvdaExe -ArgumentList @('--minimal','--disable-addons','--no-logging','--config-path', $config) -PassThru
+    $nvdaProcess = Start-Process -FilePath $nvdaExe -ArgumentList @('--minimal','--no-logging','--config-path', $config) -PassThru
     $result.nvdaPid = $nvdaProcess.Id
     $env:NVDA_PILOT_PID = [string]$nvdaProcess.Id
     $pluginReady = $false
@@ -180,7 +182,9 @@ enabled = False
         Remove-Item -LiteralPath (Join-Path $pilotDir "armed-$phase"),(Join-Path $pilotDir "ack-$phase") -Force -ErrorAction SilentlyContinue
         @{ phase = $phase } | ConvertTo-Json -Compress | Set-Content -LiteralPath $phaseFile -Encoding utf8
         if (-not (Wait-ForFile (Join-Path $pilotDir "armed-$phase"))) { throw "Probe did not arm keyboard phase $phase." }
+        $boundaryNs = ([DateTime]::UtcNow.Ticks - 621355968000000000L) * 100
         Send-VirtualKey 0x09
+        (@{ phase = $phase; timeNs = [string]$boundaryNs } | ConvertTo-Json -Compress) | Add-Content -LiteralPath $boundaryFile -Encoding utf8
         Set-Content -LiteralPath (Join-Path $pilotDir 'key-sent') -Value $phase -NoNewline -Encoding utf8
         if (-not (Wait-ForFile (Join-Path $pilotDir "ack-$phase"))) { throw "Browser did not acknowledge keyboard phase $phase." }
         $observationsPath = Join-Path $pilotDir 'browser-observations.jsonl'
@@ -200,9 +204,11 @@ enabled = False
     @{ phase = $phase } | ConvertTo-Json -Compress | Set-Content -LiteralPath $phaseFile -Encoding utf8
     if (-not (Wait-ForFile (Join-Path $pilotDir "armed-$phase"))) { throw 'Probe did not arm NVDA+Tab report phase.' }
     # Native OS keyboard input: Insert modifier plus Tab invokes NVDA's report-focus command.
+    $boundaryNs = ([DateTime]::UtcNow.Ticks - 621355968000000000L) * 100
     [HighContrastNative]::keybd_event(0x2D, 0, 1, [UIntPtr]::Zero)
     Send-VirtualKey 0x09
     [HighContrastNative]::keybd_event(0x2D, 0, 3, [UIntPtr]::Zero)
+    (@{ phase = $phase; timeNs = [string]$boundaryNs } | ConvertTo-Json -Compress) | Add-Content -LiteralPath $boundaryFile -Encoding utf8
     Set-Content -LiteralPath (Join-Path $pilotDir 'key-sent') -Value $phase -NoNewline -Encoding utf8
     if (-not (Wait-ForFile (Join-Path $pilotDir "ack-$phase"))) { throw 'Browser did not acknowledge NVDA+Tab report phase.' }
     $nodeProcess.WaitForExit(15000) | Out-Null
