@@ -68,7 +68,7 @@ state. A cell ID with settings other than its own is an error too, and the banne
 | C02 | Phone landscape | `w=844&h=390` | Safari on the Mac, frame 844 × 390 |
 | C03 | Tablet 1024 | `w=1024&h=768` | Safari on the Mac, frame 1024 × 768 |
 | C04 | Desktop 1440 | `w=1440&h=900` | Safari on the Mac, frame 1440 × 900 |
-| C05 | Touch / mouse+keyboard | `input=touch` | Safari touch presentation and mobile WebKit emulation; actual iPhone/iPad touch is a separate installed-device check |
+| C05 | Touch / mouse+keyboard | `input=touch` | Safari touch presentation; mouse/keyboard and mobile input have separate interaction suites; actual iPhone/iPad touch is an installed-device check |
 | C06 | Light/dark | `w=390&h=844&theme=dark` | Safari on the Mac, Home Assistant's dark palette |
 | C07 | RTL + one non-English language | `w=390&h=844&dir=rtl&lang=xa` | Safari on the Mac, right to left, pseudo-language |
 | C08 | Forced colours | `w=1024&h=768&contrast=forced&motion=reduce` | Chromium, opened by the script with forced colours and reduced motion on |
@@ -76,10 +76,11 @@ state. A cell ID with settings other than its own is an error too, and the banne
 
 ### Setup notes
 
-- **Touch (C05).** The autonomous matrix checks touch presentation and emulated mobile input, plus Mac mouse and
-  keyboard interaction (Tab, Enter, Escape, arrow keys). Actual iPhone/iPad touch remains in the installed-device
-  gate; it is not a prerequisite for recording the synthetic C05 result. For device staging, `--lan` prints a
-  same-Wi-Fi link that works only while the server runs; without `--lan` only this Mac can reach it.
+- **Touch (C05).** The staging command opens desktop Safari with `input=touch` presentation; it does not emulate
+  touch hardware or execute touch input. Mouse/keyboard and mobile WebKit input are checked in separately named
+  interaction suites, not inferred from the matrix visit. Actual iPhone/iPad touch remains in the installed-device
+  gate and is not a prerequisite for recording synthetic C05 presentation results. For device staging, `--lan`
+  prints a same-Wi-Fi link that works only while the server runs; without it only this Mac can reach the stage.
 - **Language (C07).** `lang=xa` is a synthetic pseudo-language made from `strings.json`: every string is accented,
   bracketed and about 30 % longer, with `{placeholders}` filled in. Plain English left on screen is text that skipped
   translation; a clipped bracket is a layout that will clip a real language. `dir=rtl` mirrors the layout.
