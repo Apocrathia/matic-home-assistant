@@ -20,6 +20,7 @@ import {
   type WorkspaceState,
 } from "./contracts";
 import type { AreaCircle, CadenceReason, NextRunPreviewBlocker, SavedPlan } from "./backend-contracts";
+import { entryFloorKey, entryMissionKey } from "./backend-contracts";
 import { notice, readWorkspaceNotice, type CameraPreference } from "./contracts";
 
 const emptyResource = <T>(): { status: "idle"; value: T | null; problem: null } => ({
@@ -216,8 +217,8 @@ export const admittedManualRoomPreview = (state: WorkspaceState): AdmittedManual
   if (!admitted || !entry || admitted.key !== manualRoomPreviewKey(state)
     || admitted.generation !== state.generation
     || admitted.preview.entryId !== state.selection.entryId
-    || admitted.floorKey !== [entry.selectedFloorOrdinal ?? "none", entry.mapFloorOrdinal ?? "none", entry.mapFloorCoherent ? "coherent" : "transition"].join(":")
-    || admitted.missionKey !== [entry.mapFloorOrdinal ?? "none", entry.mapSessionVerified ? "verified" : "unverified", entry.mapSessionKey ?? "no-session"].join(":")) return null;
+    || admitted.floorKey !== entryFloorKey(entry)
+    || admitted.missionKey !== entryMissionKey(entry)) return null;
   return admitted;
 };
 

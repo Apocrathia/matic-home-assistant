@@ -859,7 +859,7 @@ test.describe("Area review", () => {
     await page.waitForTimeout(150);
     await gallery.locator(".action-bar").getByRole("button", { name: "Name and save", exact: true }).click();
     await expect.poll(async () => (await snapshot(page)).cameras.top?.zoom ?? 1).toBeGreaterThan(1.5);
-    expect(await overlayAlpha(gallery, 4, 4)).toBeGreaterThan(60);
+    await expect.poll(() => overlayAlpha(gallery, 4, 4)).toBeGreaterThan(60);
   });
 
   test("Redraw from a saved review keeps the outline and Done comes back to Redraw", async ({ page }) => {

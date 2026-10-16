@@ -12,6 +12,7 @@ import type {
   SavedPlan,
 } from "./backend-contracts";
 import { notice, type DialogKind, type PlanView, type WorkspaceNotice, type WorkspaceState } from "./contracts";
+import { entryFloorKey, entryMissionKey } from "./backend-contracts";
 import { draftForPlan, initialWorkspaceState, manualRoomPreviewKey } from "./state";
 import {
   syntheticAreas,
@@ -945,8 +946,8 @@ export const withGalleryRoomPreview = (state: WorkspaceState, overrides?: Galler
   }
   if (!overrides && (state.manualRoomPreview.status === "loading" || state.manualRoomPreview.status === "error")) return state;
   const key = manualRoomPreviewKey(state);
-  if (!key || !state.selection.entryId) return { ...state, manualRoomPreview: { status: "idle", value: null, problem: null } };
   const entry = state.resources.entry;
+  if (!entry || !key || !state.selection.entryId) return { ...state, manualRoomPreview: { status: "idle", value: null, problem: null } };
   const rooms = state.resources.plans.value?.rooms ?? [];
   // New overrides merge over the ones the preview carries, so a test can add
   // a blocker to a scenario's due work.
@@ -981,8 +982,8 @@ export const withGalleryRoomPreview = (state: WorkspaceState, overrides?: Galler
       value: {
         key,
         generation: state.generation,
-        floorKey: [entry?.selectedFloorOrdinal ?? "none", entry?.mapFloorOrdinal ?? "none", entry?.mapFloorCoherent ? "coherent" : "transition"].join(":"),
-        missionKey: [entry?.mapFloorOrdinal ?? "none", entry?.mapSessionVerified ? "verified" : "unverified", entry?.mapSessionKey ?? "no-session"].join(":"),
+        floorKey: entryFloorKey(entry),
+        missionKey: entryMissionKey(entry),
         preview,
       },
     },

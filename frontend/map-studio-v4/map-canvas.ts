@@ -505,27 +505,26 @@ export class MaticMapCanvasV4 extends LitElement {
     if (!state.host.administrator) return this.#t("v4_admin_required", "Administrator access required");
     if (state.host.robotCount === 0) return this.#t("v4_no_robot", "No robot set up");
     if (showScene && state.activity !== "problem") return null;
-    if (state.dataMode === "live" && state.floor.readOnly && state.map.available && state.notice?.key === "v4_notice_saved_map") {
-      return this.#t("v4_saved_map_read_only_title", "Saved map is read only");
-    }
     if (state.dataMode === "history") {
-      if (!state.map.available && state.resources.scene.status === "loading") return this.#t("v4_loading_saved_map", "Loading saved map");
-      if (!state.map.available) return this.#t("v4_saved_map_unavailable", "Saved map unavailable");
-      return null;
+      return state.map.available ? null : state.resources.scene.status === "loading"
+        ? this.#t("v4_loading_saved_map", "Loading saved map")
+        : this.#t("v4_saved_map_unavailable", "Saved map unavailable");
     }
     if (!state.host.robotConnected) return this.#t("v4_robot_offline", "Robot offline");
     if (state.coherence === "verifying" || state.coherence === "booting") return this.#t("v4_locating_map", "Locating the current map");
-    if (!state.map.available && state.resources.scene.status === "loading") return this.#t("v4_loading_verified_map", "Loading the current map");
-    if (!state.map.available) return this.#t("v4_map_unavailable", "Map unavailable");
+    if (!state.map.available) return state.resources.scene.status === "loading"
+      ? this.#t("v4_loading_verified_map", "Loading the current map")
+      : this.#t("v4_map_unavailable", "Map unavailable");
     if (state.activity === "problem") return this.#t("v4_robot_attention", "Robot needs attention");
     return null;
   }
 
   #renderRail(showScene: boolean) {
+    if (!showScene) return nothing;
     const state = this.state;
     const narrow = this.narrow;
     const draw = state.workflow === "draw";
-    const saved = showScene ? savedMapPosition(state) : null;
+    const saved = savedMapPosition(state);
     const helpTitle = this.#t("v4_how_to_move", "How to move the map");
     // Draw and the area review force the top view, so the view, appearance
     // and camera groups are noise there; the sheet owns the tools on a phone. Both leave Fit and
@@ -533,12 +532,10 @@ export class MaticMapCanvasV4 extends LitElement {
     // bar. Without a scene there is nothing to fit, switch or explain
     // (home-rooms.md §11 MS-HOME-04), so the rail keeps nothing. A phone's
     // Room names row is in Map options; its rail keeps the help "?".
-    const showView = showScene && !draw && state.workflow !== "areaReview";
+    const showView = !draw && state.workflow !== "areaReview";
     const showAppearance = showView && !narrow && state.view === "top";
     const showCamera = showView && state.view === "three";
-    const showTools = showScene;
-    const showExtras = showScene;
-    const showLabels = showExtras && !narrow && !draw;
+    const showLabels = !narrow && !draw;
 
     return html`
       <div class="map-rail" data-map-control>
@@ -549,7 +546,7 @@ export class MaticMapCanvasV4 extends LitElement {
             <span aria-hidden="true">${this.#t("v4_saved_map_position", "{date} · {position} of {count}", { date: { date: saved.date }, position: saved.position, count: saved.count })}</span>
           </div>
         ` : nothing}
-        ${showScene ? html`<div class="map-context"><slot name="floor"></slot>
+        <div class="map-context"><slot name="floor"></slot>
         ${showView ? html`
           <div class="view-switch ms-surface ms-surface--floating ms-segment" role="group" aria-label=${this.#t("map_view_label", "Map view")}>
             <button
@@ -566,7 +563,7 @@ export class MaticMapCanvasV4 extends LitElement {
             >${this.#t("map_view_top", "2D")}</button>
           </div>
         ` : nothing}
-        </div>` : nothing}
+        </div>
         ${showAppearance ? html`
           <div class="appearance-switch ms-surface ms-surface--floating ms-segment" role="group" aria-label=${this.#t("map_style_label", "Map style")}>
             <button
@@ -593,8 +590,7 @@ export class MaticMapCanvasV4 extends LitElement {
           </div>
         ` : nothing}
 
-        ${showTools ? html`
-          <div class="map-tools ms-surface ms-surface--floating ms-segment" role="group" aria-label=${this.#t("v4_map_tools", "Map tools")}>
+        <div class="map-tools ms-surface ms-surface--floating ms-segment" role="group" aria-label=${this.#t("v4_map_tools", "Map tools")}>
               <button
                 class="fit ms-btn"
                 type="button"
@@ -606,9 +602,7 @@ export class MaticMapCanvasV4 extends LitElement {
                 title=${this.#t("v4_fit_map", "Fit map")}
               >${icon(iconFit)}<span class="ms-btn__label">${this.#t("v4_fit_map", "Fit map")}</span></button>
           </div>
-        ` : nothing}
-        ${showExtras ? html`
-          <div class="map-extras ms-surface ms-surface--floating ms-segment" role="group" aria-label=${this.#t("v4_map_display", "Map display")}>
+        <div class="map-extras ms-surface ms-surface--floating ms-segment" role="group" aria-label=${this.#t("v4_map_display", "Map display")}>
               ${showLabels ? html`
               <button
                 class="labels ms-btn"
@@ -628,9 +622,8 @@ export class MaticMapCanvasV4 extends LitElement {
                 title=${helpTitle}
               >${icon(iconHelp)}</button>
           </div>
-        ` : nothing}
 
-        ${showExtras ? this.help ?? nothing : nothing}
+        ${this.help ?? nothing}
       </div>
     `;
   }
