@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import secrets
 from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -215,6 +216,9 @@ def catalog_entry_projection(
             if scene_view is not None
             else runtime.slam_map.revision
         ),
+        "map_scene_epoch": (
+            scene_view.scene_epoch(entry_id) if scene_view is not None else None
+        ),
         "map_floor_coherent": floor_plan_coherent,
         "selected_floor_ordinal": selected_floor_ordinal,
         "map_floor_ordinal": map_floor_ordinal,
@@ -306,10 +310,13 @@ class MaticSlamSceneView(HomeAssistantView):
         self._tasks: dict[str, asyncio.Task[_CachedScene | None]] = {}
         self._epochs: dict[str, int] = {}
         self._generations: dict[str, _SceneGeneration] = {}
+        self._scene_epochs: dict[str, str] = {}
 
     def clear_entry(self, entry_id: str) -> None:
         """Forget all in-memory scene material retained for one robot."""
         self._epochs[entry_id] = self._epochs.get(entry_id, 0) + 1
+        if entry_id in self._generations:
+            self._scene_epochs[entry_id] = secrets.token_hex(16)
         self._cache.pop(entry_id, None)
         self._versions.pop(entry_id, None)
         task = self._tasks.pop(entry_id, None)
@@ -339,6 +346,14 @@ class MaticSlamSceneView(HomeAssistantView):
         """Return a monotonic revision covering SLAM and floor-plan changes."""
         key = _scene_snapshot_key(runtime)
         return self._revision_for_key(entry_id, key)
+
+    def scene_epoch(self, entry_id: str) -> str:
+        """Return the opaque identity for this entry's transport revision counter."""
+        epoch = self._scene_epochs.get(entry_id)
+        if epoch is None:
+            epoch = secrets.token_hex(16)
+            self._scene_epochs[entry_id] = epoch
+        return epoch
 
     def available_revision(self, entry_id: str, runtime: MaticRuntimeData) -> int:
         """Return the newest safe scene a newly opened panel can receive now."""
@@ -833,7 +848,8 @@ class MaticSlamPoseView(HomeAssistantView):
     url = POSE_API_URL
     name = "api:matic_robot:slam_pose"
 
-    def __init__(self) -> None:
+    def __init__(self, scene_view: MaticSlamSceneView | None = None) -> None:
+        self._scene_view = scene_view
         self._cache: dict[str, _CachedPose] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._epochs: dict[str, int] = {}
@@ -871,7 +887,7 @@ class MaticSlamPoseView(HomeAssistantView):
                         headers=PRIVATE_NO_STORE_HEADERS,
                     )
                 if _pose_frame_key(runtime) != frame_key:
-                    return self._unavailable_frame(runtime)
+                    return self._unavailable_frame(entry_id, runtime)
                 cached = self._cache.get(entry_id)
                 now = monotonic()
                 if (
@@ -896,7 +912,7 @@ class MaticSlamPoseView(HomeAssistantView):
                             headers=PRIVATE_NO_STORE_HEADERS,
                         )
                     if _pose_frame_key(runtime) != frame_key:
-                        return self._unavailable_frame(runtime)
+                        return self._unavailable_frame(entry_id, runtime)
                     previous_revision = (
                         cached.revision
                         if cached is not None and cached.runtime_id == id(runtime)
@@ -932,6 +948,16 @@ class MaticSlamPoseView(HomeAssistantView):
                 "position": list(position[:2]) if position is not None else None,
                 "source": source,
                 "revision": runtime.slam_map.revision,
+                "scene_revision": (
+                    self._scene_view.current_revision(entry_id, runtime)
+                    if self._scene_view is not None
+                    else None
+                ),
+                "scene_epoch": (
+                    self._scene_view.scene_epoch(entry_id)
+                    if self._scene_view is not None
+                    else None
+                ),
                 "map_floor_coherent": floor_plan_coherent,
                 "pose_revision": cached.revision,
                 "pose_age_seconds": round(max(0.0, monotonic() - cached.fetched_at), 3),
@@ -943,13 +969,25 @@ class MaticSlamPoseView(HomeAssistantView):
             headers=PRIVATE_NO_STORE_HEADERS,
         )
 
-    def _unavailable_frame(self, runtime: MaticRuntimeData) -> web.Response:
+    def _unavailable_frame(
+        self, entry_id: str, runtime: MaticRuntimeData
+    ) -> web.Response:
         """Clear a previously displayed marker after a coordinate-frame revocation."""
         return self.json(
             {
                 "position": None,
                 "source": "unavailable",
                 "revision": runtime.slam_map.revision,
+                "scene_revision": (
+                    self._scene_view.current_revision(entry_id, runtime)
+                    if self._scene_view is not None
+                    else None
+                ),
+                "scene_epoch": (
+                    self._scene_view.scene_epoch(entry_id)
+                    if self._scene_view is not None
+                    else None
+                ),
                 "map_floor_coherent": False,
                 "pose_revision": 0,
                 "pose_age_seconds": 0.0,

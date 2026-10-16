@@ -69,6 +69,7 @@ from custom_components.matic_robot.slam_scene import (
     MaticSlamSceneView,
     _map_session_key,
     areas_api_url,
+    catalog_entry_projection,
     delta_api_url,
     history_api_url,
     history_scene_api_url,
@@ -377,6 +378,7 @@ async def test_scene_generation_covers_both_multi_floor_transition_orders(
 
     initial = json.loads((await catalog_view.get(_request(hass))).body)["entries"][0]
     assert initial["map_revision"] == 7
+    assert isinstance(initial["map_scene_epoch"], str)
     assert initial["map_floor_coherent"] is True
 
     if first_change == "floor":
@@ -397,6 +399,7 @@ async def test_scene_generation_covers_both_multi_floor_transition_orders(
         )
     settled = json.loads((await catalog_view.get(_request(hass))).body)["entries"][0]
     assert settled["map_revision"] > transition["map_revision"]
+    assert settled["map_scene_epoch"] == initial["map_scene_epoch"]
     assert settled["map_floor_coherent"] is True
 
     response = await scene_view.get(_request(hass), "entry")
@@ -886,6 +889,8 @@ async def test_pose_view_returns_exact_fallback_and_unavailable_positions() -> N
         "position": [0.1, 0.2],
         "source": "exact_pose",
         "revision": 7,
+        "scene_revision": None,
+        "scene_epoch": None,
         "map_floor_coherent": True,
         "pose_revision": 1,
         "pose_age_seconds": 0.0,
@@ -916,12 +921,70 @@ async def test_pose_view_returns_exact_fallback_and_unavailable_positions() -> N
         "position": None,
         "source": "unavailable",
         "revision": 7,
+        "scene_revision": None,
+        "scene_epoch": None,
         "map_floor_coherent": False,
         "pose_revision": 1,
         "pose_age_seconds": 0.0,
         "pose_freshness": "live",
         "map_session_key": None,
     }
+
+
+async def test_pose_revision_shares_catalog_counter_and_rotates_epoch() -> None:
+    runtime = _runtime(revision=7)
+    hass = _hass(_entry(runtime))
+    scene_view = MaticSlamSceneView()
+    pose_view = MaticSlamPoseView(scene_view)
+    catalog_before = catalog_entry_projection("entry", runtime, scene_view)
+
+    runtime.coordinator.data.floor_plan = replace(
+        runtime.coordinator.data.floor_plan, floor_label="Renamed floor"
+    )
+    catalog_after = catalog_entry_projection("entry", runtime, scene_view)
+    response = await pose_view.get(_request(hass), "entry")
+    payload = json.loads(response.body)
+
+    assert payload["revision"] == 7
+    assert payload["scene_revision"] == catalog_after["map_revision"]
+    assert payload["scene_revision"] > payload["revision"]
+    assert payload["scene_epoch"] == catalog_after["map_scene_epoch"]
+    assert catalog_after["map_scene_epoch"] == catalog_before["map_scene_epoch"]
+
+    scene_view.clear_entry("entry")
+    reset_catalog = catalog_entry_projection("entry", runtime, scene_view)
+    assert reset_catalog["map_revision"] == 7
+    assert reset_catalog["map_scene_epoch"] != catalog_after["map_scene_epoch"]
+
+
+async def test_pose_frame_revocation_uses_current_scene_revision_after_await() -> None:
+    runtime = _runtime(revision=7)
+    hass = _hass(_entry(runtime))
+    scene_view = MaticSlamSceneView()
+    pose_view = MaticSlamPoseView(scene_view)
+    initial_revision = scene_view.current_revision("entry", runtime)
+    initial_epoch = scene_view.scene_epoch("entry")
+    pose_started = asyncio.Event()
+    release_pose = asyncio.Event()
+
+    async def delayed_pose():
+        pose_started.set()
+        await release_pose.wait()
+        return RobotPose(0.1, 0.2, 0.0)
+
+    runtime.client.async_get_pose.side_effect = delayed_pose
+    pending = asyncio.create_task(pose_view.get(_request(hass), "entry"))
+    await asyncio.wait_for(pose_started.wait(), timeout=1)
+    runtime.coordinator.data.floor_plan = replace(
+        runtime.coordinator.data.floor_plan, mission_id=2
+    )
+    release_pose.set()
+    response = await asyncio.wait_for(pending, timeout=1)
+    payload = json.loads(response.body)
+
+    assert payload["map_floor_coherent"] is False
+    assert payload["scene_epoch"] == initial_epoch
+    assert payload["scene_revision"] > initial_revision
 
 
 async def test_pose_view_coalesces_concurrent_live_reads_and_rechecks_runtime() -> None:
@@ -1105,7 +1168,11 @@ async def test_scene_and_catalog_require_admin_and_loaded_catalog_entries() -> N
     assert (
         response.headers["Cache-Control"] == PRIVATE_NO_STORE_HEADERS["Cache-Control"]
     )
-    assert json.loads(response.body) == {
+    payload = json.loads(response.body)
+    scene_epoch = payload["entries"][0].pop("map_scene_epoch")
+    assert isinstance(scene_epoch, str) and len(scene_epoch) == 32
+    assert all(character in "0123456789abcdef" for character in scene_epoch)
+    assert payload == {
         "entries": [
             {
                 "entry_id": loaded.entry_id,

@@ -96,7 +96,7 @@ async def async_register_frontend(hass: HomeAssistant) -> None:
         ]
     )
     scene_view = MaticSlamSceneView()
-    pose_view = MaticSlamPoseView()
+    pose_view = MaticSlamPoseView(scene_view)
     hass.data[DATA_SLAM_SCENE_VIEW] = scene_view
     hass.data[DATA_SLAM_POSE_VIEW] = pose_view
     hass.http.register_view(scene_view)
