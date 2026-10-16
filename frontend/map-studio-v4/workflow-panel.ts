@@ -92,9 +92,8 @@ background: var(--ms-local);
 font-size: var(--ms-t-sm);
 line-height: var(--ms-lh-snug);
 }
-/* As the shell's notices: the text keeps the primary colour and the tone is
-   the inline-start rule and the tint (design-system.md). */
-.problem, .notice[data-tone="warning"] { --ms-local: color-mix(in srgb, var(--notice-tone) 12%, var(--ms-surface-card)); border-inline-start: 3px solid var(--notice-tone); color: var(--ms-text); }
+/* As the shell's notices: the text keeps the primary colour on the tone tint. */
+.problem, .notice[data-tone="warning"] { --ms-local: color-mix(in srgb, var(--notice-tone) 12%, var(--ms-surface-card)); color: var(--ms-text); }
 .problem { --notice-tone: var(--ms-danger); }
 .notice[data-tone="warning"] { --notice-tone: var(--ms-warning); }
 .split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--ms-space-2); }

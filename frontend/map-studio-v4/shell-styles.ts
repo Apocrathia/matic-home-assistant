@@ -159,8 +159,7 @@ export const shellStyles = [tokens, base, controls, css`
     .panel-description { margin: var(--ms-space-1) 0 var(--ms-space-4); color: var(--ms-text-quiet); font-size: var(--ms-t-sm); line-height: var(--ms-lh-normal); }
 
     /* Notice slot and toast (shell.md §4, design-system.md .ms-notice): the
-       text stays --ms-text on the tone's tint; the glyph and the inline-start
-       rule carry the tone, never the text colour. */
+       text stays --ms-text on the tone's tint; the glyph carries the tone. */
     .notice {
       --notice-tone: var(--ms-accent);
       --ms-local: color-mix(in srgb, var(--notice-tone) 12%, var(--ms-surface-card));
@@ -168,7 +167,6 @@ export const shellStyles = [tokens, base, controls, css`
       gap: var(--ms-space-2);
       align-items: center;
       padding-inline-start: var(--ms-space-3);
-      border-inline-start: 3px solid var(--notice-tone);
       border-radius: var(--ms-radius-md);
       background: var(--ms-local);
       color: var(--ms-text);
