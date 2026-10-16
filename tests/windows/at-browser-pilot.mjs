@@ -8,10 +8,39 @@ const root = process.env.NVDA_PILOT_DIR;
 if (!root) throw new Error("NVDA_PILOT_DIR is required");
 const path = (name) => `${root}/${name}`;
 const server = createGalleryServer();
+const startedAt = Date.now();
+const diagnosticPath = path("diagnostics.jsonl");
+const diagnosticLimit = 24;
 let browser;
 let previousPhase = "";
 let previousSent = "";
 let sawPanelFocus = false;
+let diagnosticCount = 0;
+let stage = "startup";
+
+function safeDiagnosticMessage(value) {
+  return String(value)
+    .replace(/(?:[A-Za-z]:\\|\\\\)[^"'<>]+/gu, "<path>")
+    .replace(/\/(?:Users|home|tmp|private|var|opt|Applications)\/[^"'<>]+/gu, "<path>")
+    .replace(/[\r\n\t]+/gu, " ")
+    .slice(0, 240);
+}
+
+async function recordDiagnostic(event, details = {}) {
+  if (diagnosticCount >= diagnosticLimit) return;
+  diagnosticCount += 1;
+  const record = {
+    stage,
+    event,
+    elapsedMs: Math.max(0, Date.now() - startedAt),
+    browserVersion: details.browserVersion ? safeDiagnosticMessage(details.browserVersion) : null,
+    forcedColors: typeof details.forcedColors === "boolean" ? details.forcedColors : null,
+    sceneReady: typeof details.sceneReady === "boolean" ? details.sceneReady : null,
+    errorType: details.errorType ? safeDiagnosticMessage(details.errorType) : null,
+    error: details.error ? safeDiagnosticMessage(details.error) : null,
+  };
+  await appendFile(diagnosticPath, `${JSON.stringify(record)}\n`).catch(() => {});
+}
 
 async function readText(name) {
   try { return (await readFile(path(name), "utf8")).trim(); } catch { return ""; }
@@ -23,14 +52,29 @@ async function readJson(name) {
 
 try {
   await mkdir(root, { recursive: true });
+  await recordDiagnostic("server-listen-start");
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(4173, "127.0.0.1", resolve);
   });
+  stage = "edge-launch";
+  await recordDiagnostic("edge-launch-start");
   browser = await chromium.launch({ channel: "msedge", headless: false });
-  const page = await browser.newPage({ viewport: { width: 1180, height: 760 } });
-  await page.goto("http://127.0.0.1:4173/");
-  const fixture = await installPanelFixture(page, { moduleSource: "packaged" });
+  await recordDiagnostic("edge-launched", { browserVersion: browser.version() });
+  const context = await browser.newContext({
+    baseURL: "http://127.0.0.1:4173",
+    viewport: { width: 1180, height: 760 },
+  });
+  const page = await context.newPage();
+  stage = "gallery-navigation";
+  await page.goto("/");
+  await recordDiagnostic("gallery-page-loaded");
+  stage = "fixture-navigation";
+  const fixture = await installPanelFixture(page, {
+    moduleSource: "packaged",
+    onNavigationComplete: () => { stage = "fixture-install"; },
+  });
+  await recordDiagnostic("fixture-installed");
   await page.evaluate((tag) => {
     document.body.style.margin = "0";
     const panel = window.__panelFixture.createPanel();
@@ -39,11 +83,17 @@ try {
     document.body.append(panel);
     window.__pilotPanelTag = tag;
   }, fixture.panelTag);
+  stage = "scene-readiness";
   await page.waitForFunction(() => window.__pilotPanel?.getWorkspaceSnapshot().resources.scene.status === "ready", null, { timeout: 15_000 });
+  const sceneReady = await page.evaluate(() => window.__pilotPanel?.getWorkspaceSnapshot().resources.scene.status === "ready");
+  await recordDiagnostic("fixture-scene-ready", { sceneReady });
   const forcedColors = await page.evaluate(() => matchMedia("(forced-colors: active)").matches);
+  await recordDiagnostic("forced-colors-readback", { forcedColors });
   if (!forcedColors) throw new Error("headed Edge did not observe Windows forced colors");
   await page.bringToFront();
   await writeFile(path("ready"), JSON.stringify({ forcedColors, processId: process.pid }));
+  stage = "keyboard-pilot";
+  await recordDiagnostic("readiness-published", { forcedColors, browserVersion: browser.version() });
 
   const deadline = Date.now() + 120_000;
   let requestedReport = false;
@@ -132,6 +182,12 @@ try {
     matchedSyntheticTerms: matchedTerms,
     audibleOutputVerified: false,
   }));
+} catch (error) {
+  await recordDiagnostic("stage-failed", {
+    errorType: error?.name || "Error",
+    error: error?.message || String(error),
+  });
+  throw error;
 } finally {
   await browser?.close();
   if (server.listening) await new Promise((resolve) => server.close(resolve));
