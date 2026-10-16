@@ -53,8 +53,7 @@ acceptance of identity recovery.
 - 2026-10-12: assistants can run plans, clean rooms, stop and reset a room
   schedule through the same checks as Matic Map.
 - 2026-10-14: custom areas join plans in 0.5 and run every time.
-- Earlier UX8 procedure requested approval cell by cell. The owner superseded it
-  with autonomous E2E inspection and reconfirmed that instruction on 2026-10-15;
+- Earlier UX8 procedure requested approval cell by cell. The owner superseded it with autonomous E2E inspection on 2026-10-15;
   physical/device and final release acceptance remain separate.
 
 ## Entity changes
