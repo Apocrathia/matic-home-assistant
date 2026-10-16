@@ -61,10 +61,15 @@ try {
   await recordDiagnostic("edge-launch-start");
   browser = await chromium.launch({ channel: "msedge", headless: false });
   await recordDiagnostic("edge-launched", { browserVersion: browser.version() });
-  const page = await browser.newPage({ viewport: { width: 1180, height: 760 } });
+  const context = await browser.newContext({
+    baseURL: "http://127.0.0.1:4173",
+    viewport: { width: 1180, height: 760 },
+  });
+  const page = await context.newPage();
+  stage = "gallery-navigation";
+  await page.goto("/");
+  await recordDiagnostic("gallery-page-loaded");
   stage = "fixture-navigation";
-  await page.goto("http://127.0.0.1:4173/");
-  await recordDiagnostic("fixture-page-loaded");
   stage = "fixture-install";
   const fixture = await installPanelFixture(page, { moduleSource: "packaged" });
   await recordDiagnostic("fixture-installed");

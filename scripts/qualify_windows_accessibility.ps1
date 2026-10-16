@@ -303,7 +303,7 @@ finally {
     }
     $diagnosticPath = Join-Path $pilotDir 'diagnostics.jsonl'
     if (Test-Path -LiteralPath $diagnosticPath) {
-        $allowedStages = @('startup','edge-launch','fixture-navigation','fixture-install','scene-readiness','keyboard-pilot')
+        $allowedStages = @('startup','edge-launch','gallery-navigation','fixture-navigation','fixture-install','scene-readiness','keyboard-pilot')
         $result.browserDiagnostics = @(
             Get-Content -LiteralPath $diagnosticPath -TotalCount 24 | ForEach-Object {
                 try {
