@@ -54,7 +54,7 @@ def test_doc_tables_match_the_cell_list() -> None:
 
 
 def test_sign_off_rule_and_links() -> None:
-    assert "Stable waits until every cell is approved" in DOC
+    assert "does not require one owner response per cell" in DOC
     assert "npm run stage:walkthrough -- R01-C01" in DOC
     package = json.loads((ROOT / "package.json").read_text())
     script = package["scripts"]["stage:walkthrough"]

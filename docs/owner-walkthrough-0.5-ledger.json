@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "product_base": "630029aef521ff0d5492ed8012d95b94e675da1d",
-  "approval_rule": "Owner verdict required for every cell; interface changes reopen affected cells.",
+  "approval_rule": "Owner authorized autonomous cell-by-cell inspection. Record source-bound automated results separately from optional owner verdicts; interface changes require affected checks to run again. Physical/device and final release acceptance remain separate.",
   "cells": [
     {
       "cell": "R01-C01",
@@ -939,5 +939,20 @@
       "fixing_commit": null,
       "approved_from": null
     }
-  ]
+  ],
+  "owner_direction": {
+    "confirmed_on": "2026-10-15",
+    "instruction": "finish e2e by yourself",
+    "reconfirmation": "i thought we automated the cell by cell inspection",
+    "per_cell_owner_responses_required": false,
+    "existing_verdicts": "Historical owner replies only; automation does not create approvals."
+  },
+  "automated_inspection": {
+    "historical_source": "d865312f36ef21a372d946272d206a70eb1ea92c",
+    "historical_cells_checked": 117,
+    "historical_step_visits": 765,
+    "historical_receipt": "owner-walkthrough-0.5-e2e.md",
+    "scope": "Synthetic browser inspection; actual touch, assistive technology, Windows High Contrast and robot execution remain separate.",
+    "candidate_evidence": "The corresponding release PR carries fresh candidate inspection results; historical counts alone do not qualify a changed interface."
+  }
 }
