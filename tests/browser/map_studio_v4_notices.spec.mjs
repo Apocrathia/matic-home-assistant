@@ -909,6 +909,17 @@ test("workflow problems and warnings use primary text without a coloured edge ba
     });
     expect(colours.text, scenario).toBe(colours.primary);
     expect(colours.rule, scenario).toBe("0px");
+    await page.emulateMedia({ forcedColors: "active" });
+    const forcedBorder = await box.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        widths: [style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth],
+        colors: [style.borderTopColor, style.borderRightColor, style.borderBottomColor, style.borderLeftColor],
+      };
+    });
+    expect(forcedBorder.widths, scenario).toEqual(["1px", "1px", "1px", "1px"]);
+    expect(new Set(forcedBorder.colors).size, scenario).toBe(1);
+    await page.emulateMedia({ forcedColors: "none" });
   }
 });
 

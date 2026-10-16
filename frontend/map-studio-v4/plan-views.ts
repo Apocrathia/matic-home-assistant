@@ -148,7 +148,7 @@ export class MaticPlanViewsV4 extends LitElement {
 .schedule-note { margin: 0; color: var(--ms-text); font-size: var(--ms-t-xs); line-height: var(--ms-lh-snug); }
 /* A selected row is Highlight in forced colors; its open settings return to
    the system's own colours so their text stays readable. */
-@media (forced-colors: active) { .row-expanded { forced-color-adjust: auto; color: CanvasText; background: Canvas; } .edit-row .row-lines small { color: inherit; } }
+@media (forced-colors: active) { .problem { border: 1px solid CanvasText; } .row-expanded { forced-color-adjust: auto; color: CanvasText; background: Canvas; } .edit-row .row-lines small { color: inherit; } }
 @media (max-width: 25rem) { .split { grid-template-columns: 1fr; } }
 `];
 

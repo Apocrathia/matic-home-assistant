@@ -101,7 +101,7 @@ line-height: var(--ms-lh-snug);
 .group { display: grid; gap: var(--ms-space-2); }
 .floor[aria-current="true"] { border-color: var(--ms-resolved-indicator, var(--ms-accent)); background: color-mix(in srgb, var(--ms-accent) 12%, var(--ms-local)); }
 .problem p { margin: 0; }
-@media (forced-colors: active) { .floor[aria-current="true"] { forced-color-adjust: none; color: HighlightText; background: Highlight; border-color: Highlight; } }
+@media (forced-colors: active) { .problem, .notice { border: 1px solid CanvasText; } .floor[aria-current="true"] { forced-color-adjust: none; color: HighlightText; background: Highlight; border-color: Highlight; } }
 .toolbar { display: flex; flex-wrap: wrap; gap: var(--ms-space-2); }
 .checkbox { display: flex; align-items: center; gap: var(--ms-space-2); min-block-size: var(--ms-control); font-size: var(--ms-t-xs); font-weight: var(--ms-w-medium); }
 .checkbox input { inline-size: 1.2rem; block-size: 1.2rem; }
