@@ -888,9 +888,8 @@ test("rows the spec marks No button render no footer button and carry no copy", 
   }
 });
 
-// design-system.md: text never uses a raw tone colour; the tone is the rule
-// and the tint.
-test("workflow problems and warnings keep their text in the primary text colour", async ({ page }) => {
+// design-system.md: text keeps its primary colour on a tone tint, without an edge bar.
+test("workflow problems and warnings use primary text without a coloured edge bar", async ({ page }) => {
   for (const [scenario, selector] of [["plan-legacy-oversized", ".problem"], ["area-review-rebind", '.notice[data-tone="warning"]']]) {
     const gallery = await loadGallery(page, { scenario });
     // Run's R4 problem line (plan.md §3); the scenario opens in Edit.
@@ -909,7 +908,18 @@ test("workflow problems and warnings keep their text in the primary text colour"
       return result;
     });
     expect(colours.text, scenario).toBe(colours.primary);
-    expect(colours.rule, scenario).toBe("3px");
+    expect(colours.rule, scenario).toBe("0px");
+    await page.emulateMedia({ forcedColors: "active" });
+    const forcedBorder = await box.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        widths: [style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth],
+        colors: [style.borderTopColor, style.borderRightColor, style.borderBottomColor, style.borderLeftColor],
+      };
+    });
+    expect(forcedBorder.widths, scenario).toEqual(["1px", "1px", "1px", "1px"]);
+    expect(new Set(forcedBorder.colors).size, scenario).toBe(1);
+    await page.emulateMedia({ forcedColors: "none" });
   }
 });
 

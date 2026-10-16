@@ -110,8 +110,8 @@ details[open] > .ms-disclosure .chev:dir(rtl), [aria-expanded="true"] > .chev:di
 /* NEW .ms-section-heading replaces .group-heading and .shelf-heading. */
 .ms-section-heading { margin: var(--ms-space-5) 0 var(--ms-space-2); color: var(--ms-text-quiet); font-size: var(--ms-t-md); font-weight: var(--ms-w-bold); line-height: var(--ms-lh-tight); }
 .ms-section-heading:first-child { margin-block-start: 0; }
-/* NEW .ms-notice: --ms-text on the tone tint, a 3 px bar and a tone glyph. */
-.ms-notice { --tone: var(--ms-accent); --ms-local: var(--ms-tint-accent); display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--ms-space-2); align-items: center; padding-inline: var(--ms-space-3) 0; border-inline-start: 3px solid var(--tone); border-radius: var(--ms-radius-md); color: var(--ms-text); background: var(--ms-local); font-size: var(--ms-t-md); line-height: var(--ms-lh-snug); }
+/* NEW .ms-notice: --ms-text on the tone tint with a tone glyph. */
+.ms-notice { --tone: var(--ms-accent); --ms-local: var(--ms-tint-accent); display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--ms-space-2); align-items: center; padding-inline: var(--ms-space-3) 0; border-radius: var(--ms-radius-md); color: var(--ms-text); background: var(--ms-local); font-size: var(--ms-t-md); line-height: var(--ms-lh-snug); }
 .ms-notice[data-tone="success"] { --tone: var(--ms-success); --ms-local: var(--ms-tint-success); }
 .ms-notice[data-tone="warning"] { --tone: var(--ms-warning); --ms-local: var(--ms-tint-warning); }
 .ms-notice[data-tone="error"] { --tone: var(--ms-danger); --ms-local: var(--ms-tint-danger); }
@@ -193,7 +193,7 @@ export const previewShell = css`
 .hud-actions { display: flex; gap: var(--ms-space-2); }
 /* design-system.md §4 Type: the 13 px --ms-t-sm uses move to --ms-t-md. The detail keeps shell-styles.ts:220's ellipsis. */
 .hud-copy strong { font-size: var(--ms-t-md); }
-.ms-toast { --ms-local: var(--ms-surface-card); position: absolute; z-index: 20; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--ms-space-2); align-items: center; inline-size: min(24rem, calc(100% - 1.5rem)); padding-inline: var(--ms-space-3) 0; border-inline-start: 3px solid var(--tone, var(--ms-accent)); border-radius: var(--ms-radius-md); color: var(--ms-text); background: var(--ms-local); box-shadow: var(--ms-shadow-3); font-size: var(--ms-t-md); line-height: var(--ms-lh-snug); }
+.ms-toast { --ms-local: var(--ms-surface-card); position: absolute; z-index: 20; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--ms-space-2); align-items: center; inline-size: min(24rem, calc(100% - 1.5rem)); padding-inline: var(--ms-space-3) 0; border-radius: var(--ms-radius-md); color: var(--ms-text); background: var(--ms-local); box-shadow: var(--ms-shadow-3); font-size: var(--ms-t-md); line-height: var(--ms-lh-snug); }
 .ms-toast[data-tone="error"] { --tone: var(--ms-danger); }
 .ms-toast[data-tone="success"] { --tone: var(--ms-success); }
 .ms-toast > .ms-icon { color: var(--tone, var(--ms-accent)); }
