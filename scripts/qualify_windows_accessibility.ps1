@@ -24,6 +24,12 @@ $result = [ordered]@{
     highContrastRestored = $false
     highContrastFlagsRestored = $false
     highContrastSchemeRestored = $false
+    highContrastOriginalSchemePresent = $false
+    highContrastRestoredSchemePresent = $false
+    highContrastOriginalSchemeSha256 = $null
+    highContrastRestoredSchemeSha256 = $null
+    browserDiagnostics = @()
+    browserProcessExitCode = $null
     primaryFailure = $null
     cleanupFailure = $null
     nvdaSignatureVerified = $false
@@ -87,13 +93,14 @@ function Read-HighContrast {
     return (($((Get-HighContrastState).Flags) -band 0x00000001) -ne 0)
 }
 
-function Set-HighContrastState([uint32]$Flags, [string]$Scheme) {
+function Set-HighContrastState([uint32]$Flags, [AllowNull()]$Scheme) {
     $hc = New-Object HighContrastNative+HIGHCONTRAST
     $hc.cbSize = [Runtime.InteropServices.Marshal]::SizeOf($hc)
     $hc.dwFlags = $Flags
     $schemeMemory = [IntPtr]::Zero
     try {
-        if ($Scheme) { $schemeMemory = [Runtime.InteropServices.Marshal]::StringToHGlobalUni($Scheme); $hc.lpszDefaultScheme = $schemeMemory }
+        # Preserve NULL and an empty string as distinct original API values.
+        if ($null -ne $Scheme) { $schemeMemory = [Runtime.InteropServices.Marshal]::StringToHGlobalUni($Scheme); $hc.lpszDefaultScheme = $schemeMemory }
         if (-not [HighContrastNative]::SystemParametersInfo(0x0043, $hc.cbSize, [ref]$hc, 0x0002)) {
             throw "SystemParametersInfo(SPI_SETHIGHCONTRAST) failed: $([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
         }
@@ -268,6 +275,18 @@ finally {
             $originalHighContrastState.Scheme,
             [System.StringComparison]::Ordinal
         )
+        $result.highContrastOriginalSchemePresent = ($null -ne $originalHighContrastState.Scheme)
+        $result.highContrastRestoredSchemePresent = ($null -ne $restoredHighContrastState.Scheme)
+        if ($null -ne $originalHighContrastState.Scheme) {
+            $result.highContrastOriginalSchemeSha256 = [Convert]::ToHexString(
+                [Security.Cryptography.SHA256]::HashData([Text.Encoding]::Unicode.GetBytes($originalHighContrastState.Scheme))
+            ).ToLowerInvariant()
+        }
+        if ($null -ne $restoredHighContrastState.Scheme) {
+            $result.highContrastRestoredSchemeSha256 = [Convert]::ToHexString(
+                [Security.Cryptography.SHA256]::HashData([Text.Encoding]::Unicode.GetBytes($restoredHighContrastState.Scheme))
+            ).ToLowerInvariant()
+        }
         $result.highContrastRestored = $result.highContrastFlagsRestored -and $result.highContrastSchemeRestored
         if (-not $result.highContrastRestored) {
             Add-CleanupFailure "High Contrast restoration mismatch (flagsRestored=$($result.highContrastFlagsRestored), schemeRestored=$($result.highContrastSchemeRestored))."
@@ -275,6 +294,49 @@ finally {
     } catch {
         $result.highContrastRestored = $false
         Add-CleanupFailure "High Contrast restore/readback failed: $($_.Exception.Message)"
+    }
+    if ($nodeProcess) {
+        try {
+            $nodeProcess.Refresh()
+            if ($nodeProcess.HasExited) { $result.browserProcessExitCode = $nodeProcess.ExitCode }
+        } catch { }
+    }
+    $diagnosticPath = Join-Path $pilotDir 'diagnostics.jsonl'
+    if (Test-Path -LiteralPath $diagnosticPath) {
+        $allowedStages = @('startup','edge-launch','fixture-navigation','fixture-install','scene-readiness','keyboard-pilot')
+        $result.browserDiagnostics = @(
+            Get-Content -LiteralPath $diagnosticPath -TotalCount 24 | ForEach-Object {
+                try {
+                    $entry = $_ | ConvertFrom-Json
+                    if ($entry.stage -in $allowedStages -and $entry.event) {
+                        $eventName = [string]$entry.event -replace '[^a-z0-9-]', ''
+                        $safe = [ordered]@{
+                            stage = [string]$entry.stage
+                            event = $eventName.Substring(0, [Math]::Min(48, $eventName.Length))
+                        }
+                        if ($entry.elapsedMs -is [valuetype] -and [long]$entry.elapsedMs -ge 0) { $safe.elapsedMs = [Math]::Min(120000, [long]$entry.elapsedMs) }
+                        if ($entry.browserVersion) {
+                            $version = [string]$entry.browserVersion -replace '[^0-9A-Za-z ._-]', ''
+                            $safe.browserVersion = $version.Substring(0, [Math]::Min(40, $version.Length))
+                        }
+                        if ($entry.forcedColors -is [bool]) { $safe.forcedColors = [bool]$entry.forcedColors }
+                        if ($entry.sceneReady -is [bool]) { $safe.sceneReady = [bool]$entry.sceneReady }
+                        if ($entry.errorType) {
+                            $errorType = [string]$entry.errorType -replace '[^A-Za-z0-9_.-]', ''
+                            $safe.errorType = $errorType.Substring(0, [Math]::Min(40, $errorType.Length))
+                        }
+                        if ($entry.error) {
+                            $safeError = [string]$entry.error
+                            $safeError = $safeError -replace '(?i)(?:[a-z]:\\|\\\\)[^"''<>]+', '<path>'
+                            $safeError = $safeError -replace '/(?:Users|home|tmp|private|var|opt|Applications)/[^"''<>]+', '<path>'
+                            $safeError = $safeError -replace '[\r\n\t]+', ' '
+                            $safe.error = $safeError.Substring(0, [Math]::Min(240, $safeError.Length))
+                        }
+                        [pscustomobject]$safe
+                    }
+                } catch { }
+            }
+        )
     }
     $result.primaryFailure = $failureReason
     $result.cleanupFailure = $cleanupFailureReason

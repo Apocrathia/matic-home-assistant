@@ -20,7 +20,10 @@ fresh and contains no installed add-ons.
 
 The PowerShell harness reads the initial Windows High Contrast flag, sets and
 reads back `HCF_HIGHCONTRASTON` with `SystemParametersInfo`, then restores and
-verifies the initial state in `finally`. While NVDA runs, headed Edge loads the
+verifies the exact initial flags and default-scheme pointer value in `finally`.
+The cleanup distinguishes a null scheme pointer from a non-null empty scheme
+string; it reports only scheme presence and SHA-256 values, not the scheme text.
+While NVDA runs, headed Edge loads the
 packaged Map Studio fixture on loopback and asserts `(forced-colors: active)`.
 Native Windows keyboard input sends Tab to the focused Edge window, then NVDA's
 Insert+Tab report-focus command. A temporary NVDA global plugin passively
@@ -52,6 +55,12 @@ This pilot does not establish audible sound delivery, physical screen-reader
 usability, Home Assistant runtime behavior, or robot/owner acceptance. Review
 the run evidence and the remaining bounds separately from release and physical
 qualification.
+
+The run result includes at most 24 bounded browser readiness diagnostics. These
+identify the last completed synthetic fixture stage, forced-colors and scene
+readbacks, Edge version when available, and a sanitized stage error when
+startup fails. Diagnostic paths are redacted and the temporary task directory,
+including raw redirected Node logs, is removed after the summary is emitted.
 
 ## Sources
 
