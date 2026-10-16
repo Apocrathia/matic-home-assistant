@@ -40,6 +40,7 @@ export const openPlanPicker = (root) => root.locator("matic-map-shell-v4").first
 export async function installPanelFixture(page, {
   initialPlanCatalog = emptyPlans,
   moduleSource = "typescript",
+  onNavigationComplete = null,
   sceneDeltaPayload = null,
   posePosition = [1, 1],
   scenePoint = null,
@@ -104,6 +105,7 @@ export async function installPanelFixture(page, {
     }));
   }
   await page.goto("/");
+  await onNavigationComplete?.();
   // Home Assistant mounts the panel again on every page load; `remount` does
   // the same after a test reloads the page.
   const remount = () => page.evaluate(async ({ module, scenes, plans, sceneDeltaPayload, posePosition, initialCatalogEntries, initialRobotStates, userData }) => {

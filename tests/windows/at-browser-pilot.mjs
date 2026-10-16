@@ -70,8 +70,10 @@ try {
   await page.goto("/");
   await recordDiagnostic("gallery-page-loaded");
   stage = "fixture-navigation";
-  stage = "fixture-install";
-  const fixture = await installPanelFixture(page, { moduleSource: "packaged" });
+  const fixture = await installPanelFixture(page, {
+    moduleSource: "packaged",
+    onNavigationComplete: () => { stage = "fixture-install"; },
+  });
   await recordDiagnostic("fixture-installed");
   await page.evaluate((tag) => {
     document.body.style.margin = "0";
