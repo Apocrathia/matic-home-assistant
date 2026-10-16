@@ -68,7 +68,7 @@ state. A cell ID with settings other than its own is an error too, and the banne
 | C02 | Phone landscape | `w=844&h=390` | Safari on the Mac, frame 844 × 390 |
 | C03 | Tablet 1024 | `w=1024&h=768` | Safari on the Mac, frame 1024 × 768 |
 | C04 | Desktop 1440 | `w=1440&h=900` | Safari on the Mac, frame 1440 × 900 |
-| C05 | Touch / mouse+keyboard | `input=touch` | `--lan`: the iPhone or iPad on the same Wi-Fi for touch; then Safari on the Mac, mouse and keyboard only |
+| C05 | Touch / mouse+keyboard | `input=touch` | Safari touch presentation and mobile WebKit emulation; actual iPhone/iPad touch is a separate installed-device check |
 | C06 | Light/dark | `w=390&h=844&theme=dark` | Safari on the Mac, Home Assistant's dark palette |
 | C07 | RTL + one non-English language | `w=390&h=844&dir=rtl&lang=xa` | Safari on the Mac, right to left, pseudo-language |
 | C08 | Forced colours | `w=1024&h=768&contrast=forced&motion=reduce` | Chromium, opened by the script with forced colours and reduced motion on |
@@ -76,9 +76,10 @@ state. A cell ID with settings other than its own is an error too, and the banne
 
 ### Setup notes
 
-- **Touch (C05).** `--lan` also serves the stage on this Mac's Wi-Fi address and prints a link for the iPhone or
-  iPad. The address works only while the script runs; without `--lan` only this Mac can reach it. The same cell is
-  then checked on the Mac with a mouse and the keyboard alone (Tab, Enter, Escape, arrow keys). Both must pass.
+- **Touch (C05).** The autonomous matrix checks touch presentation and emulated mobile input, plus Mac mouse and
+  keyboard interaction (Tab, Enter, Escape, arrow keys). Actual iPhone/iPad touch remains in the installed-device
+  gate; it is not a prerequisite for recording the synthetic C05 result. For device staging, `--lan` prints a
+  same-Wi-Fi link that works only while the server runs; without `--lan` only this Mac can reach it.
 - **Language (C07).** `lang=xa` is a synthetic pseudo-language made from `strings.json`: every string is accented,
   bracketed and about 30 % longer, with `{placeholders}` filled in. Plain English left on screen is text that skipped
   translation; a clipped bracket is a layout that will clip a real language. `dir=rtl` mirrors the layout.

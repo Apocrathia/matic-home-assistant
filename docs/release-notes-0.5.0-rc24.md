@@ -5,9 +5,9 @@ plain words, one action at a time and layouts for every screen. RC23 was never
 tagged; its entity, setup and action changes first ship here.
 Retained entities keep their IDs and unique IDs; four duplicates are retired below. Requires Home Assistant 2026.10+.
 
-**Stable 0.5.0 waits until every cell of the
-[owner walkthrough](owner-walkthrough-0.5.md) is approved** (117 cells: 13
-journeys at 9 setups, staged live and approved one at a time), and until the
+**Stable 0.5.0 waits for autonomous inspection of the
+[interface matrix](owner-walkthrough-0.5.md)** (117 cells: 13 journeys at 9
+setups, with source-bound results and findings resolved), and until the
 rest of Gates E6 and F in [acceptance-0.5.md](acceptance-0.5.md) close: this
 RC installed through HACS and read back, restart recovery, Stop reachability,
 iPhone, iPad and Android walkthroughs with VoiceOver and NVDA, and physical
@@ -53,8 +53,9 @@ acceptance of identity recovery.
 - 2026-10-12: assistants can run plans, clean rooms, stop and reset a room
   schedule through the same checks as Matic Map.
 - 2026-10-14: custom areas join plans in 0.5 and run every time.
-- UX8 request: stable waits on the owner walkthrough above, staged by the
-  maintainer and approved or critiqued cell by cell.
+- Earlier UX8 procedure requested approval cell by cell. The owner superseded it
+  with autonomous E2E inspection and reconfirmed that instruction on 2026-10-15;
+  physical/device and final release acceptance remain separate.
 
 ## Entity changes
 
