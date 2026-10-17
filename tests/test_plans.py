@@ -49,6 +49,7 @@ from custom_components.matic_robot.managed_executor import (
     _async_active_session_state,
     _async_dispatch_leg_command,
     _async_execute_rooms,
+    _async_run_area_leg,
     _async_run_leg,
     _async_run_room,
     _async_session_history_baseline,
@@ -1074,6 +1075,13 @@ async def test_initial_save_failure_still_retires_the_run(
         ),
         ("native_stop", "unverified", "stopped_in_place", "room_interrupted", 0),
         ("stop", "cancelled", "managed_stop", "room_cancelled", 0),
+        (
+            "unknown_cancel",
+            "unverified",
+            "cancellation_unattributed",
+            "room_cancelled",
+            0,
+        ),
         ("replacement", "cancelled", "managed_replaced", "room_cancelled", 0),
         ("unload", "unverified", "config_entry_unload", "room_interrupted", 0),
         ("interrupted", "unverified", "interrupted", "room_interrupted", 0),
@@ -1124,10 +1132,12 @@ async def test_managed_terminal_matrix_uses_real_room_history_and_events(
 
     async def native_outcome(*_args, **_kwargs):
         if scenario == "stop":
-            manager.cancel("serial")
+            manager.mark_managed_stop("serial")
             raise PlanCancelledError
         if scenario == "replacement":
             manager.replace_managed_motion("serial")
+            raise PlanCancelledError
+        if scenario == "unknown_cancel":
             raise PlanCancelledError
         if scenario == "unload":
             await manager.async_cancel_and_wait("serial")
@@ -1186,6 +1196,10 @@ async def test_managed_terminal_matrix_uses_real_room_history_and_events(
     if scenario == "replacement":
         assert events[1].data["cause"] == "replacement"
         assert last_run["cause"] == "replacement"
+    if scenario == "unknown_cancel":
+        assert events[1].data["reason_code"] == "cancellation_unattributed"
+        assert events[1].data["cause"] == "unknown"
+        assert last_run["cause"] == "unknown"
     assert events[-1].data["completed_room_count"] == credit
     assert saved[-1]["robots"]["serial"]["last_run"] == last_run
     assert manager.lock("serial").locked() is False
@@ -7162,7 +7176,16 @@ async def test_leg_cancellation_records_history(hass, reason: str | None) -> Non
         manager.async_mark_cancelled.assert_awaited_once()
         await hass.async_block_till_done()
         assert events[-1].data["cause"] == (
-            "replacement" if reason == "motion_replaced" else "managed_cancellation"
+            "replacement"
+            if reason == "motion_replaced"
+            else "managed_cancellation"
+            if reason == "managed_stop"
+            else "unknown"
+        )
+        assert events[-1].data["reason_code"] == (
+            "managed_cancelled"
+            if reason in {"managed_stop", "motion_replaced"}
+            else "cancellation_unattributed"
         )
     else:
         manager.async_mark_interrupted.assert_awaited_once()
@@ -8985,6 +9008,15 @@ async def test_settings_handoff_rechecks_identity_before_dispatch(
             kwargs["record_room_completed"](room)
         return True
 
+    expected_exception = (
+        HomeAssistantError if takeover == "history_error" else ServiceValidationError
+    )
+    expected_message = (
+        "cleaning history could not be read"
+        if takeover == "history_error"
+        else "original native cleaning task"
+    )
+
     with (
         patch(
             "custom_components.matic_robot.managed_executor._async_run_leg",
@@ -8994,7 +9026,7 @@ async def test_settings_handoff_rechecks_identity_before_dispatch(
             "custom_components.matic_robot.managed_executor._async_wait_for_settled_leg_handoff",
             AsyncMock(return_value=True),
         ),
-        pytest.raises(ServiceValidationError, match="original native cleaning task"),
+        pytest.raises(expected_exception, match=expected_message),
         # Preserve coverage of legacy checkpoint boundaries: new mixed runs
         # deliberately have no separate native mission at these settings changes.
         patch(
@@ -10162,6 +10194,68 @@ async def test_plan_manager_initialization_clears_failed_manager(hass) -> None:
 # Custom area legs ------------------------------------------------------------
 
 _AREA = AreaLeg("rug", "Rug", "vacuum", "quick", "f" * 64)
+
+
+async def test_area_history_baseline_failure_never_stops_or_credits(hass) -> None:
+    manager = CleaningPlanManager(hass)
+    manager._store = SimpleNamespace(async_save=AsyncMock())
+    await manager.async_begin_run(
+        "serial", "away", "run", 0, trigger="user", service="run_selected_plan"
+    )
+    motion_token = manager.begin_managed_motion("serial")
+    sent = []
+
+    async def send_command(call) -> None:
+        sent.append(call.data)
+
+    hass.services.async_register("vacuum", "send_command", send_command)
+    stop = AsyncMock()
+    native_identity = MagicMock()
+    call = ServiceCall(
+        hass,
+        "matic_robot",
+        "run_selected_plan",
+        {
+            "plan_id": "away",
+            "start_timeout": 30,
+            "completion_timeout": 60,
+            "return_to_base": True,
+        },
+    )
+
+    with pytest.raises(HomeAssistantError, match="cleaning history could not be read"):
+        await _async_run_area_leg(
+            hass,
+            call,
+            manager,
+            "vacuum.matic",
+            "serial",
+            _AREA,
+            asyncio.Event(),
+            motion_token,
+            None,
+            AsyncMock(side_effect=MaticError("offline")),
+            stop,
+            prepared_dispatch=None,
+            finish_room_event=manager.finish_room_event("serial"),
+            floor_is_current=None,
+            floor_token=None,
+            session_identity=AsyncMock(return_value=b""),
+            expected_dispatch_identity=None,
+            expected_dispatch_history=None,
+            on_native_identity=native_identity,
+            run_id="run",
+            checkpoint_dispatch=None,
+            provenance="user",
+            settle_history=False,
+        )
+
+    assert sent == []
+    stop.assert_not_awaited()
+    native_identity.assert_not_called()
+    assert manager.managed_motion_is_current("serial", motion_token)
+    assert manager._robot("serial")["rotations"] == {}
+    assert manager.snapshot("serial")["native_reconciliation_pending"] is False
 
 
 async def test_area_start_publishes_the_area_without_touching_room_records(

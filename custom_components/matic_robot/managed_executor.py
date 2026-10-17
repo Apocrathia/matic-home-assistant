@@ -280,6 +280,14 @@ async def _async_dispatch_leg_command(
             "The robot's room map is unavailable", "room_plan_unavailable"
         )
     history_baseline = await _async_session_history_baseline(session_history)
+    if session_history is not None and history_baseline is None:
+        # A configured native-history reader that failed is different from a
+        # legacy caller that has no reader. Dispatching in the former case
+        # guarantees that completion cannot be attributed to this mission.
+        raise NativeHistoryBaselineUnavailableError(
+            "The robot's cleaning history could not be read. "
+            "Try again before starting this plan."
+        )
     if expected_dispatch_history is not None and (
         history_baseline is None
         or frozenset(hashlib.sha256(key).hexdigest() for key in history_baseline)
@@ -742,6 +750,14 @@ async def _async_run_room(
                 context=call.context,
             )
         else:
+            cancellation_reason = manager.cancellation_reason(serial_number)
+            cancellation_cause = (
+                "replacement"
+                if cancellation_reason == "motion_replaced"
+                else "managed_cancellation"
+                if cancellation_reason == "managed_stop"
+                else "unknown"
+            )
             await manager.async_mark_cancelled(
                 serial_number, call.data["plan_id"], room
             )
@@ -749,13 +765,12 @@ async def _async_run_room(
                 f"{DOMAIN}_room_cancelled",
                 {
                     **event_data,
-                    "reason_code": "managed_cancelled",
-                    "cause": (
-                        "replacement"
-                        if manager.cancellation_reason(serial_number)
-                        == "motion_replaced"
-                        else "managed_cancellation"
+                    "reason_code": (
+                        "managed_cancelled"
+                        if cancellation_reason in {"managed_stop", "motion_replaced"}
+                        else "cancellation_unattributed"
                     ),
+                    "cause": cancellation_cause,
                 },
                 context=call.context,
             )
@@ -1149,9 +1164,14 @@ async def _async_run_area_leg(
 
     dispatch = prepared_dispatch
     dispatch_attempted = dispatch is not None
+
+    def mark_dispatch_attempted() -> None:
+        nonlocal dispatch_attempted
+        dispatch_attempted = True
+        on_native_identity(None)
+
     try:
         if dispatch is None:
-            dispatch_attempted = True
             dispatch = await _async_dispatch_leg_command(
                 hass,
                 call,
@@ -1161,7 +1181,7 @@ async def _async_run_area_leg(
                 session_history,
                 floor_is_current=floor_is_current,
                 floor_token=floor_token,
-                on_dispatch=lambda: on_native_identity(None),
+                on_dispatch=mark_dispatch_attempted,
                 session_identity=session_identity,
                 on_identity=on_native_identity,
                 expected_dispatch_identity=expected_dispatch_identity,
@@ -1697,6 +1717,14 @@ async def _async_run_leg(
                 context=call.context,
             )
         else:
+            cancellation_reason = manager.cancellation_reason(serial_number)
+            cancellation_cause = (
+                "replacement"
+                if cancellation_reason == "motion_replaced"
+                else "managed_cancellation"
+                if cancellation_reason == "managed_stop"
+                else "unknown"
+            )
             await manager.async_mark_cancelled(
                 serial_number, call.data["plan_id"], active_room
             )
@@ -1704,13 +1732,12 @@ async def _async_run_leg(
                 f"{DOMAIN}_room_cancelled",
                 {
                     **event_data(active_room),
-                    "reason_code": "managed_cancelled",
-                    "cause": (
-                        "replacement"
-                        if manager.cancellation_reason(serial_number)
-                        == "motion_replaced"
-                        else "managed_cancellation"
+                    "reason_code": (
+                        "managed_cancelled"
+                        if cancellation_reason in {"managed_stop", "motion_replaced"}
+                        else "cancellation_unattributed"
                     ),
+                    "cause": cancellation_cause,
                 },
                 context=call.context,
             )
@@ -3298,6 +3325,10 @@ class PlanCancelledError(HomeAssistantError):
         self.suspend_reason = suspend_reason
 
 
+class NativeHistoryBaselineUnavailableError(HomeAssistantError):
+    """Native completion history could not be read before mission dispatch."""
+
+
 class RoomStartTimeoutError(TimeoutError):
     """The commanded room did not become active before its start deadline."""
 
@@ -3323,6 +3354,8 @@ def _failure_reason_code(error: BaseException) -> str:
         return guard_error.reason_code
     if isinstance(error, ServiceValidationError) and error.__cause__ is not None:
         error = error.__cause__
+    if isinstance(error, NativeHistoryBaselineUnavailableError):
+        return "native_history_baseline_unavailable"
     if isinstance(error, RoomStartTimeoutError):
         return "start_timeout"
     if isinstance(error, TimeoutError):
@@ -4015,9 +4048,9 @@ async def _async_execute_rooms_reserved(
                 run_reason_code = "low_charge"
                 run_cause = "robot"
             else:
-                run_outcome = "cancelled"
-                run_reason_code = "managed_stop"
-                run_cause = "managed_cancellation"
+                run_outcome = "unverified"
+                run_reason_code = "cancellation_unattributed"
+                run_cause = "unknown"
             return
         except (Exception, asyncio.CancelledError) as err:
             if _shutdown_suspends_run(hass, manager, serial_number):
