@@ -75,8 +75,27 @@ test("a pending Escape dismissal still closes Draw when its Back popstate arrive
   const panel = await mountPanel(page);
   await panel.getByRole("button", { name: /^Clean custom area/ }).click();
   await expect(panel.getByRole("heading", { level: 2, name: "Your areas" })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.__historyPanel.getWorkspaceSnapshot().resources.areas.status)).toBe("ready");
+
+  // Hold Draw's fresh catalog read so an unrelated store publication lands
+  // after Escape has requested Back but before the browser delivers popstate.
+  await panel.evaluate((panelElement) => {
+    const hass = panelElement.hass;
+    const nativeFetch = hass.fetchWithAuth;
+    window.__deferredAreaRead = { started: false, release: null };
+    hass.fetchWithAuth = (path, options) => {
+      if (!window.__deferredAreaRead.started && /areas\/synthetic$/u.test(path)) {
+        window.__deferredAreaRead.started = true;
+        return new Promise((resolve, reject) => {
+          window.__deferredAreaRead.release = () => nativeFetch(path, options).then(resolve, reject);
+        });
+      }
+      return nativeFetch(path, options);
+    };
+  });
   await panel.getByRole("button", { name: "New area" }).click();
   await expect(panel.getByRole("heading", { level: 2, name: "Draw an area" })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.__deferredAreaRead.started)).toBe(true);
 
   await page.evaluate(() => {
     const nativeBack = window.history.back.bind(window.history);
@@ -86,6 +105,9 @@ test("a pending Escape dismissal still closes Draw when its Back popstate arrive
   await page.keyboard.press("Escape");
   expect(await page.evaluate(() => window.__pendingBack.calls)).toBe(1);
   expect(await page.evaluate(() => window.__historyPanel.getWorkspaceSnapshot().workflow)).toBe("draw");
+
+  await page.evaluate(() => window.__deferredAreaRead.release());
+  await expect.poll(() => page.evaluate(() => window.__historyPanel.getWorkspaceSnapshot().resources.areas.status)).toBe("ready");
 
   const popstate = page.evaluate(() => new Promise((resolve) => {
     window.addEventListener("popstate", resolve, { once: true });
