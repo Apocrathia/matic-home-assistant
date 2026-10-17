@@ -43,6 +43,7 @@ export class LayerHistoryController {
   // Track where the browser is going instead of consulting that stale value.
   #position = 0;
   #traversalPending = false;
+  #programmaticClosePending = false;
   #unsubscribe: (() => void) | null = null;
   #handlingPop = false;
 
@@ -82,6 +83,7 @@ export class LayerHistoryController {
         if (!this.#traversalPending) {
           history.go(delta);
           this.#traversalPending = true;
+          this.#programmaticClosePending = true;
         }
         return;
       }
@@ -104,8 +106,10 @@ export class LayerHistoryController {
   // already made, by #stateChanged's go() or by an effect that closed layers
   // while a Back was still in flight (Delete confirmed in a plan's Edit).
   readonly #popState = (): void => {
+    const programmaticTraversal = this.#programmaticClosePending;
     const marker = markerFrom(history.state);
     this.#traversalPending = false;
+    this.#programmaticClosePending = false;
     this.#position = marker?.owner === this.#owner ? marker.depth : 0;
     const openDepth = layerDepth(this.#store.value);
     // Browsers may coalesce go() calls made while an earlier traversal is in
@@ -116,6 +120,22 @@ export class LayerHistoryController {
       this.#position = openDepth;
       history.go(delta);
       this.#traversalPending = true;
+      this.#programmaticClosePending = true;
+      return;
+    }
+    if (programmaticTraversal && openDepth > this.#position) {
+      // A workflow opened while the close traversal was in flight. This pop
+      // belongs to the earlier, already-applied close; restore the markers for
+      // the still-open UI instead of treating that stale pop as a new Back.
+      for (let depth = this.#position + 1; depth <= openDepth; depth += 1) {
+        const current = history.state && typeof history.state === "object" ? history.state : {};
+        history.pushState({
+          ...current,
+          maticMapLayer: { owner: this.#owner, depth },
+        }, "", window.location.href);
+        this.#position = depth;
+      }
+      this.#depth = openDepth;
       return;
     }
     if (this.#store.value.dialog === "discardDraft" && this.#store.value.command === "pending") {
@@ -152,6 +172,7 @@ export class LayerHistoryController {
       history.back();
       this.#position = this.#depth - 1;
       this.#traversalPending = true;
+      this.#programmaticClosePending = false;
     } else {
       this.#store.dispatch({ type: "dismiss-top-layer" });
     }
@@ -165,6 +186,7 @@ export class LayerHistoryController {
     this.#depth = 0;
     this.#position = 0;
     this.#traversalPending = false;
+    this.#programmaticClosePending = false;
   }
 }
 
