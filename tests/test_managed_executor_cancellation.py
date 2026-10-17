@@ -57,6 +57,7 @@ async def test_elapsed_room_timeout_cleans_up_nested_identity_waiter(hass, monke
     )
 
     original_timeout = asyncio.timeout
+
     def capture_completion_timeout(delay):
         nonlocal completion_timeout
         timeout = original_timeout(delay)
