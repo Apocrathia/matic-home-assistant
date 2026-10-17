@@ -67,6 +67,12 @@ export class LayerHistoryController {
       this.#depth = next;
       return;
     }
+    if (this.#traversalPending && next === this.#depth) {
+      // Keep the current marker stack unchanged until the pending popstate
+      // arrives. A same-depth resource update can otherwise push a replacement
+      // marker above the traversal target and make the requested Back a no-op.
+      return;
+    }
     // Effects can close a workflow while changing floors (for example when a
     // saved floor becomes read-only). The workflow's history marker still
     // exists in the browser stack, so step back over it (its pop then lands at
