@@ -44,6 +44,7 @@ async def test_elapsed_room_timeout_cleans_up_nested_identity_waiter(hass, monke
     room_waiter_started = asyncio.Event()
     completion_timeout = None
     timeout_rescheduled = asyncio.Event()
+    identity_read_cancelled = asyncio.Event()
 
     original_wait_for_room_outcome = managed_executor._async_wait_for_room_outcome
 
@@ -56,7 +57,6 @@ async def test_elapsed_room_timeout_cleans_up_nested_identity_waiter(hass, monke
     )
 
     original_timeout = asyncio.timeout
-
     def capture_completion_timeout(delay):
         nonlocal completion_timeout
         timeout = original_timeout(delay)
@@ -82,6 +82,10 @@ async def test_elapsed_room_timeout_cleans_up_nested_identity_waiter(hass, monke
             assert refresh_started.is_set()
             completion_timeout.reschedule(asyncio.get_running_loop().time())
             timeout_rescheduled.set()
+            try:
+                await asyncio.Future()
+            finally:
+                identity_read_cancelled.set()
         return identity
 
     refresh_started = asyncio.Event()
@@ -99,7 +103,6 @@ async def test_elapsed_room_timeout_cleans_up_nested_identity_waiter(hass, monke
     hass.bus.async_listen(
         "matic_robot_room_failed", callback(lambda event: events.append(event))
     )
-    monkeypatch.setattr(managed_executor, "ROOM_STATUS_REFRESH_SECONDS", 0.001)
     call = ServiceCall(
         hass,
         "matic_robot",
@@ -140,13 +143,14 @@ async def test_elapsed_room_timeout_cleans_up_nested_identity_waiter(hass, monke
                     native_identity=identity,
                 ),
             ),
-            timeout=2,
+            timeout=10,
         )
 
-    await hass.async_block_till_done()
+    await asyncio.sleep(0)
     assert raised.value.translation_key == "plan_timeout"
     assert room_waiter_started.is_set()
     assert timeout_rescheduled.is_set()
+    assert identity_read_cancelled.is_set()
     assert refresh_started.is_set()
     assert refresh_cancelled.is_set()
     assert sender_calls == [UserCommand.STOP]

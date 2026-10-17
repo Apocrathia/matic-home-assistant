@@ -11,10 +11,13 @@ source.
 
 `tests/test_managed_executor_cancellation.py` exercises the real room outcome
 waiter, native identity monitor, periodic refresh cleanup and `asyncio.Timeout`.
-It reschedules the deadline only after the waiter and refresh are active. It
-requires a handled completion timeout, one cleanup STOP, a failed-room event and
-no completion credit. It neither injects `TimeoutError` nor depends on a short
-wall-clock delay.
+It waits for the periodic loop's normal five-second refresh interval, then the
+refresh callback and native identity read remain pending together. Once both
+waiter and refresh are active, it reschedules the real timeout to expire and
+asserts cancellation unwinds the identity read and refresh task. It requires a
+handled completion timeout, one cleanup STOP, a failed-room event and no
+completion credit. It neither injects `TimeoutError` nor shortens the configured
+refresh interval; qualification takes at least one normal refresh interval.
 
 This closes the elapsed room-deadline regression gap. It does not reproduce or
 explain the observed raw cancellation. The inspected Home Assistant 2026.10.1
