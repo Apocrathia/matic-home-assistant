@@ -1796,6 +1796,60 @@ async def test_failed_managed_dispatch_stops_only_its_exact_session(hass, report
     manager.async_mark_failed.assert_awaited_once()
 
 
+async def test_unavailable_native_history_baseline_fails_before_start(hass):
+    """A failed configured reader cannot authorize an unverifiable mission."""
+    from custom_components.matic_robot.managed_executor import _async_run_room
+
+    manager = SimpleNamespace(
+        async_mark_started=AsyncMock(return_value=False),
+        async_mark_completed=AsyncMock(),
+        async_mark_failed=AsyncMock(),
+        async_replace_managed_motion=AsyncMock(),
+    )
+    sent = []
+
+    async def send_command(call):
+        sent.append(call.data)
+
+    hass.services.async_register("vacuum", "send_command", send_command)
+    events = []
+    hass.bus.async_listen("matic_robot_room_failed", events.append)
+    sender = AsyncMock()
+    with pytest.raises(HomeAssistantError):
+        await _async_run_room(
+            hass,
+            ServiceCall(
+                hass,
+                "matic_robot",
+                "intelligent_clean",
+                {
+                    "plan_id": "synthetic-plan",
+                    "start_timeout": 1,
+                    "completion_timeout": 1,
+                    "return_to_base": True,
+                },
+            ),
+            manager,
+            "vacuum.matic",
+            "synthetic-serial",
+            ROOM,
+            motion_token=7,
+            session_history=AsyncMock(side_effect=MaticError("offline")),
+            managed_user_command=sender,
+        )
+
+    assert sent == []
+    sender.assert_not_awaited()
+    manager.async_mark_failed.assert_awaited_once()
+    manager.async_mark_completed.assert_not_awaited()
+    await hass.async_block_till_done()
+    assert len(events) == 1
+    assert events[0].data["reason_code"] == "native_history_baseline_unavailable"
+    assert "cleaning history could not be read" in events[0].data["error"]
+    assert "Try again before starting this plan" in events[0].data["error"]
+    assert events[0].data["cause"] == "unknown"
+
+
 @pytest.mark.parametrize("reported", ["command", "replacement", "double_cancel"])
 async def test_cancelled_managed_dispatch_stops_only_its_exact_session(hass, reported):
     from custom_components.matic_robot.client.commands import UserCommand
