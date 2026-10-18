@@ -369,6 +369,22 @@ test("shared schedule deletion confirms one token-bound write and preserves priv
   await expect.poll(() => page.evaluate(() => document.querySelector(window.__panelFixture.panelTag).getWorkspaceSnapshot().notice?.key)).toBe("v4_notice_shared_schedule_deleted");
 });
 
+test("a shared deletion whose write module fails to load keeps the schedule and reports deletion failure @safety", async ({ page }) => {
+  await page.route("**/chunks/catalog-writes-*.js", route => route.abort());
+  const fixture = await installPanelFixture(page, { initialPlanCatalog: sharedScheduleCatalog(), moduleSource: "packaged" });
+  await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+  const panel = page.locator(fixture.panelTag);
+  const { dialog } = await openSharedDeleteDialog(page, panel);
+  await dialog.getByRole("button", { name: "Delete shared schedule", exact: true }).click();
+  await expect(panel.getByRole("alert")).toHaveText("The shared schedule wasn't deleted; reload plans, then try again.");
+  expect(await page.evaluate(() => window.__panelFixture.serviceCalls)).toEqual([]);
+  expect(await panel.evaluate(element => {
+    const state = element.getWorkspaceSnapshot();
+    return { command: state.command, fence: state.planWriteBlock,
+      scopes: state.resources.plans.value.plans.map(plan => plan.rooms[0]?.cadence?.scope ?? null) };
+  })).toEqual({ command: "idle", fence: null, scopes: ["shared", "shared", "plan"] });
+});
+
 test("server rejection of shared schedule deletion reports the stale reason @safety", async ({ page }) => {
   const fixture = await installPanelFixture(page, { initialPlanCatalog: sharedScheduleCatalog(), moduleSource: "packaged" });
   await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
