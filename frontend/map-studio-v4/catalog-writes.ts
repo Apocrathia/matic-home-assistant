@@ -3,7 +3,7 @@
 // Runtime imports are deliberately absent: an import edge into the startup
 // modules makes esbuild split them into more chunks, which costs the startup
 // graph more than this module saves. Startup helpers arrive in the context.
-import type { HassProjection, PlanDraft, ResetCadenceAction, WorkspaceNotice, WorkspaceState } from "./contracts";
+import type { DeleteSharedCadenceAction, HassProjection, PlanDraft, ResetCadenceAction, WorkspaceNotice, WorkspaceState } from "./contracts";
 import type { MaticBackend } from "./backend";
 import type { WorkspaceStore } from "./state";
 import type { EffectController } from "./effects";
@@ -18,6 +18,7 @@ export interface CatalogWriteHelpers {
   readonly initialWorkspaceState: typeof import("./state").initialWorkspaceState;
   readonly draftForPlan: typeof import("./state").draftForPlan;
   readonly hasStoppableWork: typeof import("./state").hasStoppableWork;
+  readonly sharedDeleteCurrent: typeof import("./state").sharedCadenceDeleteRequestIsCurrent;
 }
 
 /**
@@ -287,6 +288,111 @@ export const resetRoomCadence = async (context: CatalogWriteContext, action: Res
   }
 };
 
+const withoutRoomCadence = <T extends import("./backend-contracts").PlanRoom>(room: T): T => {
+  const { cadence: _cadence, cadenceProgress: _progress, cadenceReasons: _reasons, ...rest } = room;
+  return rest as T;
+};
+
+const sharedDeleteFailure = (helpers: CatalogWriteHelpers, error: unknown): WorkspaceNotice | null => {
+  const { translation_domain: domain, translation_key: key } = (error ?? {}) as Record<string, unknown>;
+  if (domain !== "matic_robot" || typeof key !== "string") return null;
+  switch (key) {
+    case "cadence_delete_stale":
+      return helpers.notice("warning", "v4_notice_shared_schedule_stale", "The shared schedule changed. Reload plans before deleting it.");
+    case "cadence_delete_map_changed":
+      return helpers.notice("warning", "v4_notice_shared_schedule_map_changed", "This schedule belongs to another map. Reload the current map and plans.");
+    case "cadence_delete_blocked":
+      return helpers.notice("warning", "v4_notice_shared_schedule_blocked", "The robot is using this schedule. Wait until cleaning ends, then try again.");
+    default:
+      return null;
+  }
+};
+
+export const deleteSharedCadence = async (context: CatalogWriteContext, action: DeleteSharedCadenceAction): Promise<void> => {
+  const { state, store } = context;
+  const live = store.value;
+  const catalog = live.resources.plans.value;
+  const room = catalog?.rooms.find((candidate) => candidate.roomId === action.roomId);
+  const consumers = catalog?.plans.filter((plan) =>
+    plan.rooms.some((savedRoom) => savedRoom.roomId === action.roomId && savedRoom.cadence?.scope === "shared")) ?? [];
+  const request = room && {
+    planId: action.planId,
+    roomId: action.roomId,
+    roomName: room.name,
+    expectedToken: action.expectedToken,
+    planNames: consumers.map((plan) => plan.name),
+  };
+  if (!request || state.selection.entryId !== live.selection.entryId
+    || !context.helpers.sharedDeleteCurrent(live, request)
+    || !context.helpers.canEditCoordinates(live)) {
+    store.patch({ notice: context.helpers.notice("warning", "v4_notice_shared_schedule_changed", "The shared schedule changed. Review plans before trying again.") });
+    return;
+  }
+  const failure = context.helpers.notice("error", "v4_notice_shared_schedule_delete_failed", "The shared schedule wasn't deleted; reload plans, then try again.");
+  let response: unknown;
+  const sent = await serviceMutation(
+    { ...context, failure },
+    "delete_room_schedule",
+    { room_id: action.roomId, expected_token: action.expectedToken },
+    context.helpers.notice("success", "v4_notice_shared_schedule_deleted", "Shared schedule deleted"),
+    (value) => { response = value; },
+    (error) => sharedDeleteFailure(context.helpers, error) ?? failure,
+  );
+  if (!sent) return;
+  let refreshed: import("./backend-contracts").PlansCatalog | null = null;
+  store.patch({ command: "pending", pendingAction: "save-plan" });
+  try {
+    const payload = response && typeof response === "object" && !Array.isArray(response)
+      ? ((response as { response?: unknown }).response ?? response) : null;
+    const result = payload && typeof payload === "object" && !Array.isArray(payload)
+      ? payload as { room_id?: unknown; affected_plan_ids?: unknown } : null;
+    const affectedIds = result?.affected_plan_ids;
+    const consumerPlanIds = consumers.map((plan) => plan.id);
+    const exactIds = Array.isArray(affectedIds) && affectedIds.length === consumerPlanIds.length
+      && affectedIds.every((id) => typeof id === "string")
+      && [...affectedIds].sort().join("\0") === [...consumerPlanIds].sort().join("\0");
+    const acknowledged = result?.room_id === action.roomId && exactIds;
+    const current = store.value;
+    const currentCatalog = current.resources.plans.value;
+    if (currentCatalog && current.selection.entryId === state.selection.entryId) {
+      const affected = new Set(consumerPlanIds);
+      const plans = currentCatalog.plans.map((plan) => affected.has(plan.id)
+        ? { ...plan, rooms: plan.rooms.map((savedRoom) => savedRoom.roomId === action.roomId && savedRoom.cadence?.scope === "shared"
+          ? withoutRoomCadence(savedRoom) : savedRoom) }
+        : plan);
+      const rooms = currentCatalog.rooms.map((catalogRoom) => {
+        if (catalogRoom.roomId !== action.roomId) return catalogRoom;
+        const { sharedCadence: _policy, sharedCadenceProgress: _progress, sharedCadenceReasons: _reasons,
+          sharedDeleteToken: _token, ...rest } = catalogRoom;
+        return rest;
+      });
+      store.patch({
+        resources: { ...current.resources, plans: { ...current.resources.plans, value: { ...currentCatalog, plans, rooms } } },
+        ...(current.planDraft.id === action.planId ? {
+          planDraft: { ...current.planDraft, rooms: current.planDraft.rooms.map((draftRoom) =>
+            draftRoom.roomId === action.roomId && draftRoom.cadence?.scope === "shared" ? withoutRoomCadence(draftRoom) : draftRoom) },
+        } : {}),
+        ...(!acknowledged ? {
+          notice: context.helpers.notice("error", "v4_notice_shared_schedule_delete_unverified", "Home Assistant accepted the change but couldn't confirm which plans were updated. Reload plans before saving."),
+        } : {}),
+      });
+    } else if (!acknowledged) {
+      store.patch({ notice: context.helpers.notice("error", "v4_notice_shared_schedule_delete_unverified", "Home Assistant accepted the change but couldn't confirm which plans were updated. Reload plans before saving.") });
+    }
+    refreshed = await refreshPlansAfterWrite(context);
+  } finally {
+    if (!context.disposed() && !context.signal.aborted
+      && store.value.selection.entryId === state.selection.entryId && store.value.command === "pending") {
+      store.patch({ command: "idle" });
+    }
+  }
+  const latest = store.value;
+  if (refreshed && latest.resources.plans.value === refreshed && !latest.planDraft.dirty
+    && latest.selection.entryId === state.selection.entryId && latest.planDraft.id === action.planId) {
+    context.effects.selectPlan(action.planId, true);
+  }
+};
+
 /**
  * The Run switch (plan.md §5). It shows the change at once, reads the catalog
  * in place, then saves the plan as Home Assistant now holds it with only
@@ -385,13 +491,15 @@ const serviceMutation = async (
   data: Readonly<Record<string, unknown>>,
   success: WorkspaceNotice,
   onAcknowledged?: (response: unknown) => void,
+  failureForError?: (error: unknown) => WorkspaceNotice,
 ): Promise<boolean> => {
   const { notice, canEditCoordinates } = context.helpers;
   const writer = planWriter(context);
   if (!writer || !canEditCoordinates(context.state)) return false;
   context.store.patch({ command: "pending", pendingAction: "save-plan", notice: notice("info", "v4_notice_saving", "Saving…") });
-  const sent = await writer.send(service, data, onAcknowledged);
-  if (sent !== null) context.store.patch({ command: "idle", notice: sent ? success : context.failure });
+  let failure = context.failure;
+  const sent = await writer.send(service, data, onAcknowledged, (error) => { failure = failureForError?.(error) ?? context.failure; });
+  if (sent !== null) context.store.patch({ command: "idle", notice: sent ? success : failure });
   return sent === true;
 };
 
@@ -411,6 +519,7 @@ const planWriter = (context: CatalogWriteContext) => {
     service: string,
     data: Readonly<Record<string, unknown>>,
     onAcknowledged?: (response: unknown) => void,
+    onFailure?: (error: unknown) => void,
   ): Promise<boolean | null> => {
     try {
       const response = await context.backend.service("matic_robot", service, data, entityId, {
@@ -420,7 +529,8 @@ const planWriter = (context: CatalogWriteContext) => {
       if (!current()) return null;
       onAcknowledged?.(response);
       return true;
-    } catch {
+    } catch (error) {
+      if (current()) onFailure?.(error);
       return current() ? false : null;
     } finally {
       // Home Assistant has answered, so the next plan write may start while

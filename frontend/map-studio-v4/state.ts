@@ -84,6 +84,7 @@ export const initialWorkspaceState = (): WorkspaceState => ({
   precisionOpen: false,
   dialog: null,
   cadenceResetRequest: null,
+  scheduleDeleteRequest: null,
   narrowHint: false,
   view: "top",
   appearance: "photo",
@@ -602,6 +603,18 @@ export const reduceWorkspace = (
         dialog: "confirmResetCadence",
         cadenceResetRequest: { planId: intent.planId, roomId: intent.roomId, mode: intent.mode },
       };
+    case "request-schedule-delete": {
+      const catalog = state.resources.plans.value;
+      const consumers = catalog?.plans.filter((plan) =>
+        plan.rooms.some((room) => room.roomId === intent.roomId && room.cadence?.scope === "shared")) ?? [];
+      const request = {
+        planId: intent.planId, roomId: intent.roomId, expectedToken: intent.expectedToken,
+        roomName: catalog?.rooms.find((room) => room.roomId === intent.roomId)?.name ?? "",
+        planNames: consumers.map((plan) => plan.name),
+      };
+      if (!sharedCadenceDeleteRequestIsCurrent(state, request)) return state;
+      return { ...state, dialog: "confirmDeleteSchedule", scheduleDeleteRequest: request };
+    }
     case "set-floor":
       return {
         ...state,
@@ -674,8 +687,8 @@ export const reduceWorkspace = (
     case "open-dialog":
       return { ...state, dialog: intent.dialog };
     case "dismiss-top-layer":
-      if (state.dialog === "confirmResetCadence") {
-        return { ...state, dialog: null, cadenceResetRequest: null };
+      if (state.dialog === "confirmResetCadence" || state.dialog === "confirmDeleteSchedule") {
+        return { ...state, dialog: null, cadenceResetRequest: null, scheduleDeleteRequest: null };
       }
       if (needsDraftConfirmation(state, intent)) return { ...state, dialog: "discardDraft" };
       if (state.dialog) return { ...state, dialog: null };
@@ -748,6 +761,26 @@ export const deleteSubject = (
     : { name: item.name });
 };
 
+/** The server token binds the policy and complete consumer plans, including names. */
+export const sharedCadenceDeleteRequestIsCurrent = (
+  state: WorkspaceState,
+  request: NonNullable<WorkspaceState["scheduleDeleteRequest"]>,
+): boolean => {
+  const catalog = state.resources.plans.value;
+  const catalogRoom = catalog?.rooms.find((room) => room.roomId === request.roomId);
+  const savedRoom = catalog?.plans.find((plan) => plan.id === request.planId)?.rooms.some((room) => room.roomId === request.roomId);
+  return Boolean(
+    state.workflow === "plan" && state.planView === "edit"
+    && state.selection.planId === request.planId && state.planDraft.id === request.planId
+    && !state.planDraft.dirty && state.dataMode === "live" && state.command === "idle"
+    && !state.managedLock && (state.activity === "idle" || state.activity === "docked")
+    && catalogRoom?.sharedDeleteToken === request.expectedToken && /^[0-9a-f]{64}$/u.test(request.expectedToken)
+    && savedRoom && state.planDraft.rooms.some((room) => room.roomId === request.roomId)
+    && request.roomName === catalogRoom.name
+    && request.roomName.trim().length
+  );
+};
+
 // Selecting a saved area loads its draft and outline; null starts a fresh
 // one. Pure, so the review gallery can play it without the effects.
 export const areaSelection = (state: WorkspaceState, areaId: string | null): Pick<WorkspaceState, "selection" | "areaDraft" | "draw"> => {
@@ -808,8 +841,10 @@ export class WorkspaceStore {
     const noticed = left.notice && left.notice !== this.#state.notice
       ? { ...left, notice: readWorkspaceNotice(left.notice) ?? this.#state.notice }
       : left;
-    const committed = noticed.dialog?.startsWith("confirmDelete") && !deleteSubject(noticed)
-      ? { ...noticed, dialog: null } : noticed;
+    const missingSubject = noticed.dialog === "confirmDeleteSchedule"
+      ? !noticed.scheduleDeleteRequest || !sharedCadenceDeleteRequestIsCurrent(noticed, noticed.scheduleDeleteRequest)
+      : noticed.dialog?.startsWith("confirmDelete") && !deleteSubject(noticed);
+    const committed = missingSubject ? { ...noticed, dialog: null, scheduleDeleteRequest: null } : noticed;
     this.#state = committed;
     this.#publish();
     return committed;

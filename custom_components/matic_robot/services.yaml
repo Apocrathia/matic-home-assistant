@@ -182,6 +182,19 @@ reset_room_cadence:
           multiple: true
           options: [mop, coverage]
 
+delete_room_schedule:
+  target: *vacuum_target
+  fields:
+    room_id:
+      required: true
+      example: room-kitchen
+      selector:
+        text:
+    expected_token:
+      required: true
+      selector:
+        text:
+
 list_plans:
   target: *vacuum_target
 

@@ -1,3 +1,4 @@
+import { build } from "esbuild";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 import { installPanelFixture, openPlanPicker } from "./map_studio_v4_panel_fixture.mjs";
@@ -291,4 +292,184 @@ test("mop-only legacy vacuum rules stay visible and can leave shared participati
     cleaning_mode: "mop", coverage_setting: "standard",
     cadence: cadence("plan", null, null, null),
   });
+});
+
+const sharedScheduleCatalog = (paused = false) => {
+  const shared = paused ? cadence("shared", null, null, null) : cadence("shared", 4, 3, "heavy_duty", true, false);
+  const privatePolicy = cadence("plan", 2, 2, "quick");
+  const roomPlan = (id, name, policy) => ({
+    id, name, enabled: true, run_behavior: "intelligent",
+    rooms: [{ room_id: "room-a", cleaning_mode: "vacuum", coverage_setting: "standard", cadence: policy,
+      cadence_identity: policy.scope === "shared" ? "shared:room-a" : `${id}:room-a` }],
+    room_order: ["room-a"], return_to_base: true,
+    finish_current_room: false, finish_current_room_threshold: 50,
+  });
+  return {
+    rooms: [{
+      room_id: "room-a", name: "Kitchen", boundary: [[0, 0], [5, 0], [5, 5]],
+      shared_cadence: shared, shared_cadence_delete_token: "a".repeat(64),
+    }],
+    plans: [roomPlan("daily", "Daily clean", shared), roomPlan("weekend", "Weekend clean", shared),
+      roomPlan("private", "Private clean", privatePolicy)],
+    selected_plan: "daily",
+  };
+};
+
+const openSharedDeleteDialog = async (page, panel) => {
+  await openPlanPicker(panel);
+  await panel.getByRole("button", { name: /^Daily clean/ }).click();
+  await panel.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
+  const rooms = panel.getByRole("list", { name: "Rooms", exact: true });
+  const settings = rooms.getByRole("button", { name: "Settings for Kitchen", exact: true });
+  if ((await settings.getAttribute("aria-expanded")) !== "true") await settings.click();
+  const schedule = rooms.getByRole("group", { name: "Smart cleaning for Kitchen" });
+  const more = schedule.getByRole("button", { name: "More for Kitchen", exact: true });
+  await more.click();
+  await panel.getByRole("menuitem", { name: "Delete shared schedule", exact: true }).click();
+  return { schedule, more, dialog: panel.getByRole("dialog", { name: "Delete shared schedule?" }) };
+};
+
+test("shared schedule deletion confirms one token-bound write and preserves private cadence @safety", async ({ page }) => {
+  const fixture = await installPanelFixture(page, { initialPlanCatalog: sharedScheduleCatalog(), moduleSource: "packaged" });
+  await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+  const panel = page.locator(fixture.panelTag);
+
+  const first = await openSharedDeleteDialog(page, panel);
+  await expect(first.dialog).toContainText('"Daily clean" and "Weekend clean"');
+  await expect(first.dialog).toContainText("Those plans keep their usual cleaning settings");
+  await first.dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(first.dialog).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "Settings for Kitchen", exact: true })).toBeFocused();
+  expect(await page.evaluate(() => window.__panelFixture.serviceCalls)).toEqual([]);
+
+  await first.more.click();
+  await panel.getByRole("menuitem", { name: "Delete shared schedule", exact: true }).click();
+  const dialog = panel.getByRole("dialog", { name: "Delete shared schedule?" });
+  await dialog.getByRole("button", { name: "Delete shared schedule", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__panelFixture.serviceCalls.length)).toBe(1);
+  await expect.poll(() => page.evaluate(() => {
+    const panel = document.querySelector(window.__panelFixture.panelTag);
+    const plans = panel.getWorkspaceSnapshot().resources.plans.value.plans;
+    return plans.map((plan) => ({ id: plan.id, cadence: plan.rooms[0]?.cadence ?? null }));
+  })).toEqual([
+    { id: "daily", cadence: null },
+    { id: "weekend", cadence: null },
+    { id: "private", cadence: {
+      scope: "plan", mopEveryN: 2, coverageEveryN: 2,
+      periodicCoverageSetting: "quick", doMopNext: false, doCoverageNext: false,
+    } },
+  ]);
+  const calls = await page.evaluate(() => window.__panelFixture.serviceCalls);
+  expect(calls).toEqual([{
+    domain: "matic_robot", service: "delete_room_schedule",
+    data: { room_id: "room-a", expected_token: "a".repeat(64) },
+    target: { entity_id: "vacuum.synthetic" },
+  }]);
+  expect(await page.evaluate(() => window.__panelFixture.serviceCalls.some((call) => /reset|start|stop/i.test(call.service)))).toBe(false);
+  await expect.poll(() => page.evaluate(() => document.querySelector(window.__panelFixture.panelTag).getWorkspaceSnapshot().notice?.key)).toBe("v4_notice_shared_schedule_deleted");
+});
+
+test("server rejection of shared schedule deletion reports the stale reason @safety", async ({ page }) => {
+  const fixture = await installPanelFixture(page, { initialPlanCatalog: sharedScheduleCatalog(), moduleSource: "packaged" });
+  await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+  const panel = page.locator(fixture.panelTag);
+  const { dialog } = await openSharedDeleteDialog(page, panel);
+  await page.evaluate(() => window.__panelFixture.failNextService("delete_room_schedule", Object.assign(
+    new Error("stale token"), { translation_domain: "matic_robot", translation_key: "cadence_delete_stale" },
+  )));
+  await dialog.getByRole("button", { name: "Delete shared schedule", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__panelFixture.serviceCalls.length)).toBe(1);
+  await expect.poll(() => page.evaluate(() => document.querySelector(window.__panelFixture.panelTag).getWorkspaceSnapshot().notice?.key)).toBe("v4_notice_shared_schedule_stale");
+  await expect.poll(() => page.evaluate(() => {
+    const panel = document.querySelector(window.__panelFixture.panelTag);
+    return panel.getWorkspaceSnapshot().resources.plans.value.plans.map((plan) => plan.rooms[0]?.cadence?.scope ?? null);
+  })).toEqual(["shared", "shared", "plan"]);
+  await expect.poll(() => page.evaluate(() => document.querySelector(window.__panelFixture.panelTag).getWorkspaceSnapshot().notice?.key)).toBe("v4_notice_shared_schedule_stale");
+});
+
+test("paused shared schedule remains deletable without reset controls @safety", async ({ page }) => {
+  const fixture = await installPanelFixture(page, { initialPlanCatalog: sharedScheduleCatalog(true), moduleSource: "packaged" });
+  await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+  const panel = page.locator(fixture.panelTag);
+  const { schedule, dialog } = await openSharedDeleteDialog(page, panel);
+  await expect(schedule.getByRole("button", { name: "Reset mopping progress for Kitchen", exact: true })).toHaveCount(0);
+  await expect(schedule.getByRole("button", { name: "Reset vacuum rotation progress for Kitchen", exact: true })).toHaveCount(0);
+  await expect(dialog).toContainText("every plan using it");
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  expect(await page.evaluate(() => window.__panelFixture.serviceCalls)).toEqual([]);
+});
+
+
+test("a changed shared schedule closes its stale confirmation without writing @safety", async ({ page }) => {
+  const fixture = await installPanelFixture(page, { initialPlanCatalog: sharedScheduleCatalog(), moduleSource: "packaged" });
+  await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+  const panel = page.locator(fixture.panelTag);
+  const { dialog } = await openSharedDeleteDialog(page, panel);
+  const bundle = await build({ stdin: { contents: 'export { WorkspaceStore } from "./frontend/map-studio-v4/state";', resolveDir: process.cwd() }, bundle: true, format: "esm", write: false });
+  await page.route("**/shared-delete-state.js", (route) => route.fulfill({ contentType: "text/javascript", body: bundle.outputFiles[0].text }));
+  const result = await page.evaluate(async () => {
+    const { WorkspaceStore } = await import("/shared-delete-state.js");
+    const panel = document.querySelector(window.__panelFixture.panelTag);
+    const store = new WorkspaceStore(panel.getWorkspaceSnapshot());
+    const state = store.value;
+    const resource = state.resources.plans;
+    store.patch({ resources: { ...state.resources, plans: { ...resource,
+      value: { ...resource.value, rooms: resource.value.rooms.map((room) => ({ ...room, sharedDeleteToken: "b".repeat(64) })) },
+    } } });
+    return { dialog: store.value.dialog, request: store.value.scheduleDeleteRequest };
+  });
+  expect(result).toEqual({ dialog: null, request: null });
+  expect(await page.evaluate(() => window.__panelFixture.serviceCalls)).toEqual([]);
+});
+
+test("a private-only room has no shared schedule delete action @safety", async ({ page }) => {
+  const fixture = await installPanelFixture(page, { initialPlanCatalog: planCatalog({ policy: cadence("plan", 2, 3, "quick", true) }), moduleSource: "packaged" });
+  await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+  const panel = page.locator(fixture.panelTag);
+  await openPlanPicker(panel);
+  await panel.getByRole("button", { name: /^Daily clean/ }).click();
+  await panel.getByRole("button", { name: "Edit Daily clean", exact: true }).click();
+  await panel.getByRole("button", { name: "Settings for Kitchen", exact: true }).click();
+  const schedule = panel.getByRole("group", { name: "Smart cleaning for Kitchen" });
+  await schedule.getByRole("button", { name: "More for Kitchen", exact: true }).click();
+  await expect(panel.getByRole("menuitem", { name: "Delete shared schedule", exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => window.__panelFixture.serviceCalls)).toEqual([]);
+});
+
+
+test("shared schedule confirmation keeps its actions reachable with many plans at 320px @safety", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const catalog = sharedScheduleCatalog();
+  for (let i = 0; i < 14; i += 1) catalog.plans.push({ ...structuredClone(catalog.plans[0]), id: `other-${i}`, name: `A long household cleaning plan ${i + 1}` });
+  const fixture = await installPanelFixture(page, { initialPlanCatalog: catalog, moduleSource: "packaged" });
+  await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+  const panel = page.locator(fixture.panelTag);
+  const { dialog } = await openSharedDeleteDialog(page, panel);
+  await expect(dialog).toContainText("A long household cleaning plan 14");
+  const confirm = dialog.getByRole("button", { name: "Delete shared schedule", exact: true });
+  await confirm.scrollIntoViewIfNeeded();
+  const box = await confirm.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.y).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(320);
+  expect(box.y + box.height).toBeLessThanOrEqual(568);
+  const violations = (await new AxeBuilder({ page }).analyze()).violations.filter(({ impact }) => impact === "serious" || impact === "critical");
+  expect(violations.map(({ id }) => id)).toEqual([]);
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  expect(await page.evaluate(() => window.__panelFixture.serviceCalls)).toEqual([]);
+});
+
+
+test("a stored shared schedule remains deletable when its policy is unavailable @safety", async ({ page }) => {
+  const catalog = sharedScheduleCatalog();
+  delete catalog.rooms[0].shared_cadence;
+  const fixture = await installPanelFixture(page, { initialPlanCatalog: catalog, moduleSource: "packaged" });
+  await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+  const panel = page.locator(fixture.panelTag);
+  const { dialog } = await openSharedDeleteDialog(page, panel);
+  await expect(dialog).toContainText('"Daily clean" and "Weekend clean"');
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  expect(await page.evaluate(() => window.__panelFixture.serviceCalls)).toEqual([]);
 });

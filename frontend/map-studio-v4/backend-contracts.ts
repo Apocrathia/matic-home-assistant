@@ -293,6 +293,7 @@ export interface PlansCatalog {
     readonly sharedCadence?: RoomCadencePolicy;
     readonly sharedCadenceProgress?: RoomCadenceProgress;
     readonly sharedCadenceReasons?: readonly CadenceReason[];
+    readonly sharedDeleteToken?: string;
   })[];
   readonly plans: readonly SavedPlan[];
   readonly selectedPlan: string | null;
@@ -773,12 +774,18 @@ export const parsePlansCatalog = (value: unknown): PlansCatalog => {
       value.shared_cadence_reasons,
     );
     const sharedCadenceReasons = parseCadenceReasons(value.shared_cadence_reasons);
+    const sharedDeleteToken = value.shared_cadence_delete_token;
+    if (sharedDeleteToken !== undefined && sharedDeleteToken !== null
+      && (typeof sharedDeleteToken !== "string" || !/^[0-9a-f]{64}$/u.test(sharedDeleteToken))) {
+      throw new ContractError("invalid-shared-cadence-delete-token");
+    }
     return {
       roomId: room.roomId,
       name: room.name,
       ...(sharedCadence === undefined ? {} : { sharedCadence }),
       ...(sharedCadenceProgress === undefined ? {} : { sharedCadenceProgress }),
       ...(sharedCadenceReasons.length ? { sharedCadenceReasons } : {}),
+      ...(typeof sharedDeleteToken === "string" ? { sharedDeleteToken } : {}),
     };
   });
   return {

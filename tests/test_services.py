@@ -85,6 +85,7 @@ from custom_components.matic_robot.services import (
     CLEAN_ROOM_SEQUENCE_SCHEMA,
     CLEAN_SERVICE_SCHEMA,
     DELETE_PLAN_ROOM_SCHEMA,
+    DELETE_ROOM_SCHEDULE_SCHEMA,
     MOVE_PLAN_ROOM_SCHEMA,
     PLAN_REFERENCE_SCHEMA,
     PREVIEW_ROOM_SEQUENCE_SCHEMA,
@@ -3602,6 +3603,65 @@ async def test_save_plan_service_rejects_one_shot_without_interval(
     assert raised.value.translation_key == "invalid_plan"
     assert manager.plans("serial") == {}
     manager._store.async_save.assert_not_awaited()
+
+
+async def test_delete_room_schedule_service_uses_current_binding_and_exact_token(
+    hass,
+) -> None:
+    manager = CleaningPlanManager(hass)
+    manager._store = SimpleNamespace(async_save=AsyncMock())
+    floor_plan = _area_floor_plan()
+    room = floor_plan.rooms[0]
+    entry = SimpleNamespace(
+        runtime_data=SimpleNamespace(
+            coordinator=SimpleNamespace(data=SimpleNamespace(floor_plan=floor_plan)),
+            slam_map=SimpleNamespace(
+                floor_plan_is_current=MagicMock(return_value=True)
+            ),
+        )
+    )
+    floor_token, room_identities = _plan_cadence_bindings(entry)
+    await manager.async_save_plan(
+        "serial",
+        "cadence-test",
+        {
+            "name": "Cadence test",
+            "rooms": [
+                {
+                    "room_id": room.id,
+                    "cleaning_mode": "vacuum",
+                    "coverage_setting": "quick",
+                    "cadence": {"scope": "shared", "mop_every_n": 3},
+                }
+            ],
+        },
+        floor_token=floor_token,
+        room_identities=room_identities,
+    )
+    services = await _registered_services(hass, manager)
+    token = manager.shared_cadence_delete_token("serial", room.id)
+    call = ServiceCall(
+        hass,
+        DOMAIN,
+        "delete_room_schedule",
+        DELETE_ROOM_SCHEDULE_SCHEMA(
+            {
+                "entity_id": ["vacuum.test"],
+                "room_id": room.id,
+                "expected_token": token,
+            }
+        ),
+    )
+    context = ("vacuum.test", entry, "serial", {room.id: room.name})
+    with patch(
+        "custom_components.matic_robot.services._saved_plan_context",
+        return_value=context,
+    ):
+        result = await _registered_handler(services, "delete_room_schedule")(call)
+
+    assert result == {"room_id": room.id, "affected_plan_ids": ["cadence-test"]}
+    assert room.id not in manager._robot("serial")["shared_room_cadence"]
+    assert "cadence" not in manager.plan("serial", "cadence-test")["rooms"][0]
 
 
 async def test_save_services_return_manager_normalized_shared_cadence(hass) -> None:

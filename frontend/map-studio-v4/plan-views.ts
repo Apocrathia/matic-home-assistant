@@ -133,6 +133,8 @@ export class MaticPlanViewsV4 extends LitElement {
 .room-more .menu { position: absolute; z-index: 18; inset-block-start: calc(100% + var(--ms-space-1)); inset-inline-end: 0; display: grid; min-inline-size: 14rem; padding: var(--ms-space-1); }
 .room-more .menu .ms-row { justify-content: flex-start; inline-size: 100%; }
 .room-more .reason { padding: var(--ms-space-1) var(--ms-space-3); }
+.ms-row--danger { color: var(--ms-resolved-danger-text, var(--ms-danger)); }
+.room-more-divider { block-size: 1px; margin: var(--ms-space-1) var(--ms-space-2); background: var(--ms-line); }
 /* Advanced: a 44 px disclosure with the ms-* chevron, opened without animation. */
 .advanced > summary { display: flex; gap: var(--ms-space-2); align-items: center; min-block-size: var(--ms-control); font-weight: var(--ms-w-medium); list-style: none; cursor: pointer; }
 .advanced > summary::-webkit-details-marker { display: none; }

@@ -532,6 +532,11 @@ export const scheduleBlock = (context: ScheduleContext, room: PlanRoom, index: n
     ? html`<p class="sched-status sched-reason" id=${id ?? nothing}>${icon(iconNoticeWarning)}<span>${text}</span></p>`
     : html`<small class="sched-status sched-reason" id=${id ?? nothing}>${icon(iconNoticeWarning)}<span>${text}</span></small>`;
   const { policy, next } = model;
+  const sharedDeleteToken = /^[0-9a-f]{64}$/u.test(input.catalogRoom?.sharedDeleteToken ?? "")
+    ? input.catalogRoom?.sharedDeleteToken ?? null
+    : null;
+  const canDeleteShared = Boolean(sharedDeleteToken && draft.id
+    && draft.rooms.some((candidate) => candidate.roomId === room.roomId));
   const patch = (cadence: RoomCadencePolicy | null): void => {
     if (!cadence || held) return;
     const rooms = draft.rooms.map((candidate, at) => at === index ? { ...candidate, cadence } : candidate);
@@ -545,6 +550,9 @@ export const scheduleBlock = (context: ScheduleContext, room: PlanRoom, index: n
   // Reset (room-schedule.md §5): a clean draft, an idle robot and a live map,
   // else held with its reason. No launcher mark: focus returns to the room.
   const block = resetBlock(t, state);
+  const deleteBlock = !block ? null : state.planDraft.dirty
+    ? t("v4_reason_delete_schedule_unsaved", "Save or cancel your changes before deleting this schedule.")
+    : t("v4_reason_delete_schedule_busy", "Wait until the robot is idle and the map is live before deleting this schedule.");
   const resetOff = Boolean(held || block);
   const resetButton = (kind: ScheduleKind, className: string, reasonId: string, role: "menuitem" | null = null) => html`<button
     class=${className}
@@ -564,7 +572,7 @@ export const scheduleBlock = (context: ScheduleContext, room: PlanRoom, index: n
   >${kind === "mop" ? t("v4_reset_mop_cadence_button", "Reset mopping") : t("v4_reset_coverage_cadence_button", "Reset vacuum rotation")}</button>`;
   const more = t("v4_room_more_named", "More for {room}", { room: name });
   const { menu } = context;
-  const overflow = draft.id && (model.resettable.mop || model.resettable.coverage) ? html`<div class="room-more" @keydown=${menu.keydown} @focusout=${menu.focusout}>
+  const overflow = draft.id && (model.resettable.mop || model.resettable.coverage || canDeleteShared) ? html`<div class="room-more" @keydown=${menu.keydown} @focusout=${menu.focusout}>
     <button
       class="ms-btn ms-btn--icon"
       type="button"
@@ -572,6 +580,7 @@ export const scheduleBlock = (context: ScheduleContext, room: PlanRoom, index: n
       title=${more}
       aria-haspopup="menu"
       aria-expanded=${String(menu.open)}
+      data-dialog-launcher=${canDeleteShared ? "confirmDeleteSchedule" : nothing}
       aria-disabled=${gate.disabled}
       aria-describedby=${gate.described}
       @click=${() => { if (!held) menu.toggle(); }}
@@ -580,8 +589,30 @@ export const scheduleBlock = (context: ScheduleContext, room: PlanRoom, index: n
       <div role="menu" aria-label=${more}>
         ${model.resettable.mop ? resetButton("mop", "ms-row ms-row--menu", "reset-reason", "menuitem") : nothing}
         ${model.resettable.coverage ? resetButton("coverage", "ms-row ms-row--menu", "reset-reason", "menuitem") : nothing}
+        ${canDeleteShared ? html`
+          ${(model.resettable.mop || model.resettable.coverage) ? html`<div class="room-more-divider" role="separator"></div>` : nothing}
+          <button
+            class="ms-row ms-row--menu ms-row--danger"
+            type="button"
+            role="menuitem"
+            tabindex="-1"
+            aria-disabled=${resetOff ? "true" : nothing}
+            aria-describedby=${(held ?? (deleteBlock ? "delete-schedule-reason" : null)) ?? nothing}
+            @click=${() => {
+              if (resetOff || !draft.id || !sharedDeleteToken) return;
+              context.menu.close(false);
+              context.intent({
+                type: "request-schedule-delete",
+                planId: draft.id,
+                roomId: room.roomId,
+                expectedToken: sharedDeleteToken,
+              });
+            }}
+          >${t("v4_delete_shared_schedule", "Delete shared schedule")}</button>
+        ` : nothing}
       </div>
       ${block ? html`<div class="reason">${reasonLine("reset-reason", block, "p")}</div>` : nothing}
+      ${canDeleteShared && deleteBlock ? html`<div class="reason">${reasonLine("delete-schedule-reason", deleteBlock, "p")}</div>` : nothing}
     </div>` : nothing}
   </div>` : nothing;
   const row = (kind: ScheduleKind, data: ScheduleRow, level: unknown) => {

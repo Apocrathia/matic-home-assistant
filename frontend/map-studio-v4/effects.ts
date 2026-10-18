@@ -6,6 +6,7 @@ import {
   type ResourceStamp,
   type ResourceState,
   type ResetCadenceAction,
+  type DeleteSharedCadenceAction,
   type SaveSettled,
   type WorkspaceNotice,
   type WorkspaceState,
@@ -37,6 +38,7 @@ import {
   initialWorkspaceState,
   draftForPlan,
   hasStoppableWork,
+  sharedCadenceDeleteRequestIsCurrent,
   manualRoomPreviewKey,
   planSelection,
   WorkspaceStore,
@@ -62,6 +64,7 @@ const isAbort = (error: unknown): boolean =>
 
 const CATALOG_WRITE_HELPERS: CatalogWriteHelpers = {
   notice, parseSavedPlanId, BackendError, isAbort, canEditCoordinates, initialWorkspaceState, draftForPlan, hasStoppableWork,
+  sharedDeleteCurrent: sharedCadenceDeleteRequestIsCurrent,
 };
 
 const problemCode = (error: unknown, fallback: string): string => {
@@ -78,7 +81,7 @@ const NOTICES = {
   actionUnconfirmed: notice("error", "v4_notice_action_unconfirmed", "Home Assistant can't confirm that command, so check the robot before trying again."),
   mapChanged: notice("info", "v4_notice_map_changed", "The map changed, so choose what to clean again."),
   statusRefreshed: notice("info", "v4_notice_status_refreshed", "Status refreshed, so check the robot before trying again."),
-  planSaveFailed: notice("error", "v4_notice_plan_save_failed", "Home Assistant can't confirm the plan was saved, so check your plans, then try again."),
+  planSaveFailed: notice("error", "v4_notice_plan_save_failed", "Couldn't confirm the change. Reload plans to check."),
   planDeleteFailed: notice("error", "v4_notice_plan_delete_failed", "The plan wasn't deleted; try again."),
   planPreviewMissing: notice("warning", "v4_notice_plan_preview_missing", "The next-run preview isn't ready; reload your plans, then try again."),
   planRemoved: notice("warning", "v4_notice_plan_removed", "This plan was removed elsewhere, so nothing was changed."),
@@ -2429,8 +2432,8 @@ export class EffectController {
   }
 
   executeAction(id: string, settled?: SaveSettled): Promise<void>;
-  executeAction(action: ResetCadenceAction): Promise<void>;
-  async executeAction(idOrAction: string | ResetCadenceAction, settled?: SaveSettled): Promise<void> {
+  executeAction(action: ResetCadenceAction | DeleteSharedCadenceAction): Promise<void>;
+  async executeAction(idOrAction: string | ResetCadenceAction | DeleteSharedCadenceAction, settled?: SaveSettled): Promise<void> {
     const id = typeof idOrAction === "string" ? idOrAction : idOrAction.id;
     switch (id) {
       case "toggle-deep-mop":
@@ -2563,11 +2566,19 @@ export class EffectController {
         await this.deleteArea();
         return;
       case "reset-room-cadence":
-        if (typeof idOrAction === "string") return;
+        if (typeof idOrAction === "string" || idOrAction.id !== "reset-room-cadence") return;
         await this.#write(
           "plan-mutation",
           idOrAction.mode === "mop" ? NOTICES.resetMopFailed : NOTICES.resetVacuumFailed,
           (writes, context) => writes.resetRoomCadence(context, idOrAction),
+        );
+        return;
+      case "delete-schedule":
+        if (typeof idOrAction === "string" || idOrAction.id !== "delete-schedule") return;
+        await this.#write(
+          "plan-mutation",
+          NOTICES.planSaveFailed,
+          (writes, context) => writes.deleteSharedCadence(context, idOrAction),
         );
         return;
     }

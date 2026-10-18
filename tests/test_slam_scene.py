@@ -1611,6 +1611,9 @@ async def test_plan_workspace_explains_legacy_room_limit() -> None:
 
 async def test_plan_workspace_projects_saved_and_shared_cadence_state() -> None:
     runtime = _runtime()
+    runtime.cleaning_plans.shared_cadence_delete_token = MagicMock(
+        return_value="d" * 64
+    )
     runtime.cleaning_plans.plans.return_value = {
         "weekday": {
             "rooms": [
@@ -1644,6 +1647,7 @@ async def test_plan_workspace_projects_saved_and_shared_cadence_state() -> None:
     assert payload["rooms"][0] == {
         "room_id": "room-1",
         "name": "Kitchen",
+        "shared_cadence_delete_token": "d" * 64,
         "shared_cadence": {"scope": "plan", "mop_every_n": 3},
         "shared_cadence_progress": {"mop": 2},
         "shared_cadence_reasons": ["mop_due"],
@@ -1654,6 +1658,9 @@ async def test_plan_workspace_projects_saved_and_shared_cadence_state() -> None:
     assert shared_call.kwargs["use_shared_schedule"] is True
     assert saved_call.kwargs["floor_token"] == shared_call.kwargs["floor_token"]
     assert saved_call.kwargs["identity"] == shared_call.kwargs["identity"]
+    runtime.cleaning_plans.shared_cadence_delete_token.assert_called_once_with(
+        "synthetic-serial", "room-1"
+    )
 
 
 async def test_plan_workspace_preserves_invalid_cadence_reasons_and_other_rooms() -> (

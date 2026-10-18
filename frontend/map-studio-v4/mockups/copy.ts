@@ -117,6 +117,17 @@ export const COPY = {
   v4_more_actions: "More actions",
   plan_delete: "Delete",
   v4_delete_plan_unsaved: "Can't delete this plan until you save or cancel your changes.",
+  v4_delete_shared_schedule: "Delete shared schedule",
+  v4_delete_shared_schedule_title: "Delete shared schedule?",
+  v4_delete_shared_schedule_detail: "This removes {room}'s shared schedule, progress, and next-clean requests from every plan using it: {plans}. Those plans keep their usual cleaning settings. Private schedules and cleaning history are unchanged.",
+  v4_delete_shared_schedule_orphan_detail: "No plans use {room}'s shared schedule. This removes the unused schedule, progress, and next-clean requests. Plans and cleaning history are unchanged.",
+  v4_notice_shared_schedule_deleted: "Shared schedule deleted",
+  v4_notice_shared_schedule_delete_failed: "The shared schedule wasn't deleted; reload plans, then try again.",
+  v4_notice_shared_schedule_delete_unverified: "Home Assistant accepted the change but couldn't confirm which plans were updated. Plans were reloaded; check the schedule before saving.",
+  v4_notice_shared_schedule_changed: "The shared schedule changed. Review plans before trying again.",
+  v4_notice_shared_schedule_stale: "The shared schedule changed. Reload plans before deleting it.",
+  v4_notice_shared_schedule_map_changed: "This schedule belongs to another map. Reload the current map and plans.",
+  v4_notice_shared_schedule_blocked: "The robot is using this schedule. Wait until cleaning ends, then try again.",
   v4_plan_name: "Plan name", // (literal) plan.md §3
   v4_cleaning_order: "Cleaning order", // (literal) plan.md §3
   v4_order_intelligent: "Intelligent rotation", // (literal) plan.md §3

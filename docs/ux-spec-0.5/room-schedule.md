@@ -1,6 +1,6 @@
 # Room schedules in a plan: 0.5 UX spec
 
-This is the Phase B spec (B1a, split from `plan.md`) for the Schedule block inside an expanded Edit room row. It covers how often a room is mopped or put on a vacuum rotation, when that work is next due, bringing it forward to the next clean, whether cleans count across all plans or in this plan only, joining a shared schedule, and Reset. Its structure and binding decisions come from `.superpowers/sdd/review-everything-e2e-to-sequential-cascade/spec-template.md`. Source paths are relative to `frontend/map-studio-v4/` unless prefixed. Sibling specs are referenced, not restated: `plan.md` (Edit view, room row, Save/Done, Run's due lines and blocked reasons), `shell.md` (the `confirmResetCadence` dialog, the notice rule) and `design-system.md` (`ms-stepper`, sizing, the nesting rule).
+This is the Phase B spec (B1a, split from `plan.md`) for the Schedule block inside an expanded Edit room row. It covers how often a room is mopped or put on a vacuum rotation, when that work is next due, bringing it forward to the next clean, whether cleans count across all plans or in this plan only, joining a shared schedule, Reset, and shared schedule deletion. Its structure and binding decisions come from `.superpowers/sdd/review-everything-e2e-to-sequential-cascade/spec-template.md`. Source paths are relative to `frontend/map-studio-v4/` unless prefixed. Sibling specs are referenced, not restated: `plan.md` (Edit view, room row, Save/Done, Run's due lines and blocked reasons), `shell.md` (the `confirmResetCadence` dialog, the notice rule) and `design-system.md` (`ms-stepper`, sizing, the nesting rule).
 
 ## 1. Scope
 - **Surfaces:** the Schedule block in an expanded, selected Edit room (`plan.md` §3; `expandedRoom` in §5); the room's overflow; Reset feedback.
@@ -12,7 +12,7 @@ A household administrator editing a plan wants a room mopped, or vacuumed at a c
 
 ## 3. Hierarchy
 At 390 and 1024 alike, after "Cleaning mode" and "Vacuum coverage" in the expanded row, top to bottom. The room card is the only bordered container; groups are separated by space and a heading, never by a border (the `design-system.md` nesting rule).
-- **Heading.** The h3 "Schedule" (`--ms-w-bold`; the room-named group says which room), with a trailing "More for {room}" overflow holding "Reset mopping" and "Reset vacuum rotation". Each item appears only for a schedule that has progress.
+- **Heading.** The h3 "Schedule" (`--ms-w-bold`; the room-named group says which room), with a trailing "More for {room}" overflow holding "Reset mopping" and "Reset vacuum rotation". Reset items appear only for a schedule that has progress. A saved shared schedule also has “Delete shared schedule”, including while paused.
 - **Shared hint.** When the room has a shared schedule that this plan does not use, the hint line "{room} has a shared schedule, and turning on a row uses it."
 - **Mop row:** a label line by value ("Mop every {count} cleans", "Mop every clean", or "Mop" when Off), a control line holding `ms-stepper` (Off, or 1 to 100), then the status line under it. Both rows share this shape.
 - **Vacuum rotation row:** the same three lines. The label line is text by level and value ("Heavy duty vacuum every {count} cleans"; "Heavy duty vacuum" when Off). The control line holds the level select, which shows only the level name (Quick, Optimal, Heavy duty; `ms-select`, 44 px, named "Vacuum level for {room}"), followed by the stepper on the same line when the content is wide enough for both (select 9 rem + 12 px gap + 170 px stepper = 326 px): they share the line at 390, and stack, select above stepper, in the 360 px inspector (301 px content) and at 320. The status line is below.
@@ -110,7 +110,9 @@ Keys are added to `strings.json` common if they exist only in TypeScript today. 
 - **RTL and motion:** −/+ follow the inline direction, numbers use `Intl.NumberFormat`, and names render in `<bdi>`. Advanced opens without animation.
 
 ## 9. Backend needs
-None. Keeping a join read-only until Save is a frontend consequence of plans.py:2372-2387. The service default scope stays `"plan"` (§12), and `periodic_coverage_setting` already accepts all three levels (cadence.py:9, 36-42).
+Deletion uses `delete_room_schedule` with the room ID and the catalog’s confirmation token. The confirmation names all consumer plans and explains that they retain their usual cleaning settings. The service atomically removes shared policy, progress and next-clean flags plus shared references in those plans; private schedules, selected plan and cleaning history remain. Changed confirmations, a changed map, active work and prepared reservations reject the write; persistence failure restores the original state. Cancel sends no write, and success reloads every affected plan before editing resumes.
+
+The existing schedule controls need no other backend changes. Keeping a join read-only until Save is a frontend consequence of plans.py:2372-2387. The service default scope stays `"plan"` (§12), and `periodic_coverage_setting` already accepts all three levels (cadence.py:9, 36-42).
 
 ## 10. Decisions needed
 - **D1.** Owner statement (2026-10-11): when the vacuum rotation is turned on it defaults to Heavy duty and offers all three levels (Quick, Optimal, Heavy duty). Today it copies the room's vacuum coverage (workflow-panel.ts:448). Existing Quick schedules keep working and show "Quick vacuum every {count} cleans". *Recommended:* as stated; kept as a decision for the record.
