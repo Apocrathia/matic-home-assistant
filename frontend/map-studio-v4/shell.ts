@@ -5,6 +5,7 @@ import type { PropertyValues } from "lit";
 
 import type {
   DateFormat,
+  DeleteSharedCadenceAction,
   HomePin,
   Localize,
   NoticePlaceholders,
@@ -1073,7 +1074,7 @@ export class MaticMapShellV4 extends LitElement {
     if (launcher) requestAnimationFrame(() => launcher.focus({ preventScroll: true }));
   }
 
-  #dispatchAction(action: string | ResetCadenceAction, settled?: SaveSettled): void {
+  #dispatchAction(action: string | ResetCadenceAction | DeleteSharedCadenceAction, settled?: SaveSettled): void {
     this.dispatchEvent(new CustomEvent(WORKSPACE_ACTION_EVENT, {
       detail: typeof action === "string" ? { id: action, settled } : action,
       bubbles: true,

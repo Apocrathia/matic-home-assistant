@@ -6,6 +6,7 @@ import {
   type ResourceStamp,
   type ResourceState,
   type ResetCadenceAction,
+  type DeleteSharedCadenceAction,
   type SaveSettled,
   type WorkspaceNotice,
   type WorkspaceState,
@@ -37,6 +38,7 @@ import {
   initialWorkspaceState,
   draftForPlan,
   hasStoppableWork,
+  sharedCadenceDeleteRequestIsCurrent,
   manualRoomPreviewKey,
   planSelection,
   WorkspaceStore,
@@ -62,6 +64,7 @@ const isAbort = (error: unknown): boolean =>
 
 const CATALOG_WRITE_HELPERS: CatalogWriteHelpers = {
   notice, parseSavedPlanId, BackendError, isAbort, canEditCoordinates, initialWorkspaceState, draftForPlan, hasStoppableWork,
+  sharedDeleteCurrent: sharedCadenceDeleteRequestIsCurrent,
 };
 
 const problemCode = (error: unknown, fallback: string): string => {
@@ -2088,10 +2091,14 @@ export class EffectController {
     if (shown) this.#store.patch({
       resources: { ...this.#store.value.resources, plans: resource("loading", this.#store.value.resources.plans.value) },
     });
+    const releaseWriteFence = this.#store.value.planWriteBlock === "refresh";
     try {
       const plans = await this.#backend.plans(entry.plansUrl, controller.signal);
       const currentEntry = this.#store.value.resources.entry;
       if (controller.signal.aborted || this.#disposed || !currentEntry || entryBoundaryKey(currentEntry) !== boundary) return null;
+      // Only a read begun after the original write settled releases its fence.
+      // Lifecycle changes and ordinary polling cannot release a pending wire.
+      if (releaseWriteFence && this.#store.value.planWriteBlock === "refresh") this.#store.patch({ planWriteBlock: null });
       const state = this.#store.value;
       // A fresh read can update an unchanged saved editor. Pending writes and
       // preflight retain their draft identity; unsaved and dirty drafts remain
@@ -2429,8 +2436,8 @@ export class EffectController {
   }
 
   executeAction(id: string, settled?: SaveSettled): Promise<void>;
-  executeAction(action: ResetCadenceAction): Promise<void>;
-  async executeAction(idOrAction: string | ResetCadenceAction, settled?: SaveSettled): Promise<void> {
+  executeAction(action: ResetCadenceAction | DeleteSharedCadenceAction): Promise<void>;
+  async executeAction(idOrAction: string | ResetCadenceAction | DeleteSharedCadenceAction, settled?: SaveSettled): Promise<void> {
     const id = typeof idOrAction === "string" ? idOrAction : idOrAction.id;
     switch (id) {
       case "toggle-deep-mop":
@@ -2563,11 +2570,19 @@ export class EffectController {
         await this.deleteArea();
         return;
       case "reset-room-cadence":
-        if (typeof idOrAction === "string") return;
+        if (typeof idOrAction === "string" || idOrAction.id !== "reset-room-cadence") return;
         await this.#write(
           "plan-mutation",
           idOrAction.mode === "mop" ? NOTICES.resetMopFailed : NOTICES.resetVacuumFailed,
           (writes, context) => writes.resetRoomCadence(context, idOrAction),
+        );
+        return;
+      case "delete-schedule":
+        if (typeof idOrAction === "string" || idOrAction.id !== "delete-schedule") return;
+        await this.#write(
+          "plan-mutation",
+          notice("error", "v4_notice_shared_schedule_delete_failed", "The shared schedule wasn't deleted; reload plans, then try again."),
+          (writes, context) => writes.deleteSharedCadence(context, idOrAction),
         );
         return;
     }

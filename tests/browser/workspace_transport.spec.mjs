@@ -736,7 +736,7 @@ test("snapshot recovery continues at a bounded interval after its retry budget",
 
 test("overflow during every failed snapshot cannot bypass retry backoff", async ({ page }) => {
   await load(page);
-  await page.clock.install();
+  await page.clock.pauseAt(new Date());
   await page.evaluate(async ([initialSnapshot, gap]) => {
     const h = window.workspaceHarness;
     const start = h.transport.start();
@@ -768,10 +768,11 @@ test("overflow during every failed snapshot cannot bypass retry backoff", async 
 
   const lastFailureTime = await page.evaluate(() => window.workspaceHarness.snapshotCallTimes[5]);
   await page.clock.fastForward(29_999);
-  const callTimes = await page.evaluate(() => window.workspaceHarness.snapshotCallTimes);
-  expect(callTimes[6] - lastFailureTime).toBeGreaterThanOrEqual(30_000);
+  expect(await page.evaluate(() => window.workspaceHarness.snapshotCalls)).toBe(6);
   await page.clock.fastForward(1);
   await expect.poll(() => page.evaluate(() => window.workspaceHarness.snapshotCalls)).toBe(7);
+  const callTimes = await page.evaluate(() => window.workspaceHarness.snapshotCallTimes);
+  expect(callTimes[6] - lastFailureTime).toBeGreaterThanOrEqual(30_000);
   await page.evaluate(() => window.workspaceHarness.transport.dispose());
 });
 

@@ -279,7 +279,7 @@ export class MaticMapPanelV4 extends LitElement {
   #action(event: CustomEvent<WorkspaceAction>): void {
     event.stopPropagation();
     if (typeof event.detail?.id !== "string") return;
-    if (event.detail.id === "reset-room-cadence" && "planId" in event.detail && "roomId" in event.detail && "mode" in event.detail) {
+    if ("planId" in event.detail && "roomId" in event.detail) {
       void this.#effects?.executeAction(event.detail);
     } else {
       void this.#effects?.executeAction(event.detail.id, "settled" in event.detail ? event.detail.settled : undefined);

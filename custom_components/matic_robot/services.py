@@ -78,6 +78,9 @@ from .plans import (
     PlanDisabledError,
     RoomSequenceLimitError,
     SavedPlanLimitError,
+    SharedRoomScheduleLockedError,
+    SharedRoomScheduleMapChangedError,
+    SharedRoomScheduleStaleError,
     async_get_plan_manager,
     plan_entries,
     plan_floor_token,
@@ -100,6 +103,7 @@ SERVICE_PREVIEW_ROOM_SEQUENCE = "preview_room_sequence"
 SERVICE_STOP_INTELLIGENT_CLEANING = "stop_intelligent_cleaning"
 SERVICE_RESET_PLAN_HISTORY = "reset_plan_history"
 SERVICE_RESET_ROOM_CADENCE = "reset_room_cadence"
+SERVICE_DELETE_ROOM_SCHEDULE = "delete_room_schedule"
 SERVICE_LIST_PLANS = "list_plans"
 SERVICE_SAVE_PLAN = "save_plan"
 SERVICE_DELETE_PLAN = "delete_plan"
@@ -290,6 +294,17 @@ RESET_ROOM_CADENCE_SCHEMA = cv.make_entity_service_schema(
             cv.ensure_list,
             [probatio.In(("mop", "coverage"))],
             probatio.Length(min=1, max=2),
+        ),
+    }
+)
+
+DELETE_ROOM_SCHEDULE_SCHEMA = cv.make_entity_service_schema(
+    {
+        probatio.Required("room_id"): probatio.All(
+            cv.string, probatio.Length(min=1, max=128)
+        ),
+        probatio.Required("expected_token"): probatio.All(
+            cv.string, probatio.Match(r"^[0-9a-f]{64}$")
         ),
     }
 )
@@ -1225,6 +1240,58 @@ async def async_register_services(hass: HomeAssistant) -> None:
         _require_matic_control(hass, async_reset_room_cadence),
         schema=RESET_ROOM_CADENCE_SCHEMA,
         supports_response=SupportsResponse.OPTIONAL,
+    )
+
+    async def async_delete_room_schedule(call: ServiceCall) -> dict[str, Any]:
+        """Remove one shared room schedule and detach its saved consumers."""
+        _entity_id, entry, serial_number, room_map = _saved_plan_context(
+            hass, call, require_rooms=False, require_current_floor=True
+        )
+        room_id = call.data["room_id"]
+        floor_plan = _current_floor_plan(entry)
+        if floor_plan is None or room_id not in room_map:
+            raise _validation_error(
+                "The room is not present on the current map",
+                "cadence_delete_map_changed",
+            )
+        try:
+            floor_token = plan_floor_token(floor_plan)
+            identity = room_cadence_identity(floor_plan, room_id)
+            receipt = await manager.async_delete_room_schedule(
+                serial_number,
+                room_id,
+                call.data["expected_token"],
+                floor_token=floor_token,
+                identity=identity,
+            )
+        except SharedRoomScheduleLockedError as err:
+            raise _validation_error(
+                "The shared room schedule is in use by a cleaning run",
+                "cadence_delete_blocked",
+            ) from err
+        except SharedRoomScheduleMapChangedError as err:
+            raise _validation_error(
+                "The shared room schedule belongs to a different map",
+                "cadence_delete_map_changed",
+            ) from err
+        except SharedRoomScheduleStaleError as err:
+            raise _validation_error(
+                "The shared room schedule changed; refresh before deleting",
+                "cadence_delete_stale",
+            ) from err
+        except ValueError as err:
+            raise _validation_error(
+                "The shared room schedule is not bound to the current map",
+                "cadence_delete_map_changed",
+            ) from err
+        return receipt
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_DELETE_ROOM_SCHEDULE,
+        _require_matic_control(hass, async_delete_room_schedule),
+        schema=DELETE_ROOM_SCHEDULE_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
     )
 
     async def async_list_plans(call: ServiceCall) -> dict[str, Any]:

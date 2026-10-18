@@ -165,6 +165,8 @@ export async function installPanelFixture(page, {
     const serviceCalls = [];
     const serviceFailures = [];
     let deferredServices = 0;
+    let deferredServiceResponses = 0;
+    let failedPlanReads = 0;
     const pendingServices = [];
     let deferredAreaWrites = 0;
     const pendingAreaWrites = [];
@@ -242,6 +244,10 @@ export async function installPanelFixture(page, {
       });
       if (/plans\/synthetic(?:-b)?$/.test(path)) {
         planReads += 1;
+        if (failedPlanReads > 0) {
+          failedPlanReads -= 1;
+          return new Response(null, { status: 503 });
+        }
         return json(structuredClone(planCatalog));
       }
       if (/slam_scene\/history(?:-b)?$/.test(path)) {
@@ -313,8 +319,35 @@ export async function installPanelFixture(page, {
               planCatalog.plans = planCatalog.plans.filter((plan) => plan.id !== data.plan);
               if (planCatalog.selected_plan === data.plan) planCatalog.selected_plan = planCatalog.plans[0]?.id ?? null;
             }
+            if (domain === "matic_robot" && service === "delete_room_schedule") {
+              const roomId = data.room_id;
+              const deletedPlanIds = planCatalog.plans
+                .filter((plan) => plan.rooms.some((room) => room.room_id === roomId && room.cadence?.scope === "shared"))
+                .map((plan) => plan.id);
+              for (const plan of planCatalog.plans) {
+                if (!deletedPlanIds.includes(plan.id)) continue;
+                plan.rooms = plan.rooms.map((room) => {
+                  if (room.room_id !== roomId) return room;
+                  const { cadence: _cadence, cadence_identity: _identity, cadence_progress: _progress,
+                    cadence_reasons: _reasons, ...rest } = room;
+                  return rest;
+                });
+              }
+              planCatalog.rooms = planCatalog.rooms.map((room) => {
+                if (room.room_id !== roomId) return room;
+                const { shared_cadence: _cadence, shared_cadence_progress: _progress,
+                  shared_cadence_reasons: _reasons, shared_cadence_delete_token: _token, ...rest } = room;
+                return rest;
+              });
+              return { response: { room_id: roomId, affected_plan_ids: deletedPlanIds } };
+            }
             return undefined;
           };
+          if (deferredServiceResponses > 0) {
+            deferredServiceResponses -= 1;
+            const result = apply();
+            return new Promise((resolve, reject) => pendingServices.push({ release: () => resolve(result), reject }));
+          }
           if (deferredServices > 0) {
             deferredServices -= 1;
             return new Promise((resolve, reject) => pendingServices.push({
@@ -341,6 +374,8 @@ export async function installPanelFixture(page, {
       get catalogReads() { return catalogReads; },
       serviceCalls,
       deferNextService: () => { deferredServices += 1; },
+      deferNextServiceResponse: () => { deferredServiceResponses += 1; },
+      failNextPlansRead: () => { failedPlanReads += 1; },
       pendingServiceCount: () => pendingServices.length,
       releaseService: (index = 0) => {
         const pending = pendingServices.splice(index, 1)[0];
@@ -370,6 +405,7 @@ export async function installPanelFixture(page, {
       },
       pendingHistoryScenes,
       get planReads() { return planReads; },
+      setPlanCatalog: (value) => Object.assign(planCatalog, structuredClone(value)),
       userData: () => structuredClone(userStore),
       userDataCalls,
       // Reject the next frontend user data message of `type` once.

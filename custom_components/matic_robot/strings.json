@@ -91,6 +91,10 @@
     "v4_delete_area_detail": "Automations that clean \"{name}\" will stop working, and the robot won't move.",
     "v4_delete_plan": "Delete plan?",
     "v4_delete_plan_detail": "Automations that run \"{name}\" will stop working, and the robot won't move.",
+    "v4_delete_shared_schedule": "Delete shared schedule",
+    "v4_delete_shared_schedule_title": "Delete shared schedule?",
+    "v4_delete_shared_schedule_detail": "This removes {room}'s shared schedule, progress, and next-clean requests from every plan using it: {plans}. Those plans keep their usual cleaning settings. Private schedules and cleaning history are unchanged.",
+    "v4_delete_shared_schedule_orphan_detail": "No plans use {room}'s shared schedule. This removes the unused schedule, progress, and next-clean requests. Plans and cleaning history are unchanged.",
     "v4_discard": "Discard",
     "v4_discard_title": "Discard changes?",
     "v4_discard_area_detail": "Your changes to \"{name}\" haven't been saved, and discarding them can't be undone.",
@@ -191,6 +195,7 @@
     "v4_reason_save_plan_room_limit": "Can't save until the plan has 100 rooms or fewer.",
     "v4_reason_save_plan_map": "Waiting for the map to be ready.",
     "v4_reason_plan_saving": "Waiting for Home Assistant to save the plan.",
+    "v4_reason_plan_change_pending": "Waiting for Home Assistant to confirm the plan change.",
     "v4_action_done": "Done",
     "v4_reason_run_plan_checking": "Waiting for Home Assistant to check the next run.",
     "v4_reason_plan_room_progress": "Can't run this plan until you reset {room}'s schedule progress, which Home Assistant can't confirm.",
@@ -403,6 +408,15 @@
     "v4_notice_reset_vacuum": "Vacuum rotation progress reset",
     "v4_notice_reset_mop_failed": "Mopping progress wasn't reset; try again.",
     "v4_notice_reset_vacuum_failed": "Vacuum rotation progress wasn't reset; try again.",
+    "v4_notice_shared_schedule_deleted": "Shared schedule deleted",
+    "v4_notice_shared_schedule_delete_unknown": "Home Assistant hasn't confirmed deletion. Reload plans after its reply to resume editing.",
+    "v4_notice_shared_schedule_delete_not_confirmed": "Deletion wasn't confirmed. Review the refreshed plans before trying again.",
+    "v4_notice_shared_schedule_delete_failed": "The shared schedule wasn't deleted; reload plans, then try again.",
+    "v4_notice_shared_schedule_delete_unverified": "Home Assistant accepted the change but couldn't confirm which plans were updated. Reload plans before saving.",
+    "v4_notice_shared_schedule_changed": "The shared schedule changed. Review plans before trying again.",
+    "v4_notice_shared_schedule_stale": "The shared schedule changed. Reload plans before deleting it.",
+    "v4_notice_shared_schedule_map_changed": "This schedule belongs to another map. Reload the current map and plans.",
+    "v4_notice_shared_schedule_blocked": "The robot is using this schedule. Wait until cleaning ends, then try again.",
     "v4_notice_saved_map": "Showing the saved map from {date} without the robot's position.",
     "v4_notice_coverage_task_unknown": "Home Assistant can't confirm the current clean, so check the robot first.",
     "v4_notice_coverage_activity_unknown": "Home Assistant can't confirm whether the robot is cleaning, so check it first.",
@@ -586,7 +600,9 @@
     "v4_deep_mop_failed": "Couldn't confirm double-pass mopping. Try again.",
     "v4_setting_unavailable": "Unavailable",
     "v4_setting_busy": "Available when cleaning stops",
-    "v4_saving": "Saving…"
+    "v4_saving": "Saving…",
+    "v4_reason_delete_schedule_unsaved": "Save or cancel your changes before deleting this schedule.",
+    "v4_reason_delete_schedule_busy": "Wait until the robot is idle and the map is live before deleting this schedule."
   },
   "config": {
     "flow_title": "{name}",
@@ -1440,6 +1456,15 @@
     },
     "invalid_room_setting": {
       "message": "A room's cleaning setting can't be used. Check each room's cleaning mode and vacuum coverage, then try again."
+    },
+    "cadence_delete_stale": {
+      "message": "The shared schedule changed. Reload plans before deleting it."
+    },
+    "cadence_delete_map_changed": {
+      "message": "This schedule belongs to another map. Reload the current map and plans."
+    },
+    "cadence_delete_blocked": {
+      "message": "The robot is using this schedule. Wait until cleaning ends, then try again."
     }
   },
   "issues": {
@@ -1814,6 +1839,20 @@
         "action": {
           "name": "Action",
           "description": "Acknowledge, mark as delivered, or check again."
+        }
+      }
+    },
+    "delete_room_schedule": {
+      "name": "Delete shared room schedule",
+      "description": "Removes one room’s shared schedule, progress and next-clean requests from every plan that uses it. Plans keep their usual cleaning settings; private schedules and cleaning history remain.",
+      "fields": {
+        "room_id": {
+          "name": "Room ID",
+          "description": "Room ID from the current Matic Map plans catalog."
+        },
+        "expected_token": {
+          "name": "Schedule confirmation",
+          "description": "The latest confirmation value for this room’s shared schedule. Review and confirm again if the schedule or a plan changes."
         }
       }
     }

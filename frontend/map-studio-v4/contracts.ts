@@ -77,6 +77,7 @@ export type DialogKind =
   | "discardDraft"
   | "confirmDeletePlan"
   | "confirmDeleteArea"
+  | "confirmDeleteSchedule"
   | "confirmResetCadence";
 
 export interface ResetCadenceAction {
@@ -86,10 +87,17 @@ export interface ResetCadenceAction {
   readonly mode: "mop" | "coverage";
 }
 
+export interface DeleteSharedCadenceAction {
+  readonly id: "delete-schedule";
+  readonly planId: string;
+  readonly roomId: string;
+  readonly expectedToken: string;
+}
+
 /** Told once whether this save was acknowledged, so Discard changes? settles on its own save. */
 export type SaveSettled = (saved: boolean) => void;
 
-export type WorkspaceAction = { readonly id: string; readonly settled?: SaveSettled } | ResetCadenceAction;
+export type WorkspaceAction = { readonly id: string; readonly settled?: SaveSettled } | ResetCadenceAction | DeleteSharedCadenceAction;
 
 export interface ResourceStamp {
   readonly entryKey: string;
@@ -307,12 +315,21 @@ export interface WorkspaceState {
   readonly activity: RobotActivity;
   readonly workflow: Workflow;
   readonly command: CommandState;
+  /** An unknown plan write stays fenced through its late reply and a fresh read. */
+  readonly planWriteBlock: "pending" | "refresh" | null;
   /** True while a recheck the user asked for ("Try again") reads the catalog. */
   readonly rechecking: boolean;
   readonly fullMap: boolean;
   readonly precisionOpen: boolean;
   readonly dialog: DialogKind | null;
   readonly cadenceResetRequest: { readonly planId: string; readonly roomId: string; readonly mode: "mop" | "coverage" } | null;
+  readonly scheduleDeleteRequest: {
+    readonly planId: string;
+    readonly roomId: string;
+    readonly roomName: string;
+    readonly expectedToken: string;
+    readonly planNames: readonly string[];
+  } | null;
   readonly narrowHint: boolean;
   readonly view: MapView;
   readonly appearance: MapAppearance;
@@ -409,6 +426,12 @@ export type WorkspaceIntent =
   }
   | { readonly type: "retry-room-preview" }
   | { readonly type: "request-room-cadence-reset"; readonly planId: string; readonly roomId: string; readonly mode: "mop" | "coverage" }
+  | {
+      readonly type: "request-schedule-delete";
+      readonly planId: string;
+      readonly roomId: string;
+      readonly expectedToken: string;
+    }
   | { readonly type: "set-floor"; readonly floorId: string }
   | { readonly type: "select-entry"; readonly entryId: string }
   | { readonly type: "set-history"; readonly historyId: string | null }
@@ -587,6 +610,7 @@ const workspaceIntentTypes: Readonly<Record<WorkspaceIntent["type"], true>> = {
   "set-clean-settings": true,
   "retry-room-preview": true,
   "request-room-cadence-reset": true,
+  "request-schedule-delete": true,
   "set-floor": true,
   "select-entry": true,
   "set-history": true,

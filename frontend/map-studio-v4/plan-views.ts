@@ -133,6 +133,8 @@ export class MaticPlanViewsV4 extends LitElement {
 .room-more .menu { position: absolute; z-index: 18; inset-block-start: calc(100% + var(--ms-space-1)); inset-inline-end: 0; display: grid; min-inline-size: 14rem; padding: var(--ms-space-1); }
 .room-more .menu .ms-row { justify-content: flex-start; inline-size: 100%; }
 .room-more .reason { padding: var(--ms-space-1) var(--ms-space-3); }
+.ms-row--danger { color: var(--ms-resolved-danger-text, var(--ms-danger)); }
+.room-more-divider { block-size: 1px; margin: var(--ms-space-1) var(--ms-space-2); background: var(--ms-line); }
 /* Advanced: a 44 px disclosure with the ms-* chevron, opened without animation. */
 .advanced > summary { display: flex; gap: var(--ms-space-2); align-items: center; min-block-size: var(--ms-control); font-weight: var(--ms-w-medium); list-style: none; cursor: pointer; }
 .advanced > summary::-webkit-details-marker { display: none; }
@@ -241,10 +243,16 @@ export class MaticPlanViewsV4 extends LitElement {
     </ul>`;
   }
 
+  #planChangeReason(): string {
+    return this.state.planWriteBlock
+      ? this.#t("v4_reason_plan_change_pending", "Waiting for Home Assistant to confirm the plan change.")
+      : this.#t("v4_reason_plan_saving", "Waiting for Home Assistant to save the plan.");
+  }
+
   /** Run's "Plan enabled" switch and why it is held (plan.md §5 Run switch, row RS). */
   #switchReason(): string | null {
     const state = this.state;
-    if (state.pendingAction === "save-plan") return this.#t("v4_reason_plan_saving", "Waiting for Home Assistant to save the plan.");
+    if (state.pendingAction === "save-plan" || state.planWriteBlock) return this.#planChangeReason();
     if (state.pendingAction === "run-plan") return this.#t("v4_reason_run_plan_checking", "Waiting for Home Assistant to check the next run.");
     if (hasStoppableWork(state)) return this.#t("v4_reason_plan_switch_busy", "Can't change this until the robot finishes.");
     if (!state.host.connected || !state.host.robotConnected) {
@@ -386,7 +394,7 @@ export class MaticPlanViewsV4 extends LitElement {
 
   /** The id of the shared reason while a save holds every Edit control (plan.md §4 E5), else null. */
   #held(): string | null {
-    return this.state.pendingAction === "save-plan" ? "edit-held" : null;
+    return this.state.pendingAction === "save-plan" || this.state.planWriteBlock ? "edit-held" : null;
   }
 
   #patch(patch: Partial<WorkspaceState["planDraft"]>): void {
@@ -774,7 +782,7 @@ export class MaticPlanViewsV4 extends LitElement {
       @click=${() => this.#patch({ runBehavior: value })}
     >${label}</button>`;
     return html`<div class="edit">
-      ${held ? html`<p class="reason" id="edit-held">${this.#t("v4_reason_plan_saving", "Waiting for Home Assistant to save the plan.")}</p>` : nothing}
+      ${held ? html`<p class="reason" id="edit-held">${this.#planChangeReason()}</p>` : nothing}
       <label class="field ms-field">${this.#t("plan_name", "Plan name")}
         <input
           maxlength="128"

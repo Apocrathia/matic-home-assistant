@@ -293,6 +293,7 @@ export interface PlansCatalog {
     readonly sharedCadence?: RoomCadencePolicy;
     readonly sharedCadenceProgress?: RoomCadenceProgress;
     readonly sharedCadenceReasons?: readonly CadenceReason[];
+    readonly sharedDeleteToken?: string;
   })[];
   readonly plans: readonly SavedPlan[];
   readonly selectedPlan: string | null;
@@ -711,36 +712,8 @@ const parseNextRunPreview = (value: unknown): NextRunPreview | undefined => {
   };
 };
 
-export const parseManualRoomSequencePreview = (value: unknown): ManualRoomSequencePreview => {
-  const response = objectValue(value, "invalid-room-sequence-preview");
-  const entryId = boundedString(response.entry_id, 128, "invalid-room-sequence-preview-entry");
-  const floorToken = boundedString(response.floor_token, 128, "invalid-room-sequence-preview-floor");
-  const previewToken = boundedString(response.preview_token, 64, "invalid-room-sequence-preview-token");
-  if (!/^[0-9a-f]{64}$/u.test(floorToken) || !/^[0-9a-f]{64}$/u.test(previewToken)) {
-    throw new ContractError("invalid-room-sequence-preview-token");
-  }
-  const preview = parseNextRunPreview({
-    rooms: response.rooms,
-    mission_boundaries: response.mission_boundaries,
-    blocker: response.blocker,
-  });
-  if (!preview) throw new ContractError("invalid-room-sequence-preview");
-  const rawRooms = response.rooms;
-  if (!Array.isArray(rawRooms)) throw new ContractError("invalid-room-sequence-preview-rooms");
-  const rooms = preview.rooms.map((room, index): ManualRoomSequencePreviewRoom => {
-    const source = objectValue(rawRooms[index], "invalid-room-sequence-preview-room");
-    const cadenceProgress = parseCadenceProgress(source.cadence_progress, source.cadence_reasons);
-    return { ...room, ...(cadenceProgress === undefined ? {} : { cadenceProgress }) };
-  });
-  return {
-    entryId,
-    floorToken,
-    previewToken,
-    rooms,
-    missionBoundaries: preview.missionBoundaries,
-    blocker: preview.blocker,
-  };
-};
+/** Shared validators for the room-preview decoder loaded on a cleaning choice. */
+export const roomPreviewHelpers = { ContractError, objectValue, boundedString, parseNextRunPreview, parseCadenceProgress };
 
 /** Shared validators passed into the deferred custom-area decoder. */
 export const areaCatalogHelpers = {
@@ -773,12 +746,18 @@ export const parsePlansCatalog = (value: unknown): PlansCatalog => {
       value.shared_cadence_reasons,
     );
     const sharedCadenceReasons = parseCadenceReasons(value.shared_cadence_reasons);
+    const sharedDeleteToken = value.shared_cadence_delete_token;
+    if (sharedDeleteToken !== undefined && sharedDeleteToken !== null
+      && (typeof sharedDeleteToken !== "string" || !/^[0-9a-f]{64}$/u.test(sharedDeleteToken))) {
+      throw new ContractError("invalid-shared-cadence-delete-token");
+    }
     return {
       roomId: room.roomId,
       name: room.name,
       ...(sharedCadence === undefined ? {} : { sharedCadence }),
       ...(sharedCadenceProgress === undefined ? {} : { sharedCadenceProgress }),
       ...(sharedCadenceReasons.length ? { sharedCadenceReasons } : {}),
+      ...(typeof sharedDeleteToken === "string" ? { sharedDeleteToken } : {}),
     };
   });
   return {

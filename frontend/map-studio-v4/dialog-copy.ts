@@ -1,5 +1,5 @@
 import { isWorkspaceIntent } from "./contracts";
-import type { DialogKind, Localize, ResetCadenceAction, WorkspaceIntent, WorkspaceState } from "./contracts";
+import type { DeleteSharedCadenceAction, DialogKind, Localize, ResetCadenceAction, WorkspaceIntent, WorkspaceState } from "./contracts";
 import { needsDraftConfirmation } from "./draft-navigation";
 import { formatList, translate } from "./localize";
 import { PLAN_VIEWS_TAG, WORKFLOW_TAG } from "./element-tags";
@@ -13,7 +13,7 @@ export interface DialogPresentation {
   readonly consequence?: string;
   readonly cancelLabel: string;
   readonly confirmLabel: string;
-  readonly action: "discard" | "delete-plan" | "delete-area" | "reset-room-cadence";
+  readonly action: "discard" | "delete-plan" | "delete-area" | "delete-schedule" | "reset-room-cadence";
 }
 
 /**
@@ -77,6 +77,23 @@ export const dialogCopy = (
         action: "delete-area",
       };
     }
+    case "confirmDeleteSchedule": {
+      const request = state.scheduleDeleteRequest;
+      if (!request) return undefined;
+      const plans = formatList(state.locale, request.planNames.map((name) => `"${name}"`));
+      return {
+        title: t("v4_delete_shared_schedule_title", "Delete shared schedule?"),
+        detail: request.planNames.length
+          ? t("v4_delete_shared_schedule_detail", "This removes {room}'s shared schedule, progress, and next-clean requests from every plan using it: {plans}. Those plans keep their usual cleaning settings. Private schedules and cleaning history are unchanged.", {
+            room: request.roomName,
+            plans,
+          })
+          : t("v4_delete_shared_schedule_orphan_detail", "No plans use {room}'s shared schedule. This removes the unused schedule, progress, and next-clean requests. Plans and cleaning history are unchanged.", { room: request.roomName }),
+        cancelLabel: t("v4_cancel", "Cancel"),
+        confirmLabel: t("v4_delete_shared_schedule", "Delete shared schedule"),
+        action: "delete-schedule",
+      };
+    }
     case "confirmResetCadence":
       return {
         title: resetMode === "mop"
@@ -109,6 +126,11 @@ export const dialogLauncher = (
     ask(intent.detail);
     return;
   }
+  if (intent.detail?.type === "request-schedule-delete") {
+    const launcher = intent.composedPath().find((candidate) => candidate instanceof HTMLElement
+      && candidate.hasAttribute("data-dialog-launcher"));
+    return launcher instanceof HTMLElement ? launcher : undefined;
+  }
   if (intent.detail?.type !== "open-dialog") return;
   // Safari does not focus a button when it is clicked with a pointing device.
   // The composed path may be retargeted, so keep only an explicit launcher.
@@ -122,12 +144,19 @@ export const confirmDialog = (
   state: WorkspaceState,
   action: Exclude<DialogPresentation["action"], "discard">,
   emit: (intent: WorkspaceIntent) => void,
-  dispatch: (action: string | ResetCadenceAction) => void,
+  dispatch: (action: string | ResetCadenceAction | DeleteSharedCadenceAction) => void,
 ): void => {
   const request = state.cadenceResetRequest;
+  const sharedDelete = state.scheduleDeleteRequest;
   emit({ type: "dismiss-top-layer" });
-  if (action !== "reset-room-cadence") dispatch(action);
-  else if (request) dispatch({ id: action, planId: request.planId, roomId: request.roomId, mode: request.mode });
+  if (action === "reset-room-cadence" && request) dispatch({ id: action, planId: request.planId, roomId: request.roomId, mode: request.mode });
+  else if (action === "delete-schedule" && sharedDelete) dispatch({
+    id: action,
+    planId: sharedDelete.planId,
+    roomId: sharedDelete.roomId,
+    expectedToken: sharedDelete.expectedToken,
+  });
+  else dispatch(action);
 };
 
 /**
@@ -137,6 +166,11 @@ export const confirmDialog = (
  */
 export const dialogReturnTarget = (previous: WorkspaceState, root: ParentNode): HTMLElement | null => {
   const request = previous.cadenceResetRequest;
+  const sharedDelete = previous.scheduleDeleteRequest;
+  if (previous.dialog === "confirmDeleteSchedule" && sharedDelete) {
+    const views = root.querySelector(WORKFLOW_TAG)?.shadowRoot?.querySelector(PLAN_VIEWS_TAG)?.shadowRoot;
+    return views?.querySelector<HTMLElement>(`[data-room-disclosure="${CSS.escape(sharedDelete.roomId)}"]`) ?? null;
+  }
   if (previous.dialog !== "confirmResetCadence" || !request) return null;
   const views = root.querySelector(WORKFLOW_TAG)?.shadowRoot?.querySelector(PLAN_VIEWS_TAG)?.shadowRoot;
   return views?.querySelector<HTMLElement>(`[data-room-disclosure="${CSS.escape(request.roomId)}"]`) ?? null;

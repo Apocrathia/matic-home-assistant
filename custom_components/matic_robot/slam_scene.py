@@ -1579,6 +1579,17 @@ class MaticPlansView(HomeAssistantView):
                 "room_id": room.id,
                 "name": room.name,
             }
+            delete_token = getattr(
+                runtime.cleaning_plans, "shared_cadence_delete_token", None
+            )
+            if callable(delete_token):
+                token = delete_token(serial_number, room.id)
+                if (
+                    isinstance(token, str)
+                    and len(token) == 64
+                    and all(char in "0123456789abcdef" for char in token)
+                ):
+                    workspace_room_projection["shared_cadence_delete_token"] = token
             cadence = cadence_state(
                 "quick_clean",
                 room.id,

@@ -48,7 +48,13 @@ async function mount(page, initialPlanCatalog = catalog) {
 
 async function edit(page, panel) {
   await panel.getByRole("button", { name: "Edit Daily", exact: true }).click();
+  // Wait for the view's scheduled focus handoff before typing in WebKit.
+  await expect(panel.getByRole("heading", { level: 2, name: "Edit plan", exact: true })).toBeFocused();
   await panel.getByRole("textbox", { name: "Plan name" }).fill("Daily edited");
+  await expect.poll(() => panel.evaluate(element => {
+    const { name, dirty } = element.getWorkspaceSnapshot().planDraft;
+    return { name, dirty };
+  })).toEqual({ name: "Daily edited", dirty: true });
 }
 
 for (const operation of ["save", "delete", "reset", "switch"]) {
@@ -120,7 +126,12 @@ test("an older refresh failure cannot replace a newer failed save's notice or dr
   await panel.getByRole("button", { name: "Save", exact: true }).click();
   await expect.poll(() => page.evaluate(() => Boolean(window.__writeRefresh.release))).toBe(true);
   await panel.getByRole("button", { name: "Edit Daily edited", exact: true }).click();
+  await expect(panel.getByRole("heading", { level: 2, name: "Edit plan", exact: true })).toBeFocused();
   await panel.getByRole("textbox", { name: "Plan name" }).fill("New change");
+  await expect.poll(() => panel.evaluate(element => {
+    const { name, dirty } = element.getWorkspaceSnapshot().planDraft;
+    return { name, dirty };
+  })).toEqual({ name: "New change", dirty: true });
   await page.evaluate(() => window.__panelFixture.failNextService("save_plan"));
   await panel.getByRole("button", { name: "Save", exact: true }).click();
   await expect.poll(() => panel.evaluate(element => element.getWorkspaceSnapshot().notice?.tone)).toBe("error");

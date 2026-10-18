@@ -202,6 +202,18 @@ class CadenceBindingError(ValueError):
     """Raised when active shared cadence lacks a verified map binding."""
 
 
+class SharedRoomScheduleStaleError(ValueError):
+    """Raised when the confirmation no longer describes this schedule."""
+
+
+class SharedRoomScheduleMapChangedError(ValueError):
+    """Raised when this schedule is not bound to the current room map."""
+
+
+class SharedRoomScheduleLockedError(ValueError):
+    """Raised when a run or cadence mutation owns this shared room schedule."""
+
+
 class PlanAreaMissingError(ValueError):
     """Raised when a plan names a saved custom area that no longer exists."""
 
@@ -3467,6 +3479,191 @@ class CleaningPlanManager:
             "mop": _stored_count(progress, "mop"),
             "coverage": _stored_count(progress, "coverage"),
         }
+
+    def shared_cadence_delete_token(
+        self, serial_number: str, room_id: str
+    ) -> str | None:
+        """Bind one shared-schedule deletion to its record and every consumer.
+
+        A dialog must be refreshed if cadence progress, the schedule policy, or
+        any consumer plan changes before deletion is confirmed.
+        """
+        robot = self._robot(serial_number)
+        schedule = robot.get("shared_room_cadence", {}).get(room_id)
+        if not isinstance(schedule, Mapping):
+            return None
+        consumers = [
+            {"plan_id": plan_id, "plan": plan}
+            for plan_id, plan in sorted(robot["plans"].items())
+            if isinstance(plan, Mapping)
+            and any(
+                isinstance(room, Mapping)
+                and room.get("room_id") == room_id
+                and isinstance(room.get("cadence"), Mapping)
+                and room["cadence"].get("scope") == "shared"
+                for room in plan.get("rooms", [])
+            )
+        ]
+        payload = {"room_id": room_id, "schedule": schedule, "consumers": consumers}
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        return hashlib.sha256(b"matic-shared-cadence-delete-v1\0" + encoded).hexdigest()
+
+    async def async_delete_room_schedule(
+        self,
+        serial_number: str,
+        room_id: str,
+        expected_token: str,
+        *,
+        floor_token: str,
+        identity: str,
+    ) -> dict[str, Any]:
+        """Delete one shared schedule and detach every saved consumer atomically."""
+
+        async def commit(_lease: _MetadataLockLease) -> dict[str, Any]:
+            async with self._user_metadata_store_transaction(serial_number):
+                robot = self._robot(serial_number)
+                schedule = robot.get("shared_room_cadence", {}).get(room_id)
+                if not isinstance(schedule, Mapping):
+                    raise SharedRoomScheduleStaleError(
+                        "shared room schedule no longer exists"
+                    )
+                if (
+                    not isinstance(floor_token, str)
+                    or len(floor_token) != 64
+                    or not isinstance(identity, str)
+                    or len(identity) != 64
+                    or schedule.get("floor_token") != floor_token
+                    or schedule.get("identity") != identity
+                ):
+                    raise SharedRoomScheduleMapChangedError(
+                        "shared room schedule belongs to a different map"
+                    )
+                if (
+                    self.shared_cadence_delete_token(serial_number, room_id)
+                    != expected_token
+                ):
+                    raise SharedRoomScheduleStaleError(
+                        "shared room schedule changed; refresh before deleting"
+                    )
+
+                active = robot.get("active_plan")
+                pending = _validated_native_reconciliation(
+                    robot.get("pending_native_reconciliation")
+                )
+                if isinstance(active, Mapping) and active.get("room_id") == room_id:
+                    raise SharedRoomScheduleLockedError(
+                        "shared room schedule is in use by an active room"
+                    )
+                if pending is not None and pending.get("room_id") == room_id:
+                    raise SharedRoomScheduleLockedError(
+                        "shared room schedule is awaiting completion verification"
+                    )
+                reservation = self._prepared_runs.get(serial_number)
+                if reservation is not None and (
+                    room_id in reservation.shared_schedule_rooms
+                    or (
+                        reservation.plan_id
+                        in {
+                            plan_id
+                            for plan_id, _room in self._shared_cadence_consumers(
+                                robot, room_id
+                            )
+                        }
+                        and room_id in reservation.rooms
+                    )
+                ):
+                    raise SharedRoomScheduleLockedError(
+                        "shared room schedule is reserved by a queued managed run"
+                    )
+                consumers = self._shared_cadence_consumers(robot, room_id)
+                for mutation in self._pending_cadence_mutations.get(
+                    serial_number, {}
+                ).values():
+                    if room_id in mutation.shared_room_ids or (
+                        mutation.plan_id in {plan_id for plan_id, _room in consumers}
+                        and room_id in mutation.plan_room_ids
+                    ):
+                        raise SharedRoomScheduleLockedError(
+                            "shared room schedule is being saved"
+                        )
+
+                before = deepcopy(robot)
+                shared = robot["shared_room_cadence"]
+                shared.pop(room_id)
+                plan_room_ids: dict[str, set[str]] = {}
+                for plan_id, room in consumers:
+                    room.pop("cadence", None)
+                    room.pop("cadence_identity", None)
+                    # A former private schedule may have left dormant counters.
+                    # Removing its shared replacement must not resurrect them
+                    # when this plan later creates a new private schedule.
+                    private_records = robot["plan_room_cadence"].get(plan_id)
+                    if isinstance(private_records, MutableMapping):
+                        private_records.pop(room_id, None)
+                    plan_room_ids.setdefault(plan_id, set()).add(room_id)
+                mutation_tokens = [
+                    self._begin_cadence_mutation(
+                        serial_number,
+                        _CadenceMutation(
+                            plan_id,
+                            frozenset(changed_rooms),
+                            frozenset({room_id}),
+                        ),
+                    )
+                    for plan_id, changed_rooms in sorted(plan_room_ids.items())
+                ]
+                if not mutation_tokens:
+                    mutation_tokens.append(
+                        self._begin_cadence_mutation(
+                            serial_number,
+                            _CadenceMutation("", frozenset(), frozenset({room_id})),
+                        )
+                    )
+                try:
+                    await self._async_save_with_rollback(serial_number, before)
+                finally:
+                    for token in mutation_tokens:
+                        self._end_cadence_mutation(serial_number, token)
+                return {
+                    "room_id": room_id,
+                    "affected_plan_ids": sorted(plan_room_ids),
+                }
+
+        result = await self._async_run_owned_metadata(
+            serial_number,
+            commit,
+            domain_locks=(self.plan_write_lock(serial_number),),
+            notify=True,
+            reject_on_admission_close=True,
+        )
+        return cast(dict[str, Any], result)
+
+    @staticmethod
+    def _shared_cadence_consumers(
+        robot: Mapping[str, Any], room_id: str
+    ) -> list[tuple[str, MutableMapping[str, Any]]]:
+        """Return each mutable saved room that references a shared schedule."""
+        consumers: list[tuple[str, MutableMapping[str, Any]]] = []
+        plans = robot.get("plans", {})
+        if not isinstance(plans, Mapping):
+            return consumers
+        for plan_id, plan in plans.items():
+            if not isinstance(plan_id, str) or not isinstance(plan, MutableMapping):
+                continue
+            rooms = plan.get("rooms", [])
+            if not isinstance(rooms, list):
+                continue
+            consumers.extend(
+                (plan_id, room)
+                for room in rooms
+                if (
+                    isinstance(room, MutableMapping)
+                    and room.get("room_id") == room_id
+                    and isinstance(room.get("cadence"), Mapping)
+                    and room["cadence"].get("scope") == "shared"
+                )
+            )
+        return consumers
 
     def cadence_editor_state(
         self,
