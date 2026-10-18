@@ -6068,6 +6068,55 @@ async def test_delete_shared_room_schedule_allows_unrelated_private_reservation(
     assert manager.plan("serial", "private")["rooms"][0]["cadence"]["scope"] == "plan"
 
 
+async def test_delete_shared_schedule_without_saved_consumers_persists_removal(
+    hass,
+) -> None:
+    manager = CleaningPlanManager(hass)
+    manager._store = SimpleNamespace(async_save=AsyncMock())
+    robot = manager._robot("serial")
+    robot["shared_room_cadence"]["orphan"] = {
+        "floor_token": "f" * 64,
+        "identity": "a" * 64,
+        "policy": {"mop_every_n": 3},
+        "progress": {"mop": 0, "coverage": 0},
+    }
+    token = manager.shared_cadence_delete_token("serial", "orphan")
+
+    assert await manager.async_delete_room_schedule(
+        "serial", "orphan", token, floor_token="f" * 64, identity="a" * 64
+    ) == {"room_id": "orphan", "affected_plan_ids": []}
+    assert "orphan" not in robot["shared_room_cadence"]
+    manager._store.async_save.assert_awaited_once()
+
+
+async def test_delete_shared_schedule_missing_record_is_stale(hass) -> None:
+    manager = CleaningPlanManager(hass)
+    manager._store = SimpleNamespace(async_save=AsyncMock())
+
+    with pytest.raises(
+        plans_module.SharedRoomScheduleStaleError, match="no longer exists"
+    ):
+        await manager.async_delete_room_schedule(
+            "serial", "missing", "0" * 64, floor_token="f" * 64, identity="a" * 64
+        )
+
+
+def test_shared_cadence_consumers_skips_malformed_saved_records() -> None:
+    valid = {"room_id": "kitchen", "cadence": {"scope": "shared"}}
+    robot = {
+        "plans": {
+            "not-a-plan": None,
+            "bad-rooms": {"rooms": {}},
+            "mixed-rooms": {"rooms": [None, {"room_id": "kitchen"}, valid]},
+        }
+    }
+
+    assert CleaningPlanManager._shared_cadence_consumers(robot, "kitchen") == [
+        ("mixed-rooms", valid)
+    ]
+    assert CleaningPlanManager._shared_cadence_consumers({"plans": []}, "kitchen") == []
+
+
 async def test_cadence_reset_normalizes_malformed_progress_and_rejects_empty_modes(
     hass,
 ) -> None:
