@@ -13,6 +13,7 @@ from custom_components.matic_robot.client.commands import UserCommand
 from custom_components.matic_robot.plans import CleaningPlanManager
 from custom_components.matic_robot.restart import async_recover_managed_run
 
+from .test_restart import _operational_state
 from .test_restart import recovery_state as recovery_fixture
 
 
@@ -51,6 +52,7 @@ async def test_restored_stop_fence_keeps_run_and_native_guards(
     async def dock(command):
         assert command is UserCommand.DOCK
         hass.states.async_set(checkpoint["entity_id"], "docked")
+        client.async_get_state.return_value = _operational_state(charging_idle=True)
 
     client.async_send_user_command.side_effect = dock
     with patch(
@@ -124,6 +126,9 @@ async def test_second_shutdown_retains_settlement_owner(hass, recovery_state):
 
     async def dock(command):
         hass.states.async_set(checkpoint["entity_id"], "docked")
+        entry.runtime_data.client.async_get_state.return_value = _operational_state(
+            charging_idle=True
+        )
 
     entry.runtime_data.client.async_send_user_command.side_effect = dock
     await async_recover_managed_run(hass, entry, "serial")

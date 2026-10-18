@@ -582,6 +582,11 @@ async def test_stop_marks_oem_fence_and_blocks_new_motion_until_docked(hass) -> 
     entry.runtime_data.coordinator.client.async_get_active_cleaning_session_state = (
         native_active
     )
+    entry.runtime_data.coordinator.client.async_get_state = AsyncMock(
+        return_value=replace(
+            entry.runtime_data.coordinator.data.operational, charging=True
+        )
+    )
 
     await entity.async_stop()
     assert manager.stop_pending("synthetic-serial") is True
