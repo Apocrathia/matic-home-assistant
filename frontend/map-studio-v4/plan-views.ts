@@ -246,7 +246,7 @@ export class MaticPlanViewsV4 extends LitElement {
   /** Run's "Plan enabled" switch and why it is held (plan.md §5 Run switch, row RS). */
   #switchReason(): string | null {
     const state = this.state;
-    if (state.pendingAction === "save-plan") return this.#t("v4_reason_plan_saving", "Waiting for Home Assistant to save the plan.");
+    if (state.pendingAction === "save-plan") return this.#t("v4_reason_plan_saving", "Waiting for Home Assistant to confirm the plan change.");
     if (state.pendingAction === "run-plan") return this.#t("v4_reason_run_plan_checking", "Waiting for Home Assistant to check the next run.");
     if (hasStoppableWork(state)) return this.#t("v4_reason_plan_switch_busy", "Can't change this until the robot finishes.");
     if (!state.host.connected || !state.host.robotConnected) {
@@ -388,7 +388,7 @@ export class MaticPlanViewsV4 extends LitElement {
 
   /** The id of the shared reason while a save holds every Edit control (plan.md §4 E5), else null. */
   #held(): string | null {
-    return this.state.pendingAction === "save-plan" ? "edit-held" : null;
+    return this.state.pendingAction === "save-plan" || this.state.planWriteBlock ? "edit-held" : null;
   }
 
   #patch(patch: Partial<WorkspaceState["planDraft"]>): void {
@@ -776,7 +776,7 @@ export class MaticPlanViewsV4 extends LitElement {
       @click=${() => this.#patch({ runBehavior: value })}
     >${label}</button>`;
     return html`<div class="edit">
-      ${held ? html`<p class="reason" id="edit-held">${this.#t("v4_reason_plan_saving", "Waiting for Home Assistant to save the plan.")}</p>` : nothing}
+      ${held ? html`<p class="reason" id="edit-held">${this.#t("v4_reason_plan_saving", "Waiting for Home Assistant to confirm the plan change.")}</p>` : nothing}
       <label class="field ms-field">${this.#t("plan_name", "Plan name")}
         <input
           maxlength="128"

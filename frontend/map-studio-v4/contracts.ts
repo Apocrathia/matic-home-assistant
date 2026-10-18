@@ -315,6 +315,8 @@ export interface WorkspaceState {
   readonly activity: RobotActivity;
   readonly workflow: Workflow;
   readonly command: CommandState;
+  /** An unknown plan write stays fenced through its late reply and a fresh read. */
+  readonly planWriteBlock: "pending" | "refresh" | null;
   /** True while a recheck the user asked for ("Try again") reads the catalog. */
   readonly rechecking: boolean;
   readonly fullMap: boolean;

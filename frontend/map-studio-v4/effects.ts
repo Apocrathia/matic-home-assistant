@@ -2091,10 +2091,14 @@ export class EffectController {
     if (shown) this.#store.patch({
       resources: { ...this.#store.value.resources, plans: resource("loading", this.#store.value.resources.plans.value) },
     });
+    const releaseWriteFence = this.#store.value.planWriteBlock === "refresh";
     try {
       const plans = await this.#backend.plans(entry.plansUrl, controller.signal);
       const currentEntry = this.#store.value.resources.entry;
       if (controller.signal.aborted || this.#disposed || !currentEntry || entryBoundaryKey(currentEntry) !== boundary) return null;
+      // Only a read begun after the original write settled releases its fence.
+      // Lifecycle changes and ordinary polling cannot release a pending wire.
+      if (releaseWriteFence && this.#store.value.planWriteBlock === "refresh") this.#store.patch({ planWriteBlock: null });
       const state = this.#store.value;
       // A fresh read can update an unchanged saved editor. Pending writes and
       // preflight retain their draft identity; unsaved and dirty drafts remain

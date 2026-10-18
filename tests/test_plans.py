@@ -5756,12 +5756,38 @@ async def test_delete_shared_room_schedule_detaches_all_consumers_atomically(
         floor_token=floor_token,
         room_identities={"room-kitchen": kitchen_identity, "room-hall": hall_identity},
     )
+    await manager.async_save_plan(
+        "serial",
+        "private",
+        {
+            "name": "Private",
+            "rooms": [
+                {
+                    "room_id": "room-kitchen",
+                    "cleaning_mode": "vacuum",
+                    "coverage_setting": "quick",
+                    "cadence": {"scope": "plan", "mop_every_n": 5},
+                }
+            ],
+        },
+        select=False,
+        floor_token=floor_token,
+        room_identities={"room-kitchen": kitchen_identity},
+    )
     await manager.async_select_plan("serial", "evening")
     robot = manager._robot("serial")
     robot["shared_room_cadence"]["room-kitchen"]["progress"].update(mop=2, coverage=1)
     robot["plan_room_cadence"]["evening"]["room-hall"] = {
         "progress": {"mop": 4, "coverage": 2},
         "identity": hall_identity,
+    }
+    robot["plan_room_cadence"]["morning"]["room-kitchen"] = {
+        "identity": kitchen_identity,
+        "progress": {"mop": 4, "coverage": 2},
+    }
+    robot["plan_room_cadence"]["private"]["room-kitchen"] = {
+        "identity": kitchen_identity,
+        "progress": {"mop": 3, "coverage": 1},
     }
     robot["native_history"] = [{"session_id": "kept"}]
     robot["last_run"] = {
@@ -5809,6 +5835,34 @@ async def test_delete_shared_room_schedule_detaches_all_consumers_atomically(
     assert robot["native_history"] == [{"session_id": "kept"}]
     assert robot["last_run"]["run_id"] == "kept"
     assert robot["rooms"]["room-kitchen"]["completed_runs"] == 7
+
+    assert "room-kitchen" not in robot["plan_room_cadence"]["morning"]
+    assert robot["plan_room_cadence"]["private"]["room-kitchen"]["progress"] == {
+        "mop": 3,
+        "coverage": 1,
+    }
+    await manager.async_save_plan(
+        "serial",
+        "morning",
+        {
+            "name": "Morning",
+            "rooms": [
+                {
+                    "room_id": "room-kitchen",
+                    "cleaning_mode": "vacuum",
+                    "coverage_setting": "quick",
+                    "cadence": {"scope": "plan", "mop_every_n": 5},
+                }
+            ],
+        },
+        select=False,
+        floor_token=floor_token,
+        room_identities={"room-kitchen": kitchen_identity},
+    )
+    assert manager.cadence_progress("serial", "morning", "room-kitchen") == {
+        "mop": 0,
+        "coverage": 0,
+    }
 
 
 async def test_delete_shared_room_schedule_rejects_stale_and_restores_write_failure(

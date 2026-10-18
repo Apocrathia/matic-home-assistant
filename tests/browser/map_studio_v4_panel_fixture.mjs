@@ -165,6 +165,8 @@ export async function installPanelFixture(page, {
     const serviceCalls = [];
     const serviceFailures = [];
     let deferredServices = 0;
+    let deferredServiceResponses = 0;
+    let failedPlanReads = 0;
     const pendingServices = [];
     let deferredAreaWrites = 0;
     const pendingAreaWrites = [];
@@ -242,6 +244,10 @@ export async function installPanelFixture(page, {
       });
       if (/plans\/synthetic(?:-b)?$/.test(path)) {
         planReads += 1;
+        if (failedPlanReads > 0) {
+          failedPlanReads -= 1;
+          return new Response(null, { status: 503 });
+        }
         return json(structuredClone(planCatalog));
       }
       if (/slam_scene\/history(?:-b)?$/.test(path)) {
@@ -337,6 +343,11 @@ export async function installPanelFixture(page, {
             }
             return undefined;
           };
+          if (deferredServiceResponses > 0) {
+            deferredServiceResponses -= 1;
+            const result = apply();
+            return new Promise((resolve, reject) => pendingServices.push({ release: () => resolve(result), reject }));
+          }
           if (deferredServices > 0) {
             deferredServices -= 1;
             return new Promise((resolve, reject) => pendingServices.push({
@@ -363,6 +374,8 @@ export async function installPanelFixture(page, {
       get catalogReads() { return catalogReads; },
       serviceCalls,
       deferNextService: () => { deferredServices += 1; },
+      deferNextServiceResponse: () => { deferredServiceResponses += 1; },
+      failNextPlansRead: () => { failedPlanReads += 1; },
       pendingServiceCount: () => pendingServices.length,
       releaseService: (index = 0) => {
         const pending = pendingServices.splice(index, 1)[0];
@@ -392,6 +405,7 @@ export async function installPanelFixture(page, {
       },
       pendingHistoryScenes,
       get planReads() { return planReads; },
+      setPlanCatalog: (value) => Object.assign(planCatalog, structuredClone(value)),
       userData: () => structuredClone(userStore),
       userDataCalls,
       // Reject the next frontend user data message of `type` once.

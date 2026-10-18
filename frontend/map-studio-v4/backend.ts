@@ -10,7 +10,7 @@ import {
   isPrivatePath,
   parseCatalog,
   parseHistoryCatalog,
-  parseManualRoomSequencePreview,
+  roomPreviewHelpers,
   parsePlansCatalog,
   parsePose,
   type AreaCircle,
@@ -40,14 +40,12 @@ const REQUEST_TIMEOUTS = {
   history: 15_000,
   workflow: 15_000,
   mutation: 20_000,
-  roomPreview: 15_000,
 } as const;
-const MAX_OUTSTANDING_ROOM_PREVIEW_WIRES = 2;
-const roomPreviewWireCountByConnection = new WeakMap<object, number>();
 
 export class BackendError extends Error {
   readonly code: string;
   readonly status: number | null;
+  readonly completion?: Promise<unknown>;
 
   constructor(code: string, status: number | null = null) {
     super(code);
@@ -406,104 +404,10 @@ export class MaticBackend {
     const connection = this.#getHass()?.connection;
     if (!connection?.sendMessagePromise) throw new BackendError("preview-unavailable");
 
-    let timeout: number | null = null;
-    let rejectAbort: (reason: DOMException) => void = () => {};
-    const interrupted = new Promise<never>((_resolve, reject) => { rejectAbort = reject; });
-    const previous = this.#roomPreviewWireInFlight.get(connection);
-    let releaseTurn!: () => void;
-    const turn = new Promise<void>((resolve) => { releaseTurn = resolve; });
-    this.#roomPreviewWireInFlight.set(connection, turn);
-    let turnReleased = false;
-    const release = (): void => {
-      if (turnReleased) return;
-      turnReleased = true;
-      releaseTurn();
-      if (this.#roomPreviewWireInFlight.get(connection) === turn) {
-        this.#roomPreviewWireInFlight.delete(connection);
-      }
-    };
-    let wireStarted = false;
-    const abort = (): void => {
-      rejectAbort(new DOMException("Aborted", "AbortError"));
-      if (wireStarted) {
-        release();
-        if (timeout !== null) window.clearTimeout(timeout);
-        timeout = null;
-      }
-    };
-    signal?.addEventListener("abort", abort, { once: true });
-    // The deadline includes time spent in the FIFO queue. A queued timeout
-    // rejects that caller immediately, but only an active wire turn can release
-    // itself here; queued turns release after their predecessor in finally.
-    const deadline = new Promise<never>((_resolve, reject) => {
-      timeout = window.setTimeout(() => {
-        timeout = null;
-        reject(new BackendError("preview-timeout"));
-      }, REQUEST_TIMEOUTS.roomPreview);
-    });
-    void deadline.catch(() => {
-      if (wireStarted) release();
-    });
-    try {
-      if (previous) {
-        await Promise.race([previous, interrupted, deadline]);
-        if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-      }
-      const outstandingWires = roomPreviewWireCountByConnection.get(connection) ?? 0;
-      if (outstandingWires >= MAX_OUTSTANDING_ROOM_PREVIEW_WIRES) {
-        throw new BackendError("preview-unavailable");
-      }
-      const wire = connection.sendMessagePromise<unknown>({
-          type: "call_service",
-          domain: "matic_robot",
-          service: "preview_room_sequence",
-          target: { entity_id: entityId },
-          service_data: {
-            rooms: rooms.map((room) => ({
-              room: room.room,
-              cleaning_mode: room.cleaning_mode,
-              coverage_setting: room.coverage_setting,
-            })),
-            use_room_schedule: true,
-            override_room_schedule: overrideRoomSchedule,
-          },
-          return_response: true,
-        });
-      roomPreviewWireCountByConnection.set(connection, outstandingWires + 1);
-      wireStarted = true;
-      let wireCountReleased = false;
-      const settleWire = (): void => {
-        if (!wireCountReleased) {
-          wireCountReleased = true;
-          const remainingWires = (roomPreviewWireCountByConnection.get(connection) ?? 1) - 1;
-          if (remainingWires === 0) roomPreviewWireCountByConnection.delete(connection);
-          else roomPreviewWireCountByConnection.set(connection, remainingWires);
-        }
-        release();
-        if (timeout !== null) window.clearTimeout(timeout);
-        timeout = null;
-      };
-      void wire.then(settleWire, settleWire);
-      const response = await Promise.race([
-        wire,
-        interrupted,
-        deadline,
-      ]);
-      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-      if (!response || typeof response !== "object" || Array.isArray(response)
-        || !("response" in response)) {
-        throw new ContractError("invalid-room-sequence-preview-envelope");
-      }
-      return parseManualRoomSequencePreview((response as { response: unknown }).response);
-    } finally {
-      if (!wireStarted) {
-        if (previous) void previous.then(release, release);
-        else release();
-        if (timeout !== null) window.clearTimeout(timeout);
-        timeout = null;
-      }
-      signal?.removeEventListener("abort", abort);
-    }
+    const { requestRoomPreview } = await import("./room-preview");
+    if (this.#disposed || signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    return requestRoomPreview(connection, this.#roomPreviewWireInFlight, entityId, rooms, overrideRoomSchedule, signal,
+      { BackendError, ...roomPreviewHelpers });
   }
 
   async saveArea(
@@ -577,10 +481,10 @@ export class MaticBackend {
           cancelWait = () => {
             if (timeout !== null) window.clearTimeout(timeout);
             timeout = null;
-            reject(new DOMException("Aborted", "AbortError"));
+            reject(Object.assign(new DOMException("Aborted", "AbortError"), { completion: request }));
           };
           this.#serviceWaits.add(cancelWait);
-          timeout = window.setTimeout(() => reject(new BackendError("mutation-timeout")), REQUEST_TIMEOUTS.mutation);
+          timeout = window.setTimeout(() => reject(Object.assign(new BackendError("mutation-timeout"), { completion: request })), REQUEST_TIMEOUTS.mutation);
         }),
       ]);
     } finally {

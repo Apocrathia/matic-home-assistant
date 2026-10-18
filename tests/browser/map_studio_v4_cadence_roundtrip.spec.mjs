@@ -473,3 +473,129 @@ test("a stored shared schedule remains deletable when its policy is unavailable 
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
   expect(await page.evaluate(() => window.__panelFixture.serviceCalls)).toEqual([]);
 });
+
+
+for (const commitBeforeReply of [true, false]) {
+  test(`shared deletion timeout fences edits through the late ${commitBeforeReply ? "reply after commit" : "commit"} and refresh @safety`, async ({ page }) => {
+    const fixture = await installPanelFixture(page, { initialPlanCatalog: sharedScheduleCatalog(), moduleSource: "packaged" });
+    await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+    const panel = page.locator(fixture.panelTag);
+    const { dialog } = await openSharedDeleteDialog(page, panel);
+    await page.clock.install();
+    await page.evaluate((committed) => {
+      if (committed) window.__panelFixture.deferNextServiceResponse();
+      else window.__panelFixture.deferNextService();
+    }, commitBeforeReply);
+    await dialog.getByRole("button", { name: "Delete shared schedule", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__panelFixture.pendingServiceCount())).toBe(1);
+    await page.clock.fastForward(20_000);
+    const snapshot = () => page.evaluate(() => document.querySelector(window.__panelFixture.panelTag).getWorkspaceSnapshot());
+    await expect.poll(async () => (await snapshot()).planWriteBlock).toBe("pending");
+    expect((await snapshot()).command).toBe("idle");
+    expect((await snapshot()).notice.key).toBe("v4_notice_shared_schedule_delete_unknown");
+    await expect(panel.getByRole("combobox", { name: "Vacuum coverage for Kitchen", exact: true })).toHaveAttribute("aria-disabled", "true");
+    // A lifecycle cancellation used to release command-pending. The independent
+    // write fence must still block edits and leave Stop available.
+    const bundle = await build({ stdin: { contents: 'export { WorkspaceStore, canStopMotion, canEditCoordinates } from "./frontend/map-studio-v4/state";', resolveDir: process.cwd() }, bundle: true, format: "esm", write: false });
+    await page.route("**/shared-delete-fence.js", (route) => route.fulfill({ contentType: "text/javascript", body: bundle.outputFiles[0].text }));
+    expect(await page.evaluate(async () => {
+      const { WorkspaceStore, canStopMotion, canEditCoordinates } = await import("/shared-delete-fence.js");
+      const state = document.querySelector(window.__panelFixture.panelTag).getWorkspaceSnapshot();
+      const store = new WorkspaceStore({ ...state, command: "idle", pendingAction: null });
+      store.dispatch({ type: "patch-plan-draft", patch: { name: "Should not change" } });
+      return { held: store.value.planWriteBlock, unchanged: store.value.planDraft.name === state.planDraft.name,
+        editable: canEditCoordinates(store.value), stoppable: canStopMotion({ ...store.value, activity: "cleaning" }) };
+    })).toEqual({ held: "pending", unchanged: true, editable: false, stoppable: true });
+    // Even a successful read before the original wire settles cannot un-fence.
+    const reads = await page.evaluate(() => window.__panelFixture.planReads);
+    await openPlanPicker(panel);
+    await expect.poll(() => page.evaluate(() => window.__panelFixture.planReads)).toBeGreaterThan(reads);
+    expect((await snapshot()).planWriteBlock).toBe("pending");
+    await page.evaluate(() => window.__panelFixture.releaseService());
+    await expect.poll(async () => (await snapshot()).planWriteBlock).toBe(null);
+    await expect.poll(async () => (await snapshot()).notice.key).toBe("v4_notice_shared_schedule_deleted");
+    expect((await snapshot()).resources.plans.value.plans.map((plan) => plan.rooms[0]?.cadence?.scope ?? null)).toEqual([null, null, "plan"]);
+    expect(await page.evaluate(() => window.__panelFixture.serviceCalls.map(({ service }) => service))).toEqual(["delete_room_schedule"]);
+  });
+}
+
+test("unknown shared deletion stays fenced after a failed read until plans reload @safety", async ({ page }) => {
+  const fixture = await installPanelFixture(page, { initialPlanCatalog: sharedScheduleCatalog(), moduleSource: "packaged" });
+  await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+  const panel = page.locator(fixture.panelTag);
+  const { dialog } = await openSharedDeleteDialog(page, panel);
+  await page.clock.install();
+  await page.evaluate(() => window.__panelFixture.deferNextServiceResponse());
+  await dialog.getByRole("button", { name: "Delete shared schedule", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__panelFixture.pendingServiceCount())).toBe(1);
+  await page.clock.fastForward(20_000);
+  await expect.poll(() => page.evaluate(() => document.querySelector(window.__panelFixture.panelTag).getWorkspaceSnapshot().planWriteBlock)).toBe("pending");
+  await page.evaluate(() => {
+    window.__panelFixture.failNextPlansRead();
+    window.__panelFixture.releaseService();
+  });
+  await expect.poll(() => page.evaluate(() => {
+    const state = document.querySelector(window.__panelFixture.panelTag).getWorkspaceSnapshot();
+    return { block: state.planWriteBlock, status: state.resources.plans.status, command: state.command };
+  })).toEqual({ block: "refresh", status: "error", command: "idle" });
+  await openPlanPicker(panel);
+  await expect.poll(() => page.evaluate(() => document.querySelector(window.__panelFixture.panelTag).getWorkspaceSnapshot().planWriteBlock)).toBe(null);
+  expect(await page.evaluate(() => window.__panelFixture.serviceCalls.map(({ service }) => service))).toEqual(["delete_room_schedule"]);
+});
+
+
+for (const afterTimeout of [false, true]) {
+  test(`shared deletion survives disposal ${afterTimeout ? "after" : "before"} its timeout and a remount @safety`, async ({ page }) => {
+    const fixture = await installPanelFixture(page, { initialPlanCatalog: sharedScheduleCatalog(), moduleSource: "packaged" });
+    await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+    const panel = page.locator(fixture.panelTag);
+    const { dialog } = await openSharedDeleteDialog(page, panel);
+    await page.clock.install();
+    await page.evaluate(() => window.__panelFixture.deferNextServiceResponse());
+    await dialog.getByRole("button", { name: "Delete shared schedule", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__panelFixture.pendingServiceCount())).toBe(1);
+    if (afterTimeout) await page.clock.fastForward(20_000);
+    await page.evaluate(() => {
+      window.__remountDeletePanel = document.querySelector(window.__panelFixture.panelTag);
+      window.__remountDeletePanel.remove();
+      document.body.append(window.__remountDeletePanel);
+    });
+    await expect.poll(() => page.evaluate(() => window.__remountDeletePanel.getWorkspaceSnapshot().planWriteBlock)).toBe("pending");
+    await page.evaluate(() => window.__panelFixture.releaseService());
+    await expect.poll(() => page.evaluate(() => window.__remountDeletePanel.getWorkspaceSnapshot().planWriteBlock)).toBe("refresh");
+    await expect.poll(() => page.evaluate(() => {
+      const state = window.__remountDeletePanel.getWorkspaceSnapshot();
+      return { coherence: state.coherence, pageActive: state.pageActive, readOnly: state.floor.readOnly };
+    })).toEqual({ coherence: "current", pageActive: true, readOnly: false });
+    await openPlanPicker(panel);
+    await expect.poll(() => page.evaluate(() => window.__remountDeletePanel.getWorkspaceSnapshot().planWriteBlock)).toBe(null);
+    expect(await page.evaluate(() => window.__remountDeletePanel.getWorkspaceSnapshot().resources.plans.value.plans.map((plan) => plan.rooms[0]?.cadence?.scope ?? null))).toEqual([null, null, "plan"]);
+    expect(await page.evaluate(() => window.__panelFixture.serviceCalls.map(({ service }) => service))).toEqual(["delete_room_schedule"]);
+  });
+}
+
+
+for (const remaining of ["policy", "reference", "missing-room"]) {
+  test(`an unknown deletion cannot claim success with a remaining ${remaining} @safety`, async ({ page }) => {
+    const fixture = await installPanelFixture(page, { initialPlanCatalog: sharedScheduleCatalog(), moduleSource: "packaged" });
+    await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+    const panel = page.locator(fixture.panelTag);
+    const { dialog } = await openSharedDeleteDialog(page, panel);
+    await page.evaluate(() => window.__panelFixture.deferNextServiceResponse());
+    await dialog.getByRole("button", { name: "Delete shared schedule", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__panelFixture.pendingServiceCount())).toBe(1);
+    const uncertain = sharedScheduleCatalog();
+    delete uncertain.rooms[0].shared_cadence_delete_token;
+    if (remaining !== "policy") delete uncertain.rooms[0].shared_cadence;
+    if (remaining !== "reference") {
+      for (const plan of uncertain.plans.filter((candidate) => candidate.id !== "private")) delete plan.rooms[0].cadence;
+    }
+    if (remaining === "missing-room") uncertain.rooms = [];
+    await page.evaluate((catalog) => {
+      window.__panelFixture.setPlanCatalog(catalog);
+      window.__panelFixture.rejectService(0, new Error("synthetic connection lost after dispatch"));
+    }, uncertain);
+    await expect.poll(() => page.evaluate(() => document.querySelector(window.__panelFixture.panelTag).getWorkspaceSnapshot().notice?.key)).toBe("v4_notice_shared_schedule_delete_not_confirmed");
+    expect(await page.evaluate(() => window.__panelFixture.serviceCalls.map(({ service }) => service))).toEqual(["delete_room_schedule"]);
+  });
+}

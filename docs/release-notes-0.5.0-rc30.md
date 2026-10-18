@@ -7,6 +7,10 @@ cleaning settings, private schedules and cleaning history remain.
 
 Deletion checks the current map and rejects a changed confirmation or a
 schedule in use. The update is saved atomically, with rollback on failure.
+Dormant counters from a former private schedule are cleared for shared
+consumers; current private schedules keep their progress. A delayed reply
+holds editing until the original request settles and plans reload, while
+Stop remains available. Room-preview requests now load on demand.
 
 RC30 retains the RC29 history dismissal fix and the earlier reconnect and
 managed completion guards. Source review, CI, installation, runtime, device,

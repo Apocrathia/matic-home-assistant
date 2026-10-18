@@ -3594,6 +3594,12 @@ class CleaningPlanManager:
                 for plan_id, room in consumers:
                     room.pop("cadence", None)
                     room.pop("cadence_identity", None)
+                    # A former private schedule may have left dormant counters.
+                    # Removing its shared replacement must not resurrect them
+                    # when this plan later creates a new private schedule.
+                    private_records = robot["plan_room_cadence"].get(plan_id)
+                    if isinstance(private_records, MutableMapping):
+                        private_records.pop(room_id, None)
                     plan_room_ids.setdefault(plan_id, set()).add(room_id)
                 mutation_tokens = [
                     self._begin_cadence_mutation(

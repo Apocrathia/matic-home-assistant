@@ -1849,7 +1849,7 @@
         },
         "expected_token": {
           "name": "Schedule confirmation",
-          "description": "The room’s shared_cadence_delete_token from the latest plans catalog. A changed schedule or plan requires a new confirmation."
+          "description": "The latest confirmation value for this room’s shared schedule. Review and confirm again if the schedule or a plan changes."
         }
       }
     }

@@ -330,17 +330,59 @@ export const deleteSharedCadence = async (context: CatalogWriteContext, action: 
   }
   const failure = context.helpers.notice("error", "v4_notice_shared_schedule_delete_failed", "The shared schedule wasn't deleted; reload plans, then try again.");
   let response: unknown;
-  const sent = await serviceMutation(
+  let acknowledged = false;
+  let uncertain: { completion?: Promise<unknown> } | null = null;
+  const owner = context.projection();
+  const sending = serviceMutation(
     { ...context, failure },
     "delete_room_schedule",
     { room_id: action.roomId, expected_token: action.expectedToken },
     context.helpers.notice("success", "v4_notice_shared_schedule_deleted", "Shared schedule deleted"),
-    (value) => { response = value; },
-    (error) => sharedDeleteFailure(context.helpers, error) ?? failure,
+    (value) => { response = value; acknowledged = true; },
+    (error) => {
+      const rejected = sharedDeleteFailure(context.helpers, error);
+      if (rejected) return rejected;
+      uncertain = (error ?? {}) as { completion?: Promise<unknown> };
+      return context.helpers.notice("warning", "v4_notice_shared_schedule_delete_unknown", "Home Assistant hasn't confirmed deletion. Reload plans after its reply to resume editing.");
+    },
   );
-  if (!sent) return;
+  // serviceMutation dispatches synchronously before its first await. Fence
+  // that original wire immediately, including entry changes and remounts.
+  store.patch({ planWriteBlock: "pending" });
+  const sent = await sending;
+  if (!sent) {
+    if (!uncertain && !acknowledged) {
+      store.patch({ planWriteBlock: null });
+      return;
+    }
+    // Timeout and disposal do not cancel a transmitted service request. Stop
+    // stays available while the outcome is unknown; no write is sent twice.
+    if (uncertain) {
+      store.patch({ notice: context.helpers.notice("warning", "v4_notice_shared_schedule_delete_unknown", "Home Assistant hasn't confirmed deletion. Reload plans after its reply to resume editing.") });
+      await (uncertain as { completion?: Promise<unknown> }).completion?.catch(() => {});
+    }
+    // The store outlives a detached controller. Its replacement can release
+    // this fence with a fresh read once the original wire has settled.
+    store.patch({ planWriteBlock: "refresh" });
+    if (context.disposed()) return;
+    const fresh = await context.effects.loadPlans({ force: true });
+    if (fresh && context.projection()?.entryKey === owner?.entryKey
+      && context.projection()?.userKey === owner?.userKey) {
+      const currentRoom = fresh.rooms.find((candidate) => candidate.roomId === action.roomId);
+      const latest = store.value;
+      const deleted = Boolean(currentRoom && !currentRoom.sharedDeleteToken && !currentRoom.sharedCadence
+        && !fresh.plans.some((plan) => plan.rooms.some((savedRoom) => savedRoom.roomId === action.roomId && savedRoom.cadence?.scope === "shared"))
+        && latest.selection.floorId === state.selection.floorId
+        && latest.draftFloorOrdinal === state.draftFloorOrdinal && latest.draftMapSessionKey === state.draftMapSessionKey);
+      store.patch({ notice: deleted
+        ? context.helpers.notice("success", "v4_notice_shared_schedule_deleted", "Shared schedule deleted")
+        : context.helpers.notice("warning", "v4_notice_shared_schedule_delete_not_confirmed", "Deletion wasn't confirmed. Review the refreshed plans before trying again.") });
+      context.settled(deleted);
+    }
+    return;
+  }
   let refreshed: import("./backend-contracts").PlansCatalog | null = null;
-  store.patch({ command: "pending", pendingAction: "save-plan" });
+  store.patch({ command: "pending", pendingAction: "save-plan", planWriteBlock: "refresh" });
   try {
     const payload = response && typeof response === "object" && !Array.isArray(response)
       ? ((response as { response?: unknown }).response ?? response) : null;
@@ -526,11 +568,10 @@ const planWriter = (context: CatalogWriteContext) => {
         acknowledgementTimeout: "mutation",
         ...(onAcknowledged ? { returnResponse: true } : {}),
       });
-      if (!current()) return null;
       onAcknowledged?.(response);
-      return true;
+      return current() ? true : null;
     } catch (error) {
-      if (current()) onFailure?.(error);
+      onFailure?.(error);
       return current() ? false : null;
     } finally {
       // Home Assistant has answered, so the next plan write may start while

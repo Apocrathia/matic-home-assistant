@@ -79,6 +79,7 @@ export const initialWorkspaceState = (): WorkspaceState => ({
   activity: "unknown",
   workflow: "none",
   command: "idle",
+  planWriteBlock: null,
   rechecking: false,
   fullMap: false,
   precisionOpen: false,
@@ -662,6 +663,7 @@ export const reduceWorkspace = (
         workflow: intent.workflow === "areaReview" ? "areaReview" : state.workflow,
       };
     case "patch-plan-draft":
+      if (state.planWriteBlock) return state;
       if (intent.patch.rooms && intent.patch.rooms.length > MAX_ROOM_SEQUENCE_SIZE
         && !isLegacyPlanReduction(state, intent.patch.rooms)) return state;
       return {
@@ -966,7 +968,7 @@ export const canChangeRobotSetting = (state: WorkspaceState): boolean =>
   && !state.managedLock && !hasStoppableWork(state);
 
 export const canEditCoordinates = (state: WorkspaceState): boolean =>
-  state.pageActive && canShowLiveMap(state)
+  !state.planWriteBlock && state.pageActive && canShowLiveMap(state)
   && state.coherence === "current"
   && state.map.complete
   && state.map.floorCoherent
@@ -1028,7 +1030,7 @@ type Reason = { readonly reason: string; readonly reasonKey: string };
 // While a command runs, the edits that would race it are held and say why
 // (shell.md §5); choosing a tool stays open, since painting is refused anyway.
 export const heldReasonKey = (state: WorkspaceState): Reason | null =>
-  state.command === "pending" ? { reason: "Waiting for the current change to finish.", reasonKey: "v4_reason_stop_busy" }
+  state.command === "pending" || state.planWriteBlock ? { reason: "Waiting for the current change to finish.", reasonKey: "v4_reason_stop_busy" }
     : state.command === "starting" ? { reason: "Waiting for the robot to begin.", reasonKey: "v4_reason_starting" }
       : state.command === "settling" ? { reason: "Waiting for the robot to stop.", reasonKey: "v4_reason_stop" }
         : null;

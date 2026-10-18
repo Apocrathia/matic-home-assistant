@@ -90,6 +90,7 @@
     "stop_intelligent_cleaning": { "service": "mdi:stop-circle-outline" },
     "reset_plan_history": { "service": "mdi:history" },
     "reset_room_cadence": { "service": "mdi:calendar-refresh" },
+    "delete_room_schedule": { "service": "mdi:calendar-remove-outline" },
     "list_plans": { "service": "mdi:format-list-bulleted" },
     "save_plan": { "service": "mdi:content-save-outline" },
     "delete_plan": { "service": "mdi:delete-outline" },
