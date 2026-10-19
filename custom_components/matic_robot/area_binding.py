@@ -454,6 +454,36 @@ def _room_frame_matches(
         for old_point, new_point in zip(old_landmarks, new_landmarks, strict=True)
         if old_point == new_point
     }
+    # Boundary snapshots are rounded to millimeters. Points on one short edge
+    # can therefore remain exactly fixed after a small rotation while the far
+    # end moves visibly. Require fixed extrema to span at least half the saved
+    # landmark diameter, allowing 2 mm for rounding at both ends. This bounds
+    # hidden frame drift; it cannot detect motion that rounds to the same
+    # millimeter coordinates. There are at most eight extrema, so pairwise
+    # work is constant and explicitly budgeted.
+    room_geometry.charge_query_work(
+        len(old_unique) * (len(old_unique) - 1) // 2
+        + len(fixed_landmarks) * (len(fixed_landmarks) - 1) // 2
+    )
+    old_points = tuple(old_unique)
+    fixed_points = tuple(fixed_landmarks)
+    room_span_squared = max(
+        (
+            (left[0] - right[0]) ** 2 + (left[1] - right[1]) ** 2
+            for index, left in enumerate(old_points)
+            for right in old_points[index + 1 :]
+        ),
+        default=0,
+    )
+    fixed_span_squared = max(
+        (
+            (left[0] - right[0]) ** 2 + (left[1] - right[1]) ** 2
+            for index, left in enumerate(fixed_points)
+            for right in fixed_points[index + 1 :]
+        ),
+        default=0,
+    )
+    required_fixed_span = max(0, (math.isqrt(room_span_squared) + 1) // 2 - 2)
     room_geometry.charge_query_work(len(new))
     room_geometry.charge_query_work(len(old))
     old_area = sum(
@@ -461,7 +491,11 @@ def _room_frame_matches(
         - old[(index + 1) % len(old)][0] * old[index][1]
         for index in range(len(old))
     )
-    if len(fixed_landmarks) < 2 or old_area == 0:
+    if (
+        len(fixed_landmarks) < 2
+        or math.isqrt(fixed_span_squared) < required_fixed_span
+        or old_area == 0
+    ):
         return False
     for source, target in ((old_unique, new), (new_unique, old)):
         for point in source:
