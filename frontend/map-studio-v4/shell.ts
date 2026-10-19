@@ -1950,11 +1950,11 @@ export class MaticMapShellV4 extends LitElement {
                   ${/* step is always +1 or -1 */ (compact ? [this._sheetDetent === "full" ? -1 : 1] as const : [1, -1] as const).map((step) => html`<button
                     class="ms-btn ms-btn--icon ms-btn--sm"
                     type="button"
-                    aria-label=${this.#t(step > 0 ? "v4_show_more" : "v4_show_less", step > 0 ? "Expand panel" : "Collapse panel")}
+                    aria-label=${step < 0 ? this.#t("v4_show_less", "Collapse panel") : this.#t("v4_show_more", "Expand panel")}
                     aria-controls="sheet-panel"
-                    ?disabled=${this.#helpReturnsFull || this._sheetDetent === (step > 0 ? "full" : "peek")}
+                    ?disabled=${this.#helpReturnsFull || this._sheetDetent === (step < 0 ? "peek" : "full")}
                     @click=${() => this.#sheetStep(step)}
-                  >${icon(step > 0 ? iconChevronUp : iconChevronDown)}</button>`)}
+                  >${icon(step < 0 ? iconChevronDown : iconChevronUp)}</button>`)}
                 </div>
                 ${showDrawTools ? html`
                   <div class="sheet-tools">
