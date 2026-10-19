@@ -140,14 +140,12 @@ export class MaticMapCanvasV4 extends LitElement {
     /* Phone: the full detent leaves two rows, so "?" takes the bottom-left;
        its popover keeps the top-right slot under Fit, above the camera steps. */
     :host([narrow]) .map-extras { inset-inline-end: auto; inset-inline-start: 0; inset-block-end: var(--map-sheet-offset, 0px); }
-    /* A compact full sheet leaves one visible rail row. Keep Help in that row;
-       the panel temporarily collapses while its popover is open. */
+    /* A compact full sheet leaves one visible rail row. Keep Help between the
+       floor/view controls and Fit; the panel collapses while its popover is open. */
     :host([data-short]) .map-extras {
-      inset-block-start: 0;
-      inset-block-end: auto;
-      inset-inline-start: 50%;
-      inset-inline-end: auto;
-      transform: translateX(-50%);
+      inset-block: 0 auto;
+      /* Fit is 44px wide with an 8px gap. */
+      inset-inline: auto 52px;
     }
     :host([data-short]) .camera-steps { display: none; }
 
@@ -601,10 +599,10 @@ export class MaticMapCanvasV4 extends LitElement {
               >${icon(iconRoomNames)}<span class="ms-btn__label">${this.#t("v4_room_names", "Room names")}</span></button>
               ` : nothing}
               <button
-                class="help ms-btn ms-btn--icon"
+                class="ms-btn ms-btn--icon"
                 type="button"
                 aria-label=${helpTitle}
-                aria-expanded=${String(this.help !== null)}
+                aria-expanded=${this.help !== null}
                 aria-controls=${NAVIGATION_HELP_ID}
                 @click=${this.#toggleHelp}
                 title=${helpTitle}

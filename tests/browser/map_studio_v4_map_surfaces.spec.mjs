@@ -155,6 +155,19 @@ test.describe("help (map-surfaces.md §5 Help, §11 MS-HELP-01/02)", () => {
     const dialog = helpDialog(gallery);
     await expect(dialog).toBeVisible();
     await expect(panel).toHaveAttribute("data-detent", "peek");
+    const expand = panel.getByRole("button", { name: "Expand panel", exact: true });
+    await expect(expand).toBeDisabled();
+    await expand.click({ force: true });
+    await expect(panel).toHaveAttribute("data-detent", "peek");
+    const handleBounds = await panel.locator(".sheet-handle").boundingBox();
+    expect(handleBounds).not.toBeNull();
+    await page.mouse.move(handleBounds.x + handleBounds.width / 2, handleBounds.y + handleBounds.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(handleBounds.x + handleBounds.width / 2, handleBounds.y - 80);
+    await page.mouse.up();
+    await expect(panel).toHaveAttribute("data-detent", "peek");
+    await gallery.locator("button.skip-link").nth(1).evaluate((button) => button.click());
+    await expect(panel).toHaveAttribute("data-detent", "peek");
     expect(await rows(dialog)).toEqual({
       Trackpad: "Scroll to move the map · pinch to zoom · twist to rotate",
       Mouse: "Drag to move the map · wheel to zoom",
@@ -171,6 +184,27 @@ test.describe("help (map-surfaces.md §5 Help, §11 MS-HELP-01/02)", () => {
     await expect(dialog).toHaveCount(0);
     await expect(panel).toHaveAttribute("data-detent", "full");
     await expect(help).toBeFocused();
+  });
+
+  test("short narrow Help stays between the floor/view controls and Fit", async ({ page }) => {
+    const gallery = await loadGallery(page, {
+      scenario: "ready",
+      narrow: true,
+      viewport: { width: 390, height: 390 },
+    });
+    await gallery.locator(".stage").evaluate((stage) => {
+      Object.assign(stage.style, { blockSize: "100dvh", minBlockSize: "0", maxInlineSize: "none" });
+    });
+    const canvas = canvasOf(gallery);
+    await expect(canvas).toHaveAttribute("data-short", "");
+    const helpBounds = await helpButton(gallery).boundingBox();
+    const contextBounds = await canvas.locator(".map-context").boundingBox();
+    const fitBounds = await canvas.getByRole("button", { name: "Fit the whole map on screen" }).boundingBox();
+    expect(helpBounds).not.toBeNull();
+    expect(contextBounds).not.toBeNull();
+    expect(fitBounds).not.toBeNull();
+    expect(helpBounds.x).toBeGreaterThanOrEqual(contextBounds.x + contextBounds.width);
+    expect(helpBounds.x + helpBounds.width).toBeLessThanOrEqual(fitBounds.x);
   });
 
   test("a fine pointer reads Trackpad, Mouse and Keyboard rows for the one gesture model", async ({ page }) => {

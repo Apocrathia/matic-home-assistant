@@ -448,8 +448,7 @@ export class MaticMapShellV4 extends LitElement {
   // beside its "?".
   protected _helpOpen = false;
   #helpLauncher: HTMLElement | null = null;
-  #helpCoarse = false;
-  #helpReturnDetent: SheetDetent | null = null;
+  #helpReturnsFull = false;
   protected _sheetDetent: SheetDetent = "half";
   // The two live regions (shell.md §4 rule 6). Each holds only its newest
   // message: the polite one for detent, status title and non-error notices,
@@ -1101,6 +1100,7 @@ export class MaticMapShellV4 extends LitElement {
   // ---- Bottom sheet -------------------------------------------------------
 
   #setDetent(detent: SheetDetent): void {
+    if (this._helpOpen && this.#helpReturnsFull) detent = "peek";
     if (detent === this._sheetDetent) return;
     this._sheetDetent = detent;
     this.#announce("_polite", detent === "peek" ? this.#t("v4_workspace_height_peek", "Cleaning panel, collapsed")
@@ -1154,6 +1154,7 @@ export class MaticMapShellV4 extends LitElement {
   }
 
   #gripDown(event: PointerEvent): void {
+    if (this.#helpReturnsFull) return;
     if (event.pointerType === "mouse" && event.button !== 0) return;
     if (this.#startsOnInteractiveSheetDescendant(event)) return;
     const sheet = this.#sheet();
@@ -1318,22 +1319,16 @@ export class MaticMapShellV4 extends LitElement {
   // Help owns its small lazy chunk, so opening it never loads workflow views.
   #openHelp(launcher: HTMLElement | null): void {
     this.#helpLauncher = launcher;
-    this.#helpCoarse = window.matchMedia("(any-pointer: coarse)").matches;
-    if ((this._measuredNarrow ?? this.state.narrowHint) && !this.state.fullMap && this._sheetDetent === "full") {
-      this.#helpReturnDetent = "full";
-      this.#setDetent("peek");
-    } else {
-      this.#helpReturnDetent = null;
-    }
+    this.#helpReturnsFull = !this.state.fullMap && this.#sheet()?.dataset.detent === "full";
+    if (this.#helpReturnsFull) this.#setDetent("peek");
     this.#mapHelpView.request();
     this._helpOpen = true;
   }
 
   #closeHelp(restoreFocus: boolean): void {
     this._helpOpen = false;
-    const returnDetent = restoreFocus ? this.#helpReturnDetent : null;
-    this.#helpReturnDetent = null;
-    if (returnDetent && this._sheetDetent === "peek") this.#setDetent(returnDetent);
+    if (restoreFocus && this.#helpReturnsFull && this._sheetDetent === "peek") this.#setDetent("full");
+    this.#helpReturnsFull = false;
     if (restoreFocus) this.#helpLauncher?.focus();
   }
 
@@ -1825,7 +1820,7 @@ export class MaticMapShellV4 extends LitElement {
       : narrow ? `--map-sheet-offset:${this._sheetOffset}px` : "--map-sheet-offset:0px";
     const showDrawTools = narrow && state.workflow === "draw";
     const help = !this._helpOpen ? null : this.#mapHelpView.value
-      ? this.#mapHelpView.value.renderMapHelp({ state, coarse: this.#helpCoarse, t: (key, fallback) => this.#t(key, fallback), close: () => this.#closeHelp(true) })
+      ? this.#mapHelpView.value.renderMapHelp({ state, coarse: window.matchMedia("(any-pointer: coarse)").matches, t: (key, fallback) => this.#t(key, fallback), close: () => this.#closeHelp(true) })
       : chunkStatus(this.#mapHelpView.status, this.localize, this.#retry);
     const precisionOpen = state.precisionOpen && state.workflow === "draw";
     // Success and error always toast; info and warning only while the slot is
@@ -1952,14 +1947,14 @@ export class MaticMapShellV4 extends LitElement {
                   ${this._sheetDetent === "peek" ? this.#back(state, true) : nothing}
                   <span class="sheet-status">${this.#sheetStatus(state, status)}</span>
                   ${compact ? this.#actionBar(state, footerPrimary, footerSecondary) : nothing}
-                  ${(compact ? [this._sheetDetent === "full" ? -1 : 1] as const : [1, -1] as const).map((step) => html`<button
+                  ${/* step is always +1 or -1, so truthiness selects expansion */ (compact ? [this._sheetDetent === "full" ? -1 : 1] as const : [1, -1] as const).map((step) => html`<button
                     class="ms-btn ms-btn--icon ms-btn--sm"
                     type="button"
-                    aria-label=${step > 0 ? this.#t("v4_show_more", "Expand panel") : this.#t("v4_show_less", "Collapse panel")}
+                    aria-label=${step ? this.#t("v4_show_more", "Expand panel") : this.#t("v4_show_less", "Collapse panel")}
                     aria-controls="sheet-panel"
-                    aria-disabled=${this._sheetDetent === (step > 0 ? "full" : "peek") ? "true" : nothing}
+                    ?disabled=${this.#helpReturnsFull || this._sheetDetent === (step ? "full" : "peek")}
                     @click=${() => this.#sheetStep(step)}
-                  >${icon(step > 0 ? iconChevronUp : iconChevronDown)}</button>`)}
+                  >${icon(step ? iconChevronUp : iconChevronDown)}</button>`)}
                 </div>
                 ${showDrawTools ? html`
                   <div class="sheet-tools">
