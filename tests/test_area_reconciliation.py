@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.exceptions import ServiceValidationError
 
 from custom_components.matic_robot import area_binding as binding
 from custom_components.matic_robot.area_geometry import RoomGeometryIndex
@@ -40,36 +41,43 @@ def _area(floor):
     }
 
 
-@pytest.mark.parametrize("offset", [0.002, 0.015])
-def test_outer_contour_refinement_recovers_without_rewriting_area(offset):
+@pytest.mark.parametrize("offset", [0.001, 0.005, 0.010])
+def test_small_single_room_frame_shift_stays_reviewable(offset):
     original = _floor()
     area = _area(original)
     before = deepcopy(area)
-    changed = _floor(((offset, 0), (10, 0), (10, 10), (offset, 10)))
-    for current in (changed, original, changed):
-        assert (
-            binding.area_binding_status(area, current)
-            is binding.AreaBindingStatus.CURRENT
-        )
-        # The cleaning command uses the same decision as the area workspace.
-        assert _validated_area_command(area, current, None, None)[1] == [
-            (5.0, 5.0, 0.2)
-        ]
+    changed = _floor(tuple((x + offset, y) for x, y in original.rooms[0].boundary))
+    assert (
+        binding.area_binding_status(area, changed)
+        is binding.AreaBindingStatus.GEOMETRY_CHANGED
+    )
+    with pytest.raises(ServiceValidationError) as error:
+        _validated_area_command(area, changed, None, None)
+    assert error.value.translation_key == "area_map_changed"
     assert area == before
 
 
 def test_successive_small_changes_cannot_walk_the_saved_frame():
     area = _area(_floor())
     for offset in (0.005, 0.010, 0.015):
-        current = _floor(((offset, 0), (10, 0), (10, 10), (offset, 10)))
+        current = _floor(tuple((x + offset, y) for x, y in _floor().rooms[0].boundary))
         assert (
             binding.area_binding_status(area, current)
-            is binding.AreaBindingStatus.CURRENT
+            is binding.AreaBindingStatus.GEOMETRY_CHANGED
         )
-    current = _floor(((0.025, 0), (10, 0), (10, 10), (0.025, 10)))
+    current = _floor(tuple((x + 0.025, y) for x, y in _floor().rooms[0].boundary))
     assert (
         binding.area_binding_status(area, current)
         is binding.AreaBindingStatus.GEOMETRY_CHANGED
+    )
+
+
+def test_one_corner_one_millimeter_refinement_keeps_other_frame_anchors():
+    original = _floor()
+    area = _area(original)
+    changed = _floor(((0.001, 0), *original.rooms[0].boundary[1:]))
+    assert (
+        binding.area_binding_status(area, changed) is binding.AreaBindingStatus.CURRENT
     )
 
 
@@ -151,12 +159,22 @@ def test_small_centered_room_rotation_does_not_keep_stale_area_frame():
     area = _area(original)
     angle = 0.0005
     cos_angle, sin_angle = math.cos(angle), math.sin(angle)
-    rotated_boundary = tuple(
+    rotated_vertices = tuple(
         (
             5 + cos_angle * (x - 5) - sin_angle * (y - 5),
             5 + sin_angle * (x - 5) + cos_angle * (y - 5),
         )
         for x, y in original.rooms[0].boundary
+    )
+    rotated_boundary = tuple(
+        point
+        for start, end in zip(
+            rotated_vertices, (*rotated_vertices[1:], rotated_vertices[0]), strict=True
+        )
+        for point in (
+            start,
+            ((start[0] + end[0]) / 2, (start[1] + end[1]) / 2),
+        )
     )
     rotated = replace(
         original,
@@ -164,6 +182,30 @@ def test_small_centered_room_rotation_does_not_keep_stale_area_frame():
     )
     assert (
         binding.area_binding_status(area, rotated)
+        is binding.AreaBindingStatus.GEOMETRY_CHANGED
+    )
+
+
+def test_legacy_room_anchor_without_absolute_boundary_blocks_small_translation():
+    original = _floor()
+    remote = Room(
+        "remote", "Remote", "remote", b"remote", ((20, 0), (30, 0), (30, 10), (20, 10))
+    )
+    original = replace(original, rooms=(*original.rooms, remote))
+    area = _area(original)
+    area["map_binding"]["translation_room_anchors"][0].pop("boundary_mm")
+    moved = replace(
+        original,
+        rooms=(
+            replace(
+                original.rooms[0],
+                boundary=tuple((x + 0.005, y) for x, y in original.rooms[0].boundary),
+            ),
+            remote,
+        ),
+    )
+    assert (
+        binding.area_binding_status(area, moved)
         is binding.AreaBindingStatus.GEOMETRY_CHANGED
     )
 
@@ -269,9 +311,27 @@ def test_degenerate_landmarks_do_not_establish_a_frame():
     saved = {"fingerprint": "a" * 64, "boundary_mm": [[0, 0], [1, 0], [2, 0]]}
     current = {"fingerprint": "b" * 64, "boundary_mm": [[0, 0], [1, 1], [2, 0]]}
     assert not binding._room_frame_matches(saved, current, RoomGeometryIndex([]))
+    assert not binding._room_frame_matches(
+        saved, {"fingerprint": "a" * 64, "boundary_mm": []}, RoomGeometryIndex([])
+    )
 
 
-async def test_old_binding_enriches_only_on_original_map_and_survives_reload(hass):
+def test_room_frame_landmark_work_is_charged_before_scan():
+    saved = {
+        "fingerprint": "a" * 64,
+        "boundary_mm": [[0, 0], [100, 0], [100, 100], [0, 100]],
+    }
+    current = {
+        "fingerprint": "b" * 64,
+        "boundary_mm": [[1, 0], [101, 0], [101, 100], [1, 100]],
+    }
+    room_geometry = RoomGeometryIndex([])
+    room_geometry._query_work_remaining = 1
+    with pytest.raises(binding.GeometryTooComplex):
+        binding._room_frame_matches(saved, current, room_geometry)
+
+
+async def test_legacy_frame_shift_does_not_enrich_but_snapshot_survives_reload(hass):
     floor = _floor()
     area = _area(floor)
     area["map_binding"]["translation_room_anchors"][0].pop("boundary_mm")
@@ -300,6 +360,18 @@ async def test_old_binding_enriches_only_on_original_map_and_survives_reload(has
     ) == AreaBindingUpgradeResult(0, False)
     reloaded._store.async_save.assert_not_awaited()
     assert reloaded._data == saved
+
+
+def test_legacy_anchor_without_boundary_rejects_small_whole_room_translation():
+    original = _floor()
+    area = _area(original)
+    area["map_binding"]["translation_room_anchors"][0].pop("boundary_mm")
+    translated = _floor(tuple((x + 0.005, y) for x, y in original.rooms[0].boundary))
+
+    assert (
+        binding.area_binding_status(area, translated)
+        is binding.AreaBindingStatus.GEOMETRY_CHANGED
+    )
 
 
 async def test_legacy_upgrade_does_not_rebase_tolerated_remote_map_changes(hass):

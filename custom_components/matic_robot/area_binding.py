@@ -8,7 +8,6 @@ import struct
 from collections import Counter, deque
 from collections.abc import Callable, Mapping, Sequence
 from enum import StrEnum
-from itertools import pairwise
 from typing import Any
 
 import probatio
@@ -390,70 +389,6 @@ def _room_polygon_fingerprint(polygon: Sequence[Sequence[int]]) -> str:
     return digest.hexdigest()
 
 
-def _is_small_rigid_rotation(
-    old: Sequence[Sequence[int]], new: Sequence[Sequence[int]]
-) -> bool:
-    """Recognize a same-vertex room rotated within boundary tolerance."""
-    if len(old) != len(new) or len(old) < 3:
-        return False
-    old_center = (
-        sum(point[0] for point in old) / len(old),
-        sum(point[1] for point in old) / len(old),
-    )
-    new_center = (
-        sum(point[0] for point in new) / len(new),
-        sum(point[1] for point in new) / len(new),
-    )
-    count = len(old)
-    candidates = sorted(
-        (
-            (old[0][0] - point[0]) ** 2 + (old[0][1] - point[1]) ** 2,
-            index,
-        )
-        for index, point in enumerate(new)
-    )
-    max_distance = _ROOM_FRAME_TOLERANCE_MILLIMETERS**2
-    candidate_indices = [
-        index for distance, index in candidates[:8] if distance <= max_distance
-    ]
-    for reverse in (False, True):
-        for shift in candidate_indices:
-            cosine = sine = 0.0
-            for index, (old_x, old_y) in enumerate(old):
-                new_x, new_y = new[(shift + (index if not reverse else -index)) % count]
-                x, y = old_x - old_center[0], old_y - old_center[1]
-                u, v = new_x - new_center[0], new_y - new_center[1]
-                cosine += x * u + y * v
-                sine += x * v - y * u
-            angle = math.atan2(sine, cosine)
-            if abs(angle) <= 1e-6:
-                continue
-            cos_angle, sin_angle = math.cos(angle), math.sin(angle)
-            if all(
-                math.hypot(
-                    new_x
-                    - new_center[0]
-                    - (
-                        cos_angle * (old_x - old_center[0])
-                        - sin_angle * (old_y - old_center[1])
-                    ),
-                    new_y
-                    - new_center[1]
-                    - (
-                        sin_angle * (old_x - old_center[0])
-                        + cos_angle * (old_y - old_center[1])
-                    ),
-                )
-                <= 0.75
-                for index, (old_x, old_y) in enumerate(old)
-                for new_x, new_y in (
-                    new[(shift + (index if not reverse else -index)) % count],
-                )
-            ):
-                return True
-    return False
-
-
 def _room_frame_matches(
     saved: Mapping[str, Any],
     current: Mapping[str, Any],
@@ -469,46 +404,63 @@ def _room_frame_matches(
     """
     old: list[list[int]] | None = saved.get("boundary_mm")
     new: list[list[int]] | None = current.get("boundary_mm")
-    same_fingerprint = (
-        str(saved["fingerprint"]).casefold() == str(current["fingerprint"]).casefold()
-    )
-    if same_fingerprint and (not old or not new):
-        return True
-    if not old or not new:
+    if not old:
+        # Legacy V3 anchors lack the immutable polygon snapshot. They can
+        # establish an unchanged frame only when both their translation-free
+        # shape fingerprint and absolute bounds are exactly unchanged.
+        current_bounds = current.get("bounds")
+        saved_bounds = saved.get("bounds")
+        bounds_match = saved_bounds == current_bounds
+        if not bounds_match and new and isinstance(current_bounds, list):
+            # Preserve the old last-vertex-as-max-x representation only when
+            # it matches exactly; the normal legacy comparison is tolerant.
+            legacy_bounds = [*current_bounds]
+            legacy_bounds[2] = new[-1][0]
+            bounds_match = saved_bounds == legacy_bounds
+        return (
+            bool(new)
+            and str(saved["fingerprint"]).casefold()
+            == str(current["fingerprint"]).casefold()
+            and bounds_match
+        )
+    if not new:
         return False
+    room_geometry.charge_query_work(len(old) + len(new))
     if old == new:
         return True
-    if _is_small_rigid_rotation(old, new):
-        return False
-    # Translation-normalized fingerprints intentionally ignore origin. Reject
-    # a rigid displacement of the room frame even when it is smaller than the
-    # contour-refinement tolerance; otherwise anchored areas retain stale
-    # coordinates after a room moves a few millimeters.
     directions = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1))
-    deltas: set[_QuantizedPoint] = set()
+    room_geometry.charge_query_work((len(old) + len(new)) * len(directions))
+    old_landmarks: list[_QuantizedPoint] = []
+    new_landmarks: list[_QuantizedPoint] = []
     for dx, dy in directions:
         old_extreme = max(old, key=lambda p: (p[0] * dx + p[1] * dy, p[0], p[1]))
         new_extreme = max(new, key=lambda p: (p[0] * dx + p[1] * dy, p[0], p[1]))
-        deltas.add((new_extreme[0] - old_extreme[0], new_extreme[1] - old_extreme[1]))
-    if len(deltas) == 1:
-        delta_x, delta_y = next(iter(deltas))
-        if delta_x or delta_y:
-            return False
-    for source, target in ((old, new), (new, old)):
-        room_geometry.charge_query_work(len(source) * len(directions))
-        landmarks: set[_QuantizedPoint] = set()
-        for dx, dy in directions:
-            extreme = max(source, key=lambda p: (p[0] * dx + p[1] * dy, p[0], p[1]))
-            landmarks.add((extreme[0], extreme[1]))
-        # Thin/degenerate outlines cannot establish a two-dimensional frame.
-        points = sorted(landmarks)
-        if len(points) < 3 or not any(
-            (b[0] - points[0][0]) * (c[1] - points[0][1])
-            != (b[1] - points[0][1]) * (c[0] - points[0][0])
-            for b, c in pairwise(points[1:])
-        ):
-            return False
-        for point in landmarks:
+        old_landmarks.append((old_extreme[0], old_extreme[1]))
+        new_landmarks.append((new_extreme[0], new_extreme[1]))
+    deltas = {
+        (new_point[0] - old_point[0], new_point[1] - old_point[1])
+        for old_point, new_point in zip(old_landmarks, new_landmarks, strict=True)
+    }
+    # Translation-normalized room hashes do not establish an absolute frame.
+    if len(deltas) == 1 and next(iter(deltas)) != (0, 0):
+        return False
+    old_unique = set(old_landmarks)
+    new_unique = set(new_landmarks)
+    # Require two distinct immutable absolute extrema from the original frame.
+    # Two fixed points determine a 2D rigid frame; edge retessellation cannot
+    # pass merely because its points remain close to the old contour.
+    room_geometry.charge_query_work(len(new))
+    current_points = {tuple(point) for point in new}
+    points = sorted(old_unique & current_points)
+    old_area = sum(
+        old[index][0] * old[(index + 1) % len(old)][1]
+        - old[(index + 1) % len(old)][0] * old[index][1]
+        for index in range(len(old))
+    )
+    if len(points) < 2 or old_area == 0:
+        return False
+    for source, target in ((old_unique, new), (new_unique, old)):
+        for point in source:
             for index, start in enumerate(target):
                 room_geometry.charge_query_work()
                 end = target[(index + 1) % len(target)]

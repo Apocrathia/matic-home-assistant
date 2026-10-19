@@ -187,6 +187,10 @@ class MetadataAdmissionClosedError(HomeAssistantError):
     """Raised when a user metadata write reaches an unloading robot."""
 
 
+class AreaFramePointLimitError(ValueError):
+    """Raised when saved area room-frame snapshots exceed storage capacity."""
+
+
 class RoomSequenceLimitError(ValueError):
     """Raised when a cleaning definition exceeds the supported room count."""
 
@@ -2547,7 +2551,9 @@ class CleaningPlanManager:
                 + room_frame_point_count(area)
             )
             if projected_points > _MAX_PERSISTED_ROOM_FRAME_POINTS_PER_ROBOT:
-                raise ValueError("aggregate room frame boundary point limit exceeded")
+                raise AreaFramePointLimitError(
+                    "aggregate room frame boundary point limit exceeded"
+                )
             robot["areas"][area_id] = deepcopy(dict(area))
             robot["selected_area"] = area_id
 
