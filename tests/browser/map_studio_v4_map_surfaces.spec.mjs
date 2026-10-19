@@ -134,6 +134,27 @@ test.describe("help (map-surfaces.md §5 Help, §11 MS-HELP-01/02)", () => {
     await expect(helpButton(retained)).toBeVisible();
   });
 
+  test("short landscape keeps map help visible and in the viewport", async ({ page }) => {
+    const gallery = await loadGallery(page, {
+      scenario: "ready",
+      viewport: { width: 844, height: 390 },
+    });
+    const canvas = canvasOf(gallery);
+    await canvas.evaluate((element) => element.setAttribute("data-short", ""));
+
+    const help = helpButton(gallery);
+    await expect(help).toBeVisible();
+    await help.click();
+    const dialog = helpDialog(gallery);
+    await expect(dialog).toBeVisible();
+    const bounds = await dialog.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(844);
+    expect(bounds.y).toBeGreaterThanOrEqual(0);
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(390);
+  });
+
   test("a fine pointer reads Trackpad, Mouse and Keyboard rows for the one gesture model", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "ready" });
     await patchState(gallery, { view: "three" });

@@ -140,8 +140,10 @@ export class MaticMapCanvasV4 extends LitElement {
     /* Phone: the full detent leaves two rows, so "?" takes the bottom-left;
        its popover keeps the top-right slot under Fit, above the camera steps. */
     :host([narrow]) .map-extras { inset-inline-end: auto; inset-inline-start: 0; inset-block-end: var(--map-sheet-offset, 0px); }
-    /* A compact sheet at full leaves one rail row of map: the bottom clusters would cover the top one. */
-    :host([data-short]) :is(.map-extras, .camera-steps) { display: none; }
+    /* A compact sheet at full leaves one rail row of map: move display controls
+       below the main rail so Help remains reachable; orbit controls stay hidden. */
+    :host([data-short]) .map-extras { inset-block-start: var(--row); inset-block-end: auto; }
+    :host([data-short]) .camera-steps { display: none; }
 
     .map-tools, .view-switch, .appearance-switch, .camera-steps { display: flex; }
 
