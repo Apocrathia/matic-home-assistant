@@ -39,6 +39,7 @@ from custom_components.matic_robot.const import (
 )
 from custom_components.matic_robot.frontend import DATA_SLAM_SCENE_VIEW
 from custom_components.matic_robot.plans import (
+    AreaFramePointLimitError,
     AreaInUseError,
     CleaningPlanManager,
     MetadataAdmissionClosedError,
@@ -2143,6 +2144,28 @@ async def test_area_workspace_reports_metadata_admission_closed(operation) -> No
 
     assert response.status == HTTPStatus.SERVICE_UNAVAILABLE
     assert response.headers["Cache-Control"] == "private, no-store, max-age=0"
+
+
+async def test_area_workspace_reports_room_frame_capacity_to_client() -> None:
+    runtime = _runtime()
+    hass = _hass(_entry(runtime))
+    view = MaticAreasView()
+    runtime.cleaning_plans.async_save_area.side_effect = AreaFramePointLimitError(
+        "aggregate room frame boundary point limit exceeded"
+    )
+    values = {
+        "name": "Under table",
+        "circles": [{"x": 0.1, "y": 0.1, "radius": 0.2}],
+        "cleaning_mode": "vacuum_and_mop",
+        "coverage_setting": "standard",
+    }
+
+    response = await view.post(_json_request(hass, "POST", values), "entry")
+
+    assert response.status == HTTPStatus.REQUEST_ENTITY_TOO_LARGE
+    assert json.loads(response.body) == {"error": "area_boundary_point_limit"}
+    assert response.headers["Cache-Control"] == "private, no-store, max-age=0"
+    runtime.cleaning_plans.async_save_area.assert_awaited_once()
 
 
 async def test_area_mutations_require_admin_before_body_or_store_access() -> None:

@@ -64,6 +64,7 @@ try {
   const context = await browser.newContext({
     baseURL: "http://127.0.0.1:4173",
     viewport: { width: 1180, height: 760 },
+    forcedColors: null,
   });
   const page = await context.newPage();
   stage = "gallery-navigation";
@@ -167,7 +168,7 @@ try {
   assert.equal(correlatedToNvdaFocus(tabSpeech), true, "Tab speech did not correlate with NVDA's recognized focused object");
   assert.equal(correlatedToNvdaFocus(reportSpeech), true, "NVDA+Tab speech did not correlate with NVDA's recognized focused object");
   assert.ok(tabFocusEvents.some((focus) => tabSpeech.some((speech) => speech.focusName === focus.name)), "NVDA focus event did not correlate with queued Tab speech");
-  assert.ok(matchedTerms.length > 0, "Tab and NVDA+Tab produced no matching NVDA-generated phrase");
+  assert.ok(matchedTerms.length > 0, "Tab and NVDA+Tab queued no matching synthetic fixture label");
   assert.equal(sawPanelFocus, true, "native OS Tab input did not focus inside the Map Studio fixture");
   assert.ok(currentPid > 0 && sourceHash?.length === 64, "NVDA process/source provenance is missing");
 

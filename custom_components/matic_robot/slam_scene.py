@@ -40,6 +40,7 @@ from .client.models import FloorPlan, HermesCollectionEntry, RobotPose
 from .client.slam_map import decode_slam_tile, encode_slam_scene
 from .const import CONF_LIVE_WORKSPACE_TRANSPORT, DOMAIN
 from .plans import (
+    AreaFramePointLimitError,
     AreaInUseError,
     CleaningRoom,
     MetadataAdmissionClosedError,
@@ -1229,6 +1230,12 @@ class MaticAreasView(HomeAssistantView):
         except MetadataAdmissionClosedError:
             return web.Response(
                 status=HTTPStatus.SERVICE_UNAVAILABLE,
+                headers=PRIVATE_NO_STORE_HEADERS,
+            )
+        except AreaFramePointLimitError:
+            return self.json(
+                {"error": "area_boundary_point_limit"},
+                status_code=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
                 headers=PRIVATE_NO_STORE_HEADERS,
             )
         return self.json(

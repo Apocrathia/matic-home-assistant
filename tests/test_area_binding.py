@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 from unittest.mock import MagicMock, patch
 
@@ -1115,7 +1116,9 @@ def test_hash_only_signature_uses_indexed_occupancy_queries() -> None:
         assert len(_hash_only_area_geometry_fingerprint(floor_plan, circles)) == 64
 
 
-def test_scoped_binding_requires_review_after_local_subcentimeter_jitter() -> None:
+def test_scoped_binding_automatically_recovers_after_local_subcentimeter_jitter() -> (
+    None
+):
     original = _floor_plan()
     floor_plan = replace(
         original,
@@ -1144,11 +1147,11 @@ def test_scoped_binding_requires_review_after_local_subcentimeter_jitter() -> No
     assert floor_plan_geometry_fingerprint(jittered) != (
         floor_plan_geometry_fingerprint(floor_plan)
     )
-    assert area_binding_status(area, jittered) is AreaBindingStatus.GEOMETRY_CHANGED
-    assert area_binding_allows_review(area, jittered)
+    assert area_binding_status(area, jittered) is AreaBindingStatus.CURRENT
+    assert not area_binding_allows_review(area, jittered)
 
 
-def test_scoped_binding_requires_review_after_probe_occupancy_flip() -> None:
+def test_scoped_binding_automatically_recovers_after_probe_occupancy_flip() -> None:
     floor_plan = _floor_plan()
     circles = [{"x": 0.35, "y": 0.5, "radius": 0.1}]
     area = _scoped_area(floor_plan, circles)
@@ -1170,8 +1173,8 @@ def test_scoped_binding_requires_review_after_probe_occupancy_flip() -> None:
 
     current_binding = binding_for_area(jittered, circles)
     assert area["map_binding"]["local_occupancy"] != current_binding["local_occupancy"]
-    assert area_binding_status(area, jittered) is AreaBindingStatus.GEOMETRY_CHANGED
-    assert area_binding_allows_review(area, jittered)
+    assert area_binding_status(area, jittered) is AreaBindingStatus.CURRENT
+    assert not area_binding_allows_review(area, jittered)
 
 
 @pytest.mark.parametrize("narrow_half_width", [0.05, 0.34])
@@ -1442,7 +1445,7 @@ def test_scoped_binding_preserves_raw_semantic_bounds_after_quantization() -> No
     assert area_binding_status(area, changed) is AreaBindingStatus.GEOMETRY_CHANGED
 
 
-def test_scoped_binding_requires_review_after_fractional_wall_movement() -> None:
+def test_scoped_binding_automatically_recovers_after_fractional_wall_movement() -> None:
     circle = {"x": 0.963543, "y": 0.0, "radius": 1.533657}
     saved_wall = 2.737451
     current_wall = 2.747381
@@ -1479,13 +1482,11 @@ def test_scoped_binding_requires_review_after_fractional_wall_movement() -> None
     assert area["map_binding"]["local_segments_mm"] == [[2737, -3000, 2737, 3000]]
     assert current_binding["local_segments_mm"] == [[2747, -3000, 2747, 3000]]
     assert area["map_binding"]["local_occupancy"] != current_binding["local_occupancy"]
-    assert area_binding_status(area, jittered) is AreaBindingStatus.GEOMETRY_CHANGED
-    assert area_binding_allows_review(area, jittered)
+    assert area_binding_status(area, jittered) is AreaBindingStatus.CURRENT
+    assert not area_binding_allows_review(area, jittered)
 
 
-def test_scoped_binding_requires_review_when_expanded_guard_detects_wall_change() -> (
-    None
-):
+def test_scoped_binding_recovers_at_expanded_guard() -> None:
     saved_wall = 0.8509
     current_wall = 0.8608
     floor_plan = FloorPlan(
@@ -1521,11 +1522,11 @@ def test_scoped_binding_requires_review_when_expanded_guard_detects_wall_change(
     assert [851, -1000, 851, 1000] in area["map_binding"]["local_segments_mm"]
     assert [861, -1000, 861, 1000] in current_binding["local_segments_mm"]
     assert area["map_binding"]["local_occupancy"] != current_binding["local_occupancy"]
-    assert area_binding_status(area, jittered) is AreaBindingStatus.GEOMETRY_CHANGED
-    assert area_binding_allows_review(area, jittered)
+    assert area_binding_status(area, jittered) is AreaBindingStatus.CURRENT
+    assert not area_binding_allows_review(area, jittered)
 
 
-def test_scoped_binding_requires_review_for_saved_center_near_moved_boundary() -> None:
+def test_scoped_binding_recovers_near_moved_boundary() -> None:
     floor_plan = FloorPlan(
         42,
         "synthetic-partition",
@@ -1559,11 +1560,11 @@ def test_scoped_binding_requires_review_for_saved_center_near_moved_boundary() -
         ),
     )
 
-    assert area_binding_status(area, jittered) is AreaBindingStatus.GEOMETRY_CHANGED
+    assert area_binding_status(area, jittered) is AreaBindingStatus.CURRENT
     assert area_binding_status(area, moved) is AreaBindingStatus.INVALID
 
 
-def test_scoped_binding_requires_review_at_guard_band_cutoff() -> None:
+def test_scoped_binding_automatically_recovers_at_guard_band_cutoff() -> None:
     floor_plan = _floor_plan()
     kitchen, study = floor_plan.rooms
     floor_plan = replace(
@@ -1600,8 +1601,8 @@ def test_scoped_binding_requires_review_at_guard_band_cutoff() -> None:
     current_binding = binding_for_area(jittered, circles)
     assert area["map_binding"]["local_segments_mm"] == []
     assert current_binding["local_segments_mm"]
-    assert area_binding_status(area, jittered) is AreaBindingStatus.GEOMETRY_CHANGED
-    assert area_binding_allows_review(area, jittered)
+    assert area_binding_status(area, jittered) is AreaBindingStatus.CURRENT
+    assert not area_binding_allows_review(area, jittered)
 
 
 def test_local_segment_matching_finds_non_greedy_pairing() -> None:
@@ -1886,7 +1887,9 @@ def test_local_segment_geometry_matching_edge_cases(
     assert _local_segment_geometries_match(saved, current, shape) is expected
 
 
-def test_scoped_binding_requires_review_after_diagonal_boundary_movement() -> None:
+def test_scoped_binding_automatically_recovers_after_diagonal_boundary_movement() -> (
+    None
+):
     floor_plan = FloorPlan(
         42,
         "synthetic-partition",
@@ -1912,11 +1915,11 @@ def test_scoped_binding_requires_review_after_diagonal_boundary_movement() -> No
     )
 
     assert area["map_binding"]["local_segments_mm"] == [[0, 136, 1000, 156]]
-    assert area_binding_status(area, jittered) is AreaBindingStatus.GEOMETRY_CHANGED
-    assert area_binding_allows_review(area, jittered)
+    assert area_binding_status(area, jittered) is AreaBindingStatus.CURRENT
+    assert not area_binding_allows_review(area, jittered)
 
 
-def test_scoped_binding_requires_review_after_shared_wall_movement() -> None:
+def test_scoped_binding_automatically_recovers_after_shared_wall_movement() -> None:
     floor_plan = FloorPlan(
         42,
         "synthetic-partition",
@@ -1955,11 +1958,13 @@ def test_scoped_binding_requires_review_after_shared_wall_movement() -> None:
         [1000, 0, 1000, 1000],
         [1000, 0, 1000, 1000],
     ]
-    assert area_binding_status(area, jittered) is AreaBindingStatus.GEOMETRY_CHANGED
-    assert area_binding_allows_review(area, jittered)
+    assert area_binding_status(area, jittered) is AreaBindingStatus.CURRENT
+    assert not area_binding_allows_review(area, jittered)
 
 
-def test_scoped_binding_requires_review_at_overlapping_circle_guard_cutoff() -> None:
+def test_scoped_binding_automatically_recovers_at_overlapping_circle_guard_cutoff() -> (
+    None
+):
     floor_plan = _floor_plan()
     kitchen, study = floor_plan.rooms
     floor_plan = replace(
@@ -1996,8 +2001,8 @@ def test_scoped_binding_requires_review_at_overlapping_circle_guard_cutoff() -> 
         ),
     )
 
-    assert area_binding_status(area, jittered) is AreaBindingStatus.GEOMETRY_CHANGED
-    assert area_binding_allows_review(area, jittered)
+    assert area_binding_status(area, jittered) is AreaBindingStatus.CURRENT
+    assert not area_binding_allows_review(area, jittered)
 
 
 def test_scoped_binding_rejects_tampered_tolerance_evidence() -> None:
@@ -2154,7 +2159,7 @@ def test_stale_same_map_area_can_be_reviewed_without_blind_rebinding() -> None:
         (
             _area(),
             replace(_floor_plan(), partition_protocol_id="new-partition"),
-            AreaBindingStatus.PARTITION_CHANGED,
+            AreaBindingStatus.CURRENT,
         ),
         (
             _area(),
@@ -2968,13 +2973,14 @@ def test_mixed_room_anchors_cannot_substitute_another_room() -> None:
     for anchor in legacy_anchors:
         anchor.pop("room_key")
         anchor.pop("circle_keys")
+        anchor.pop("boundary_mm")
     legacy_area["map_binding"]["translation_room_anchors"] = legacy_anchors
     assert area_binding_status(legacy_area, moved_upper) is (
         AreaBindingStatus.GEOMETRY_CHANGED
     )
 
 
-def test_translation_room_anchor_detects_reshaping_with_unchanged_bounds() -> None:
+def test_room_frame_reconciles_remote_reshaping_with_unchanged_bounds() -> None:
     floor_plan = FloorPlan(
         42,
         "synthetic-partition",
@@ -3012,15 +3018,10 @@ def test_translation_room_anchor_detects_reshaping_with_unchanged_bounds() -> No
     current_anchor = area_binding_module._translation_room_anchors(reshaped, circles)[0]
     assert saved_anchor["bounds"] == current_anchor["bounds"]
     assert saved_anchor["fingerprint"] != current_anchor["fingerprint"]
-    with (
-        patch.object(
-            area_binding_module, "_local_geometry_fingerprint", return_value="0" * 64
-        ) as local_fingerprint,
-        patch.object(area_binding_module, "_local_segment_correspondence") as matches,
-    ):
-        assert area_binding_status(area, reshaped) is AreaBindingStatus.GEOMETRY_CHANGED
-        local_fingerprint.assert_not_called()
-        matches.assert_not_called()
+    assert area_binding_status(area, reshaped) is AreaBindingStatus.CURRENT
+    # Historical anchors have no original boundary to establish this frame.
+    saved_anchor.pop("boundary_mm")
+    assert area_binding_status(area, reshaped) is AreaBindingStatus.GEOMETRY_CHANGED
 
 
 def test_scoped_binding_rejects_malformed_translation_room_anchors() -> None:
@@ -3159,6 +3160,124 @@ def test_unanchored_area_ignores_coincident_remote_extrema_edits() -> None:
     )
 
     assert area_binding_status(area, changed) is AreaBindingStatus.CURRENT
+
+
+def test_room_frame_rejects_translated_contour_that_keeps_old_right_corners() -> None:
+    """Fixed contour vertices must be corresponding directional extrema."""
+    floor_plan = FloorPlan(
+        42,
+        "synthetic-partition",
+        b"synthetic-partition",
+        (_room("home", "Home", ((0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0))),),
+    )
+    area = _scoped_area(floor_plan, [{"x": 5.0, "y": 5.0, "radius": 0.2}])
+    # Translate the frame by 15 mm. Keep the old right corners as ordinary
+    # collinear contour vertices, then move one new extreme another 1 mm.
+    # This defeats the old "two shared boundary points" check without being
+    # one uniform landmark translation.
+    translated = replace(
+        floor_plan,
+        rooms=(
+            replace(
+                floor_plan.rooms[0],
+                boundary=(
+                    (0.015, 0.0),
+                    (10.0, 0.0),
+                    (10.015, 0.0),
+                    (10.016, 10.0),
+                    (10.0, 10.0),
+                    (0.015, 10.0),
+                ),
+            ),
+        ),
+    )
+    assert area_binding_status(area, translated) is AreaBindingStatus.GEOMETRY_CHANGED
+
+
+@pytest.mark.parametrize(
+    ("boundary", "circle", "angle"),
+    [
+        (
+            ((0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 0.2)),
+            {"x": 8.0, "y": 7.0, "radius": 0.2},
+            0.00065,
+        ),
+        (
+            ((0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 0.2)),
+            {"x": 8.0, "y": 7.0, "radius": 0.2},
+            0.0015,
+        ),
+        (
+            ((0.0, 0.0), (10.0, 0.0), (10.0, 0.3), (0.0, 0.3)),
+            {"x": 8.0, "y": 0.15, "radius": 0.05},
+            0.0015,
+        ),
+        (
+            ((0.0, 0.0), (30.0, 0.0), (30.0, 0.3), (0.0, 0.3)),
+            {"x": 24.0, "y": 0.15, "radius": 0.05},
+            0.0015,
+        ),
+        (
+            ((0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)),
+            {"x": 8.0, "y": 7.0, "radius": 0.2},
+            0.0015,
+        ),
+    ],
+)
+def test_room_frame_rejects_rotation_with_short_edge_fixed_extrema(
+    boundary: tuple[tuple[float, float], ...],
+    circle: dict[str, float],
+    angle: float,
+) -> None:
+    """Rounded short-edge extrema cannot anchor an otherwise rotated frame."""
+    floor_plan = FloorPlan(
+        42,
+        "synthetic-partition",
+        b"synthetic-partition",
+        (_room("home", "Home", boundary),),
+    )
+    area = _scoped_area(floor_plan, [circle])
+    cosine = math.cos(angle)
+    sine = math.sin(angle)
+    rotated = replace(
+        floor_plan,
+        rooms=(
+            replace(
+                floor_plan.rooms[0],
+                boundary=tuple(
+                    (x * cosine - y * sine, x * sine + y * cosine) for x, y in boundary
+                ),
+            ),
+        ),
+    )
+
+    saved_anchor = area["map_binding"]["translation_room_anchors"][0]
+    current_anchor = area_binding_module._translation_room_anchors(rotated, [circle])[0]
+    assert area_binding_status(area, rotated) is AreaBindingStatus.GEOMETRY_CHANGED
+    assert not area_binding_module._room_frame_matches(
+        saved_anchor, current_anchor, area_binding_module._room_geometry_index(rotated)
+    )
+
+
+def test_room_frame_accepts_one_millimeter_corner_refinement() -> None:
+    floor_plan = FloorPlan(
+        42,
+        "synthetic-partition",
+        b"synthetic-partition",
+        (_room("home", "Home", ((0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0))),),
+    )
+    area = _scoped_area(floor_plan, [{"x": 5.0, "y": 5.0, "radius": 0.2}])
+    refined = replace(
+        floor_plan,
+        rooms=(
+            replace(
+                floor_plan.rooms[0],
+                boundary=((0.0, 0.0), (10.0, 0.0), (10.001, 10.0), (0.0, 10.0)),
+            ),
+        ),
+    )
+
+    assert area_binding_status(area, refined) is AreaBindingStatus.CURRENT
 
 
 def test_translation_frame_bounds_rejects_empty_floor_plan() -> None:

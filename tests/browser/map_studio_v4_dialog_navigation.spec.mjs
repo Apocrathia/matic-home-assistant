@@ -213,6 +213,9 @@ test.describe("UX2 discard dialog navigation", () => {
     await panel.getByRole("menuitem", { name: "Delete", exact: true }).click();
     await panel.getByRole("dialog", { name: "Delete plan?" }).getByRole("button", { name: "Delete", exact: true }).click();
     await expect(panel.getByRole("heading", { level: 2, name: "Your plans" })).toBeVisible();
+    // Deletion updates the picker before the browser finishes removing the
+    // Edit and dialog entries. Wait for that traversal before sending Back.
+    await expect.poll(() => page.evaluate(() => history.state?.maticMapLayer?.depth)).toBe(1);
     await back(page);
     await expect(panel.getByRole("heading", { level: 2, name: "Choose what to clean" })).toBeVisible();
   });
