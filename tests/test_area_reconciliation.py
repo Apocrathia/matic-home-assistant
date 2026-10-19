@@ -331,6 +331,26 @@ def test_room_frame_landmark_work_is_charged_before_scan():
         binding._room_frame_matches(saved, current, room_geometry)
 
 
+def test_room_frame_area_scan_exhausts_budget_before_integer_geometry():
+    saved = {
+        "fingerprint": "a" * 64,
+        "boundary_mm": [[0, 0], [100, 0], [100, 100], [0, 100]],
+    }
+    current = {
+        "fingerprint": "b" * 64,
+        "boundary_mm": [[1, 0], [100, 0], [100, 100], [0, 100]],
+    }
+    room_geometry = RoomGeometryIndex([])
+    # Equality, directional landmarks and the current-point set consume 76.
+    # There must be no integer polygon-area traversal after that budget ends.
+    room_geometry._query_work_remaining = 76
+    with patch.object(
+        binding, "sum", side_effect=AssertionError("uncharged area scan"), create=True
+    ):
+        with pytest.raises(binding.GeometryTooComplex):
+            binding._room_frame_matches(saved, current, room_geometry)
+
+
 async def test_legacy_frame_shift_does_not_enrich_but_snapshot_survives_reload(hass):
     floor = _floor()
     area = _area(floor)

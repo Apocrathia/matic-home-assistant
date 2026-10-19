@@ -452,6 +452,7 @@ def _room_frame_matches(
     room_geometry.charge_query_work(len(new))
     current_points = {tuple(point) for point in new}
     points = sorted(old_unique & current_points)
+    room_geometry.charge_query_work(len(old))
     old_area = sum(
         old[index][0] * old[(index + 1) % len(old)][1]
         - old[(index + 1) % len(old)][0] * old[index][1]
