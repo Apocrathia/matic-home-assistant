@@ -237,11 +237,11 @@ ${n?this.#We(e,u,f):y}
 ${(n?[this._sheetDetent==="full"?-1:1]:[1,-1]).map(b=>w`<button
 class="ms-btn ms-btn--icon ms-btn--sm"
 type="button"
-aria-label=${b?this.#e("v4_show_more","Expand panel"):this.#e("v4_show_less","Collapse panel")}
+aria-label=${this.#e(b>0?"v4_show_more":"v4_show_less",b>0?"Expand panel":"Collapse panel")}
 aria-controls="sheet-panel"
-?disabled=${this.#o||this._sheetDetent===(b?"full":"peek")}
+?disabled=${this.#o||this._sheetDetent===(b>0?"full":"peek")}
 @click=${()=>this.#Re(b)}
->${q(b?hs:us)}</button>`)}
+>${q(b>0?hs:us)}</button>`)}
 </div>
 ${L?w`
 <div class="sheet-tools">

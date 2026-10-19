@@ -1947,14 +1947,14 @@ export class MaticMapShellV4 extends LitElement {
                   ${this._sheetDetent === "peek" ? this.#back(state, true) : nothing}
                   <span class="sheet-status">${this.#sheetStatus(state, status)}</span>
                   ${compact ? this.#actionBar(state, footerPrimary, footerSecondary) : nothing}
-                  ${/* step is always +1 or -1, so truthiness selects expansion */ (compact ? [this._sheetDetent === "full" ? -1 : 1] as const : [1, -1] as const).map((step) => html`<button
+                  ${/* step is always +1 or -1 */ (compact ? [this._sheetDetent === "full" ? -1 : 1] as const : [1, -1] as const).map((step) => html`<button
                     class="ms-btn ms-btn--icon ms-btn--sm"
                     type="button"
-                    aria-label=${step ? this.#t("v4_show_more", "Expand panel") : this.#t("v4_show_less", "Collapse panel")}
+                    aria-label=${this.#t(step > 0 ? "v4_show_more" : "v4_show_less", step > 0 ? "Expand panel" : "Collapse panel")}
                     aria-controls="sheet-panel"
-                    ?disabled=${this.#helpReturnsFull || this._sheetDetent === (step ? "full" : "peek")}
+                    ?disabled=${this.#helpReturnsFull || this._sheetDetent === (step > 0 ? "full" : "peek")}
                     @click=${() => this.#sheetStep(step)}
-                  >${icon(step ? iconChevronUp : iconChevronDown)}</button>`)}
+                  >${icon(step > 0 ? iconChevronUp : iconChevronDown)}</button>`)}
                 </div>
                 ${showDrawTools ? html`
                   <div class="sheet-tools">
