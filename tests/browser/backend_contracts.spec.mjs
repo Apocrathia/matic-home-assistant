@@ -3,7 +3,7 @@ import { build } from "esbuild";
 
 const bundle = await build({
   stdin: {
-    contents: 'export { parseCatalog, parseHistoryCatalog, parsePlansCatalog, parsePose } from "./frontend/map-studio-v4/backend-contracts"; import { areaCatalogHelpers } from "./frontend/map-studio-v4/backend-contracts"; import { parseAreasCatalog as parseAreas } from "./frontend/map-studio-v4/area-catalog"; export const parseAreasCatalog = value => parseAreas(value, areaCatalogHelpers);',
+    contents: 'export { parseCatalog, parseHistoryCatalog, parsePlansCatalog, parsePose } from "./frontend/map-studio-v4/backend-contracts"; import { areaCatalogHelpers } from "./frontend/map-studio-v4/backend-contracts"; import { parseAreasCatalog as parseAreas } from "./frontend/map-studio-v4/area-catalog"; import * as geometry from "./frontend/map-studio-v4/area-outline"; export const parseAreasCatalog = value => parseAreas(value, areaCatalogHelpers, geometry);',
     resolveDir: process.cwd(),
   },
   bundle: true,
@@ -59,6 +59,31 @@ test("the area catalog names the selected custom area, or none", async ({ page }
   });
   expect(result, `selected_area "porch", null and "" parsed as ${JSON.stringify(result)}`)
     .toEqual(["porch", null, "invalid-selected-area"]);
+});
+
+test("the area catalog keeps outline geometry validation in the deferred parser", async ({ page }) => {
+  await load(page);
+  const result = await page.evaluate(async () => {
+    const { parseAreasCatalog } = await import("/backend-contracts.js");
+    const area = (outline) => ({
+      id: "rug", name: "Rug", circles: [], outline,
+      cleaning_mode: "vacuum", coverage_setting: "standard", status: "current", can_rebind: false,
+    });
+    const payload = (outline) => ({
+      scene_url: "/api/matic_robot/scene", rooms: [], areas: [area(outline)], selected_area: "rug",
+    });
+    const square = [{ x: 0, y: 0 }, { x: 3, y: 0 }, { x: 3, y: 3 }, { x: 0, y: 3 }];
+    const crossed = [{ x: 0, y: 0 }, { x: 3, y: 3 }, { x: 0, y: 3 }, { x: 3, y: 0 }];
+    const parse = (outline) => {
+      try {
+        return parseAreasCatalog(payload(outline)).areas[0].outline !== null;
+      } catch (error) {
+        return error.code;
+      }
+    };
+    return [parse(square), parse(crossed)];
+  });
+  expect(result).toEqual([true, "invalid-area-outline"]);
 });
 
 test("catalog live workspace capability defaults off and validates explicit booleans", async ({ page }) => {

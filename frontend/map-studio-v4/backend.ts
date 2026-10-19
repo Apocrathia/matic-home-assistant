@@ -1,8 +1,8 @@
 import type { AreaOutline } from "./area-outline";
 import { MAX_ROOM_SEQUENCE_SIZE, type HassLike } from "./contracts";
 import {
-  CATALOG_URL,
   areaCatalogHelpers,
+  CATALOG_URL,
   ContractError,
   DELTA_HEADER_BYTES,
   DELTA_MAX_BYTES,
@@ -380,11 +380,12 @@ export class MaticBackend {
   }
 
   async areas(path: string, signal?: AbortSignal): Promise<AreasCatalog> {
-    const [{ parseAreasCatalog }, value] = await Promise.all([
+    const [{ parseAreasCatalog }, geometry, value] = await Promise.all([
       import("./area-catalog"),
+      import("./area-outline"),
       this.#json("areas", path, REQUEST_TIMEOUTS.workflow, signal),
     ]);
-    return parseAreasCatalog(value, areaCatalogHelpers);
+    return parseAreasCatalog(value, areaCatalogHelpers, geometry);
   }
 
   async previewRoomSequence(

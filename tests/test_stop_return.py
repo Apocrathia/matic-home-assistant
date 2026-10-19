@@ -62,7 +62,32 @@ def _client(session: object = False) -> SimpleNamespace:
     )
     return SimpleNamespace(
         async_get_active_cleaning_session_state=reader,
+        async_get_state=AsyncMock(
+            return_value=SimpleNamespace(
+                returning=False,
+                cleaning=False,
+                paused=False,
+                charging=False,
+                charging_idle=False,
+                error_codes=(),
+            )
+        ),
         async_send_user_command=AsyncMock(),
+    )
+
+
+def _operational(**changes: object) -> SimpleNamespace:
+    """Build a complete direct operational snapshot for stop-return fakes."""
+    return SimpleNamespace(
+        **{
+            "returning": False,
+            "cleaning": False,
+            "paused": False,
+            "charging": False,
+            "charging_idle": False,
+            "error_codes": (),
+            **changes,
+        }
     )
 
 
@@ -90,6 +115,229 @@ async def test_docks_once_the_stopped_task_reports_inactive(hass) -> None:
     refresh.assert_awaited_once()
 
 
+async def test_cached_docked_but_fresh_ready_state_dispatches_dock(hass) -> None:
+    """A stale HA docked state cannot settle STOP while the robot is ready."""
+    hass.states.async_set(ENTITY, "docked", {})
+    client = _client(session=False)
+
+    assert await _run(hass, client, _manager())
+
+    client.async_send_user_command.assert_awaited_once_with(UserCommand.DOCK)
+
+
+async def test_cached_docked_but_fresh_ready_does_not_clear_stop_fence(hass) -> None:
+    hass.states.async_set(ENTITY, "docked", {})
+    client = _client(session=False)
+    manager = SimpleNamespace(
+        stop_fence_token=MagicMock(return_value=7),
+        async_clear_stop_pending_if_token=AsyncMock(return_value=True),
+    )
+
+    assert not await async_clear_ownerless_stop_if_settled(
+        hass,
+        native_active=client.async_get_active_cleaning_session_state,
+        fresh_state=client.async_get_state,
+        manager=manager,
+        serial_number="serial",
+        entity_id=ENTITY,
+    )
+
+    manager.async_clear_stop_pending_if_token.assert_not_awaited()
+
+
+async def test_missing_or_unreadable_direct_state_never_proves_docking(hass) -> None:
+    hass.states.async_set(ENTITY, "docked", {})
+    native_active = AsyncMock(return_value=False)
+    assert not await stop_return.async_native_stop_is_settled(
+        hass, native_active, ENTITY
+    )
+    assert not await stop_return.async_native_stop_is_settled(
+        hass,
+        native_active,
+        ENTITY,
+        fresh_state=AsyncMock(side_effect=MaticError("unavailable")),
+    )
+
+
+@pytest.mark.parametrize(
+    "changes", [{"returning": True}, {"cleaning": True}, {"paused": True}]
+)
+async def test_fresh_moving_states_do_not_prove_docking(hass, changes) -> None:
+    hass.states.async_set(ENTITY, "idle", {})
+    assert not await stop_return.async_native_stop_is_settled(
+        hass,
+        AsyncMock(return_value=False),
+        ENTITY,
+        fresh_state=AsyncMock(return_value=_operational(**changes)),
+    )
+
+
+async def test_fresh_charging_with_latched_error_can_clear_stop_fence(hass) -> None:
+    """An explicit physical charging flag remains dock evidence with warnings."""
+    hass.states.async_set(ENTITY, "charging", {})
+    manager = SimpleNamespace(
+        stop_fence_token=MagicMock(return_value=7),
+        async_clear_stop_pending_if_token=AsyncMock(return_value=True),
+    )
+
+    assert await async_clear_ownerless_stop_if_settled(
+        hass,
+        native_active=AsyncMock(return_value=False),
+        fresh_state=AsyncMock(
+            return_value=_operational(charging=True, error_codes=(999,))
+        ),
+        manager=manager,
+        serial_number="serial",
+        entity_id=ENTITY,
+    )
+    manager.async_clear_stop_pending_if_token.assert_awaited_once_with(
+        "serial", 7, run_id=None
+    )
+
+
+async def test_replacement_during_fresh_state_read_prevents_dock(hass) -> None:
+    hass.states.async_set(ENTITY, "docked", {})
+    manager = _manager()
+    client = _client(session=False)
+
+    async def replacement_state() -> SimpleNamespace:
+        hass.states.async_set(ENTITY, "cleaning", {})
+        return SimpleNamespace(
+            returning=False,
+            cleaning=False,
+            paused=False,
+            charging=False,
+            charging_idle=False,
+            error_codes=(),
+        )
+
+    client.async_get_state = AsyncMock(side_effect=replacement_state)
+
+    assert not await _run(hass, client, manager)
+    client.async_send_user_command.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "snapshot", [_operational(error_codes=(999,)), SimpleNamespace()]
+)
+async def test_incomplete_or_error_only_fresh_snapshot_is_not_treated_as_ready(
+    hass, monkeypatch, snapshot
+) -> None:
+    hass.states.async_set(ENTITY, "docked", {})
+    monkeypatch.setattr(stop_return, "DOCK_SETTLE_TIMEOUT_SECONDS", 0)
+    client = _client(session=False)
+    client.async_get_state = AsyncMock(return_value=snapshot)
+
+    assert not await _run(hass, client, _manager())
+    client.async_send_user_command.assert_not_awaited()
+
+
+async def test_new_stop_fence_wins_during_fresh_dock_read(hass) -> None:
+    hass.states.async_set(ENTITY, "docked", {})
+    manager = _manager()
+    manager.stop_pending.side_effect = [True, True, False]
+    client = _client(session=False)
+    client.async_get_state = AsyncMock(return_value=_operational(charging_idle=True))
+
+    assert not await _run(hass, client, manager)
+    client.async_send_user_command.assert_not_awaited()
+
+
+async def test_replacement_during_fresh_dock_read_prevents_settlement(hass) -> None:
+    hass.states.async_set(ENTITY, "docked", {})
+    client = _client(session=False)
+
+    async def replacement_state() -> SimpleNamespace:
+        hass.states.async_set(ENTITY, "cleaning", {})
+        return _operational(charging_idle=True)
+
+    client.async_get_state = AsyncMock(side_effect=replacement_state)
+
+    assert not await _run(hass, client, _manager())
+    client.async_send_user_command.assert_not_awaited()
+
+
+async def test_fresh_replacement_state_never_dispatches_dock(hass) -> None:
+    hass.states.async_set(ENTITY, "docked", {})
+    client = _client(session=False)
+    client.async_get_state = AsyncMock(return_value=_operational(cleaning=True))
+
+    assert not await _run(hass, client, _manager())
+    client.async_send_user_command.assert_not_awaited()
+
+
+async def test_stop_callback_without_finalizer_keeps_fence(hass) -> None:
+    hass.states.async_set(ENTITY, "docked", {})
+    manager = _manager()
+    manager.stop_fence_token = MagicMock(return_value=4)
+    client = _client(session=False)
+    client.async_get_state = AsyncMock(return_value=_operational(charging_idle=True))
+
+    assert not await async_dock_when_stop_settles(
+        hass,
+        client=client,
+        refresh=AsyncMock(),
+        manager=manager,
+        serial_number="serial",
+        entity_id=ENTITY,
+        stop_fence_token=4,
+    )
+
+
+async def test_transient_fresh_state_failure_retries_until_ready(
+    hass, monkeypatch
+) -> None:
+    hass.states.async_set(ENTITY, "docked", {})
+    monkeypatch.setattr(stop_return, "DOCK_SETTLE_TIMEOUT_SECONDS", 1)
+    client = _client(session=False)
+    client.async_get_state = AsyncMock(
+        side_effect=[MaticError("temporary read failure"), _operational()]
+    )
+
+    assert await _run(hass, client, _manager())
+    client.async_send_user_command.assert_awaited_once_with(UserCommand.DOCK)
+
+
+async def test_transient_native_failure_with_cached_homeward_retries(hass, monkeypatch):
+    hass.states.async_set(ENTITY, "docked", {})
+    monkeypatch.setattr(stop_return, "DOCK_SETTLE_TIMEOUT_SECONDS", 1)
+    client = _client(session=[MaticError("temporary native failure"), False])
+
+    assert await _run(hass, client, _manager())
+    assert client.async_get_active_cleaning_session_state.await_count == 2
+    client.async_send_user_command.assert_awaited_once_with(UserCommand.DOCK)
+
+
+async def test_already_docked_callback_runs_after_command_lease_releases(hass) -> None:
+    hass.states.async_set(ENTITY, "docked", {})
+    client = _client(session=False)
+    client.async_get_state = AsyncMock(return_value=_operational(charging_idle=True))
+    manager = _manager()
+    lock = asyncio.Lock()
+    manager.command_lock = MagicMock(return_value=lock)
+    manager.external_command = MagicMock(
+        side_effect=lambda _serial: _command_context(manager, _serial)
+    )
+    manager.stop_fence_token = MagicMock(return_value=3)
+    on_docked = AsyncMock(return_value=True)
+
+    async def reacquire_command_lease() -> bool:
+        async with manager.external_command("serial"):
+            return await on_docked()
+
+    assert await async_dock_when_stop_settles(
+        hass,
+        client=client,
+        refresh=AsyncMock(),
+        manager=manager,
+        serial_number="serial",
+        entity_id=ENTITY,
+        stop_fence_token=3,
+        on_docked=reacquire_command_lease,
+    )
+    on_docked.assert_awaited_once()
+
+
 async def test_unknown_native_status_with_cleared_identity_docks_and_confirms(
     hass,
 ) -> None:
@@ -102,13 +350,14 @@ async def test_unknown_native_status_with_cleared_identity_docks_and_confirms(
     assert token is not None
 
     client = MaticHermesClient("192.0.2.1", 16320)
-    client.async_get_property = AsyncMock(side_effect=[b"", b"", b"", b""])
+    client.async_get_property = AsyncMock(side_effect=[b""] * 12)
     unknown_state = replace(
         _state(idle=True).operational,
         state_codes=(108, 109, 110),
     )
+    docked_state = replace(unknown_state, charging_idle=True)
     client.async_get_state = AsyncMock(
-        side_effect=[unknown_state, unknown_state, unknown_state, unknown_state]
+        side_effect=[unknown_state] * 3 + [docked_state] * 9
     )
     client.async_send_user_command = AsyncMock()
 
@@ -127,8 +376,8 @@ async def test_unknown_native_status_with_cleared_identity_docks_and_confirms(
 
     assert sent
     client.async_send_user_command.assert_awaited_once_with(UserCommand.DOCK)
-    assert client.async_get_state.await_count == 4
-    assert client.async_get_property.await_count == 4
+    assert client.async_get_state.await_count == 5
+    assert client.async_get_property.await_count == 2
     assert manager.stop_fence_token("serial") is None
 
 
@@ -159,8 +408,8 @@ async def test_final_dock_uses_task_state_under_retained_identity(
 
     assert await _run(hass, client, _manager()) is expected_dock
 
-    client.async_get_state.assert_awaited_once()
-    if expected_dock:
+    assert client.async_get_state.await_count == (2 if expected_dock else 1)
+    if expected_dock and not changes.get("charging"):
         client.async_send_user_command.assert_awaited_once_with(UserCommand.DOCK)
     else:
         client.async_send_user_command.assert_not_awaited()
@@ -185,6 +434,7 @@ async def test_retained_inactive_identity_allows_exact_ownerless_fence_clear(
     assert await async_clear_ownerless_stop_if_settled(
         hass,
         native_active=client.async_get_active_cleaning_session_state,
+        fresh_state=client.async_get_state,
         manager=manager,
         serial_number="serial",
         entity_id=ENTITY,
@@ -235,9 +485,10 @@ async def test_final_dock_preserves_run_correlation_and_closes_stop(hass) -> Non
 
 @pytest.mark.parametrize("native_active", [False, True, None, "error"])
 async def test_ownerless_stop_fence_clears_only_after_native_inactive_dock(
-    hass, native_active: bool | str | None
+    hass, monkeypatch, native_active: bool | str | None
 ) -> None:
     """A docked coordinator state alone cannot clear an ownerless STOP fence."""
+    monkeypatch.setattr(stop_return, "DOCK_SETTLE_TIMEOUT_SECONDS", 0)
     manager = CleaningPlanManager(hass)
     manager._store = SimpleNamespace(async_save=AsyncMock())
     await manager.async_mark_stop_pending("serial")
@@ -245,6 +496,10 @@ async def test_ownerless_stop_fence_clears_only_after_native_inactive_dock(
     assert token is not None
     hass.states.async_set(ENTITY, "docked", {})
     client = _client(session=native_active)
+    if native_active is False:
+        client.async_get_state = AsyncMock(
+            return_value=_operational(charging_idle=True)
+        )
     if native_active == "error":
         client.async_get_active_cleaning_session_state = AsyncMock(
             side_effect=MaticError("unavailable")
@@ -261,7 +516,9 @@ async def test_ownerless_stop_fence_clears_only_after_native_inactive_dock(
     )
 
     assert settled is (native_active is False)
-    client.async_get_active_cleaning_session_state.assert_awaited_once()
+    assert client.async_get_active_cleaning_session_state.await_count == (
+        2 if native_active is False else 1
+    )
     if native_active is False:
         assert manager.stop_fence_token("serial") is None
     else:
@@ -270,9 +527,10 @@ async def test_ownerless_stop_fence_clears_only_after_native_inactive_dock(
 
 @pytest.mark.parametrize("native_active", [False, True])
 async def test_managed_dock_callback_requires_native_inactive(
-    hass, native_active: bool
+    hass, monkeypatch, native_active: bool
 ) -> None:
     """A charging state cannot terminalize a run while native activity remains."""
+    monkeypatch.setattr(stop_return, "DOCK_SETTLE_TIMEOUT_SECONDS", 0)
     manager = CleaningPlanManager(hass)
     manager._store = SimpleNamespace(async_save=AsyncMock())
     await manager.async_mark_stop_pending("serial", run_id="run-1")
@@ -280,6 +538,10 @@ async def test_managed_dock_callback_requires_native_inactive(
     assert token is not None
     hass.states.async_set(ENTITY, "charging", {})
     client = _client(session=native_active)
+    if native_active is False:
+        client.async_get_state = AsyncMock(
+            return_value=_operational(charging_idle=True)
+        )
     on_docked = AsyncMock()
 
     settled = await async_dock_when_stop_settles(
@@ -313,6 +575,9 @@ async def test_transient_native_probe_failure_retries_until_stop_settles(
     assert token is not None
     hass.states.async_set(ENTITY, "idle", {})
     client = _client(session=[False, MaticError("transient"), False])
+    client.async_get_state = AsyncMock(
+        side_effect=[_operational(), _operational(charging_idle=True)]
+    )
 
     async def refresh() -> None:
         hass.states.async_set(ENTITY, "docked", {})
@@ -382,6 +647,7 @@ async def test_ownerless_preflight_rejects_state_change_during_native_read(
     assert not await async_clear_ownerless_stop_if_settled(
         hass,
         native_active=active_read,
+        fresh_state=AsyncMock(return_value=_operational(charging=True)),
         manager=manager,
         serial_number="serial",
         entity_id=ENTITY,
@@ -407,6 +673,7 @@ async def test_ownerless_preflight_preserves_new_fence_created_during_probe(
     assert not await async_clear_ownerless_stop_if_settled(
         hass,
         native_active=active_read,
+        fresh_state=AsyncMock(return_value=_operational(charging=True)),
         manager=manager,
         serial_number="serial",
         entity_id=ENTITY,
@@ -422,6 +689,7 @@ async def test_ownerless_preflight_skips_native_read_without_a_fence(hass) -> No
     assert not await async_clear_ownerless_stop_if_settled(
         hass,
         native_active=native_active,
+        fresh_state=AsyncMock(return_value=_operational(charging=True)),
         manager=manager,
         serial_number="serial",
         entity_id=ENTITY,
@@ -598,14 +866,14 @@ async def test_final_dock_confirmation_survives_stop_fence_expiry(hass) -> None:
 
 
 @pytest.mark.parametrize("state", ["docked", "charging", "returning"])
-async def test_skips_when_the_robot_is_already_home_or_heading_there(
+async def test_cached_homeward_state_with_fresh_ready_robot_dispatches_dock(
     hass, state: str
 ) -> None:
     hass.states.async_set(ENTITY, state, {})
     client = _client(session=False)
 
-    assert await _run(hass, client, _manager()) is False
-    client.async_send_user_command.assert_not_awaited()
+    assert await _run(hass, client, _manager()) is True
+    client.async_send_user_command.assert_awaited_once_with(UserCommand.DOCK)
 
 
 @pytest.mark.parametrize("state", ["docked", "charging"])
@@ -1053,6 +1321,24 @@ async def test_schedule_is_a_no_op_without_background_task_support() -> None:
     manager.register_reconciliation_task.assert_not_called()
 
 
+async def test_confirmation_schedule_is_a_no_op_without_background_task_support() -> (
+    None
+):
+    manager = _manager()
+    fake_hass = SimpleNamespace(states=SimpleNamespace(get=MagicMock()))
+
+    assert not schedule_dock_confirmation(
+        fake_hass,
+        refresh=AsyncMock(),
+        manager=manager,
+        serial_number="serial",
+        entity_id=ENTITY,
+        run_id="run-1",
+        on_docked=AsyncMock(),
+    )
+    manager.register_reconciliation_task.assert_not_called()
+
+
 async def test_timeout_failure_can_finalize_while_dock_confirmation_waits(
     hass, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1064,6 +1350,9 @@ async def test_timeout_failure_can_finalize_while_dock_confirmation_waits(
     token = manager.stop_fence_token("serial")
     hass.states.async_set(ENTITY, "idle", {})
     client = _client(session=False)
+    client.async_get_state = AsyncMock(
+        side_effect=[_operational(), _operational(charging=True)]
+    )
     dock_sent = asyncio.Event()
     failure_saved = asyncio.Event()
 
@@ -1210,6 +1499,7 @@ async def test_idle_native_inactivity_does_not_clear_ownerless_dock_fence(hass) 
     assert not await async_clear_ownerless_stop_if_settled(
         hass,
         native_active=AsyncMock(return_value=False),
+        fresh_state=AsyncMock(return_value=_operational()),
         manager=manager,
         serial_number="serial",
         entity_id=ENTITY,

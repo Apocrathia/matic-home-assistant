@@ -20,7 +20,12 @@ from custom_components.matic_robot.managed_executor import (
 from custom_components.matic_robot.plans import CleaningRoom
 from custom_components.matic_robot.restart import async_recover_managed_run
 
-from .test_restart import recovery_state as recovery_fixture
+from .test_restart import (
+    _operational_state,
+)
+from .test_restart import (
+    recovery_state as recovery_fixture,
+)
 
 
 @pytest.fixture
@@ -96,8 +101,10 @@ async def test_recovered_stop_uses_native_settlement_and_correlated_dock(
             manager.mark_managed_stop("serial")
             hass.states.async_set(checkpoint["entity_id"], "idle")
             client.async_get_active_cleaning_session_state.return_value = native_active
+            client.async_get_state.return_value = _operational_state()
         elif value is UserCommand.DOCK:
             hass.states.async_set(checkpoint["entity_id"], "docked")
+            client.async_get_state.return_value = _operational_state(charging_idle=True)
 
     client.async_send_user_command.side_effect = command
     docked = []

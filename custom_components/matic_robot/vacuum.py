@@ -197,6 +197,7 @@ class MaticVacuum(MaticEntity, StateVacuumEntity):
         if self.entity_id is not None and await async_clear_ownerless_stop_if_settled(
             self.hass,
             native_active=self.coordinator.client.async_get_active_cleaning_session_state,
+            fresh_state=self.coordinator.client.async_get_state,
             manager=self._plans,
             serial_number=serial_number,
             entity_id=self.entity_id,

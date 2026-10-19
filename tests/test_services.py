@@ -5997,20 +5997,45 @@ async def test_native_reconciliation_schedule_and_stop_fence_guards(hass) -> Non
     manager_with_fence._store = SimpleNamespace(async_save=AsyncMock())
     manager_with_fence.mark_stop_pending("serial")
     native_active = AsyncMock(return_value=False)
+    fresh_state = AsyncMock(
+        return_value=SimpleNamespace(
+            returning=False,
+            cleaning=False,
+            paused=False,
+            charging=False,
+            charging_idle=True,
+            error_codes=(),
+        )
+    )
     with pytest.raises(ServiceValidationError) as blocked:
         await _ensure_stop_settled(
-            hass, manager_with_fence, "serial", "vacuum.test", native_active
+            hass,
+            manager_with_fence,
+            "serial",
+            "vacuum.test",
+            native_active,
+            fresh_state,
         )
     assert blocked.value.translation_key == "robot_stop_pending"
     hass.states.async_set("vacuum.test", "docked")
     await _ensure_stop_settled(
-        hass, manager_with_fence, "serial", "vacuum.test", native_active
+        hass,
+        manager_with_fence,
+        "serial",
+        "vacuum.test",
+        native_active,
+        fresh_state,
     )
     assert manager_with_fence.stop_pending("serial") is False
 
     manager_with_fence.mark_stop_pending("serial")
     await _ensure_stop_settled(
-        hass, manager_with_fence, "serial", "vacuum.test", native_active
+        hass,
+        manager_with_fence,
+        "serial",
+        "vacuum.test",
+        native_active,
+        fresh_state,
     )
     assert manager_with_fence.stop_pending("serial") is False
 

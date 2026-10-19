@@ -47,6 +47,21 @@ from custom_components.matic_robot.restart import (
 from tests.wire_builders import _session_identity
 
 
+def _operational_state(**changes: object) -> SimpleNamespace:
+    """Complete direct robot snapshot used by restart STOP watcher tests."""
+    return SimpleNamespace(
+        **{
+            "returning": False,
+            "cleaning": False,
+            "paused": False,
+            "charging": False,
+            "charging_idle": False,
+            "error_codes": (),
+            **changes,
+        }
+    )
+
+
 @pytest.fixture
 async def recovery_state(hass):
     manager = CleaningPlanManager(hass)
@@ -98,6 +113,7 @@ async def recovery_state(hass):
         async_get_cleaning_session_identity=AsyncMock(return_value=identity),
         async_get_cleaning_session_records=AsyncMock(return_value=()),
         async_get_active_cleaning_session_state=AsyncMock(return_value=True),
+        async_get_state=AsyncMock(return_value=_operational_state()),
         async_send_user_command=AsyncMock(),
         activity_journal=SimpleNamespace(
             set_run_id=MagicMock(

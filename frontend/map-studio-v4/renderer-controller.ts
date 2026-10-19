@@ -2,7 +2,7 @@ import type { AreaCircle, SceneModel, SceneRoom } from "./backend-contracts";
 import { SCENE_DELTA_DIRTY_BLOCK_BYTES } from "./backend-contracts";
 import type { CameraPreference, CoordinateEditCapture, MapQuality, MapView, WorkspaceState } from "./contracts";
 import { canShowExactPose, hasCoordinateEditAdmission } from "./state";
-import { rgba, type CanvasPalette } from "./theme-probe";
+import { rgba, type CanvasPalette, type Channel } from "./theme-probe";
 
 export interface MapPoint {
   readonly x: number;
@@ -120,6 +120,17 @@ export const topView = (state: WorkspaceState): MapView => forcesTop(state) ? "t
 /** Room colors replace the photo wherever the map shows the top view. */
 const roomColours = (state: WorkspaceState | null): boolean =>
   !!state && topView(state) === "top" && state.appearance === "rooms";
+
+// Match the categorical room hues used by the native top-down map. Blend
+// with the theme surface so both light and dark maps keep readable labels.
+const ROOM_COLORS: readonly Channel[] = [
+  [91, 143, 249], [97, 221, 170], [120, 211, 248],
+  [114, 98, 253], [246, 144, 61], [240, 139, 180],
+];
+const roomColor = (index: number, palette: CanvasPalette): Channel => palette.forced
+  ? palette.roomFill
+  : (ROOM_COLORS[index % ROOM_COLORS.length] ?? palette.roomFill)
+    .map((value, channel) => Math.round(value * .45 + (palette.roomFill[channel] ?? 0) * .55)) as unknown as Channel;
 
 const cameraPreferenceIsFit = (view: MapView, preference: CameraPreference | undefined): boolean => {
   if (!preference) return true;
@@ -1486,6 +1497,9 @@ export class RendererController {
     // the selected ones (home-rooms.md §5 Parity, R9).
     const allRooms = state.labelsVisible || roomColours(state);
     if (allRooms || selectedNames.size) {
+      // IDs keep each room's hue stable when scene metadata is reordered.
+      const roomIndexes = new Map(scene.metadata.rooms.map((room) => room.id).sort()
+        .map((id, index) => [id, index]));
       context.lineWidth = 1.5;
       context.font = "600 12px system-ui, sans-serif";
       context.textAlign = "center";
@@ -1494,11 +1508,12 @@ export class RendererController {
       for (const room of scene.metadata.rooms) {
         const selected = selectedNames.has(room.name.toLocaleLowerCase());
         if (!allRooms && !selected) continue;
-        context.strokeStyle = selected ? rgba(palette.accent, 1) : rgba(palette.quiet, .7);
+        context.strokeStyle = selected ? rgba(palette.accent, 1)
+          : palette.forced ? rgba(palette.text, 1) : rgba(palette.quiet, .7);
         context.fillStyle = selected
           ? rgba(palette.accent, .26)
           : roomColours(state)
-            ? rgba(palette.roomFill, .94)
+            ? rgba(roomColor(roomIndexes.get(room.id) ?? 0, palette), .94)
             : rgba(palette.plate, .04);
         context.beginPath();
         const step = Math.max(1, Math.ceil(room.boundary.length / 512));

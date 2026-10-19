@@ -4405,13 +4405,18 @@ async def _ensure_stop_settled(
     serial_number: str,
     entity_id: str,
     native_active: Callable[[], Awaitable[bool | None]] | None = None,
+    fresh_state: Callable[[], Awaitable[object]] | None = None,
 ) -> None:
     """Reject replacement plans while the OEM stop countdown is still active."""
     if not manager.stop_pending(serial_number):
         return
+    direct_state = fresh_state or getattr(
+        getattr(native_active, "__self__", None), "async_get_state", None
+    )
     if native_active is not None and await async_clear_ownerless_stop_if_settled(
         hass,
         native_active=native_active,
+        fresh_state=direct_state,
         manager=manager,
         serial_number=serial_number,
         entity_id=entity_id,
