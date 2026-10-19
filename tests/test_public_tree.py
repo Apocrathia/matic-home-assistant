@@ -163,3 +163,15 @@ def test_privacy_scan_skips_generated_ux_audit_screenshots(tmp_path: Path) -> No
         f"docs/.generated/notes.md:1: private IPv4 address {address}",
         "tests/browser/house.png: private artifact type .png",
     ]
+
+
+def test_privacy_scan_skips_nested_git_worktrees(tmp_path: Path) -> None:
+    """A linked checkout is separate from the repository being scanned."""
+    worktree = tmp_path / ".claude" / "worktrees" / "review"
+    worktree.mkdir(parents=True)
+    (worktree / ".git").write_text("gitdir: ../../../../.git/worktrees/review\n")
+    private_capture = worktree / "tests" / "browser" / "capture.png"
+    private_capture.parent.mkdir(parents=True)
+    private_capture.write_bytes(b"private map capture")
+
+    assert scan_tree(tmp_path) == []

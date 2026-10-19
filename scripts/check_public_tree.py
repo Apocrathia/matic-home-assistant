@@ -111,6 +111,10 @@ def public_files(root: Path = ROOT) -> Iterator[Path]:
             if name not in EXCLUDED_PARTS
             and not name.endswith(".egg-info")
             and relative_directory / name not in EXCLUDED_PATHS
+            # A linked Git worktree is a separate checkout, not part of this
+            # repository's publishable tree. Its ignored captures and private
+            # test data must not make this checkout's privacy scan fail.
+            and not (directory / name / ".git").exists()
         ]
         yield from (directory / name for name in filenames)
 
