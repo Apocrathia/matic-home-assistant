@@ -2455,6 +2455,7 @@ class CleaningPlanManager:
                 MAP_BINDING_VERSION,
                 HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
                 BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+                ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
                 SCOPED_MAP_BINDING_VERSION,
             }:
                 continue
