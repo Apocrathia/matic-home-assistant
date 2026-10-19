@@ -1318,12 +1318,10 @@ export class MaticMapShellV4 extends LitElement {
     else this.#openHelp(event.composedPath()[0] as HTMLElement);
   };
 
-  // A press before the views chunk is ready shows its status in the rail
-  // and opens once it settles; a failed load has the chunk's Try again.
+  // Help owns its small lazy chunk, so opening it never loads workflow views.
   #openHelp(launcher: HTMLElement | null): void {
     this.#helpLauncher = launcher;
     this.#helpCoarse = window.matchMedia("(any-pointer: coarse)").matches;
-    this.#views.request();
     this.#mapHelpView.request();
     this._helpOpen = true;
   }

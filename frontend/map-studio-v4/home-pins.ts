@@ -94,7 +94,7 @@ export const followPins = (
       ];
       const nextPins = oldPins.filter((pin) => present.some((existing) => same(existing, pin)));
       mode = "v2";
-      host.saveHomePinState(excluded);
+      host.saveHomePinState(excluded, nextPins);
       if (nextPins.length !== oldPins.length) store.patch({ homePins: { ...state.homePins, pins: nextPins } });
       return;
     }
@@ -124,7 +124,7 @@ export const followPins = (
         const [kind, ...id] = value.split(":");
         return { kind: kind as HomePin["kind"], id: id.join(":") };
       });
-      host.saveHomePinState(nextExcluded);
+      host.saveHomePinState(nextExcluded, pins);
       store.patch({ homePins: { ...state.homePins, pins } });
     }
   };
@@ -151,6 +151,16 @@ export const loadPins = async (
 const notice = (tone: WorkspaceNotice["tone"], key: string, fallback: string): WorkspaceNotice => ({ tone, key, fallback });
 export const PINS_SAVE_FAILED = notice("error", "v4_notice_shortcuts_save_failed", "Home Assistant couldn't save your home shortcuts. Try again.");
 
+interface PersistedPinsState {
+  readonly pins: HomePin[];
+  readonly excluded: HomePin[];
+}
+type PinsMutation = (confirmed: PersistedPinsState) => PersistedPinsState;
+interface PendingPinsWrite {
+  readonly mutation: PinsMutation;
+  reconcileStoreOnSettle: boolean;
+}
+
 
 /** Persistence runs from this already-lazy module so one-tap pins add no startup bytes. */
 export class HomePinsPersistence {
@@ -164,10 +174,13 @@ export class HomePinsPersistence {
     readonly onWrite: () => void;
   };
   #write: Promise<unknown> = Promise.resolve();
-  #revisions = new Map<string, number>();
   #exclusions: HomePin[] = [];
-  #orderRevision = 0;
   #mutationRevision = 0;
+  #confirmedPins: HomePin[] = [];
+  #confirmedExclusions: HomePin[] = [];
+  #pending: PendingPinsWrite[] = [];
+  #pendingWrites = 0;
+  #queueGeneration = 0;
 
   constructor(
     store: WorkspaceStore,
@@ -187,55 +200,108 @@ export class HomePinsPersistence {
 
   reset(): void {
     this.#write = Promise.resolve();
-    this.#revisions.clear();
     this.#exclusions = [];
-    this.#orderRevision += 1;
+    this.#confirmedPins = [];
+    this.#confirmedExclusions = [];
+    this.#pending = [];
+    this.#pendingWrites = 0;
+    this.#queueGeneration += 1;
     this.#mutationRevision += 1;
   }
 
-  setExclusions(excluded: readonly HomePin[]): void { this.#exclusions = [...excluded]; }
+  setExclusions(excluded: readonly HomePin[], pins: readonly HomePin[] = this.#store.value.homePins.pins): void {
+    this.#exclusions = [...excluded];
+    this.#confirmedPins = [...pins];
+    this.#confirmedExclusions = [...excluded];
+  }
   exclusions(): readonly HomePin[] { return this.#exclusions; }
 
-  #writePins(onFailure: () => void): void {
+  #writePins(mutationIntent: PinsMutation, onFailure: () => void, reconcileStoreOnSettle = true): void {
     const entryId = this.#store.value.selection.entryId;
     const owner = this.#context.owner();
     const epoch = this.#context.epoch();
     if (!entryId || !owner || owner !== this.#context.currentOwner() || this.#store.value.homePins.status !== "ready") return;
     const current = (): boolean => !this.#context.disposed() && epoch === this.#context.epoch()
       && this.#context.currentOwner() === owner && this.#store.value.homePins.status === "ready";
+    const entry = { mutation: mutationIntent, reconcileStoreOnSettle };
+    this.#pending.push(entry);
+    this.#pendingWrites += 1;
+    const generation = this.#queueGeneration;
+    const mutation = this.#mutationRevision;
     this.#write = this.#write.then(async () => {
+      const pendingIndex = this.#pending.indexOf(entry);
+      if (pendingIndex >= 0) this.#pending.splice(pendingIndex, 1);
       if (!current()) return;
+      let succeeded = false;
       try {
-        await writePins(this.#connection, entryId, this.#store.value.homePins.pins, this.#exclusions, current);
-        if (current()) this.#context.onWrite();
+        // Replay this intent over the latest confirmed state. A failed earlier
+        // write is absent from the base, so later operations remain ordered
+        // without positional inverse guesses or stale payloads.
+        const next = entry.mutation({ pins: [...this.#confirmedPins], excluded: [...this.#confirmedExclusions] });
+        await writePins(this.#connection, entryId, next.pins, next.excluded, current);
+        if (current()) {
+          succeeded = true;
+          this.#confirmedPins = [...next.pins];
+          this.#confirmedExclusions = [...next.excluded];
+          this.#context.onWrite();
+        }
       } catch {
         if (current()) onFailure();
+      } finally {
+        if (generation === this.#queueGeneration) {
+          this.#pendingWrites -= 1;
+          if (this.#pendingWrites === 0 && current() && mutation === this.#mutationRevision
+            && (entry.reconcileStoreOnSettle || succeeded)) {
+            this.#exclusions = [...this.#confirmedExclusions];
+            const state = this.#store.value;
+            if (state.homePins.status === "ready") {
+              this.#store.patch({ homePins: { ...state.homePins, pins: [...this.#confirmedPins] } });
+            }
+          }
+        }
       }
     }).catch(() => undefined);
   }
 
-  saveState(excluded: readonly HomePin[]): void {
+  saveState(excluded: readonly HomePin[], pins: readonly HomePin[] = this.#store.value.homePins.pins): void {
+    const beforeExcluded = [...this.#exclusions];
+    const beforePins = [...this.#store.value.homePins.pins];
+    const nextExcluded = [...excluded];
+    const nextPins = [...pins];
     this.#exclusions = [...excluded];
     this.#mutationRevision += 1;
-    this.#writePins(() => this.#store.patch({ notice: PINS_SAVE_FAILED }));
+    this.#writePins((confirmed) => {
+      // Catalog reconciliation only adds newly visible defaults and removes
+      // missing entries. Replay that membership delta over persisted state.
+      const removedPins = beforePins.filter((pin) => !nextPins.some((candidate) => same(candidate, pin)));
+      const addedPins = nextPins.filter((pin) => !beforePins.some((candidate) => same(candidate, pin)));
+      const removedExclusions = beforeExcluded.filter((pin) => !nextExcluded.some((candidate) => same(candidate, pin)));
+      const addedExclusions = nextExcluded.filter((pin) => !beforeExcluded.some((candidate) => same(candidate, pin)));
+      const nextExclusions = confirmed.excluded.filter((pin) => !removedExclusions.some((candidate) => same(candidate, pin)));
+      for (const pin of addedExclusions) {
+        if (!nextExclusions.some((candidate) => same(candidate, pin))) nextExclusions.push(pin);
+      }
+      const next = confirmed.pins.filter((pin) => !removedPins.some((candidate) => same(candidate, pin)));
+      for (const pin of addedPins) {
+        if (!next.some((candidate) => same(candidate, pin)) && !nextExclusions.some((candidate) => same(candidate, pin))) next.push(pin);
+      }
+      return { pins: next, excluded: nextExclusions };
+    }, () => this.#store.patch({ notice: PINS_SAVE_FAILED }), false);
   }
 
-  savePin(pin: HomePin, pinned: boolean, previous: readonly HomePin[]): void {
+  savePin(pin: HomePin, pinned: boolean, _previous: readonly HomePin[]): void {
     const matches = (candidate: HomePin): boolean => same(candidate, pin);
-    const wasExcluded = this.#exclusions.some(matches);
     this.#exclusions = this.#exclusions.filter((candidate) => !matches(candidate));
     if (!pinned) this.#exclusions.push(pin);
-    const key = `${pin.kind}:${pin.id}`;
-    const revision = (this.#revisions.get(key) ?? 0) + 1;
-    this.#revisions.set(key, revision);
     this.#mutationRevision += 1;
-    this.#writePins(() => {
-      if (this.#revisions.get(key) !== revision) return;
-      this.#exclusions = this.#exclusions.filter((candidate) => !matches(candidate));
-      if (wasExcluded) this.#exclusions.push(pin);
-      const pins = this.#store.value.homePins.pins.filter((candidate) => !matches(candidate));
-      if (!pinned) pins.splice(Math.min(Math.max(previous.findIndex(matches), 0), pins.length), 0, pin);
-      this.#store.patch({ homePins: { status: "ready", pins }, notice: PINS_SAVE_FAILED });
+    this.#writePins((confirmed) => {
+      const pins = confirmed.pins.filter((candidate) => !matches(candidate));
+      if (pinned) pins.push(pin);
+      const excluded = confirmed.excluded.filter((candidate) => !matches(candidate));
+      if (!pinned) excluded.push(pin);
+      return { pins, excluded };
+    }, () => {
+      this.#store.patch({ notice: PINS_SAVE_FAILED });
     });
   }
 
@@ -248,12 +314,16 @@ export class HomePinsPersistence {
     if (index < 0 || target < 0 || target >= previous.length) return;
     const pins = [...previous];
     [pins[index], pins[target]] = [pins[target]!, pins[index]!];
-    const revision = ++this.#orderRevision;
-    const mutation = ++this.#mutationRevision;
+    this.#mutationRevision += 1;
     this.#store.patch({ homePins: { ...state.homePins, pins } });
-    this.#writePins(() => {
-      if (this.#orderRevision !== revision || this.#mutationRevision !== mutation) return;
-      this.#store.patch({ homePins: { status: "ready", pins: [...previous] }, notice: PINS_SAVE_FAILED });
-    });
+    this.#writePins((confirmed) => {
+      const next = [...confirmed.pins];
+      const currentIndex = next.findIndex((candidate) => same(candidate, pin));
+      const nextIndex = currentIndex + direction;
+      if (currentIndex >= 0 && nextIndex >= 0 && nextIndex < next.length) {
+        [next[currentIndex], next[nextIndex]] = [next[nextIndex]!, next[currentIndex]!];
+      }
+      return { pins: next, excluded: [...confirmed.excluded] };
+    }, () => this.#store.patch({ notice: PINS_SAVE_FAILED }));
   }
 }

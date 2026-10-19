@@ -2247,7 +2247,7 @@ export class EffectController {
       });
       const loaded = await module.loadPins(connection, this.#store, entryId, current);
       if (!current()) return;
-      this.#homePinsPersistence.setExclusions(loaded.excluded);
+      this.#homePinsPersistence.setExclusions(loaded.excluded, loaded.pins);
       this.#store.patch({ homePins: { status: "ready", pins: loaded.pins } });
       module.followPins(this.#store, this, entryId, current, loaded.mode);
       if (this.#store.value.resources.areas.status === "idle") void this.loadAreas();
@@ -2258,16 +2258,14 @@ export class EffectController {
   }
 
   /**
-   * Writes the pins the reducer already shows, for the owner they were
-   * changed for. Each queued write sends the list as it is when its turn
-   * comes, so a later change is never lost to an earlier snapshot, and none
-   * is sent once the owner changed. A failed write undoes only its own
-   * change, at the place the pin had (`previous` is the list before it).
+   * Replays queued shortcut changes over the last confirmed state, for the
+   * owner they were changed for. Failed changes are skipped before later
+   * intents run; owner changes prevent subsequent sends.
    */
   homePinExclusions(): readonly HomePin[] { return this.#homePinsPersistence?.exclusions() ?? []; }
 
-  saveHomePinState(excluded: readonly HomePin[]): void {
-    this.#homePinsPersistence?.saveState(excluded);
+  saveHomePinState(excluded: readonly HomePin[], pins?: readonly HomePin[]): void {
+    this.#homePinsPersistence?.saveState(excluded, pins);
   }
 
   saveHomePin(pin: HomePin, pinned: boolean, previous: readonly HomePin[]): void {

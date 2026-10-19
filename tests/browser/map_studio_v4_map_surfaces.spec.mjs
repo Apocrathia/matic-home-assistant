@@ -55,6 +55,30 @@ const drag = async (page, from, to, options = {}) => {
 };
 
 test.describe("help (map-surfaces.md §5 Help, §11 MS-HELP-01/02)", () => {
+  test("empty Home Help loads its own styled chunk and returns focus without workflow views", async ({ page }) => {
+    const workflowRequests = [];
+    const helpRequests = [];
+    page.on("request", (request) => {
+      if (request.url().includes("/chunks/workflow-panel-")) workflowRequests.push(request.url());
+      if (request.url().includes("/chunks/map-help-")) helpRequests.push(request.url());
+    });
+    const gallery = await loadGallery(page, { scenario: "home-unpinned" });
+    const help = helpButton(gallery);
+    await expect(help).toBeVisible();
+    await help.click();
+    const dialog = helpDialog(gallery);
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator("dt")).toHaveCount(3);
+    const bounds = await dialog.boundingBox();
+    expect(bounds?.width).toBeGreaterThan(0);
+    expect(bounds?.height).toBeGreaterThan(0);
+    await expect(dialog.getByRole("button", { name: "Close" })).toBeFocused();
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await expect(help).toBeFocused();
+    expect(helpRequests).toHaveLength(1);
+    expect(workflowRequests).toHaveLength(0);
+  });
+
   test("the rail shows ? whenever a map shows and nothing is locating", async ({ page }) => {
     for (const scenario of ["ready", "rooms", "draw", "history", "area-review-new"]) {
       const gallery = await loadGallery(page, { scenario });
