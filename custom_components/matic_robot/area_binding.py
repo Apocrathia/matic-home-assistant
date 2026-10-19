@@ -446,19 +446,22 @@ def _room_frame_matches(
         return False
     old_unique = set(old_landmarks)
     new_unique = set(new_landmarks)
-    # Require two distinct immutable absolute extrema from the original frame.
-    # Two fixed points determine a 2D rigid frame; edge retessellation cannot
-    # pass merely because its points remain close to the old contour.
+    # Fixed landmarks must remain the corresponding directional extrema.
+    # Merely retaining an old corner as a collinear contour vertex does not
+    # establish that the room frame is unchanged.
+    fixed_landmarks = {
+        old_point
+        for old_point, new_point in zip(old_landmarks, new_landmarks, strict=True)
+        if old_point == new_point
+    }
     room_geometry.charge_query_work(len(new))
-    current_points = {tuple(point) for point in new}
-    points = sorted(old_unique & current_points)
     room_geometry.charge_query_work(len(old))
     old_area = sum(
         old[index][0] * old[(index + 1) % len(old)][1]
         - old[(index + 1) % len(old)][0] * old[index][1]
         for index in range(len(old))
     )
-    if len(points) < 2 or old_area == 0:
+    if len(fixed_landmarks) < 2 or old_area == 0:
         return False
     for source, target in ((old_unique, new), (new_unique, old)):
         for point in source:

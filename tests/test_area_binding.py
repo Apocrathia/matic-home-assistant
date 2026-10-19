@@ -3161,6 +3161,38 @@ def test_unanchored_area_ignores_coincident_remote_extrema_edits() -> None:
     assert area_binding_status(area, changed) is AreaBindingStatus.CURRENT
 
 
+def test_room_frame_rejects_translated_contour_that_keeps_old_right_corners() -> None:
+    """Fixed contour vertices must be corresponding directional extrema."""
+    floor_plan = FloorPlan(
+        42,
+        "synthetic-partition",
+        b"synthetic-partition",
+        (_room("home", "Home", ((0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0))),),
+    )
+    area = _scoped_area(floor_plan, [{"x": 5.0, "y": 5.0, "radius": 0.2}])
+    # Translate the frame by 15 mm. Keep the old right corners as ordinary
+    # collinear contour vertices, then move one new extreme another 1 mm.
+    # This defeats the old "two shared boundary points" check without being
+    # one uniform landmark translation.
+    translated = replace(
+        floor_plan,
+        rooms=(
+            replace(
+                floor_plan.rooms[0],
+                boundary=(
+                    (0.015, 0.0),
+                    (10.0, 0.0),
+                    (10.015, 0.0),
+                    (10.016, 10.0),
+                    (10.0, 10.0),
+                    (0.015, 10.0),
+                ),
+            ),
+        ),
+    )
+    assert area_binding_status(area, translated) is AreaBindingStatus.GEOMETRY_CHANGED
+
+
 def test_translation_frame_bounds_rejects_empty_floor_plan() -> None:
     floor_plan = FloorPlan(42, "synthetic-partition", b"synthetic-partition", ())
     with pytest.raises(ValueError, match="no room geometry"):
