@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
-import { icon, iconCleaning, iconDue, iconNoticeWarning } from "./icons";
+import { repeat } from "lit/directives/repeat.js";
+import { icon, iconCleaning, iconDone, iconMoveDown, iconMoveUp, iconMenu, iconDue, iconNoticeWarning } from "./icons";
 import type { SavedArea, SavedPlan } from "./backend-contracts";
 import type { HomePin, PrimaryAction, WorkspaceIntent, WorkspaceState } from "./contracts";
 import { areaSelection, draftForPlan, selectPrimaryAction } from "./state";
@@ -20,6 +21,10 @@ export interface ShortcutHost {
   readonly t: Translate;
   /** Home is held (busy, locating, map not ready): every card says why through the home reason. */
   readonly held: boolean;
+  readonly editing: boolean;
+  readonly canReorder: boolean;
+  readonly toggleEditing: () => void;
+  readonly move: (pin: HomePin, direction: -1 | 1) => Promise<void>;
   readonly run: (pin: HomePin) => void;
   readonly emit: (intent: WorkspaceIntent) => void;
 }
@@ -47,74 +52,85 @@ const CHECK_AREA = { label: "", kind: "primary", enabled: false, id: "check-area
 // A shortcut is one button that runs (owner, 2026-10-14): it leads with the
 // play glyph, so it reads as "starts now", unlike the cards that open a
 // screen. Changing a plan or area is Your plans' or Your areas' job.
-const shortcut = (host: ShortcutHost, pin: HomePin, name: string, title: string, lines: unknown, action: PrimaryAction | null, run: string, chip: unknown) => {
+const shortcut = (host: ShortcutHost, pin: HomePin, name: string, title: string, lines: unknown, action: PrimaryAction | null, run: string, chip: unknown, position: number, total: number) => {
   const { t, held } = host;
   const enabled = !held && action?.id === run && action.enabled;
   const reasonAction = held || enabled ? null : action;
-  // Only the name is isolated (copy-style <bdi>).
-  const [before = "", after = ""] = title.split("\u0000");
-  return html`<button
-    class="ms-row ms-row--card shortcut"
-    type="button"
-    data-launcher=${`run:${pin.kind}:${pin.id}`}
-    aria-disabled=${enabled ? nothing : "true"}
-    aria-describedby=${held ? "home-reason" : nothing}
-    @click=${() => { if (enabled) host.run(pin); }}
-  >
-    <span class="ms-row__lead">${icon(iconCleaning)}</span>
-    <span class="ms-row__body">
-      <strong class="card-title"><span class="card-name">${before}<bdi>${name}</bdi>${after}</span>${chip}</strong>
-      ${lines}
-      ${reasonAction?.reason ? html`<span class="card-lines"><span class="line" data-tone="warning">${icon(iconNoticeWarning)}${actionReason(t, reasonAction, false, host.emit)}</span></span>` : nothing}
-    </span>
-  </button>`;
+  const [before = "", after = ""] = host.editing ? ["", ""] : title.split("\u0000");
+  const body = html`${host.editing ? nothing : html`<span class="ms-row__lead">${icon(iconCleaning)}</span>`}<span class="ms-row__body">
+    <strong class="card-title"><span class="card-name">${before}<bdi>${name}</bdi>${after}</span>${chip}</strong>
+    ${lines}
+    ${reasonAction?.reason ? html`<span class="card-lines"><span class="line" data-tone="warning">${icon(iconNoticeWarning)}${actionReason(t, reasonAction, false, host.emit)}</span></span>` : nothing}
+  </span>`;
+  if (host.editing) {
+    const move = (event: Event, direction: -1 | 1) => {
+      const control = event.currentTarget as HTMLButtonElement;
+      const group = control.closest(".home-shortcuts");
+      const root = group?.getRootNode();
+      const rootHost = root instanceof ShadowRoot ? root.host : null;
+      const focused = control.matches(":focus");
+      void host.move(pin, direction).then(() => {
+        if (!focused || !group?.isConnected) return;
+        let active: Element | null = document.activeElement;
+        while (active instanceof HTMLElement && active.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+        if (active && active !== document.body && active !== rootHost && active !== control) return;
+        const target = [...group.querySelectorAll<HTMLButtonElement>("button[data-shortcut-kind]")]
+          .find((candidate) => candidate.dataset.shortcutKind === pin.kind
+            && candidate.dataset.shortcutId === pin.id
+            && candidate.dataset.moveDirection === (direction < 0 ? "up" : "down"));
+        target?.focus({ preventScroll: true });
+      });
+    };
+    const atStart = position === 0;
+    const atEnd = position === total - 1;
+    return html`<div class="ms-row ms-row--card shortcut shortcut-edit">${body}${host.canReorder ? html`<span class="shortcut-order">
+      <button class="ms-btn ms-btn--icon" type="button" data-shortcut-kind=${pin.kind} data-shortcut-id=${pin.id} data-move-direction="up" aria-label=${t("v4_move_shortcut_up", "Move {shortcut} up", { shortcut: name })} aria-disabled=${String(atStart)} @click=${(event: Event) => { if (!atStart) move(event, -1); }}>${icon(iconMoveUp)}</button>
+      <button class="ms-btn ms-btn--icon" type="button" data-shortcut-kind=${pin.kind} data-shortcut-id=${pin.id} data-move-direction="down" aria-label=${t("v4_move_shortcut_down", "Move {shortcut} down", { shortcut: name })} aria-disabled=${String(atEnd)} @click=${(event: Event) => { if (!atEnd) move(event, 1); }}>${icon(iconMoveDown)}</button>
+    </span>` : nothing}</div>`;
+  }
+  return html`<button class="ms-row ms-row--card shortcut" type="button" data-launcher=${`run:${pin.kind}:${pin.id}`} aria-disabled=${enabled ? nothing : "true"}
+    aria-describedby=${held ? "home-reason" : nothing} @click=${() => { if (enabled) host.run(pin); }}>${body}</button>`;
 };
 
-const planShortcut = (host: ShortcutHost, pin: HomePin, plan: SavedPlan) => {
+const planShortcut = (host: ShortcutHost, pin: HomePin, plan: SavedPlan, position: number, total: number) => {
   const { t, state } = host;
   const action = planShortcutAction(state, plan);
   const due = plan.enabled ? dueLines(t, state.locale, plan.nextRunPreview?.rooms ?? []) : [];
-  return shortcut(
-    host, pin, plan.name, t("v4_run_named_plan", "Run {plan}", { plan: "\u0000" }),
+  return shortcut(host, pin, plan.name, t("v4_run_named_plan", "Run {plan}", { plan: "\u0000" }),
     html`<small>${planRowLine2(t, state.locale, plan)}</small>${due.length ? html`<span class="card-lines">${due.map((line) => html`<span class="line">${icon(iconDue)}${line}</span>`)}</span>` : nothing}`,
-    "label" in action ? action : null, "run-plan",
-    plan.enabled ? nothing : html`<span class="ms-chip">${t("v4_paused", "Paused")}</span>`,
-  );
+    "label" in action ? action : null, "run-plan", plan.enabled ? nothing : html`<span class="ms-chip">${t("v4_paused", "Paused")}</span>`, position, total);
 };
 
-const areaShortcut = (host: ShortcutHost, pin: HomePin, area: SavedArea) => {
+const areaShortcut = (host: ShortcutHost, pin: HomePin, area: SavedArea, position: number, total: number) => {
   const { t, state } = host;
   const action = areaShortcutAction(state, area);
-  return shortcut(
-    host, pin, area.name, t("v4_clean_named_area", "Clean {area}", { area: "\u0000" }),
-    html`<small>${settingLabel(t, area)}</small>`,
-    !("label" in action) ? null : action.id === "save-area" ? CHECK_AREA : action, "run-area",
-    nothing,
-  );
+  return shortcut(host, pin, area.name, t("v4_clean_named_area", "Clean {area}", { area: "\u0000" }), html`<small>${settingLabel(t, area)}</small>`,
+    !("label" in action) ? null : action.id === "save-area" ? CHECK_AREA : action, "run-area", nothing, position, total);
 };
 
-/** The pinned shortcuts in the order they were added, and a quiet line when they could not be read; `nothing` when neither shows. */
+/** The ordered home shortcuts and their accessible edit/reorder controls. */
 export const homeShortcuts = (host: ShortcutHost) => {
   const { state, t } = host;
-  // A catalog being reread or that failed to reread keeps its last list, as
-  // the plan's own Run view does; the gate below is that view's.
   const plans = state.resources.plans.value?.plans ?? [];
   const areas = state.resources.areas.value?.areas ?? [];
-  const rows = state.homePins.pins.flatMap((pin) => {
+  const visiblePins = state.homePins.pins.filter((pin) => pin.kind === "plan"
+    ? plans.some((candidate) => candidate.id === pin.id) : areas.some((candidate) => candidate.id === pin.id));
+  const canReorder = host.canReorder && visiblePins.length === state.homePins.pins.length;
+  const rowHost = { ...host, canReorder };
+  const rows = repeat(visiblePins, (pin) => `${pin.kind}:${pin.id}`, (pin, index) => {
     if (pin.kind === "plan") {
       const plan = plans.find((candidate) => candidate.id === pin.id);
-      return plan ? [planShortcut(host, pin, plan)] : [];
+      return plan ? planShortcut(rowHost, pin, plan, index, visiblePins.length) : nothing;
     }
     const area = areas.find((candidate) => candidate.id === pin.id);
-    return area ? [areaShortcut(host, pin, area)] : [];
+    return area ? areaShortcut(rowHost, pin, area, index, visiblePins.length) : nothing;
   });
-  // Nothing to show leaves home without a Shortcuts section.
-  if (!rows.length && state.homePins.status !== "error") return nothing;
-  return html`${rows}${state.homePins.status === "error" ? html`<p class="pins-error">${t("v4_shortcuts_unavailable", "Home Assistant couldn't load your home shortcuts.")} <button
-    class="ms-btn ms-btn--secondary"
-    type="button"
-    @click=${() => host.emit({ type: "reload-home-pins" })}
-  >${t("v4_retry", "Try again")}</button></p>` : nothing}`;
+  if (!visiblePins.length && state.homePins.status !== "error") return nothing;
+  const heading = t("v4_shortcuts_heading", "Shortcuts");
+  return html`<h3 class="ms-section-heading home-shortcuts-heading" id="shortcuts-heading">${heading}<button class="ms-btn ms-btn--icon" type="button"
+    aria-label=${host.editing ? t("v4_done_editing_home_shortcuts", "Done editing shortcuts") : t("v4_edit_home_shortcuts", "Edit shortcuts")}
+    ?disabled=${!host.editing && !canReorder} @click=${host.toggleEditing}>${icon(host.editing ? iconDone : iconMenu)}</button></h3>
+    <div class="quick-actions home-shortcuts" role="group" aria-labelledby="shortcuts-heading">${rows}${state.homePins.status === "error" ? html`<p class="pins-error">${t("v4_shortcuts_unavailable", "Home Assistant couldn't load your home shortcuts.")} <button class="ms-btn ms-btn--secondary" type="button" @click=${() => host.emit({ type: "reload-home-pins" })}>${t("v4_retry", "Try again")}</button></p>` : nothing}</div>`;
 };
 
 /**

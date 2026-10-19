@@ -2183,6 +2183,7 @@ export class EffectController {
   #resumeAreaCatalog(): void {
     const state = this.#store.value;
     if ((state.workflow === "areas" || state.workflow === "draw" || state.workflow === "areaReview" || state.workflow === "plan"
+      || state.homePins.status === "ready"
       || state.homePins.pins.some((pin) => pin.kind === "area"))
       && state.resources.areas.status === "idle") {
       void this.loadAreas();
@@ -2202,10 +2203,7 @@ export class EffectController {
   #pinsReadFor: string | null = null;
   #pinsEpoch = 0;
   #pinsToken = 0;
-  #pinsWrite: Promise<unknown> = Promise.resolve();
-  // Each toggle's revision per pin: a failed write undoes its own toggle only
-  // while no newer toggle of that pin followed (Codex PRRT_kwDOTau7uM6sOOL7).
-  #pinRevisions = new Map<string, number>();
+  #homePinsPersistence: import("./home-pins").HomePinsPersistence | null = null;
 
   #currentPinsOwner(): string | null {
     const { owner, selection } = this.#store.value;
@@ -2218,8 +2216,7 @@ export class EffectController {
     this.#pinsOwner = owner;
     this.#pinsEpoch += 1;
     this.#pinsToken += 1;
-    this.#pinsWrite = Promise.resolve();
-    this.#pinRevisions.clear();
+    this.#homePinsPersistence?.reset();
     if (this.#store.value.homePins.status !== "idle" || this.#store.value.homePins.pins.length) {
       this.#store.patch({ homePins: { status: "idle", pins: [] } });
     }
@@ -2241,10 +2238,19 @@ export class EffectController {
     this.#store.patch({ homePins: { status: "loading", pins: [] } });
     try {
       const module = await import("./home-pins");
-      const pins = await module.loadPins(connection, this.#store, entryId, current);
+      this.#homePinsPersistence ??= new module.HomePinsPersistence(this.#store, connection, {
+        owner: () => this.#pinsOwner,
+        currentOwner: () => this.#currentPinsOwner(),
+        epoch: () => this.#pinsEpoch,
+        disposed: () => this.#disposed,
+        onWrite: () => this.#resumeAreaCatalog(),
+      });
+      const loaded = await module.loadPins(connection, this.#store, entryId, current);
       if (!current()) return;
-      this.#store.patch({ homePins: { status: "ready", pins: pins ?? [] } });
-      module.followPins(this.#store, this, entryId, current, !pins);
+      this.#homePinsPersistence.setExclusions(loaded.excluded);
+      this.#store.patch({ homePins: { status: "ready", pins: loaded.pins } });
+      module.followPins(this.#store, this, entryId, current, loaded.mode);
+      if (this.#store.value.resources.areas.status === "idle") void this.loadAreas();
       this.#resumeAreaCatalog();
     } catch {
       if (current()) this.#store.patch({ homePins: { status: "error", pins: [] } });
@@ -2258,36 +2264,20 @@ export class EffectController {
    * is sent once the owner changed. A failed write undoes only its own
    * change, at the place the pin had (`previous` is the list before it).
    */
-  saveHomePin(pin: HomePin, pinned: boolean, previous: readonly HomePin[]): void {
-    const entryId = this.#store.value.selection.entryId;
-    const connection = this.#workspaceConnection;
-    const owner = this.#pinsOwner;
-    const epoch = this.#pinsEpoch;
-    if (!entryId || !connection || !owner || owner !== this.#currentPinsOwner()
-      || this.#store.value.homePins.status !== "ready") return;
-    const same = (candidate: HomePin): boolean => candidate.kind === pin.kind && candidate.id === pin.id;
-    const key = `${pin.kind}:${pin.id}`;
-    const revision = (this.#pinRevisions.get(key) ?? 0) + 1;
-    this.#pinRevisions.set(key, revision);
-    const current = (): boolean => !this.#disposed && epoch === this.#pinsEpoch
-      && this.#currentPinsOwner() === owner && this.#store.value.homePins.status === "ready";
-    this.#pinsWrite = this.#pinsWrite.then(async () => {
-      const module = await import("./home-pins");
-      if (!current()) return;
-      try {
-        await module.writePins(connection, entryId, this.#store.value.homePins.pins, current);
-        if (current()) this.#resumeAreaCatalog();
-      } catch {
-        if (!current()) return;
-        // A newer toggle of this pin stands: its own write sends the whole
-        // list again and reports its own failure.
-        if (this.#pinRevisions.get(key) !== revision) return;
-        const pins = this.#store.value.homePins.pins.filter((candidate) => !same(candidate));
-        if (!pinned) pins.splice(Math.min(Math.max(previous.findIndex(same), 0), pins.length), 0, pin);
-        this.#store.patch({ homePins: { status: "ready", pins }, notice: module.PINS_SAVE_FAILED });
-      }
-    }).catch(() => undefined);
+  homePinExclusions(): readonly HomePin[] { return this.#homePinsPersistence?.exclusions() ?? []; }
+
+  saveHomePinState(excluded: readonly HomePin[]): void {
+    this.#homePinsPersistence?.saveState(excluded);
   }
+
+  saveHomePin(pin: HomePin, pinned: boolean, previous: readonly HomePin[]): void {
+    this.#homePinsPersistence?.savePin(pin, pinned, previous);
+  }
+
+  moveHomePin(pin: HomePin, direction: -1 | 1): void {
+    this.#homePinsPersistence?.move(pin, direction);
+  }
+
 
   async loadAreas({ reconcileDraft = true }: { reconcileDraft?: boolean } = {}): Promise<AreasCatalog | null> {
     if (!this.#pageLifecycle.active) {

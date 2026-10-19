@@ -43,6 +43,7 @@ from .area_binding import (
     MAP_BINDING_VERSION,
     SCOPED_MAP_BINDING_VERSION,
     AreaBindingStatus,
+    _graft_legacy_room_frame_boundaries,
     _room_geometry_index,
     area_binding_status,
     binding_for_area,
@@ -2477,8 +2478,12 @@ class CleaningPlanManager:
             }:
                 if room_geometry is None:
                     room_geometry = _room_geometry_index(floor_plan)
+                current_room_anchors: list[dict[str, Any]] = []
                 status = area_binding_status(
-                    area, floor_plan, room_geometry=room_geometry
+                    area,
+                    floor_plan,
+                    room_geometry=room_geometry,
+                    _current_room_anchors=current_room_anchors,
                 )
             else:
                 # Whole-map bindings can reject mission, partition, or map
@@ -2493,10 +2498,23 @@ class CleaningPlanManager:
             if version == SCOPED_MAP_BINDING_VERSION and str(
                 binding.get("geometry_sha256", "")
             ).casefold() != floor_plan_geometry_fingerprint(floor_plan):
-                # Old anchors lack the original room outline. Only enrich an
-                # exact original map, never turn a tolerated offset into a new
-                # reference and accumulate drift on subsequent restarts.
-                pending = True
+                try:
+                    # Keep the index and work budget already used by status.
+                    assert room_geometry is not None
+                    grafted_binding = _graft_legacy_room_frame_boundaries(
+                        binding,
+                        current_room_anchors,
+                        room_geometry=room_geometry,
+                    )
+                except GeometryTooComplex:
+                    # Exact anchor-only migration shares the status query's
+                    # request budget and fails closed when that budget ends.
+                    return AreaBindingUpgradeResult(0, True)
+                if grafted_binding is None:
+                    # Do not partially commit another migration if a candidate
+                    # legacy frame cannot be proven without rebasing.
+                    return AreaBindingUpgradeResult(0, True)
+                staged.append((area, grafted_binding))
                 continue
             if room_geometry is None:
                 room_geometry = _room_geometry_index(floor_plan)

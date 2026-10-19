@@ -28,7 +28,12 @@ export const shellWorkflowStyles = css`
 
     /* One-tap shortcuts share a quiet surface; navigation keeps separate cards.
        Whole-row targets and full names/due lines keep actions easy to identify. */
+    .home-shortcuts-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--ms-space-2); }
+    .home-shortcuts-heading .ms-btn--icon { flex: none; margin-inline-start: auto; }
     .quick-actions.home-shortcuts { gap: 0; border: 1px solid var(--ms-line); border-radius: var(--ms-radius-lg); }
+    .home-shortcuts .shortcut-edit { cursor: default; }
+    .home-shortcuts .shortcut-edit .ms-row__body { flex: 1; }
+    .shortcut-order { display: flex; flex: none; gap: var(--ms-space-1); }
     .home-shortcuts .shortcut { --ms-local: light-dark(color-mix(in srgb, var(--ms-accent) 4%, var(--ms-surface-card)), color-mix(in srgb, var(--ms-accent) 8%, var(--ms-surface-card))); border-color: transparent; border-radius: 0; }
     .home-shortcuts .shortcut:first-child { border-start-start-radius: var(--ms-radius-lg); border-start-end-radius: var(--ms-radius-lg); }
     .home-shortcuts .shortcut:last-child { border-end-start-radius: var(--ms-radius-lg); border-end-end-radius: var(--ms-radius-lg); }

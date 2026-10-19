@@ -37,8 +37,7 @@ export { actionReason, drawCancel, drawExit, focusPlanTarget, planCancel, planTi
 // Dialogs that only these views' controls open carry their copy, launcher and
 // confirm here.
 export { confirmDialog, dialogCopy, dialogLauncher, dialogReturnTarget } from "./dialog-copy";
-export { MapOptions } from "./map-options";
-export { drawRecipes, renderMapHelp } from "./map-help";
+export { drawRecipes } from "./draw-recipes";
 export { roomTapAnnouncement, roomsGripLine, roomsSummary } from "./rooms-view";
 export { shellWorkflowStyles } from "./workflow-styles";
 export { homeShortcuts } from "./home-shortcuts";

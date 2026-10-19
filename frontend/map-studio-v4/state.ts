@@ -718,6 +718,7 @@ export const reduceWorkspace = (
       // Shown at once; the effects write it and put it back if the write fails.
       if (state.homePins.status !== "ready") return state;
       const { kind, id } = intent.pin;
+      if (state.homePins.pins.some((pin) => pin.kind === kind && pin.id === id) === intent.pinned) return state;
       const pins = state.homePins.pins.filter((pin) => pin.kind !== kind || pin.id !== id);
       return { ...state, homePins: { ...state.homePins, pins: intent.pinned ? [...pins, { kind, id }] : pins } };
     }

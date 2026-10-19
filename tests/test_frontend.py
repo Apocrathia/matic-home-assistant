@@ -318,10 +318,13 @@ def test_rooms_view_ships_in_the_lazy_workflow_chunk() -> None:
         assert marker in workflow
 
 
-def test_map_help_ships_in_the_lazy_workflow_chunk() -> None:
-    """Help opens from a loaded workflow, so its rows load with the views (UX5 R2)."""
+def test_map_help_ships_in_a_separate_lazy_chunk() -> None:
+    """Keep navigation recipes in their own reachable chunk outside startup."""
     startup = _startup_source()
-    workflow = _STUDIO_V4_WORKFLOW_CHUNK_PATHS[0].read_text(encoding="utf-8")
+    help_chunks = list(_STUDIO_V4_CHUNK_DIRECTORY.glob("map-help-*.js"))
+    assert len(help_chunks) == 1
+    assert help_chunks[0].name in startup
+    help_source = help_chunks[0].read_text(encoding="utf-8")
     for marker in ("twist two fingers", "Space-drag to move"):
         assert marker not in startup
-        assert marker in workflow
+        assert marker in help_source

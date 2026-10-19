@@ -261,7 +261,17 @@ export class MaticMapPanelV4 extends LitElement {
     }
     if (intent.type === "set-home-pin") {
       const before = this.#store.value;
-      if (this.#store.dispatch(intent) !== before) this.#effects?.saveHomePin(intent.pin, intent.pinned, before.homePins.pins);
+      if (before.homePins.status === "ready"
+        && before.homePins.pins.some((pin) => pin.kind === intent.pin.kind && pin.id === intent.pin.id) !== intent.pinned) {
+        // Update the follower's exclusions before dispatch notifies it; otherwise
+        // its synchronous catalog reconciliation can undo this explicit choice.
+        this.#effects?.saveHomePin(intent.pin, intent.pinned, before.homePins.pins);
+        this.#store.dispatch(intent);
+      }
+      return;
+    }
+    if (intent.type === "move-home-pin") {
+      this.#effects?.moveHomePin(intent.pin, intent.direction);
       return;
     }
     if (intent.type === "reload-home-pins") {

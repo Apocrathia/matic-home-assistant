@@ -389,6 +389,37 @@ def _room_polygon_fingerprint(polygon: Sequence[Sequence[int]]) -> str:
     return digest.hexdigest()
 
 
+def _legacy_room_frame_bounds_mode(
+    saved: Mapping[str, Any], current: Mapping[str, Any]
+) -> bool | None:
+    """Return whether legacy bounds match exactly, including the old x bug."""
+    current_bounds = current["bounds"]
+    saved_bounds = saved["bounds"]
+    new = current["boundary_mm"]
+    if saved_bounds == current_bounds:
+        return False
+    # Old writers used the final canonical vertex x instead of max(x). Accept
+    # only that exact representation here; the normal legacy comparison may
+    # tolerate small differences, which is insufficient to create a snapshot.
+    legacy_bounds = [*current_bounds]
+    legacy_bounds[2] = new[-1][0]
+    if saved_bounds == legacy_bounds:
+        return True
+    return None
+
+
+def _legacy_room_frame_matches_exactly(
+    saved: Mapping[str, Any], current: Mapping[str, Any]
+) -> bool:
+    """Prove the old translation-free anchor and its exact absolute origin."""
+    return (
+        bool(current.get("boundary_mm"))
+        and str(saved.get("fingerprint", "")).casefold()
+        == str(current.get("fingerprint", "")).casefold()
+        and _legacy_room_frame_bounds_mode(saved, current) is not None
+    )
+
+
 def _room_frame_matches(
     saved: Mapping[str, Any],
     current: Mapping[str, Any],
@@ -408,21 +439,7 @@ def _room_frame_matches(
         # Legacy V3 anchors lack the immutable polygon snapshot. They can
         # establish an unchanged frame only when both their translation-free
         # shape fingerprint and absolute bounds are exactly unchanged.
-        current_bounds = current.get("bounds")
-        saved_bounds = saved.get("bounds")
-        bounds_match = saved_bounds == current_bounds
-        if not bounds_match and new and isinstance(current_bounds, list):
-            # Preserve the old last-vertex-as-max-x representation only when
-            # it matches exactly; the normal legacy comparison is tolerant.
-            legacy_bounds = [*current_bounds]
-            legacy_bounds[2] = new[-1][0]
-            bounds_match = saved_bounds == legacy_bounds
-        return (
-            bool(new)
-            and str(saved["fingerprint"]).casefold()
-            == str(current["fingerprint"]).casefold()
-            and bounds_match
-        )
+        return _legacy_room_frame_matches_exactly(saved, current)
     if not new:
         return False
     room_geometry.charge_query_work(len(old) + len(new))
@@ -572,15 +589,17 @@ def _translation_room_anchors(
     """Persist frame anchors only for rooms containing saved circle centers."""
     if len(floor_plan.rooms) > _MAX_TRANSLATION_ROOM_ANCHORS:
         raise ValueError("too many rooms for scoped area frame anchors")
-    rooms = [
-        {
-            "room_id": room.id,
-            "name": room.name,
-            "boundary": [list(point) for point in room.boundary],
-        }
-        for room in floor_plan.rooms
-    ]
-    room_geometry = room_geometry or RoomGeometryIndex(rooms)
+    if room_geometry is None:
+        room_geometry = RoomGeometryIndex(
+            [
+                {
+                    "room_id": room.id,
+                    "name": room.name,
+                    "boundary": [list(point) for point in room.boundary],
+                }
+                for room in floor_plan.rooms
+            ]
+        )
     circle_keys_by_room: dict[int, set[str]] = {}
     association_count = 0
     for circle in circles:
@@ -603,6 +622,7 @@ def _translation_room_anchors(
         circle_keys = circle_keys_by_room.get(index)
         if not circle_keys:
             continue
+        room_geometry.charge_query_work(len(room.boundary))
         polygon = _canonical_polygon(room.boundary)
         point_count += len(polygon)
         if point_count > _MAX_ROOM_FRAME_POINTS:
@@ -622,6 +642,69 @@ def _translation_room_anchors(
             }
         )
     return anchors
+
+
+def _graft_legacy_room_frame_boundaries(
+    binding: Mapping[str, Any],
+    current_anchors: Sequence[Mapping[str, Any]],
+    *,
+    room_geometry: RoomGeometryIndex,
+) -> MapBinding | None:
+    """Graft snapshots onto a status-validated legacy V3 binding.
+
+    Caller must have verified CURRENT status after a changed whole-map digest
+    and supplied anchors generated from the current floor plan. Thus saved
+    fields, circle coverage, current anchor fields, boundaries, and bounds have
+    already passed their respective validators. Keep the extra uniqueness and
+    exact per-room association checks here because CURRENT permits subset
+    associations and does not reject duplicate saved room keys.
+    """
+    saved_anchors = binding["translation_room_anchors"]
+    room_geometry.charge_query_work(len(saved_anchors) + len(current_anchors))
+    current_by_room_key = {
+        anchor["room_key"].casefold(): anchor for anchor in current_anchors
+    }
+    saved_room_keys: set[str] = set()
+    for anchor in saved_anchors:
+        room_geometry.charge_query_work(len(anchor["circle_keys"]))
+        room_key = anchor["room_key"].casefold()
+        if room_key in saved_room_keys:
+            return None
+        saved_room_keys.add(room_key)
+    updated_anchors = [dict(anchor) for anchor in saved_anchors]
+    for saved_anchor, updated_anchor in zip(
+        saved_anchors, updated_anchors, strict=True
+    ):
+        room_key = saved_anchor["room_key"].casefold()
+        # CURRENT status proved that every saved room key resolves to a
+        # generated current anchor with a subset of the saved circle set.
+        current_anchor = current_by_room_key[room_key]
+        saved_keys = {str(key).casefold() for key in saved_anchor["circle_keys"]}
+        current_keys = current_anchor["circle_keys"]
+        room_geometry.charge_query_work(len(current_keys))
+        normalized_current_keys = {str(key).casefold() for key in current_keys}
+        if "boundary_mm" in saved_anchor:
+            # Mixed legacy and snapshot anchors are valid during staged
+            # migrations; CURRENT status verified this existing snapshot.
+            continue
+        # A snapshot may only be added when this room still has the exact old
+        # canonical shape, absolute origin, and circle association. The normal
+        # status check permits subset associations, so require equality here.
+        if (
+            saved_keys != normalized_current_keys
+            or not _legacy_room_frame_matches_exactly(saved_anchor, current_anchor)
+        ):
+            return None
+        boundary = current_anchor["boundary_mm"]
+        room_geometry.charge_query_work(len(boundary))
+        updated_anchor["boundary_mm"] = [list(point) for point in boundary]
+        if _legacy_room_frame_bounds_mode(saved_anchor, current_anchor):
+            # The exact frame proof above established the historical bugged
+            # bounds; normalize them because a v3 snapshot requires true bounds.
+            updated_anchor["bounds"] = list(current_anchor["bounds"])
+    updated_binding = dict(binding)
+    updated_binding["translation_room_anchors"] = updated_anchors
+    return updated_binding
 
 
 def binding_for_area(
@@ -1037,8 +1120,11 @@ def area_binding_status(
     floor_plan: FloorPlan,
     *,
     room_geometry: RoomGeometryIndex | None = None,
+    _current_room_anchors: list[dict[str, Any]] | None = None,
 ) -> AreaBindingStatus:
     """Compare one saved area with the current floor plan without guessing."""
+    if _current_room_anchors is not None:
+        _current_room_anchors.clear()
     schema_version = area.get("schema_version")
     if schema_version is None:
         return AreaBindingStatus.LEGACY
@@ -1204,6 +1290,8 @@ def area_binding_status(
                     return AreaBindingStatus.GEOMETRY_CHANGED
             except GeometryTooComplex:
                 return AreaBindingStatus.GEOMETRY_CHANGED
+        if _current_room_anchors is not None:
+            _current_room_anchors.extend(current_anchors)
     local_geometry = _local_geometry_fingerprint(shape, occupancy, segments)
     if str(saved["local_geometry_sha256"]).casefold() == local_geometry:
         if (

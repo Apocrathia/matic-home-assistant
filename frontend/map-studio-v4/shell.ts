@@ -463,6 +463,7 @@ export class MaticMapShellV4 extends LitElement {
   // editor and hands it to the canvas, so the sheet is the one place a failure
   // of either, building included, is said.
   readonly #views = new LazyChunk(this, () => this.#workflowModule());
+  readonly #mapHelpView = new LazyChunk(this, () => import("./map-help"));
   readonly #outline = new LazyChunk(this, async () => {
     const [{ OutlineEditor }, geometry] = await Promise.all([
       import("./outline-editor"),
@@ -470,10 +471,15 @@ export class MaticMapShellV4 extends LitElement {
     ]);
     return new OutlineEditor(geometry);
   });
-  // The Map options menu (map-options.ts) ships in the views chunk, which a
-  // module of its own would split the shared lit chunk for, and loads on its
-  // first press; that press opens it once the load has settled.
-  readonly #options: LazyChunk<MapOptions> = new LazyChunk(this, async () => new (await this.#workflowModule()).MapOptions(this));
+  // The menu has its own small lazy module; the first press opens it once the
+  // module and menu controller have settled.
+  readonly #options: LazyChunk<MapOptions> = new LazyChunk(this, async () => {
+    const [{ MapOptions },] = await Promise.all([
+      import("./map-options"),
+      this.#workflowModule(),
+    ]);
+    return new MapOptions(this);
+  });
   #optionsPending = false;
   // The workflow a Try again reload was pressed in (lazy-chunk.ts).
   #resume = takeResume();
@@ -506,6 +512,8 @@ export class MaticMapShellV4 extends LitElement {
   // Home stays on screen meanwhile (owner, 2026-10-14): Run plan needs the
   // plan's Run view in the store (effects.ts run-plan), never on screen.
   #pinRun: string | null = null;
+  #editingHomeShortcuts = false;
+  #shortcutsOwner: string | null = null;
   #workflowStyled = false;
 
   // The views chunk brings the shell rules its markup needs (workflow-styles.ts,
@@ -1316,6 +1324,7 @@ export class MaticMapShellV4 extends LitElement {
     this.#helpLauncher = launcher;
     this.#helpCoarse = window.matchMedia("(any-pointer: coarse)").matches;
     this.#views.request();
+    this.#mapHelpView.request();
     this._helpOpen = true;
   }
 
@@ -1615,11 +1624,7 @@ export class MaticMapShellV4 extends LitElement {
           >${t("v4_retry", "Try again")}</button>
         </div>
       ` : nothing}
-      ${shortcuts === nothing ? nothing : html`
-        <h3 class="ms-section-heading" id="shortcuts-heading">${t("v4_shortcuts_heading", "Shortcuts")}</h3>
-        <div class="quick-actions home-shortcuts" role="group" aria-labelledby="shortcuts-heading">${shortcuts}</div>
-        <h3 class="ms-section-heading">${t("v4_more_ways_heading", "More ways to clean")}</h3>
-      `}
+      ${shortcuts === nothing ? nothing : html`${shortcuts}<h3 class="ms-section-heading">${t("v4_more_ways_heading", "More ways to clean")}</h3>`}
       <div class="quick-actions" role="group" aria-label=${t("v4_cleaning_choices", "Cleaning choices")}>
         ${card("rooms", shortcuts === nothing, iconRobot, roomsDisabled,
           t("v4_clean_rooms", "Clean rooms"),
@@ -1638,12 +1643,22 @@ export class MaticMapShellV4 extends LitElement {
   // read to show. A shortcut's tap is its screen's own primary action.
   #shortcuts(state: WorkspaceState, held: boolean) {
     const { status, pins } = state.homePins;
+    const owner = state.owner && state.selection.entryId ? JSON.stringify([state.owner.userKey, state.selection.entryId]) : null;
+    if (owner !== this.#shortcutsOwner || !pins.length) this.#editingHomeShortcuts = false;
+    this.#shortcutsOwner = owner;
     if (status !== "error" && !pins.length) return nothing;
     this.#views.request();
     return this.#views.value?.homeShortcuts({
       state,
       t: this.#tr,
       held,
+      editing: this.#editingHomeShortcuts,
+      canReorder: state.resources.plans.status === "ready" && state.resources.areas.status === "ready",
+      toggleEditing: () => { this.#editingHomeShortcuts = !this.#editingHomeShortcuts; this.requestUpdate(); },
+      move: (pin, direction) => {
+        this.#intent({ type: "move-home-pin", pin, direction });
+        return this.updateComplete.then(() => undefined);
+      },
       emit: (intent: WorkspaceIntent) => this.#intent(intent),
       run: (pin: HomePin) => {
         // Run plan needs its Run view (effects.ts run-plan), which home
@@ -1805,9 +1820,9 @@ export class MaticMapShellV4 extends LitElement {
     const sheetOffset = state.fullMap ? "--map-sheet-offset:calc(var(--ms-control-lg) + 3 * var(--ms-space-3))"
       : narrow ? `--map-sheet-offset:${this._sheetOffset}px` : "--map-sheet-offset:0px";
     const showDrawTools = narrow && state.workflow === "draw";
-    const help = !this._helpOpen ? null : this.#views.value
-      ? this.#views.value.renderMapHelp({ state, coarse: this.#helpCoarse, t: (key, fallback) => this.#t(key, fallback), close: () => this.#closeHelp(true) })
-      : chunkStatus(this.#views.status, this.localize, this.#retry);
+    const help = !this._helpOpen ? null : this.#mapHelpView.value
+      ? this.#mapHelpView.value.renderMapHelp({ state, coarse: this.#helpCoarse, t: (key, fallback) => this.#t(key, fallback), close: () => this.#closeHelp(true) })
+      : chunkStatus(this.#mapHelpView.status, this.localize, this.#retry);
     const precisionOpen = state.precisionOpen && state.workflow === "draw";
     // Success and error always toast; info and warning only while the slot is
     // off-screen (sheet at peek, or Full map).
