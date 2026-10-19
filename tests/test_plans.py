@@ -1668,6 +1668,47 @@ async def test_custom_areas_round_trip_by_id_and_name_without_snapshot(hass) -> 
     assert manager.areas("serial") == {}
 
 
+async def test_saved_area_frame_point_limit_is_aggregate_and_replacement_safe(
+    hass,
+) -> None:
+    manager = CleaningPlanManager(hass)
+    manager._store = SimpleNamespace(async_save=AsyncMock())
+    floor = FloorPlan(
+        42,
+        "partition",
+        b"partition",
+        (
+            Room(
+                "room",
+                "Room",
+                "protocol",
+                b"room",
+                ((0, 0), (10, 0), (10, 10), (0, 10)),
+            ),
+        ),
+    )
+    circles = [{"x": 5.0, "y": 5.0, "radius": 0.2}]
+    area = {
+        "schema_version": AREA_SCHEMA_VERSION,
+        "name": "Area",
+        "circles": circles,
+        "cleaning_mode": "vacuum",
+        "coverage_setting": "standard",
+        "map_binding": binding_for_area(floor, circles),
+    }
+    with patch.object(plans_module, "_MAX_PERSISTED_ROOM_FRAME_POINTS_PER_ROBOT", 8):
+        await manager.async_save_area("serial", "first", area)
+        await manager.async_save_area("serial", "second", area)
+        before = manager.areas("serial")
+        with pytest.raises(ValueError, match="aggregate room frame"):
+            await manager.async_save_area("serial", "third", area)
+        assert manager.areas("serial") == before
+        assert manager._store.async_save.await_count == 2
+        # Replacing an existing area subtracts its previous snapshot first.
+        await manager.async_save_area("serial", "first", area)
+    assert manager._store.async_save.await_count == 3
+
+
 async def test_current_v1_area_bindings_upgrade_automatically(hass) -> None:
     manager = CleaningPlanManager(hass)
     manager._store = SimpleNamespace(async_save=AsyncMock())

@@ -38,6 +38,7 @@ from homeassistant.util.file import WriteError
 from homeassistant.util.json import SerializationError
 
 from .area_binding import (
+    _MAX_PERSISTED_ROOM_FRAME_POINTS_PER_ROBOT,
     HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
     MAP_BINDING_VERSION,
     SCOPED_MAP_BINDING_VERSION,
@@ -46,6 +47,8 @@ from .area_binding import (
     area_binding_status,
     binding_for_area,
     floor_plan_geometry_fingerprint,
+    room_frame_point_count,
+    total_room_frame_point_count,
 )
 from .area_geometry import GeometryTooComplex
 from .cadence import (
@@ -2402,11 +2405,16 @@ class CleaningPlanManager:
 
         async def commit(_lease: _MetadataLockLease) -> AreaBindingUpgradeResult:
             async with self._store_lock:
-                result = await self._async_upgrade_area_bindings_transaction(
-                    serial_number, floor_plan
-                )
-                if result.upgraded:
-                    await self._store.async_save(self._data)
+                areas_before = deepcopy(self._robot(serial_number)["areas"])
+                try:
+                    result = await self._async_upgrade_area_bindings_transaction(
+                        serial_number, floor_plan
+                    )
+                    if result.upgraded:
+                        await self._store.async_save(self._data)
+                except BaseException:
+                    self._robot(serial_number)["areas"] = areas_before
+                    raise
                 return result
 
         def notify_if_upgraded(result: AreaBindingUpgradeResult) -> None:
@@ -2425,7 +2433,9 @@ class CleaningPlanManager:
         upgraded = 0
         pending = False
         room_geometry = None
-        for area in self._robot(serial_number)["areas"].values():
+        areas = self._robot(serial_number)["areas"]
+        staged: list[tuple[MutableMapping[str, Any], dict[str, Any]]] = []
+        for area in areas.values():
             if not isinstance(area, MutableMapping):
                 continue
             binding = area.get("map_binding")
@@ -2498,6 +2508,15 @@ class CleaningPlanManager:
                 continue
             except KeyError, TypeError, ValueError:
                 continue
+            staged.append((area, upgraded_binding))
+        projected_points = total_room_frame_point_count(areas)
+        for area, upgraded_binding in staged:
+            projected_points += room_frame_point_count(
+                {"map_binding": upgraded_binding}
+            ) - room_frame_point_count(area)
+        if projected_points > _MAX_PERSISTED_ROOM_FRAME_POINTS_PER_ROBOT:
+            return AreaBindingUpgradeResult(0, True)
+        for area, upgraded_binding in staged:
             area["map_binding"] = upgraded_binding
             upgraded += 1
         return AreaBindingUpgradeResult(upgraded, pending)
@@ -2521,6 +2540,14 @@ class CleaningPlanManager:
         """Create or replace a private local drawn-area definition."""
 
         def save(robot: dict[str, Any]) -> None:
+            areas = robot["areas"]
+            projected_points = (
+                total_room_frame_point_count(areas)
+                - room_frame_point_count(areas.get(area_id, {}))
+                + room_frame_point_count(area)
+            )
+            if projected_points > _MAX_PERSISTED_ROOM_FRAME_POINTS_PER_ROBOT:
+                raise ValueError("aggregate room frame boundary point limit exceeded")
             robot["areas"][area_id] = deepcopy(dict(area))
             robot["selected_area"] = area_id
 

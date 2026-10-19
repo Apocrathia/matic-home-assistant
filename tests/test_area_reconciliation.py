@@ -1,5 +1,6 @@
 """Automatic custom-area recovery keeps the original spatial reference."""
 
+import math
 from copy import deepcopy
 from dataclasses import replace
 from types import SimpleNamespace
@@ -13,6 +14,7 @@ from custom_components.matic_robot.client.models import FloorPlan, Room
 from custom_components.matic_robot.plans import (
     AreaBindingUpgradeResult,
     CleaningPlanManager,
+    PlanAreaMapChangedError,
 )
 from custom_components.matic_robot.services import _validated_area_command
 
@@ -109,6 +111,92 @@ def test_room_retessellation_does_not_invalidate_an_interior_area():
     assert (
         binding.area_binding_status(area, current) is binding.AreaBindingStatus.CURRENT
     )
+
+
+@pytest.mark.parametrize("offset", [(0.001, 0), (0.015, 0), (0, 0.015), (0.015, 0.015)])
+def test_small_single_room_translation_does_not_keep_stale_area_frame(offset):
+    original = _floor()
+    remote = Room(
+        "remote", "Remote", "remote", b"remote", ((20, 0), (30, 0), (30, 10), (20, 10))
+    )
+    original = replace(original, rooms=(*original.rooms, remote))
+    area = _area(original)
+    dx, dy = offset
+    moved = replace(
+        original,
+        rooms=(
+            replace(
+                original.rooms[0],
+                boundary=tuple((x + dx, y + dy) for x, y in original.rooms[0].boundary),
+            ),
+            remote,
+        ),
+    )
+    assert (
+        binding.translation_invariant_geometry_fingerprint(moved)
+        != area["map_binding"]["translation_invariant_geometry_sha256"]
+    )
+    assert (
+        binding.area_binding_status(area, moved)
+        is binding.AreaBindingStatus.GEOMETRY_CHANGED
+    )
+
+
+def test_small_centered_room_rotation_does_not_keep_stale_area_frame():
+    original = _floor()
+    remote = Room(
+        "remote", "Remote", "remote", b"remote", ((20, 0), (30, 0), (30, 10), (20, 10))
+    )
+    original = replace(original, rooms=(*original.rooms, remote))
+    area = _area(original)
+    angle = 0.0005
+    cos_angle, sin_angle = math.cos(angle), math.sin(angle)
+    rotated_boundary = tuple(
+        (
+            5 + cos_angle * (x - 5) - sin_angle * (y - 5),
+            5 + sin_angle * (x - 5) + cos_angle * (y - 5),
+        )
+        for x, y in original.rooms[0].boundary
+    )
+    rotated = replace(
+        original,
+        rooms=(replace(original.rooms[0], boundary=rotated_boundary), remote),
+    )
+    assert (
+        binding.area_binding_status(area, rotated)
+        is binding.AreaBindingStatus.GEOMETRY_CHANGED
+    )
+
+
+async def test_moved_room_blocks_saved_plan_preview(hass):
+    original = _floor()
+    remote = Room(
+        "remote", "Remote", "remote", b"remote", ((20, 0), (30, 0), (30, 10), (20, 10))
+    )
+    original = replace(original, rooms=(*original.rooms, remote))
+    area = _area(original)
+    moved = replace(
+        original,
+        rooms=(
+            replace(
+                original.rooms[0],
+                boundary=tuple((x + 0.015, y) for x, y in original.rooms[0].boundary),
+            ),
+            remote,
+        ),
+    )
+    manager = CleaningPlanManager(hass)
+    manager._robot("serial")["areas"]["area"] = area
+    with pytest.raises(PlanAreaMapChangedError):
+        manager._preview_area(
+            "serial",
+            {
+                "area_id": "area",
+                "cleaning_mode": "vacuum",
+                "coverage_setting": "standard",
+            },
+            moved,
+        )
 
 
 def test_legacy_bounds_bug_does_not_invalidate_unchanged_room_after_remote_edit():
@@ -240,3 +328,37 @@ async def test_legacy_upgrade_does_not_rebase_tolerated_remote_map_changes(hass)
     ) == AreaBindingUpgradeResult(0, True)
     manager._store.async_save.assert_not_awaited()
     assert manager.areas("serial")["area"] == area
+
+
+async def test_legacy_enrichment_respects_aggregate_frame_point_limit(hass):
+    floor = _floor()
+    legacy = _area(floor)
+    legacy["map_binding"]["translation_room_anchors"][0].pop("boundary_mm")
+    manager = CleaningPlanManager(hass)
+    manager._store = SimpleNamespace(async_save=AsyncMock())
+    manager._robot("serial")["areas"] = {
+        "legacy": deepcopy(legacy),
+        "existing": _area(floor),
+    }
+    before = deepcopy(manager.areas("serial"))
+    with patch(
+        "custom_components.matic_robot.plans._MAX_PERSISTED_ROOM_FRAME_POINTS_PER_ROBOT",
+        6,
+    ):
+        result = await manager.async_upgrade_area_bindings("serial", floor)
+    assert result == AreaBindingUpgradeResult(0, True)
+    manager._store.async_save.assert_not_awaited()
+    assert manager.areas("serial") == before
+
+
+async def test_legacy_enrichment_rolls_back_when_store_write_fails(hass):
+    floor = _floor()
+    legacy = _area(floor)
+    legacy["map_binding"]["translation_room_anchors"][0].pop("boundary_mm")
+    manager = CleaningPlanManager(hass)
+    manager._store = SimpleNamespace(async_save=AsyncMock(side_effect=OSError("disk")))
+    manager._robot("serial")["areas"]["legacy"] = deepcopy(legacy)
+    before = manager.areas("serial")
+    with pytest.raises(OSError, match="disk"):
+        await manager.async_upgrade_area_bindings("serial", floor)
+    assert manager.areas("serial") == before

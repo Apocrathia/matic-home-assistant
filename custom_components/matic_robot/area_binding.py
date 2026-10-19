@@ -71,6 +71,7 @@ _MAX_SIGNED_64 = (1 << 63) - 1
 _MAX_TRANSLATION_ROOM_ANCHORS = 256
 _MAX_TRANSLATION_ROOM_CIRCLE_ASSOCIATIONS = 8_192
 _MAX_ROOM_FRAME_POINTS = MAX_FLOOR_PLAN_BOUNDARY_POINTS
+_MAX_PERSISTED_ROOM_FRAME_POINTS_PER_ROBOT = MAX_FLOOR_PLAN_BOUNDARY_POINTS
 _AREA_REPAIR_LEARN_MORE_URL = (
     "https://github.com/ProspectOre/matic-home-assistant/"
     "blob/main/docs/cleaning.md#custom-areas"
@@ -389,6 +390,70 @@ def _room_polygon_fingerprint(polygon: Sequence[Sequence[int]]) -> str:
     return digest.hexdigest()
 
 
+def _is_small_rigid_rotation(
+    old: Sequence[Sequence[int]], new: Sequence[Sequence[int]]
+) -> bool:
+    """Recognize a same-vertex room rotated within boundary tolerance."""
+    if len(old) != len(new) or len(old) < 3:
+        return False
+    old_center = (
+        sum(point[0] for point in old) / len(old),
+        sum(point[1] for point in old) / len(old),
+    )
+    new_center = (
+        sum(point[0] for point in new) / len(new),
+        sum(point[1] for point in new) / len(new),
+    )
+    count = len(old)
+    candidates = sorted(
+        (
+            (old[0][0] - point[0]) ** 2 + (old[0][1] - point[1]) ** 2,
+            index,
+        )
+        for index, point in enumerate(new)
+    )
+    max_distance = _ROOM_FRAME_TOLERANCE_MILLIMETERS**2
+    candidate_indices = [
+        index for distance, index in candidates[:8] if distance <= max_distance
+    ]
+    for reverse in (False, True):
+        for shift in candidate_indices:
+            cosine = sine = 0.0
+            for index, (old_x, old_y) in enumerate(old):
+                new_x, new_y = new[(shift + (index if not reverse else -index)) % count]
+                x, y = old_x - old_center[0], old_y - old_center[1]
+                u, v = new_x - new_center[0], new_y - new_center[1]
+                cosine += x * u + y * v
+                sine += x * v - y * u
+            angle = math.atan2(sine, cosine)
+            if abs(angle) <= 1e-6:
+                continue
+            cos_angle, sin_angle = math.cos(angle), math.sin(angle)
+            if all(
+                math.hypot(
+                    new_x
+                    - new_center[0]
+                    - (
+                        cos_angle * (old_x - old_center[0])
+                        - sin_angle * (old_y - old_center[1])
+                    ),
+                    new_y
+                    - new_center[1]
+                    - (
+                        sin_angle * (old_x - old_center[0])
+                        + cos_angle * (old_y - old_center[1])
+                    ),
+                )
+                <= 0.75
+                for index, (old_x, old_y) in enumerate(old)
+                for new_x, new_y in (
+                    new[(shift + (index if not reverse else -index)) % count],
+                )
+            ):
+                return True
+    return False
+
+
 def _room_frame_matches(
     saved: Mapping[str, Any],
     current: Mapping[str, Any],
@@ -402,13 +467,33 @@ def _room_frame_matches(
     local walls and occupancy must still pass the independent area checks.
     Never replace the saved reference with a tolerated intermediate map.
     """
-    if str(saved["fingerprint"]).casefold() == str(current["fingerprint"]).casefold():
-        return True
     old: list[list[int]] | None = saved.get("boundary_mm")
     new: list[list[int]] | None = current.get("boundary_mm")
+    same_fingerprint = (
+        str(saved["fingerprint"]).casefold() == str(current["fingerprint"]).casefold()
+    )
+    if same_fingerprint and (not old or not new):
+        return True
     if not old or not new:
         return False
+    if old == new:
+        return True
+    if _is_small_rigid_rotation(old, new):
+        return False
+    # Translation-normalized fingerprints intentionally ignore origin. Reject
+    # a rigid displacement of the room frame even when it is smaller than the
+    # contour-refinement tolerance; otherwise anchored areas retain stale
+    # coordinates after a room moves a few millimeters.
     directions = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1))
+    deltas: set[_QuantizedPoint] = set()
+    for dx, dy in directions:
+        old_extreme = max(old, key=lambda p: (p[0] * dx + p[1] * dy, p[0], p[1]))
+        new_extreme = max(new, key=lambda p: (p[0] * dx + p[1] * dy, p[0], p[1]))
+        deltas.add((new_extreme[0] - old_extreme[0], new_extreme[1] - old_extreme[1]))
+    if len(deltas) == 1:
+        delta_x, delta_y = next(iter(deltas))
+        if delta_x or delta_y:
+            return False
     for source, target in ((old, new), (new, old)):
         room_geometry.charge_query_work(len(source) * len(directions))
         landmarks: set[_QuantizedPoint] = set()
@@ -436,6 +521,33 @@ def _room_frame_matches(
             else:
                 return False
     return True
+
+
+def room_frame_point_count(area: Mapping[str, Any]) -> int:
+    """Count persisted room-frame boundary vertices in one saved area."""
+    binding = area.get("map_binding")
+    anchors = (
+        binding.get("translation_room_anchors")
+        if isinstance(binding, Mapping)
+        else None
+    )
+    if not isinstance(anchors, list):
+        return 0
+    return sum(
+        len(points)
+        for anchor in anchors
+        if isinstance(anchor, Mapping)
+        and isinstance((points := anchor.get("boundary_mm")), list)
+    )
+
+
+def total_room_frame_point_count(areas: Mapping[str, Any]) -> int:
+    """Count all persisted room-frame boundary vertices for one robot."""
+    return sum(
+        room_frame_point_count(area)
+        for area in areas.values()
+        if isinstance(area, Mapping)
+    )
 
 
 def _room_anchor_bounds_match(
