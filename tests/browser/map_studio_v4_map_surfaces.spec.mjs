@@ -62,6 +62,7 @@ test.describe("help (map-surfaces.md §5 Help, §11 MS-HELP-01/02)", () => {
       return route.abort();
     });
     const gallery = await loadGallery(page, { scenario: "home-unpinned", narrow: true });
+    await gallery.evaluate((element) => { element.ownerDocument.documentElement.dir = "rtl"; });
     const launcher = optionsButton(gallery);
     await launcher.click();
     const menu = optionsMenu(gallery);
@@ -75,10 +76,16 @@ test.describe("help (map-surfaces.md §5 Help, §11 MS-HELP-01/02)", () => {
       after: getComputedStyle(element, "::after").width,
     }))).toEqual({ before: "24px", after: "18px" });
     const checked = await names.getAttribute("aria-checked");
+    const thumb = names.locator(".ms-switch");
+    const inlineStart = () => thumb.evaluate((element) => Number.parseFloat(getComputedStyle(element, "::after").insetInlineStart));
+    const before = await inlineStart();
     await names.click();
     await expect(names).toHaveAttribute("aria-checked", String(checked !== "true"));
+    if (checked === "true") await expect.poll(inlineStart).toBeLessThan(before);
+    else await expect.poll(inlineStart).toBeGreaterThan(before);
     await names.click();
     await expect(names).toHaveAttribute("aria-checked", checked);
+    await expect.poll(inlineStart).toBe(before);
     await page.keyboard.press("Escape");
     await expect(menu).toHaveCount(0);
     await expect(launcher).toBeFocused();

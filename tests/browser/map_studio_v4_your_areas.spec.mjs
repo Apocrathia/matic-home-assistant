@@ -290,6 +290,19 @@ test.describe("home shortcuts", () => {
     await expect(runButton(gallery, "Entryway")).toHaveAccessibleName(/^Clean Entryway Vacuum · Optimal$/);
   });
 
+  test("Show on home switches move their thumb toward the inline end in either direction", async ({ page }) => {
+    for (const dir of ["ltr", "rtl"]) {
+      const gallery = await loadGallery(page, { scenario: "area-review-saved", dir });
+      const pin = gallery.getByRole("switch", { name: "Show on home" });
+      await expect(pin).toHaveAttribute("aria-checked", "false");
+      const inlineStart = () => pin.evaluate((element) => Number.parseFloat(getComputedStyle(element, "::after").insetInlineStart));
+      const uncheckedStart = await inlineStart();
+      await pin.click();
+      await expect(pin).toHaveAttribute("aria-checked", "true");
+      await expect.poll(inlineStart).toBeGreaterThan(uncheckedStart);
+    }
+  });
+
   test("the switch waits while shortcuts load, says why after a failed read, and is absent without user data", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "plan-saved-intelligent" });
     const pin = gallery.getByRole("switch", { name: "Show on home" });
