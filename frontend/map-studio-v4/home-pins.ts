@@ -158,7 +158,7 @@ interface PersistedPinsState {
 type PinsMutation = (confirmed: PersistedPinsState) => PersistedPinsState;
 interface PendingPinsWrite {
   readonly mutation: PinsMutation;
-  reconcileStoreOnSettle: boolean;
+  readonly kind: "catalog" | "user";
 }
 
 
@@ -181,6 +181,8 @@ export class HomePinsPersistence {
   #pending: PendingPinsWrite[] = [];
   #pendingWrites = 0;
   #queueGeneration = 0;
+  #deferredCatalogMutations: PinsMutation[] = [];
+  #reconcileUserMutationOnSettle = false;
 
   constructor(
     store: WorkspaceStore,
@@ -205,6 +207,8 @@ export class HomePinsPersistence {
     this.#confirmedExclusions = [];
     this.#pending = [];
     this.#pendingWrites = 0;
+    this.#deferredCatalogMutations = [];
+    this.#reconcileUserMutationOnSettle = false;
     this.#queueGeneration += 1;
     this.#mutationRevision += 1;
   }
@@ -213,17 +217,20 @@ export class HomePinsPersistence {
     this.#exclusions = [...excluded];
     this.#confirmedPins = [...pins];
     this.#confirmedExclusions = [...excluded];
+    this.#deferredCatalogMutations = [];
+    this.#reconcileUserMutationOnSettle = false;
   }
   exclusions(): readonly HomePin[] { return this.#exclusions; }
 
-  #writePins(mutationIntent: PinsMutation, onFailure: () => void, reconcileStoreOnSettle = true): void {
+  #writePins(mutationIntent: PinsMutation, onFailure: () => void, kind: PendingPinsWrite["kind"] = "user"): void {
     const entryId = this.#store.value.selection.entryId;
     const owner = this.#context.owner();
     const epoch = this.#context.epoch();
     if (!entryId || !owner || owner !== this.#context.currentOwner() || this.#store.value.homePins.status !== "ready") return;
     const current = (): boolean => !this.#context.disposed() && epoch === this.#context.epoch()
       && this.#context.currentOwner() === owner && this.#store.value.homePins.status === "ready";
-    const entry = { mutation: mutationIntent, reconcileStoreOnSettle };
+    const entry: PendingPinsWrite = { mutation: mutationIntent, kind };
+    if (kind === "user") this.#reconcileUserMutationOnSettle = true;
     this.#pending.push(entry);
     this.#pendingWrites += 1;
     const generation = this.#queueGeneration;
@@ -237,26 +244,45 @@ export class HomePinsPersistence {
         // Replay this intent over the latest confirmed state. A failed earlier
         // write is absent from the base, so later operations remain ordered
         // without positional inverse guesses or stale payloads.
-        const next = entry.mutation({ pins: [...this.#confirmedPins], excluded: [...this.#confirmedExclusions] });
+        let next: PersistedPinsState = { pins: [...this.#confirmedPins], excluded: [...this.#confirmedExclusions] };
+        // A failed catalog migration/cleanup is not retried by itself. Keep
+        // its semantic delta so the next real write can carry it forward.
+        for (const deferred of this.#deferredCatalogMutations) {
+          next = deferred({ pins: [...next.pins], excluded: [...next.excluded] });
+        }
+        next = entry.mutation({ pins: [...next.pins], excluded: [...next.excluded] });
         await writePins(this.#connection, entryId, next.pins, next.excluded, current);
         if (current()) {
           succeeded = true;
           this.#confirmedPins = [...next.pins];
           this.#confirmedExclusions = [...next.excluded];
+          this.#deferredCatalogMutations = [];
           this.#context.onWrite();
         }
       } catch {
-        if (current()) onFailure();
+        if (current()) {
+          if (entry.kind === "catalog") this.#deferredCatalogMutations.push(entry.mutation);
+          onFailure();
+        }
       } finally {
         if (generation === this.#queueGeneration) {
           this.#pendingWrites -= 1;
           if (this.#pendingWrites === 0 && current() && mutation === this.#mutationRevision
-            && (entry.reconcileStoreOnSettle || succeeded)) {
-            this.#exclusions = [...this.#confirmedExclusions];
+            && (this.#reconcileUserMutationOnSettle || succeeded)) {
+            let visible: PersistedPinsState = {
+              pins: [...this.#confirmedPins], excluded: [...this.#confirmedExclusions],
+            };
+            // Keep failed catalog reconciliation visible without retrying it
+            // on the store patch; roll back only the failed user intent.
+            for (const deferred of this.#deferredCatalogMutations) {
+              visible = deferred({ pins: [...visible.pins], excluded: [...visible.excluded] });
+            }
+            this.#exclusions = [...visible.excluded];
             const state = this.#store.value;
             if (state.homePins.status === "ready") {
-              this.#store.patch({ homePins: { ...state.homePins, pins: [...this.#confirmedPins] } });
+              this.#store.patch({ homePins: { ...state.homePins, pins: [...visible.pins] } });
             }
+            this.#reconcileUserMutationOnSettle = false;
           }
         }
       }
@@ -286,7 +312,7 @@ export class HomePinsPersistence {
         if (!next.some((candidate) => same(candidate, pin)) && !nextExclusions.some((candidate) => same(candidate, pin))) next.push(pin);
       }
       return { pins: next, excluded: nextExclusions };
-    }, () => this.#store.patch({ notice: PINS_SAVE_FAILED }), false);
+    }, () => this.#store.patch({ notice: PINS_SAVE_FAILED }), "catalog");
   }
 
   savePin(pin: HomePin, pinned: boolean, _previous: readonly HomePin[]): void {

@@ -229,6 +229,71 @@ test("a failed write undoes only its own toggle, never a newer one of the same p
   expect(stored).toEqual([plan("daily")]);
 });
 
+test("a failed pin save is rolled back after a queued catalog save also fails, and survives reload", async ({ page }) => {
+  await setup(page, { u1: record([plan("daily")]) });
+  await page.evaluate(() => { window.pinsHarness.planIds = ["daily"]; window.pinsHarness.areaIds = []; });
+  await sync(page, "u1", "synthetic-entry");
+  await expect.poll(() => pins(page)).toMatchObject({ status: "ready", pins: [plan("daily")] });
+  const baseline = await page.evaluate(() => window.pinsHarness.sets);
+  await hold(page, "frontend/set_user_data");
+  await page.evaluate(() => {
+    const h = window.pinsHarness;
+    const pin = { kind: "plan", id: "daily" };
+    h.controller.saveHomePin(pin, false, h.store.value.homePins.pins);
+    h.store.dispatch({ type: "set-home-pin", pin, pinned: false });
+  });
+  await expect.poll(() => heldCount(page)).toBe(1);
+  await page.evaluate((baseline) => {
+    const h = window.pinsHarness;
+    h.failSetAt = baseline + 1;
+    h.failSetAlso = baseline + 2;
+  }, baseline);
+  await reloadPlans(page, ["daily", "new-catalog-plan"], "daily");
+  await releaseIgnoringFailure(page, 0);
+  await expect.poll(() => page.evaluate(() => window.pinsHarness.sets)).toBe(baseline + 2);
+  // Reconcile the failed user toggle while retaining the catalog addition;
+  // that visible state prevents the store subscription from retrying cleanup.
+  await expect.poll(() => pins(page)).toMatchObject({ status: "ready", pins: [plan("daily"), plan("new-catalog-plan")] });
+  expect(await storedPins(page, "u1", "synthetic-entry")).toEqual([plan("daily")]);
+  await reloadPlans(page, ["daily", "new-catalog-plan"], "daily");
+  await page.waitForTimeout(50);
+  expect(await page.evaluate(() => window.pinsHarness.sets)).toBe(baseline + 2);
+
+  // A fresh controller reads the confirmed user choice, so the failed toggle
+  // cannot disappear from the UI and then unexpectedly return on reload.
+  await page.evaluate(() => {
+    const h = window.pinsHarness;
+    h.reloaded = h.make();
+    h.reloaded.sync("u1", "synthetic-entry");
+  });
+  await expect.poll(() => page.evaluate(() => window.pinsHarness.reloaded.store.value.homePins)).toMatchObject({
+    status: "ready", pins: expect.arrayContaining([plan("daily")]),
+  });
+});
+
+test("a successful user toggle carries forward failed legacy migration exclusions", async ({ page }) => {
+  await setup(page, { u1: { [keyOf("synthetic-entry")]: { pins: [plan("daily")] } } });
+  await page.evaluate(() => { window.pinsHarness.failSetAt = 1; });
+  await sync(page, "u1", "synthetic-entry");
+  await expect.poll(() => page.evaluate(() => window.pinsHarness.sets)).toBe(1);
+  await expect.poll(() => pins(page)).toMatchObject({ status: "ready", pins: [plan("daily")] });
+  await page.evaluate(() => {
+    const h = window.pinsHarness;
+    const pin = { kind: "plan", id: "daily" };
+    h.controller.saveHomePin(pin, false, h.store.value.homePins.pins);
+    h.store.dispatch({ type: "set-home-pin", pin, pinned: false });
+  });
+  await expect.poll(() => page.evaluate((key) => window.pinsHarness.data.u1[key], keyOf("synthetic-entry"))).toMatchObject({
+    version: 2, pins: [], excluded: expect.arrayContaining(ALL),
+  });
+  await page.evaluate(() => {
+    const h = window.pinsHarness;
+    h.reloaded = h.make();
+    h.reloaded.sync("u1", "synthetic-entry");
+  });
+  await expect.poll(() => page.evaluate(() => window.pinsHarness.reloaded.store.value.homePins)).toMatchObject({ status: "ready", pins: [] });
+});
+
 test("queued same-pin moves keep the last successful order when a later move fails", async ({ page }) => {
   const initial = [plan("daily"), plan("weekend"), plan("fresh"), plan("stale")];
   await setup(page, { u1: record(initial) });
