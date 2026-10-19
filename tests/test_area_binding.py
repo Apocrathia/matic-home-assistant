@@ -3195,28 +3195,39 @@ def test_room_frame_rejects_translated_contour_that_keeps_old_right_corners() ->
 
 
 @pytest.mark.parametrize(
-    ("boundary", "circle"),
+    ("boundary", "circle", "angle"),
     [
         (
             ((0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 0.2)),
             {"x": 8.0, "y": 7.0, "radius": 0.2},
+            0.00065,
+        ),
+        (
+            ((0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 0.2)),
+            {"x": 8.0, "y": 7.0, "radius": 0.2},
+            0.0015,
         ),
         (
             ((0.0, 0.0), (10.0, 0.0), (10.0, 0.3), (0.0, 0.3)),
             {"x": 8.0, "y": 0.15, "radius": 0.05},
+            0.0015,
         ),
         (
             ((0.0, 0.0), (30.0, 0.0), (30.0, 0.3), (0.0, 0.3)),
             {"x": 24.0, "y": 0.15, "radius": 0.05},
+            0.0015,
         ),
         (
             ((0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)),
             {"x": 8.0, "y": 7.0, "radius": 0.2},
+            0.0015,
         ),
     ],
 )
 def test_room_frame_rejects_rotation_with_short_edge_fixed_extrema(
-    boundary: tuple[tuple[float, float], ...], circle: dict[str, float]
+    boundary: tuple[tuple[float, float], ...],
+    circle: dict[str, float],
+    angle: float,
 ) -> None:
     """Rounded short-edge extrema cannot anchor an otherwise rotated frame."""
     floor_plan = FloorPlan(
@@ -3226,7 +3237,6 @@ def test_room_frame_rejects_rotation_with_short_edge_fixed_extrema(
         (_room("home", "Home", boundary),),
     )
     area = _scoped_area(floor_plan, [circle])
-    angle = 0.0015
     cosine = math.cos(angle)
     sine = math.sin(angle)
     rotated = replace(
@@ -3243,10 +3253,10 @@ def test_room_frame_rejects_rotation_with_short_edge_fixed_extrema(
 
     saved_anchor = area["map_binding"]["translation_room_anchors"][0]
     current_anchor = area_binding_module._translation_room_anchors(rotated, [circle])[0]
+    assert area_binding_status(area, rotated) is AreaBindingStatus.GEOMETRY_CHANGED
     assert not area_binding_module._room_frame_matches(
         saved_anchor, current_anchor, area_binding_module._room_geometry_index(rotated)
     )
-    assert area_binding_status(area, rotated) is AreaBindingStatus.GEOMETRY_CHANGED
 
 
 def test_room_frame_accepts_one_millimeter_corner_refinement() -> None:
