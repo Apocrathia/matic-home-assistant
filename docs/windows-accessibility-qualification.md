@@ -30,6 +30,12 @@ setting; Playwright's default `none` would override the system preference. The
 prior native probe (39179377481) observed Windows High Contrast enabled but
 Edge forced colors disabled, so that run remains unqualified and provides no
 NVDA acceptance evidence.
+At initial candidate head `258c503` (based on rc31), probe 39182402998 verified
+Edge forced colors active and the fixture scene ready with this setting. It
+then failed because NVDA queued no whitelisted speech during OS Tab navigation.
+Overall qualification remains unqualified: keyboard-focus, queued-speech, and
+audible-output proof are absent, and cleanup reported a scheme mismatch
+although the High Contrast flags were restored.
 Native Windows keyboard input sends Tab to the focused Edge window, then NVDA's
 Insert+Tab report-focus command. A temporary NVDA global plugin passively
 observes the documented `speech.extensions.pre_speechQueued` action and
