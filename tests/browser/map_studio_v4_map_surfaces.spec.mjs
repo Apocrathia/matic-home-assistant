@@ -137,22 +137,40 @@ test.describe("help (map-surfaces.md §5 Help, §11 MS-HELP-01/02)", () => {
   test("short landscape keeps map help visible and in the viewport", async ({ page }) => {
     const gallery = await loadGallery(page, {
       scenario: "ready",
+      narrow: true,
       viewport: { width: 844, height: 390 },
     });
+    await gallery.locator(".stage").evaluate((stage) => {
+      Object.assign(stage.style, { blockSize: "100dvh", minBlockSize: "0", maxInlineSize: "none" });
+    });
     const canvas = canvasOf(gallery);
-    await canvas.evaluate((element) => element.setAttribute("data-short", ""));
+    await expect(canvas).toHaveAttribute("narrow", "");
+    await expect(canvas).toHaveAttribute("data-short", "");
+    const panel = panelOf(gallery);
+    await expect(panel).toHaveAttribute("data-detent", "full");
 
     const help = helpButton(gallery);
     await expect(help).toBeVisible();
     await help.click();
     const dialog = helpDialog(gallery);
     await expect(dialog).toBeVisible();
+    await expect(panel).toHaveAttribute("data-detent", "peek");
+    expect(await rows(dialog)).toEqual({
+      Trackpad: "Scroll to move the map · pinch to zoom · twist to rotate",
+      Mouse: "Drag to move the map · wheel to zoom",
+      Keyboard: "WASD or arrows to move · +/− to zoom · 0 to fit",
+    });
     const bounds = await dialog.boundingBox();
     expect(bounds).not.toBeNull();
+    expect(bounds.height).toBeGreaterThan(80);
     expect(bounds.x).toBeGreaterThanOrEqual(0);
     expect(bounds.x + bounds.width).toBeLessThanOrEqual(844);
     expect(bounds.y).toBeGreaterThanOrEqual(0);
     expect(bounds.y + bounds.height).toBeLessThanOrEqual(390);
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(panel).toHaveAttribute("data-detent", "full");
+    await expect(help).toBeFocused();
   });
 
   test("a fine pointer reads Trackpad, Mouse and Keyboard rows for the one gesture model", async ({ page }) => {

@@ -449,6 +449,7 @@ export class MaticMapShellV4 extends LitElement {
   protected _helpOpen = false;
   #helpLauncher: HTMLElement | null = null;
   #helpCoarse = false;
+  #helpReturnDetent: SheetDetent | null = null;
   protected _sheetDetent: SheetDetent = "half";
   // The two live regions (shell.md §4 rule 6). Each holds only its newest
   // message: the polite one for detent, status title and non-error notices,
@@ -1318,12 +1319,21 @@ export class MaticMapShellV4 extends LitElement {
   #openHelp(launcher: HTMLElement | null): void {
     this.#helpLauncher = launcher;
     this.#helpCoarse = window.matchMedia("(any-pointer: coarse)").matches;
+    if ((this._measuredNarrow ?? this.state.narrowHint) && !this.state.fullMap && this._sheetDetent === "full") {
+      this.#helpReturnDetent = "full";
+      this.#setDetent("peek");
+    } else {
+      this.#helpReturnDetent = null;
+    }
     this.#mapHelpView.request();
     this._helpOpen = true;
   }
 
   #closeHelp(restoreFocus: boolean): void {
     this._helpOpen = false;
+    const returnDetent = restoreFocus ? this.#helpReturnDetent : null;
+    this.#helpReturnDetent = null;
+    if (returnDetent && this._sheetDetent === "peek") this.#setDetent(returnDetent);
     if (restoreFocus) this.#helpLauncher?.focus();
   }
 

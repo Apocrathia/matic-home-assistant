@@ -50,6 +50,7 @@ export const renderMapHelp = ({ state, coarse, t, close }: MapHelpContext) => {
       .map-rail:has(.appearance-switch) { --help-top: calc(2 * var(--row)); }
       .map-root:has(.selection-chip) .map-rail { --help-bottom: calc(116px + 4rem); }
       :host([narrow]) .map-rail { --help-bottom: calc(var(--map-sheet-offset, 0px) + 44px + var(--ms-space-2)); }
+      :host([narrow]) .map-rail:has(.navigation-help) { --help-bottom: calc(var(--map-sheet-offset, 0px) + var(--ms-space-2)); }
       .map-rail:has(.map-chip) { --help-top: calc(2 * var(--row)); }
       .map-rail:has(.map-chip):has(.appearance-switch) { --help-top: calc(3 * var(--row)); }
       .navigation-help { position: absolute; inset-block-start: var(--help-top); inset-inline-end: 0; max-block-size: calc(100% - var(--help-top) - var(--help-bottom)); overflow: auto; box-sizing: border-box; inline-size: 22rem; max-inline-size: 100%; padding: 0.8rem 0.9rem; font-size: 0.74rem; line-height: 1.45; }
