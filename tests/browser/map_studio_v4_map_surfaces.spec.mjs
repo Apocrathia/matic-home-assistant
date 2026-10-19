@@ -55,6 +55,67 @@ const drag = async (page, from, to, options = {}) => {
 };
 
 test.describe("help (map-surfaces.md §5 Help, §11 MS-HELP-01/02)", () => {
+  test("empty Home Map options stays styled when workflow downloads are blocked", async ({ page }) => {
+    const workflowRequests = [];
+    await page.route("**/chunks/workflow-panel-*", (route) => {
+      workflowRequests.push(route.request().url());
+      return route.abort();
+    });
+    const gallery = await loadGallery(page, { scenario: "home-unpinned", narrow: true });
+    await gallery.evaluate((element) => { element.ownerDocument.documentElement.dir = "rtl"; });
+    const launcher = optionsButton(gallery);
+    await launcher.click();
+    const menu = optionsMenu(gallery);
+    await expect(menu).toBeVisible();
+    await expect(menu).toHaveCSS("position", "absolute");
+    await expect(menu).toHaveCSS("display", "grid");
+    const names = menu.getByRole("menuitemcheckbox", { name: "Room names" });
+    await expect(names).toBeVisible();
+    expect(await names.locator(".ms-switch").evaluate((element) => ({
+      before: getComputedStyle(element, "::before").height,
+      after: getComputedStyle(element, "::after").width,
+    }))).toEqual({ before: "24px", after: "18px" });
+    const checked = await names.getAttribute("aria-checked");
+    const thumb = names.locator(".ms-switch");
+    const inlineStart = () => thumb.evaluate((element) => Number.parseFloat(getComputedStyle(element, "::after").insetInlineStart));
+    const before = await inlineStart();
+    await names.click();
+    await expect(names).toHaveAttribute("aria-checked", String(checked !== "true"));
+    if (checked === "true") await expect.poll(inlineStart).toBeLessThan(before);
+    else await expect.poll(inlineStart).toBeGreaterThan(before);
+    await names.click();
+    await expect(names).toHaveAttribute("aria-checked", checked);
+    await expect.poll(inlineStart).toBe(before);
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(launcher).toBeFocused();
+    expect(workflowRequests).toHaveLength(0);
+  });
+
+  test("empty Home Help loads its own styled chunk and returns focus without workflow views", async ({ page }) => {
+    const workflowRequests = [];
+    const helpRequests = [];
+    page.on("request", (request) => {
+      if (request.url().includes("/chunks/workflow-panel-")) workflowRequests.push(request.url());
+      if (request.url().includes("/chunks/map-help-")) helpRequests.push(request.url());
+    });
+    const gallery = await loadGallery(page, { scenario: "home-unpinned" });
+    const help = helpButton(gallery);
+    await expect(help).toBeVisible();
+    await help.click();
+    const dialog = helpDialog(gallery);
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator("dt")).toHaveCount(3);
+    const bounds = await dialog.boundingBox();
+    expect(bounds?.width).toBeGreaterThan(0);
+    expect(bounds?.height).toBeGreaterThan(0);
+    await expect(dialog.getByRole("button", { name: "Close" })).toBeFocused();
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await expect(help).toBeFocused();
+    expect(helpRequests).toHaveLength(1);
+    expect(workflowRequests).toHaveLength(0);
+  });
+
   test("the rail shows ? whenever a map shows and nothing is locating", async ({ page }) => {
     for (const scenario of ["ready", "rooms", "draw", "history", "area-review-new"]) {
       const gallery = await loadGallery(page, { scenario });
@@ -78,6 +139,79 @@ test.describe("help (map-surfaces.md §5 Help, §11 MS-HELP-01/02)", () => {
     await expect(canvas.getByRole("button", { name: "Fit the whole map on screen" })).toBeVisible();
     await expect(canvas.getByRole("button", { name: "Room names" })).toBeVisible();
     await expect(helpButton(retained)).toBeVisible();
+  });
+
+  test("short landscape keeps map help visible and in the viewport", async ({ page }) => {
+    const gallery = await loadGallery(page, {
+      scenario: "ready",
+      narrow: true,
+      viewport: { width: 844, height: 390 },
+    });
+    await gallery.locator(".stage").evaluate((stage) => {
+      Object.assign(stage.style, { blockSize: "100dvh", minBlockSize: "0", maxInlineSize: "none" });
+    });
+    const canvas = canvasOf(gallery);
+    await expect(canvas).toHaveAttribute("narrow", "");
+    await expect(canvas).toHaveAttribute("data-short", "");
+    const panel = panelOf(gallery);
+    await expect(panel).toHaveAttribute("data-detent", "full");
+
+    const help = helpButton(gallery);
+    await expect(help).toBeVisible();
+    await help.click();
+    const dialog = helpDialog(gallery);
+    await expect(dialog).toBeVisible();
+    await expect(panel).toHaveAttribute("data-detent", "peek");
+    const expand = panel.getByRole("button", { name: "Expand panel", exact: true });
+    await expect(expand).toBeDisabled();
+    await expand.click({ force: true });
+    await expect(panel).toHaveAttribute("data-detent", "peek");
+    const handleBounds = await panel.locator(".sheet-handle").boundingBox();
+    expect(handleBounds).not.toBeNull();
+    await page.mouse.move(handleBounds.x + handleBounds.width / 2, handleBounds.y + handleBounds.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(handleBounds.x + handleBounds.width / 2, handleBounds.y - 80);
+    await page.mouse.up();
+    await expect(panel).toHaveAttribute("data-detent", "peek");
+    await gallery.locator("button.skip-link").nth(1).evaluate((button) => button.click());
+    await expect(panel).toHaveAttribute("data-detent", "peek");
+    expect(await rows(dialog)).toEqual({
+      Trackpad: "Scroll to move the map · pinch to zoom · twist to rotate",
+      Mouse: "Drag to move the map · wheel to zoom",
+      Keyboard: "WASD or arrows to move · +/− to zoom · 0 to fit",
+    });
+    const bounds = await dialog.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds.height).toBeGreaterThan(80);
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(844);
+    expect(bounds.y).toBeGreaterThanOrEqual(0);
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(390);
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(panel).toHaveAttribute("data-detent", "full");
+    await expect(help).toBeFocused();
+  });
+
+  test("short narrow Help stays between the floor/view controls and Fit", async ({ page }) => {
+    const gallery = await loadGallery(page, {
+      scenario: "ready",
+      narrow: true,
+      viewport: { width: 390, height: 390 },
+    });
+    await gallery.locator(".stage").evaluate((stage) => {
+      Object.assign(stage.style, { blockSize: "100dvh", minBlockSize: "0", maxInlineSize: "none" });
+    });
+    const canvas = canvasOf(gallery);
+    await expect(canvas).toHaveAttribute("data-short", "");
+    const helpBounds = await helpButton(gallery).boundingBox();
+    const contextBounds = await canvas.locator(".map-context").boundingBox();
+    const fitBounds = await canvas.getByRole("button", { name: "Fit the whole map on screen" }).boundingBox();
+    expect(helpBounds).not.toBeNull();
+    expect(contextBounds).not.toBeNull();
+    expect(fitBounds).not.toBeNull();
+    expect(helpBounds.x).toBeGreaterThanOrEqual(contextBounds.x + contextBounds.width);
+    expect(helpBounds.x + helpBounds.width).toBeLessThanOrEqual(fitBounds.x);
   });
 
   test("a fine pointer reads Trackpad, Mouse and Keyboard rows for the one gesture model", async ({ page }) => {

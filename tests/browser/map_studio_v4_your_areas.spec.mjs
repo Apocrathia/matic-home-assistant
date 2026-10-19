@@ -290,6 +290,19 @@ test.describe("home shortcuts", () => {
     await expect(runButton(gallery, "Entryway")).toHaveAccessibleName(/^Clean Entryway Vacuum · Optimal$/);
   });
 
+  test("Show on home switches move their thumb toward the inline end in either direction", async ({ page }) => {
+    for (const dir of ["ltr", "rtl"]) {
+      const gallery = await loadGallery(page, { scenario: "area-review-saved", dir });
+      const pin = gallery.getByRole("switch", { name: "Show on home" });
+      await expect(pin).toHaveAttribute("aria-checked", "false");
+      const inlineStart = () => pin.evaluate((element) => Number.parseFloat(getComputedStyle(element, "::after").insetInlineStart));
+      const uncheckedStart = await inlineStart();
+      await pin.click();
+      await expect(pin).toHaveAttribute("aria-checked", "true");
+      await expect.poll(inlineStart).toBeGreaterThan(uncheckedStart);
+    }
+  });
+
   test("the switch waits while shortcuts load, says why after a failed read, and is absent without user data", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "plan-saved-intelligent" });
     const pin = gallery.getByRole("switch", { name: "Show on home" });
@@ -563,6 +576,12 @@ const PLAN_CATALOG = {
 // One user-data key per robot (Codex PRRT_kwDOTau7uM6sPDWX).
 const KEY = "matic_robot_home_shortcuts.synthetic-entry";
 const OTHER = "matic_robot_home_shortcuts.other-entry";
+const AREA_CATALOG = {
+  scene_url: "/api/matic_robot/slam_scene/synthetic",
+  rooms: [],
+  areas: [{ id: "entryway", name: "Entryway", circles: [{ x: 0, y: 0, radius: 0.2 }], cleaning_mode: "vacuum", coverage_setting: "standard", status: "current", can_rebind: false }],
+  selected_area: null,
+};
 
 async function mountPanel(page, options) {
   const fixture = await installPanelFixture(page, { initialPlanCatalog: PLAN_CATALOG, ...options });
@@ -582,32 +601,83 @@ const pins = (page) => page.evaluate(() => window.__pinPanel.getWorkspaceSnapsho
 const stored = (page) => page.evaluate((keys) => Object.fromEntries(keys.map((key) => [key, window.__panelFixture.userData()[key]]).filter(([, value]) => value !== undefined)), [KEY, OTHER]);
 
 test.describe("home shortcuts in Home Assistant's user data", () => {
-  test("the default plan becomes the first shortcut once; a cleared list stays cleared", async ({ page }) => {
-    const panel = await mountPanel(page, { userData: {} });
-    await expect.poll(() => pins(page)).toEqual({ status: "ready", pins: [{ kind: "plan", id: "daily" }] });
-    expect(await stored(page)).toEqual({ [KEY]: { pins: [{ kind: "plan", id: "daily" }] } });
-    await expect(panel.locator("button.shortcut")).toHaveAccessibleName(/^Run Daily clean/);
+  test("a new record shows all saved plans and areas; a cleared list stays cleared", async ({ page }) => {
+    const panel = await mountPanel(page, { initialAreasCatalog: AREA_CATALOG, userData: {} });
+    await expect.poll(() => pins(page)).toEqual({ status: "ready", pins: [{ kind: "plan", id: "daily" }, { kind: "area", id: "entryway" }] });
+    expect(await stored(page)).toEqual({ [KEY]: { version: 2, pins: [{ kind: "plan", id: "daily" }, { kind: "area", id: "entryway" }], excluded: [] } });
+    await expect(panel.locator("button.shortcut")).toHaveCount(2);
 
-    const cleared = await mountPanel(page, { userData: { [KEY]: { pins: [] }, [OTHER]: { pins: [{ kind: "area", id: "x" }] } } });
+    const cleared = await mountPanel(page, { userData: { [KEY]: { version: 2, pins: [], excluded: [{ kind: "plan", id: "daily" }, { kind: "area", id: "entryway" }] }, [OTHER]: { version: 2, pins: [{ kind: "area", id: "x" }], excluded: [] } } });
     await expect.poll(() => pins(page)).toEqual({ status: "ready", pins: [] });
     await expect(cleared.locator("button.shortcut")).toHaveCount(0);
     await expect(cleared.getByRole("button", { name: "Your plans", exact: true })).toBeVisible();
   });
 
+  test("legacy records preserve visible order and conservatively keep other saved items hidden", async ({ page }) => {
+    const panel = await mountPanel(page, { userData: { [KEY]: { version: 2, pins: [{ kind: "plan", id: "daily" }, { kind: "area", id: "entryway" }], excluded: [] } } });
+    await expect.poll(() => pins(page)).toEqual({ status: "ready", pins: [{ kind: "plan", id: "daily" }] });
+    await expect.poll(() => stored(page)).toEqual({ [KEY]: { version: 2, pins: [{ kind: "plan", id: "daily" }], excluded: [{ kind: "area", id: "entryway" }] } });
+    await expect(panel.locator("button.shortcut")).toHaveAccessibleName(/^Run Daily clean/);
+  });
+
+  test("shortcuts can be reordered with keyboard reachable controls without launching", async ({ page }) => {
+    const [daily] = PLAN_CATALOG.plans;
+    const initialPlanCatalog = { ...PLAN_CATALOG, plans: [daily, { ...daily, id: "x", name: "Plan X" }] };
+    const panel = await mountPanel(page, { initialPlanCatalog, userData: { [KEY]: { version: 2, pins: [{ kind: "plan", id: "daily" }, { kind: "plan", id: "x" }], excluded: [] } } });
+    await expect.poll(() => pins(page)).toEqual({ status: "ready", pins: [{ kind: "plan", id: "daily" }, { kind: "plan", id: "x" }] });
+    await expect.poll(() => page.evaluate(() => window.__pinPanel.getWorkspaceSnapshot().resources.areas.status)).toBe("ready");
+    const shortcutsHeading = panel.locator("#shortcuts-heading");
+    const editButton = panel.getByRole("button", { name: "Edit shortcuts" });
+    await expect(shortcutsHeading).toHaveText("Shortcuts");
+    await expect(editButton).toHaveText("");
+    const [headingBox, editBox] = await Promise.all([shortcutsHeading.boundingBox(), editButton.boundingBox()]);
+    expect(headingBox).not.toBeNull();
+    expect(editBox).not.toBeNull();
+    expect(editBox.x + editBox.width).toBeCloseTo(headingBox.x + headingBox.width, 0);
+    expect(editBox.y).toBeGreaterThanOrEqual(headingBox.y);
+    expect(editBox.y + editBox.height).toBeLessThanOrEqual(headingBox.y + headingBox.height);
+    await panel.getByRole("button", { name: "Edit shortcuts" }).click();
+    await expect(panel.locator(".home-shortcuts button.shortcut")).toHaveCount(0);
+    await panel.getByRole("button", { name: "Move Plan X up" }).click();
+    await expect.poll(() => panel.locator(".home-shortcuts .card-name bdi").allTextContents()).toEqual(["Plan X", "Daily clean"]);
+    await expect.poll(() => page.evaluate((key) => window.__panelFixture.userData()[key], KEY)).toEqual({ version: 2, pins: [{ kind: "plan", id: "x" }, { kind: "plan", id: "daily" }], excluded: [] });
+    await panel.getByRole("button", { name: "Done editing shortcuts" }).click();
+    await expect(panel.locator(".home-shortcuts button.shortcut")).toHaveCount(2);
+  });
+
+  test("keyboard focus follows one shortcut through repeated reorder moves", async ({ page }) => {
+    const [daily] = PLAN_CATALOG.plans;
+    const initialPlanCatalog = { ...PLAN_CATALOG, plans: [daily, { ...daily, id: "x", name: "Plan X" }, { ...daily, id: "y", name: "Plan Y" }, { ...daily, id: "z", name: "Plan Z" }, { ...daily, id: "w", name: "Plan W" }] };
+    const pinOrder = [{ kind: "plan", id: "daily" }, { kind: "plan", id: "x" }, { kind: "plan", id: "y" }, { kind: "plan", id: "z" }, { kind: "plan", id: "w" }];
+    const panel = await mountPanel(page, { initialPlanCatalog, userData: { [KEY]: { version: 2, pins: pinOrder, excluded: [] } } });
+    await expect.poll(() => pins(page)).toEqual({ status: "ready", pins: pinOrder });
+    await expect.poll(() => page.evaluate(() => window.__pinPanel.getWorkspaceSnapshot().resources.areas.status)).toBe("ready");
+    await panel.getByRole("button", { name: "Edit shortcuts" }).click();
+    const movePlanXDown = panel.getByRole("button", { name: "Move Plan X down" });
+    await movePlanXDown.focus();
+    await movePlanXDown.press("Enter");
+    await expect.poll(() => panel.locator(".home-shortcuts .card-name bdi").allTextContents()).toEqual(["Daily clean", "Plan Y", "Plan X", "Plan Z", "Plan W"]);
+    await expect(movePlanXDown).toBeFocused();
+    await movePlanXDown.press("Enter");
+    await expect.poll(() => panel.locator(".home-shortcuts .card-name bdi").allTextContents()).toEqual(["Daily clean", "Plan Y", "Plan Z", "Plan X", "Plan W"]);
+    await expect(movePlanXDown).toBeFocused();
+    expect(await page.evaluate(() => window.__panelFixture.serviceCalls)).toEqual([]);
+  });
+
   test("pin and unpin are written for this robot only, keeping other robots' lists", async ({ page }) => {
-    const panel = await mountPanel(page, { userData: { [KEY]: { pins: [] }, [OTHER]: { pins: [{ kind: "plan", id: "x" }] } } });
+    const panel = await mountPanel(page, { userData: { [KEY]: { version: 2, pins: [], excluded: [{ kind: "plan", id: "daily" }, { kind: "area", id: "entryway" }] }, [OTHER]: { version: 2, pins: [{ kind: "plan", id: "x" }], excluded: [] } } });
     await expect.poll(() => pins(page)).toMatchObject({ status: "ready" });
     await panel.getByRole("button", { name: "Your plans", exact: true }).click();
     await panel.getByRole("button", { name: /^Daily clean/ }).click();
     const pin = panel.getByRole("switch", { name: "Show on home" });
     await pin.click();
-    await expect.poll(() => stored(page)).toEqual({ [KEY]: { pins: [{ kind: "plan", id: "daily" }] }, [OTHER]: { pins: [{ kind: "plan", id: "x" }] } });
+    await expect.poll(() => stored(page)).toEqual({ [KEY]: { version: 2, pins: [{ kind: "plan", id: "daily" }], excluded: [{ kind: "area", id: "entryway" }] }, [OTHER]: { version: 2, pins: [{ kind: "plan", id: "x" }], excluded: [] } });
     await pin.click();
-    await expect.poll(() => stored(page)).toEqual({ [KEY]: { pins: [] }, [OTHER]: { pins: [{ kind: "plan", id: "x" }] } });
+    await expect.poll(() => stored(page)).toEqual({ [KEY]: { version: 2, pins: [], excluded: [{ kind: "area", id: "entryway" }, { kind: "plan", id: "daily" }] }, [OTHER]: { version: 2, pins: [{ kind: "plan", id: "x" }], excluded: [] } });
   });
 
   test("a failed read leaves home working with nothing pinned and a quiet Try again", async ({ page }) => {
-    await installPanelFixture(page, { initialPlanCatalog: PLAN_CATALOG, userData: { [KEY]: { pins: [{ kind: "plan", id: "daily" }] } } });
+    await installPanelFixture(page, { initialPlanCatalog: PLAN_CATALOG, userData: { [KEY]: { version: 2, pins: [{ kind: "plan", id: "daily" }, { kind: "area", id: "entryway" }], excluded: [] } } });
     await page.evaluate(() => window.__panelFixture.failNextUserData("frontend/get_user_data"));
     await page.setViewportSize({ width: 1024, height: 768 });
     await page.evaluate(() => {
@@ -623,7 +693,7 @@ test.describe("home shortcuts in Home Assistant's user data", () => {
   });
 
   test("a failed write puts the switch back and says so", async ({ page }) => {
-    const panel = await mountPanel(page, { userData: { [KEY]: { pins: [] } } });
+    const panel = await mountPanel(page, { userData: { [KEY]: { version: 2, pins: [], excluded: [{ kind: "plan", id: "daily" }, { kind: "area", id: "entryway" }] } } });
     await expect.poll(() => pins(page)).toMatchObject({ status: "ready" });
     await page.evaluate(() => window.__panelFixture.failNextUserData("frontend/set_user_data"));
     await panel.getByRole("button", { name: "Your plans", exact: true }).click();
@@ -633,11 +703,11 @@ test.describe("home shortcuts in Home Assistant's user data", () => {
     await expect.poll(() => pins(page)).toEqual({ status: "ready", pins: [] });
     await expect(pin).toHaveAttribute("aria-checked", "false");
     expect(await page.evaluate(() => window.__pinPanel.getWorkspaceSnapshot().notice)).toMatchObject({ tone: "error", key: "v4_notice_shortcuts_save_failed" });
-    expect(await stored(page)).toEqual({ [KEY]: { pins: [] } });
+    expect(await stored(page)).toEqual({ [KEY]: { version: 2, pins: [], excluded: [{ kind: "plan", id: "daily" }, { kind: "area", id: "entryway" }] } });
   });
 
   test("one tap runs the plan through run_selected_plan with its preview, then home shows Stop", async ({ page }) => {
-    const panel = await mountPanel(page, { userData: { [KEY]: { pins: [{ kind: "plan", id: "daily" }] } } });
+    const panel = await mountPanel(page, { userData: { [KEY]: { version: 2, pins: [{ kind: "plan", id: "daily" }, { kind: "area", id: "entryway" }], excluded: [] } } });
     const run = panel.locator("button.shortcut");
     await expect(run).toHaveAccessibleName(/^Run Daily clean/);
     await expect(run).not.toHaveAttribute("aria-disabled", "true");
@@ -656,7 +726,7 @@ test.describe("home shortcuts in Home Assistant's user data", () => {
     // Every pinned plan exists: a pin whose plan is gone is cleaned up (followPins).
     const [daily] = PLAN_CATALOG.plans;
     const initialPlanCatalog = { ...PLAN_CATALOG, plans: [daily, { ...daily, id: "x", name: "Plan X" }, { ...daily, id: "y", name: "Plan Y" }] };
-    const panel = await mountPanel(page, { initialPlanCatalog, userData: { [KEY]: { pins } } });
+    const panel = await mountPanel(page, { initialPlanCatalog, userData: { [KEY]: { version: 2, pins, excluded: [{ kind: "area", id: "entryway" }] } } });
     await expect.poll(() => page.evaluate(() => window.__pinPanel.getWorkspaceSnapshot().homePins.status)).toBe("ready");
     await page.evaluate(() => window.__panelFixture.failNextUserData("frontend/set_user_data"));
     await openPlan(panel, "Daily clean");
@@ -690,8 +760,8 @@ test.describe("home shortcuts in Home Assistant's user data", () => {
 
 // ---- Seeding, on the module itself -----------------------------------------
 
-test.describe("home-pins seeding", () => {
-  test("seeds the default plan only from a plan list that loaded", async ({ page }) => {
+test.describe("home-pins loading", () => {
+  test("loading a new record leaves catalog reconciliation to the owner-bound follower", async ({ page }) => {
     const bundle = await build({
       stdin: { contents: 'export { loadPins } from "./frontend/map-studio-v4/home-pins"; export { WorkspaceStore } from "./frontend/map-studio-v4/state"; export { createGalleryState } from "./frontend/map-studio-v4/gallery-state";', resolveDir: process.cwd() },
       bundle: true, format: "esm", write: false,
@@ -700,25 +770,22 @@ test.describe("home-pins seeding", () => {
     await page.goto("/", { waitUntil: "domcontentloaded" });
     const result = await page.evaluate(async () => {
       const { loadPins, WorkspaceStore, createGalleryState } = await import("/home-pins-test.js");
-      const run = async (status, failWrite = false) => {
+      const run = async () => {
         const writes = [];
         const connection = { sendMessagePromise: async (message) => {
           if (message.type === "frontend/get_user_data") return { value: null };
-          if (failWrite) throw new Error("synthetic");
+          if (message.type !== "frontend/get_user_data") throw new Error("unexpected write during read");
           writes.push(message.value);
           return null;
         } };
         const initial = createGalleryState("ready");
-        const store = new WorkspaceStore({ ...initial, resources: { ...initial.resources, plans: { ...initial.resources.plans, status } } });
+        const store = new WorkspaceStore(initial);
         const pins = await loadPins(connection, store, initial.selection.entryId);
         return { pins, writes };
       };
-      return { ready: await run("ready"), error: await run("error"), failedWrite: await run("ready", true) };
+      return run();
     });
-    expect(result.ready.pins).toEqual([{ kind: "plan", id: "daily" }]);
-    expect(result.ready.writes).toHaveLength(1);
-    // Undecided, not empty: null keeps the robot unseeded until the plans load.
-    expect(result.error).toEqual({ pins: null, writes: [] });
-    expect(result.failedWrite.pins).toEqual([{ kind: "plan", id: "daily" }]);
+    expect(result.pins).toEqual({ pins: [], excluded: [], mode: "new" });
+    expect(result.writes).toEqual([]);
   });
 });

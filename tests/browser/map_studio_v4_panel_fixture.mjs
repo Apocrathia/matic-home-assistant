@@ -39,6 +39,7 @@ export const openPlanPicker = (root) => root.locator("matic-map-shell-v4").first
 
 export async function installPanelFixture(page, {
   initialPlanCatalog = emptyPlans,
+  initialAreasCatalog = null,
   moduleSource = "typescript",
   onNavigationComplete = null,
   sceneDeltaPayload = null,
@@ -108,7 +109,7 @@ export async function installPanelFixture(page, {
   await onNavigationComplete?.();
   // Home Assistant mounts the panel again on every page load; `remount` does
   // the same after a test reloads the page.
-  const remount = () => page.evaluate(async ({ module, scenes, plans, sceneDeltaPayload, posePosition, initialCatalogEntries, initialRobotStates, userData }) => {
+  const remount = () => page.evaluate(async ({ module, scenes, plans, areas, sceneDeltaPayload, posePosition, initialCatalogEntries, initialRobotStates, userData }) => {
     const { MATIC_MAP_PANEL_TAG } = await import(module);
     const json = (body, headers = {}) => new Response(JSON.stringify(body), {
       headers: { "Content-Type": "application/json", ...headers },
@@ -237,10 +238,11 @@ export async function installPanelFixture(page, {
         map_session_key: entryB ? "b".repeat(64) : "a".repeat(64),
         pose_freshness: "live",
       });
-      if (/areas\/synthetic(?:-b)?$/.test(path)) return json({
+      if (/areas\/synthetic(?:-b)?$/.test(path)) return json(areas ?? {
         scene_url: `/api/matic_robot/slam_scene/${entryB ? "synthetic-b" : "synthetic"}`,
         rooms: [],
         areas: [],
+        selected_area: null,
       });
       if (/plans\/synthetic(?:-b)?$/.test(path)) {
         planReads += 1;
@@ -423,6 +425,7 @@ export async function installPanelFixture(page, {
     module: modulePath,
     scenes: sceneBytes(scenePoint),
     plans: initialPlanCatalog,
+    areas: initialAreasCatalog,
     sceneDeltaPayload,
     posePosition,
     initialCatalogEntries,

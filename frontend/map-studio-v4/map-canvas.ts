@@ -120,7 +120,7 @@ export class MaticMapCanvasV4 extends LitElement {
     }
 
     /* Navigation has stable corners; only orbit controls follow the sheet. */
-    .map-rail { --row: calc(44px + 2 * var(--ms-space-2)); --help-top: var(--row); --help-bottom: 116px; position: absolute; inset: 0.75rem; inset-inline: max(0.75rem, var(--ms-safe-left)) max(0.75rem, var(--ms-safe-right)); z-index: 4; pointer-events: none; }
+    .map-rail { --row: calc(44px + 2 * var(--ms-space-2)); position: absolute; inset: 0.75rem; inset-inline: max(0.75rem, var(--ms-safe-left)) max(0.75rem, var(--ms-safe-right)); z-index: 4; pointer-events: none; }
     .map-rail > * { pointer-events: auto; }
     slot[name="scrim"] { display: contents; pointer-events: none; }
     ::slotted(.sheet-scrim) { pointer-events: auto; }
@@ -133,9 +133,6 @@ export class MaticMapCanvasV4 extends LitElement {
     .camera-steps { position: absolute; inset-block-end: var(--map-sheet-offset, 0px); inset-inline-end: 0; }
     .map-root:has(.selection-chip) .camera-steps { inset-block-end: calc(var(--map-sheet-offset, 0px) + 4rem); }
     .map-root:has(.selection-chip) .map-extras { inset-block-end: calc(var(--map-sheet-offset, 0px) + 4rem + 52px); }
-    .map-rail:has(.appearance-switch) { --help-top: calc(2 * var(--row)); }
-    .map-root:has(.selection-chip) .map-rail { --help-bottom: calc(116px + 4rem); }
-    .navigation-help { position: absolute; inset-block-start: var(--help-top); inset-inline-end: 0; max-block-size: calc(100% - var(--help-top) - var(--help-bottom)); overflow: auto; box-sizing: border-box; }
     :host([narrow]) .map-context { max-inline-size: calc(100% - 52px); gap: var(--ms-space-1); }
     :host([narrow]) ::slotted(.floor-switcher) { inline-size: 7rem; }
     :host([narrow]) .fit { min-inline-size: 44px; padding-inline: var(--ms-space-2); }
@@ -143,9 +140,14 @@ export class MaticMapCanvasV4 extends LitElement {
     /* Phone: the full detent leaves two rows, so "?" takes the bottom-left;
        its popover keeps the top-right slot under Fit, above the camera steps. */
     :host([narrow]) .map-extras { inset-inline-end: auto; inset-inline-start: 0; inset-block-end: var(--map-sheet-offset, 0px); }
-    :host([narrow]) .map-rail { --help-bottom: calc(var(--map-sheet-offset, 0px) + 44px + var(--ms-space-2)); }
-    /* A compact sheet at full leaves one rail row of map: the bottom clusters would cover the top one. */
-    :host([data-short]) :is(.map-extras, .camera-steps) { display: none; }
+    /* A compact full sheet leaves one visible rail row. Keep Help between the
+       floor/view controls and Fit; the panel collapses while its popover is open. */
+    :host([data-short]) .map-extras {
+      inset-block: 0 auto;
+      /* Fit is 44px wide with an 8px gap. */
+      inset-inline: auto 52px;
+    }
+    :host([data-short]) .camera-steps { display: none; }
 
     .map-tools, .view-switch, .appearance-switch, .camera-steps { display: flex; }
 
@@ -153,10 +155,7 @@ export class MaticMapCanvasV4 extends LitElement {
     /* The saved-map chip sits top centre under the rail's first row; the
        appearance switch steps down to make room (map-surfaces.md §4). */
     .map-chip { position: absolute; inset-block-start: var(--row); inset-inline: 0; margin-inline: auto; inline-size: fit-content; max-inline-size: 100%; padding: var(--ms-space-1) var(--ms-space-3); font-size: var(--ms-t-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
-    .map-chip :last-child::before { content: " · "; }
-    .map-rail:has(.map-chip) { --help-top: calc(2 * var(--row)); }
     .map-rail:has(.map-chip) .appearance-switch { inset-block-start: calc(2 * var(--row)); }
-    .map-rail:has(.map-chip):has(.appearance-switch) { --help-top: calc(3 * var(--row)); }
     .map-root:has(.map-chip) .scene-canvas { filter: saturate(0.35); }
 
     .map-dock {
@@ -166,9 +165,8 @@ export class MaticMapCanvasV4 extends LitElement {
       inline-size: fit-content;
       max-inline-size: calc(100% - 1rem);
     }
-    .map-dock .draw-tools--row { flex-direction: row; gap: var(--ms-space-1); }
     .map-dock .draw-tools button { padding-inline: var(--ms-space-2); }
-    @media (any-pointer: coarse) { .selection-chip .ms-btn--sm, .navigation-help .ms-btn--sm { min-inline-size: var(--ms-control); min-block-size: var(--ms-control); } }
+    @media (any-pointer: coarse) { .selection-chip .ms-btn--sm { min-inline-size: var(--ms-control); min-block-size: var(--ms-control); } }
     .selection-chip {
       display: flex;
       align-items: center;
@@ -179,21 +177,9 @@ export class MaticMapCanvasV4 extends LitElement {
       white-space: nowrap;
     }
 
-    .navigation-help {
-      inline-size: 22rem;
-      max-inline-size: 100%;
-      padding: 0.8rem 0.9rem;
-      font-size: 0.74rem;
-      line-height: 1.45;
-    }
-    .navigation-help header { display: flex; align-items: center; justify-content: space-between; gap: var(--ms-space-2); margin-block-end: 0.5rem; }
-    .navigation-help h2 { margin: 0; font-size: var(--ms-t-sm); font-weight: var(--ms-w-bold); }
-    .navigation-help dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.35rem 0.65rem; margin: 0; }
-    .navigation-help dt { font-weight: 750; }
-    .navigation-help dd { margin: 0; color: var(--ms-text-quiet); }
 
-    .keyboard-aim { display: none; position: absolute; z-index: 3; inset: 50% auto auto 50%; inline-size: 20px; block-size: 20px; translate: -50% -50%; border: 2px solid white; outline: 2px solid #111; border-radius: 50%; pointer-events: none; }
-    .keyboard-aim::after { content: "+"; position: absolute; inset: 50% auto auto 50%; translate: -50% -50%; color: #111; font: bold 20px/1 sans-serif; text-shadow: 0 0 2px white; }
+    .keyboard-aim { display: none; position: absolute; z-index: 3; inset: 50% auto auto 50%; inline-size: 20px; block-size: 20px; translate: -50% -50%; border: 2px solid #fff; outline: 2px solid #111; border-radius: 50%; pointer-events: none; }
+    .keyboard-aim::after { content: "+"; position: absolute; inset: 50% auto auto 50%; translate: -50% -50%; color: #111; font: 700 20px/1 sans-serif; text-shadow: 0 0 2px white; }
     .map-root:focus-visible .keyboard-aim { display: block; }
     .scene-window {
       position: absolute;
@@ -543,7 +529,7 @@ export class MaticMapCanvasV4 extends LitElement {
           <div class="map-chip ms-surface ms-surface--floating">
             <span class="sr-only">${this.#t("v4_history_chip_label", "Saved map, read only, {date}, {position} of {count}", { date: { date: saved.date }, position: saved.position, count: saved.count })}</span>
             <span aria-hidden="true">${this.#t("v4_saved_map", "Saved map")}</span>
-            <span aria-hidden="true">${this.#t("v4_saved_map_position", "{date} · {position} of {count}", { date: { date: saved.date }, position: saved.position, count: saved.count })}</span>
+            <span aria-hidden="true"> · ${this.#t("v4_saved_map_position", "{date} · {position} of {count}", { date: { date: saved.date }, position: saved.position, count: saved.count })}</span>
           </div>
         ` : nothing}
         <div class="map-context"><slot name="floor"></slot>
@@ -613,10 +599,10 @@ export class MaticMapCanvasV4 extends LitElement {
               >${icon(iconRoomNames)}<span class="ms-btn__label">${this.#t("v4_room_names", "Room names")}</span></button>
               ` : nothing}
               <button
-                class="help ms-btn ms-btn--icon"
+                class="ms-btn ms-btn--icon"
                 type="button"
                 aria-label=${helpTitle}
-                aria-expanded=${String(this.help !== null)}
+                aria-expanded=${this.help !== null}
                 aria-controls=${NAVIGATION_HELP_ID}
                 @click=${this.#toggleHelp}
                 title=${helpTitle}

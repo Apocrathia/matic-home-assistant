@@ -2,33 +2,21 @@ import { css } from "lit";
 
 // Shell rules for markup that renders only once the workflow chunk is ready
 // (the Back button, the action bar's summary and jump, the grip's Back
-// column, the Map options menu and the sheet's brush settings). The discard dialog stays with the shell:
+// column and the sheet's brush settings). The discard dialog stays with the shell:
 // a Draw draft can be dirty while this chunk failed. The shell adopts them with its
 // own styles when the chunk loads, so startup does not carry them.
 export const shellWorkflowStyles = css`
-
-    /* The Map options menu renders only from this chunk. */
-    .overflow-menu {
-      position: absolute;
-      z-index: 18;
-      inset-block-start: calc(100% + var(--ms-space-1));
-      inset-inline-end: 0;
-      display: grid;
-      gap: var(--ms-space-1);
-      min-inline-size: 14rem;
-      padding: var(--ms-space-1);
-    }
-    .overflow-menu .ms-row { justify-content: flex-start; }
-    .overflow-menu [role="menuitemcheckbox"] { justify-content: space-between; gap: var(--ms-space-3); }
-    .overflow-menu [role="group"] { display: grid; gap: var(--ms-space-1); }
-    .overflow-menu [role="group"] + * { border-block-start: 1px solid var(--ms-line); padding-block-start: var(--ms-space-1); }
-    .menu-heading { margin: 0; padding: var(--ms-space-2) var(--ms-space-3) var(--ms-space-1); color: var(--ms-text-quiet); font-size: var(--ms-t-sm); font-weight: var(--ms-w-bold); }
 
     .panel-back { flex: none; }
 
     /* One-tap shortcuts share a quiet surface; navigation keeps separate cards.
        Whole-row targets and full names/due lines keep actions easy to identify. */
+    .home-shortcuts-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--ms-space-2); }
+    .home-shortcuts-heading .ms-btn--icon { flex: none; margin-inline-start: auto; }
     .quick-actions.home-shortcuts { gap: 0; border: 1px solid var(--ms-line); border-radius: var(--ms-radius-lg); }
+    .home-shortcuts .shortcut-edit { cursor: default; }
+    .home-shortcuts .shortcut-edit .ms-row__body { flex: 1; }
+    .shortcut-order { display: flex; flex: none; gap: var(--ms-space-1); }
     .home-shortcuts .shortcut { --ms-local: light-dark(color-mix(in srgb, var(--ms-accent) 4%, var(--ms-surface-card)), color-mix(in srgb, var(--ms-accent) 8%, var(--ms-surface-card))); border-color: transparent; border-radius: 0; }
     .home-shortcuts .shortcut:first-child { border-start-start-radius: var(--ms-radius-lg); border-start-end-radius: var(--ms-radius-lg); }
     .home-shortcuts .shortcut:last-child { border-end-start-radius: var(--ms-radius-lg); border-end-end-radius: var(--ms-radius-lg); }

@@ -140,10 +140,10 @@ automations need only the saved name.
 
 ## Home shortcuts
 
-A plan or area with **Show on home** turned on appears on the home screen
-under **Shortcuts**, above the other choices, in the order you added it. One tap runs it, exactly as
-**Run plan** or **Clean this area** would; a shortcut that can't run says why,
-and **Stop** shows while it runs. To change one, use **Your plans** or
-**Clean custom area**.
-Your default plan starts as a shortcut until you change the list. Each Home
-Assistant user has their own shortcuts.
+New plans and custom areas appear under **Shortcuts** by default. Turn
+**Show on home** off on a saved item's screen to hide it. Use the small edit
+icon at the end of the **Shortcuts** heading to move items up or down, then
+choose **Done editing shortcuts**. Choices and order are saved per Home
+Assistant user and robot; updates preserve your existing shortcuts.
+One tap runs a shortcut exactly as **Run plan** or **Clean this area** would.
+A shortcut that can't run says why, and **Stop** shows while it runs.

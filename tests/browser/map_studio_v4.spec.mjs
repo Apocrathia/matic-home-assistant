@@ -4413,17 +4413,18 @@ test.describe("Map Studio v0.4 foundation", () => {
       return sheetBounds ? Math.abs(bounds.bottom - sheetBounds.top) : Number.POSITIVE_INFINITY;
     })).toBeLessThanOrEqual(1);
     await expect(showMore).toHaveAttribute("aria-controls", "sheet-panel");
-    await expect(showMore).not.toHaveAttribute("aria-disabled", "true");
-    await expect(showLess).not.toHaveAttribute("aria-disabled", "true");
+    await expect(showMore).toBeEnabled();
+    await expect(showLess).toBeEnabled();
     await showMore.click();
     await expect(sheet).toHaveAttribute("data-detent", "full");
-    await expect(showMore).toHaveAttribute("aria-disabled", "true");
+    await expect(showMore).toBeDisabled();
+    await expect(showLess).toBeEnabled();
     await expect(live).toContainText("Cleaning panel, full height");
     await showLess.click();
     await expect(sheet).toHaveAttribute("data-detent", "half");
     await showLess.click();
     await expect(sheet).toHaveAttribute("data-detent", "peek");
-    await expect(showLess).toHaveAttribute("aria-disabled", "true");
+    await expect(showLess).toBeDisabled();
     await expect(live).toContainText("Cleaning panel, collapsed");
     await expect(gallery.locator("#sheet-panel")).toBeHidden();
     await showMore.click();
@@ -7526,7 +7527,7 @@ test.describe("Map Studio v0.4 on touch @mobile", () => {
       const sweep = async (label) => {
         // Open the sheet fully so the panel's own buttons are on screen too.
         for (let step = 0; step < 2; step += 1) {
-          if (await showMore.getAttribute("aria-disabled") !== "true") await showMore.click();
+          if (await showMore.isEnabled()) await showMore.click();
         }
         const buttons = gallery.locator("button:visible");
         const count = await buttons.count();

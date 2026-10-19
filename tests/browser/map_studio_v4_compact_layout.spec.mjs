@@ -137,6 +137,7 @@ test.describe("compact sheet at 844×390 (MS-RESP-01, -02, -03)", () => {
     await expect(sheet).toHaveAttribute("data-detent", "full");
     await expect(grip.getByRole("button", { name: "Expand panel", exact: true })).toBeHidden();
     await expect(grip.getByRole("button", { name: "Collapse panel", exact: true })).toBeFocused();
+    await expect(grip.getByRole("button", { name: "Collapse panel", exact: true })).toBeEnabled();
     await page.keyboard.press("Enter");
     await expect(sheet).toHaveAttribute("data-detent", "peek");
     await expect(grip.getByRole("button", { name: "Collapse panel", exact: true })).toBeHidden();

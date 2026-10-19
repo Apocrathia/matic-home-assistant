@@ -3,6 +3,7 @@ import type { WorkspaceIntent, WorkspaceState } from "./contracts";
 import { icon, iconDone } from "./icons";
 import { MenuController } from "./menu-controller";
 import { topView } from "./renderer-controller";
+import { switchStyles } from "./switch-styles";
 
 type Host = ReactiveControllerHost & HTMLElement & { readonly renderRoot: ParentNode };
 
@@ -35,6 +36,25 @@ export class MapOptions {
     const detail = (quality: WorkspaceState["quality"], label: string) =>
       radio(state.quality === quality, label, () => intent({ type: "set-quality", quality }));
     return html`
+      <style>
+        ${switchStyles.cssText}
+    .overflow-menu {
+      position: absolute;
+      z-index: 18;
+      inset-block-start: calc(100% + var(--ms-space-1));
+      inset-inline-end: 0;
+      display: grid;
+      gap: var(--ms-space-1);
+      min-inline-size: 14rem;
+      padding: var(--ms-space-1);
+    }
+    .overflow-menu .ms-row { justify-content: flex-start; }
+    .overflow-menu [role="menuitemcheckbox"] { justify-content: space-between; gap: var(--ms-space-3); }
+    .overflow-menu [role="group"] { display: grid; gap: var(--ms-space-1); }
+    .overflow-menu [role="group"] + * { border-block-start: 1px solid var(--ms-line); padding-block-start: var(--ms-space-1); }
+    .menu-heading { margin: 0; padding: var(--ms-space-2) var(--ms-space-3) var(--ms-space-1); color: var(--ms-text-quiet); font-size: var(--ms-t-sm); font-weight: var(--ms-w-bold); }
+
+      </style>
       <div id="map-options" class="overflow-menu ms-surface ms-surface--overlay" role="menu" aria-label=${t("v4_map_options", "Map options")}>
         ${narrow ? html`
           <div role="group" aria-labelledby="menu-display">
