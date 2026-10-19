@@ -92,14 +92,10 @@ test("precomputes room selection once for the supported 100-room bound", async (
 
   expect(result.selectedIdsMapCalls).toBe(1);
   expect(result.roomFillStyles).toHaveLength(100);
-  const selectedStyles = result.roomFillStyles.filter((_, index) => index % 2 === 0);
-  const unselectedStyles = result.roomFillStyles.filter((_, index) => index % 2 === 1);
-  expect(new Set(selectedStyles).size).toBe(1);
-  expect(new Set(unselectedStyles).size).toBeGreaterThanOrEqual(6);
-  expect(result.roomFillStyles.filter((style) => style === selectedStyles[0])).toHaveLength(50);
+  expect(new Set(result.roomFillStyles).size).toBe(100);
 });
 
-test("room colors stay distinct by room ID, retain selection and labels, and yield to forced colors", async ({ page }) => {
+test("all 256 room colors stay distinct by room ID, retain selection and labels, and yield to forced colors", async ({ page }) => {
   const bundle = await build({
     stdin: {
       contents: 'export { RendererController } from "./frontend/map-studio-v4/renderer-controller"; export { createGalleryState } from "./frontend/map-studio-v4/gallery-state";',
@@ -118,7 +114,7 @@ test("room colors stay distinct by room ID, retain selection and labels, and yie
   const result = await page.evaluate(async () => {
     const { RendererController, createGalleryState } = await import("/renderer-room-colors.js");
     const base = createGalleryState("ready");
-    const rooms = Array.from({ length: 7 }, (_, index) => {
+    const rooms = Array.from({ length: 256 }, (_, index) => {
       const left = index * 12;
       return {
         id: `stable-room-${index}`,
@@ -203,32 +199,33 @@ test("room colors stay distinct by room ID, retain selection and labels, and yie
     };
   });
 
-  const selectedIndex = result.first.fills.findIndex((style) => style === "rgba(12, 120, 200, 0.26)");
+  const selectedIndex = result.first.strokes.findIndex((style) => style === "#0c78c8");
   expect(result.first.strokes[selectedIndex]).toBe("#0c78c8");
   const roomCount = Object.keys(result.firstById).length;
   const roomFills = result.first.fills.slice(0, roomCount);
   const unselectedFills = roomFills.filter((_, index) => index !== selectedIndex);
-  expect(new Set(unselectedFills).size).toBeGreaterThanOrEqual(6);
+  expect(roomCount).toBe(256);
+  expect(new Set(roomFills).size).toBe(roomCount);
   expect(result.firstById).toEqual(result.reorderedById);
-  expect(roomFills[selectedIndex]).toBe("rgba(12, 120, 200, 0.26)");
+  expect(new Set(unselectedFills).size).toBe(roomCount - 1);
   expect(result.labeled.textCount).toBeGreaterThan(0);
   expect(result.first.textCount).toBe(0);
   expect(result.labeled.fills).toEqual(result.first.fills);
-  const darkSelectedIndex = result.dark.fills.findIndex((style) => style === "rgba(12, 120, 200, 0.26)");
+  const darkSelectedIndex = result.dark.strokes.findIndex((style) => style === "#0c78c8");
   expect(darkSelectedIndex).toBe(selectedIndex);
   expect(result.dark.strokes[darkSelectedIndex]).toBe("#0c78c8");
   const darkUnselected = result.dark.fills.slice(0, roomCount).filter((_, index) => index !== darkSelectedIndex);
-  expect(new Set(darkUnselected).size).toBeGreaterThanOrEqual(6);
+  expect(new Set(darkUnselected).size).toBe(roomCount - 1);
   const channelMean = (style) => style.match(/rgba\((\d+), (\d+), (\d+),/).slice(1, 4)
     .reduce((sum, channel) => sum + Number(channel), 0) / 3;
   const lightUnselected = roomFills.filter((_, index) => index !== selectedIndex);
   expect(darkUnselected.every((style, index) => channelMean(style) < channelMean(lightUnselected[index]))).toBe(true);
-  const forcedSelectedIndex = result.forced.fills.findIndex((style) => style === "rgba(12, 120, 200, 0.26)");
+  const forcedSelectedIndex = result.forced.strokes.findIndex((style) => style === "#0c78c8");
   expect(forcedSelectedIndex).toBe(selectedIndex);
   expect(result.forced.strokes[forcedSelectedIndex]).toBe("#0c78c8");
-  expect(result.forced.fills.slice(0, roomCount).filter((_, index) => index !== forcedSelectedIndex))
-    .toEqual(Array(6).fill("rgba(235, 235, 235, 0.94)"));
+  expect(result.forced.fills.slice(0, roomCount))
+    .toEqual(Array(roomCount).fill("rgba(235, 235, 235, 0.94)"));
   expect(result.forced.strokes.slice(0, roomCount).filter((_, index) => index !== forcedSelectedIndex))
-    .toEqual(Array(6).fill("#141e28"));
+    .toEqual(Array(roomCount - 1).fill("#141e28"));
   expect(result.photo.renderedPoints).toBeGreaterThan(0);
 });
