@@ -7527,7 +7527,7 @@ test.describe("Map Studio v0.4 on touch @mobile", () => {
       const sweep = async (label) => {
         // Open the sheet fully so the panel's own buttons are on screen too.
         for (let step = 0; step < 2; step += 1) {
-          if (await showMore.getAttribute("aria-disabled") !== "true") await showMore.click();
+          if (await showMore.isEnabled()) await showMore.click();
         }
         const buttons = gallery.locator("button:visible");
         const count = await buttons.count();
