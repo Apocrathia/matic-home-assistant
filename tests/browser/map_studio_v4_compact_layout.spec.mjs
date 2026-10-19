@@ -27,6 +27,31 @@ const strip = (gallery) => ({
   detail: gallery.locator(".status-copy small"),
 });
 
+async function stableSheetHeight(sheet) {
+  return sheet.evaluate(async (element) => {
+    let previous = null;
+    let stableFrames = 0;
+    const nextFrame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+    for (let frame = 0; frame < 60; frame += 1) {
+      await nextFrame();
+      const height = element.getBoundingClientRect().height;
+      const sizeTransition = element.getAnimations().some((animation) => {
+        if (animation.playState !== "running") return false;
+        if (animation.transitionProperty === "block-size" || animation.transitionProperty === "height") return true;
+        return animation.effect?.getKeyframes().some((keyframe) =>
+          Object.hasOwn(keyframe, "blockSize") || Object.hasOwn(keyframe, "height"),
+        ) ?? false;
+      });
+      stableFrames = !sizeTransition && previous !== null && Math.abs(height - previous) < 0.05
+        ? stableFrames + 1
+        : 0;
+      if (stableFrames >= 3) return height;
+      previous = height;
+    }
+    throw new Error("Mobile sheet did not reach stable geometry within 60 animation frames");
+  });
+}
+
 test.describe("status strip (MS-STATUS-01, MS-STATUS-05)", () => {
   test("Stop accepted reads Stopping at once, with Stop's reason shown on wide", async ({ page }) => {
     const gallery = await stage(page, "stopping-command", { width: 1440, height: 900 });
@@ -121,7 +146,11 @@ test.describe("compact sheet at 844×390 (MS-RESP-01, -02, -03)", () => {
   test("peek leaves the map most of the height: 72 px, 92 with a reason, Draw about 120 to 140", async ({ page }) => {
     for (const [steps, limit, viewport] of [["rooms-ready", 73], ["rooms", 93], ["draw", 141], ["draw", 141, { width: 320, height: 256 }]]) {
       const gallery = await stage(page, steps, viewport ?? LANDSCAPE);
-      const height = await gallery.locator(".mobile-sheet").evaluate((sheet) => sheet.getBoundingClientRect().height);
+      const sheet = gallery.locator(".mobile-sheet");
+      if (steps === "draw") {
+        await expect(gallery.getByRole("toolbar", { name: "Draw area tools", exact: true })).toBeVisible();
+      }
+      const height = await stableSheetHeight(sheet);
       expect(height, steps).toBeLessThanOrEqual(limit);
     }
   });

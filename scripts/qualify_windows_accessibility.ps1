@@ -4,9 +4,10 @@ Set-StrictMode -Version Latest
 $nvdaVersion = '2026.2'
 $nvdaSha256 = 'f3f8d29974a88d687b3c4809be192219ec579c5bdabcda5aaf53635288bca824'
 $installer = Join-Path $env:RUNNER_TEMP "nvda_$nvdaVersion.exe"
-$portable = Join-Path $env:RUNNER_TEMP 'nvda-portable'
-$config = Join-Path $env:RUNNER_TEMP 'nvda-config'
-$pilotDir = Join-Path $env:RUNNER_TEMP 'windows-at-pilot'
+$runId = [Guid]::NewGuid().ToString('N')
+$portable = Join-Path $env:RUNNER_TEMP "nvda-portable-$runId"
+$config = Join-Path $env:RUNNER_TEMP "nvda-config-$runId"
+$pilotDir = Join-Path $env:RUNNER_TEMP "windows-at-pilot-$runId"
 $nodeLog = Join-Path $pilotDir 'node.log'
 $nodeError = Join-Path $pilotDir 'node-error.log'
 $nodeProcess = $null
@@ -20,7 +21,7 @@ $result = [ordered]@{
     nvdaVersion = $nvdaVersion
     edgeVersion = $null
     highContrastObserved = $false
-    browserForcedColors = $false
+    browserForcedColors = $null
     highContrastRestored = $false
     highContrastFlagsRestored = $false
     highContrastSchemeRestored = $false
@@ -29,6 +30,8 @@ $result = [ordered]@{
     highContrastOriginalSchemeSha256 = $null
     highContrastRestoredSchemeSha256 = $null
     browserDiagnostics = @()
+    browserPhaseObservations = @()
+    nvdaProbeCounts = $null
     browserProcessExitCode = $null
     primaryFailure = $null
     cleanupFailure = $null
@@ -338,6 +341,52 @@ finally {
             }
         )
     }
+    # Preserve bounded observations even when the qualification assertions fail.
+    $readyPath = Join-Path $pilotDir 'ready'
+    $observedForcedColors = $null
+    try {
+        if ((Test-Path -LiteralPath $readyPath) -and (Get-Item -LiteralPath $readyPath).Length -le 1024) {
+            $ready = Get-Content -LiteralPath $readyPath -Raw | ConvertFrom-Json
+            if ($ready.PSObject.Properties['forcedColors'] -and $ready.forcedColors -is [bool]) {
+                $observedForcedColors = [bool]$ready.forcedColors
+            }
+        }
+    } catch { }
+    if ($null -eq $observedForcedColors) {
+        try {
+            $readback = @($result.browserDiagnostics | Where-Object { $_.event -eq 'forced-colors-readback' } | Select-Object -Last 1)
+            if ($readback.Count -eq 1 -and $readback[0].forcedColors -is [bool]) {
+                $observedForcedColors = [bool]$readback[0].forcedColors
+            }
+        } catch { }
+    }
+    if ($observedForcedColors -is [bool]) { $result.browserForcedColors = $observedForcedColors }
+    $observationsPath = Join-Path $pilotDir 'browser-observations.jsonl'
+    if (Test-Path -LiteralPath $observationsPath) {
+        $result.browserPhaseObservations = @(
+            Get-Content -LiteralPath $observationsPath -TotalCount 9 | ForEach-Object {
+                try {
+                    $observation = $_ | ConvertFrom-Json
+                    if ($observation.phase -is [string] -and $observation.phase -cmatch '^(tab-[1-8]|nvda-report)$' -and $observation.focusWithinPanel -is [bool]) {
+                        [pscustomobject]@{ phase = [string]$observation.phase; focusWithinPanel = [bool]$observation.focusWithinPanel }
+                    }
+                } catch { }
+            }
+        )
+    }
+    $countsPath = Join-Path $pilotDir 'probe-counts.json'
+    try {
+        if ((Test-Path -LiteralPath $countsPath) -and (Get-Item -LiteralPath $countsPath).Length -le 2048) {
+            $counts = Get-Content -LiteralPath $countsPath -Raw | ConvertFrom-Json
+            $safeCounts = [ordered]@{}
+            foreach ($name in @('focusCallbacks','speechCallbacks','msedgeCallbacks','otherCallbacks','unknownCallbacks','segments','whitelistedSegments','errors')) {
+                $count = $counts.$name
+                if (($count -isnot [int] -and $count -isnot [long]) -or $count -lt 0 -or $count -gt 10000) { throw 'Invalid probe counter.' }
+                $safeCounts[$name] = [long]$count
+            }
+            $result.nvdaProbeCounts = $safeCounts
+        }
+    } catch { }
     $result.primaryFailure = $failureReason
     $result.cleanupFailure = $cleanupFailureReason
     Remove-Item -LiteralPath $installer,$portable,$config,$pilotDir -Recurse -Force -ErrorAction SilentlyContinue

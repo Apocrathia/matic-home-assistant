@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import re
 import time
 
 import api
@@ -17,6 +18,19 @@ SAFE_TERMS = (
     "Kitchen",
 )
 MAX_SEGMENT = 180
+MAX_COUNTER = 10_000
+
+
+def _safe_terms(text):
+    if len(text) > MAX_SEGMENT or not all(
+        character.isprintable() for character in text
+    ):
+        return []
+    return [
+        term
+        for term in SAFE_TERMS
+        if re.search(r"(?<!\w)" + re.escape(term) + r"(?!\w)", text, re.IGNORECASE)
+    ]
 
 
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
@@ -24,9 +38,26 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         super().__init__(*args, **kwargs)
         self._phase_path = os.environ["NVDA_PILOT_PHASE_FILE"]
         self._event_path = os.environ["NVDA_PILOT_EVENT_FILE"]
+        self._counts_path = os.path.join(
+            os.environ["NVDA_PILOT_DIR"], "probe-counts.json"
+        )
+        self._counts = dict.fromkeys(
+            (
+                "focusCallbacks",
+                "speechCallbacks",
+                "msedgeCallbacks",
+                "otherCallbacks",
+                "unknownCallbacks",
+                "segments",
+                "whitelistedSegments",
+                "errors",
+            ),
+            0,
+        )
         self._source_hash = self._hash_source()
         speechExtensions.pre_speechQueued.register(self._on_speech_queued)
         self._append({"kind": "loaded"})
+        self._publish_counts()
 
     def _hash_source(self):
         with open(__file__, "rb") as source:
@@ -52,15 +83,39 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         except (OSError, ValueError, TypeError):
             return "idle"
 
-    def _module(self, obj=None):
+    def _module_kind(self, obj=None):
         try:
             focus = obj if obj is not None else api.getFocusObject()
-            module = str(focus.appModule.appModuleName).lower()
+            module = focus.appModule.appModuleName
+            if not isinstance(module, str) or not module:
+                return "unknown"
+            module = module.lower()
             if module in {"msedge", "msedge.exe"}:
                 return "msedge"
+            return "other" if module else "unknown"
         except Exception:
-            pass
-        return None
+            self._increment_count("errors")
+            return "unknown"
+
+    def _module(self, obj=None):
+        return "msedge" if self._module_kind(obj) == "msedge" else None
+
+    def _increment_count(self, name, amount=1):
+        self._counts[name] = min(MAX_COUNTER, self._counts[name] + amount)
+
+    def _count_callback(self, name, obj=None):
+        self._increment_count(name)
+        self._increment_count(self._module_kind(obj) + "Callbacks")
+
+    def _publish_counts(self):
+        # Separate from speech evidence: these counters contain no names or text.
+        try:
+            temporary = self._counts_path + ".tmp"
+            with open(temporary, "w", encoding="utf-8") as counts:
+                json.dump(self._counts, counts, separators=(",", ":"))
+            os.replace(temporary, self._counts_path)
+        except OSError:
+            self._increment_count("errors")
 
     def _append(self, value, module=None):
         if value.get("kind") == "loaded":
@@ -84,45 +139,49 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
     def event_gainFocus(self, obj, nextHandler):
         try:
+            self._count_callback("focusCallbacks", obj)
             name = str(getattr(obj, "name", ""))
             role = str(getattr(obj, "role", ""))
             module = self._module(obj)
-            if module and any(
-                term.casefold() in name.casefold() for term in SAFE_TERMS
-            ):
+            terms = _safe_terms(name)
+            if module and terms:
                 self._append(
-                    {"kind": "focus", "name": name[:MAX_SEGMENT], "role": role[:48]},
+                    {"kind": "focus", "name": terms[0], "role": role[:48]},
                     module,
                 )
         except Exception:
-            pass
+            self._increment_count("errors")
         finally:
+            self._publish_counts()
             nextHandler()
 
     def _safe_focus_name(self):
         try:
             name = str(getattr(api.getFocusObject(), "name", ""))
-            if len(name) <= MAX_SEGMENT and any(
-                term.casefold() in name.casefold() for term in SAFE_TERMS
-            ):
-                return name
+            terms = _safe_terms(name)
+            if terms:
+                return terms[0]
         except Exception:
-            pass
+            self._increment_count("errors")
         return None
 
     def _on_speech_queued(self, speechSequence, priority):
         try:
+            self._count_callback("speechCallbacks")
             segments = []
             for segment in speechSequence:
+                if isinstance(segment, str):
+                    self._increment_count("segments")
                 if (
                     not isinstance(segment, str)
                     or not segment
                     or len(segment) > MAX_SEGMENT
                 ):
                     continue
-                if any(term.casefold() in segment.casefold() for term in SAFE_TERMS):
-                    if all(character.isprintable() for character in segment):
-                        segments.append(segment)
+                terms = _safe_terms(segment)
+                if terms:
+                    segments.extend(term for term in terms if term not in segments)
+                    self._increment_count("whitelistedSegments")
             if segments:
                 self._append(
                     {
@@ -133,7 +192,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
                 )
         except Exception:
             # Observation must never disrupt NVDA's speech queue.
-            pass
+            self._increment_count("errors")
+        finally:
+            self._publish_counts()
 
     def terminate(self, *args, **kwargs):
         speechExtensions.pre_speechQueued.unregister(self._on_speech_queued)
