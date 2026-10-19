@@ -751,7 +751,7 @@ def binding_for_area(
                 ),
                 "translation_room_anchors": anchors,
             }
-        except (GeometryTooComplex, OverflowError, TypeError, ValueError):
+        except GeometryTooComplex, OverflowError, TypeError, ValueError:
             # Keep saving supported when an otherwise safe area fits the
             # bounded hash but its additional absolute-frame evidence does not.
             return {
@@ -1165,9 +1165,7 @@ def _saved_room_frames_match(
     ):
         return False
     saved_circle_keys = {
-        str(key).casefold()
-        for anchor in saved_anchors
-        for key in anchor["circle_keys"]
+        str(key).casefold() for anchor in saved_anchors for key in anchor["circle_keys"]
     }
     saved_by_room_key: dict[str, set[str]] = {}
     for anchor in saved_anchors:
@@ -1323,9 +1321,10 @@ def area_binding_status(
                         room_geometry,
                     ):
                         return AreaBindingStatus.GEOMETRY_CHANGED
-                    if (
-                        saved["translation_invariant_geometry_sha256"].casefold()
-                        == translation_invariant_geometry_fingerprint(floor_plan)
+                    if saved[
+                        "translation_invariant_geometry_sha256"
+                    ].casefold() == translation_invariant_geometry_fingerprint(
+                        floor_plan
                     ):
                         # The whole map only moved in its coordinate frame.
                         return AreaBindingStatus.GEOMETRY_CHANGED
@@ -1562,9 +1561,7 @@ def _valid_saved_binding(binding: Mapping[str, Any]) -> bool:
             or (
                 version == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
                 and _valid_digest(binding["local_geometry_sha256"])
-                and _valid_digest(
-                    binding["translation_invariant_geometry_sha256"]
-                )
+                and _valid_digest(binding["translation_invariant_geometry_sha256"])
                 and _valid_anchored_room_frame_anchors(
                     binding["translation_room_anchors"]
                 )

@@ -2086,8 +2086,7 @@ async def test_current_v4_bounded_area_binding_upgrades_to_room_anchored(hass) -
         "serial", floor_plan
     ) == AreaBindingUpgradeResult(1, False)
     assert (
-        area["map_binding"]["version"]
-        == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+        area["map_binding"]["version"] == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
     )
     manager._store.async_save.assert_awaited_once()
 

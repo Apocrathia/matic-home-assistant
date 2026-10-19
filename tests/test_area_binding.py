@@ -235,8 +235,7 @@ def test_hash_fingerprint_work_exhaustion_keeps_valid_drift_reviewable() -> None
     circles = [{"x": 5.0, "y": 4.4, "radius": 0.1}]
     area = _scoped_area(floor_plan, circles)
     assert (
-        area["map_binding"]["version"]
-        == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+        area["map_binding"]["version"] == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
     )
     changed_boundary = (*boundary[:-1], (0.0, 10.1))
     changed = replace(
@@ -293,8 +292,7 @@ def test_hash_fingerprint_exhaustion_keeps_saved_center_tolerance() -> None:
     with patch.object(area_binding_module, "_MAX_LOCAL_SEGMENT_MATCH_SEGMENTS", 0):
         area = _scoped_area(floor_plan, circles)
     assert (
-        area["map_binding"]["version"]
-        == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+        area["map_binding"]["version"] == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
     )
     changed = replace(
         floor_plan,
@@ -520,10 +518,7 @@ def test_anchored_hash_binding_rejects_area_room_frame_translation() -> None:
             ),
         ),
     )
-    assert (
-        area_binding_status(area, translated)
-        is AreaBindingStatus.GEOMETRY_CHANGED
-    )
+    assert area_binding_status(area, translated) is AreaBindingStatus.GEOMETRY_CHANGED
 
 
 def test_saved_room_frame_match_rejects_incomplete_or_inconsistent_evidence() -> None:
