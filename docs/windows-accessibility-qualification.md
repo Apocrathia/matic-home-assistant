@@ -25,6 +25,11 @@ The cleanup distinguishes a null scheme pointer from a non-null empty scheme
 string; it reports only scheme presence and SHA-256 values, not the scheme text.
 While NVDA runs, headed Edge loads the
 packaged Map Studio fixture on loopback and asserts `(forced-colors: active)`.
+The Playwright context sets `forcedColors: null` so Edge inherits the Windows
+setting; Playwright's default `none` would override the system preference. The
+prior native probe (39179377481) observed Windows High Contrast enabled but
+Edge forced colors disabled, so that run remains unqualified and provides no
+NVDA acceptance evidence.
 Native Windows keyboard input sends Tab to the focused Edge window, then NVDA's
 Insert+Tab report-focus command. A temporary NVDA global plugin passively
 observes the documented `speech.extensions.pre_speechQueued` action and
@@ -70,3 +75,4 @@ including raw redirected Node logs, is removed before the summary is emitted.
 - [NVDA 2026.2 speech extension source](https://raw.githubusercontent.com/nvaccess/nvda/release-2026.2/source/speech/extensions.py)
 - [NVDA 2026.2 Developer Guide: global plugins and extension points](https://download.nvaccess.org/releases/2026.2/documentation/developerGuide.html)
 - [Microsoft: High contrast parameter](https://learn.microsoft.com/en-us/windows/win32/winauto/high-contrast-parameter)
+- [Playwright: Browser.newContext forcedColors](https://playwright.dev/docs/api/class-browser#browser-new-context-option-forced-colors)

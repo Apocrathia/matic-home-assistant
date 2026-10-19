@@ -64,6 +64,7 @@ try {
   const context = await browser.newContext({
     baseURL: "http://127.0.0.1:4173",
     viewport: { width: 1180, height: 760 },
+    forcedColors: null,
   });
   const page = await context.newPage();
   stage = "gallery-navigation";
