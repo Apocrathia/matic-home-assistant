@@ -1,5 +1,4 @@
 import type { AreaOutline } from "./area-outline";
-import { validOutline } from "./area-outline";
 import {
   MAX_LEGACY_PLAN_ROOM_SEQUENCE_SIZE,
   MAX_ROOM_SEQUENCE_SIZE,
@@ -718,7 +717,7 @@ export const roomPreviewHelpers = { ContractError, objectValue, boundedString, p
 /** Shared validators passed into the deferred custom-area decoder. */
 export const areaCatalogHelpers = {
   ContractError, objectValue, boundedString, boundedNumber, booleanValue,
-  privatePath, parseRooms, parseCleaningMode, parseCoverage, selectedId, validOutline,
+  privatePath, parseRooms, parseCleaningMode, parseCoverage, selectedId,
 };
 
 export const parseSavedPlanId = (value: unknown): string => {

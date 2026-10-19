@@ -27,7 +27,6 @@ import {
   SHELL_TAG,
   WORKFLOW_TAG,
 } from "./element-tags";
-import { edgeDistance, validOutline } from "./area-outline";
 import { heldReasonKey, renderDrawTools } from "./draw-tools";
 import { LazyChunk, chunkStatus, reloadInto, takeResume, type ChunkStatus } from "./lazy-chunk";
 import type { MapOptions } from "./map-options";
@@ -464,7 +463,13 @@ export class MaticMapShellV4 extends LitElement {
   // editor and hands it to the canvas, so the sheet is the one place a failure
   // of either, building included, is said.
   readonly #views = new LazyChunk(this, () => this.#workflowModule());
-  readonly #outline = new LazyChunk(this, async () => new (await import("./outline-editor")).OutlineEditor({ edgeDistance, validOutline }));
+  readonly #outline = new LazyChunk(this, async () => {
+    const [{ OutlineEditor }, geometry] = await Promise.all([
+      import("./outline-editor"),
+      import("./area-outline"),
+    ]);
+    return new OutlineEditor(geometry);
+  });
   // The Map options menu (map-options.ts) ships in the views chunk, which a
   // module of its own would split the shared lit chunk for, and loads on its
   // first press; that press opens it once the load has settled.

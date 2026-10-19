@@ -3,10 +3,12 @@
 import type { AreaOutline } from "./area-outline";
 import type { AreaCircle, AreaBindingStatus, AreasCatalog, SavedArea } from "./backend-contracts";
 type AreaCatalogHelpers = typeof import("./backend-contracts").areaCatalogHelpers;
+type AreaCatalogGeometry = Pick<typeof import("./area-outline"), "validOutline">;
 
-export const parseAreasCatalog = (value: unknown, helpers: AreaCatalogHelpers): AreasCatalog => {
+export const parseAreasCatalog = (value: unknown, helpers: AreaCatalogHelpers, geometry: AreaCatalogGeometry): AreasCatalog => {
   const { ContractError, objectValue, boundedString, boundedNumber, booleanValue,
-    privatePath, parseRooms, parseCleaningMode, parseCoverage, selectedId, validOutline } = helpers;
+    privatePath, parseRooms, parseCleaningMode, parseCoverage, selectedId } = helpers;
+  const { validOutline } = geometry;
   const parseOutline = (value: unknown): AreaOutline | null => {
     if (value === undefined || value === null) return null;
     if (!Array.isArray(value) || value.length < 3 || value.length > 64) throw new ContractError("invalid-area-outline");

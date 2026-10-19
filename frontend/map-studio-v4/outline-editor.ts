@@ -8,8 +8,8 @@ import type { RendererController } from "./renderer-controller";
 import { captureCoordinateEdit, hasCoordinateEditAdmission } from "./state";
 
 /**
- * The startup outline checks, passed in by the shell. Importing area-outline
- * here would split it into a chunk of its own, shared with startup.
+ * Outline checks loaded alongside the editor and passed in by the shell.
+ * The backend's deferred area decoder shares the same geometry module.
  */
 export type OutlineGeometry = Pick<typeof import("./area-outline"), "edgeDistance" | "validOutline">;
 
