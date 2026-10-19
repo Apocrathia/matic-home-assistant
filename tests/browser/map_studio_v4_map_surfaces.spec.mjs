@@ -55,6 +55,36 @@ const drag = async (page, from, to, options = {}) => {
 };
 
 test.describe("help (map-surfaces.md §5 Help, §11 MS-HELP-01/02)", () => {
+  test("empty Home Map options stays styled when workflow downloads are blocked", async ({ page }) => {
+    const workflowRequests = [];
+    await page.route("**/chunks/workflow-panel-*", (route) => {
+      workflowRequests.push(route.request().url());
+      return route.abort();
+    });
+    const gallery = await loadGallery(page, { scenario: "home-unpinned", narrow: true });
+    const launcher = optionsButton(gallery);
+    await launcher.click();
+    const menu = optionsMenu(gallery);
+    await expect(menu).toBeVisible();
+    await expect(menu).toHaveCSS("position", "absolute");
+    await expect(menu).toHaveCSS("display", "grid");
+    const names = menu.getByRole("menuitemcheckbox", { name: "Room names" });
+    await expect(names).toBeVisible();
+    expect(await names.locator(".ms-switch").evaluate((element) => ({
+      before: getComputedStyle(element, "::before").height,
+      after: getComputedStyle(element, "::after").width,
+    }))).toEqual({ before: "24px", after: "18px" });
+    const checked = await names.getAttribute("aria-checked");
+    await names.click();
+    await expect(names).toHaveAttribute("aria-checked", String(checked !== "true"));
+    await names.click();
+    await expect(names).toHaveAttribute("aria-checked", checked);
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(launcher).toBeFocused();
+    expect(workflowRequests).toHaveLength(0);
+  });
+
   test("empty Home Help loads its own styled chunk and returns focus without workflow views", async ({ page }) => {
     const workflowRequests = [];
     const helpRequests = [];

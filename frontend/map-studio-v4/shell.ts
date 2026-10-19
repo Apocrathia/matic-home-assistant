@@ -474,10 +474,7 @@ export class MaticMapShellV4 extends LitElement {
   // The menu has its own small lazy module; the first press opens it once the
   // module and menu controller have settled.
   readonly #options: LazyChunk<MapOptions> = new LazyChunk(this, async () => {
-    const [{ MapOptions },] = await Promise.all([
-      import("./map-options"),
-      this.#workflowModule(),
-    ]);
+    const { MapOptions } = await import("./map-options");
     return new MapOptions(this);
   });
   #optionsPending = false;
@@ -516,9 +513,8 @@ export class MaticMapShellV4 extends LitElement {
   #shortcutsOwner: string | null = null;
   #workflowStyled = false;
 
-  // The views chunk brings the shell rules its markup needs (workflow-styles.ts,
-  // and form-controls.ts for the Map options switch); either loader adopts
-  // them once, before the chunk's own update renders that markup.
+  // Workflow views bring their shell and form rules. The independent Map
+  // options module renders its own menu and shared switch rules.
   async #workflowModule(): Promise<typeof import("./workflow-panel")> {
     const views = await import("./workflow-panel");
     if (!this.#workflowStyled) {
