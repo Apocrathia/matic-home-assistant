@@ -40,10 +40,12 @@ from homeassistant.util.json import SerializationError
 from .area_binding import (
     HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
     MAP_BINDING_VERSION,
+    SCOPED_MAP_BINDING_VERSION,
     AreaBindingStatus,
     _room_geometry_index,
     area_binding_status,
     binding_for_area,
+    floor_plan_geometry_fingerprint,
 )
 from .area_geometry import GeometryTooComplex
 from .cadence import (
@@ -2396,7 +2398,7 @@ class CleaningPlanManager:
     async def async_upgrade_area_bindings(
         self, serial_number: str, floor_plan: FloorPlan | None
     ) -> AreaBindingUpgradeResult:
-        """Upgrade exactly current whole-map area bindings to scoped bindings."""
+        """Upgrade verified area bindings without rebasing tolerated drift."""
 
         async def commit(_lease: _MetadataLockLease) -> AreaBindingUpgradeResult:
             async with self._store_lock:
@@ -2435,15 +2437,30 @@ class CleaningPlanManager:
             if version not in {
                 MAP_BINDING_VERSION,
                 HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+                SCOPED_MAP_BINDING_VERSION,
             }:
                 continue
+            if version == SCOPED_MAP_BINDING_VERSION:
+                anchors = binding.get("translation_room_anchors")
+                if (
+                    isinstance(anchors, list)
+                    and anchors
+                    and all(
+                        isinstance(anchor, Mapping) and "boundary_mm" in anchor
+                        for anchor in anchors
+                    )
+                ):
+                    continue
             circles = area.get("circles")
             if not isinstance(circles, list):
                 continue
             if floor_plan is None:
                 pending = True
                 continue
-            if version == HASH_ONLY_SCOPED_MAP_BINDING_VERSION:
+            if version in {
+                HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+                SCOPED_MAP_BINDING_VERSION,
+            }:
                 if room_geometry is None:
                     room_geometry = _room_geometry_index(floor_plan)
                 status = area_binding_status(
@@ -2458,6 +2475,14 @@ class CleaningPlanManager:
                     AreaBindingStatus.GEOMETRY_CHANGED,
                     AreaBindingStatus.INVALID,
                 }
+                continue
+            if version == SCOPED_MAP_BINDING_VERSION and str(
+                binding.get("geometry_sha256", "")
+            ).casefold() != floor_plan_geometry_fingerprint(floor_plan):
+                # Old anchors lack the original room outline. Only enrich an
+                # exact original map, never turn a tolerated offset into a new
+                # reference and accumulate drift on subsequent restarts.
+                pending = True
                 continue
             if room_geometry is None:
                 room_geometry = _room_geometry_index(floor_plan)

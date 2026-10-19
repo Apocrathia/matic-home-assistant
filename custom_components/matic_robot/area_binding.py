@@ -8,6 +8,7 @@ import struct
 from collections import Counter, deque
 from collections.abc import Callable, Mapping, Sequence
 from enum import StrEnum
+from itertools import pairwise
 from typing import Any
 
 import probatio
@@ -17,6 +18,7 @@ from homeassistant.helpers import issue_registry as ir
 from .area_geometry import AreaGeometry, GeometryTooComplex, RoomGeometryIndex
 from .client.floor_plan import MAX_FLOOR_PLAN_BOUNDARY_POINTS
 from .client.models import FloorPlan
+from .client.slam_map import VOXEL_SCALE_METERS
 from .const import DOMAIN
 from .repairs import repair_placeholders
 
@@ -34,6 +36,11 @@ _LOCAL_GEOMETRY_MARGIN_METERS = 0.25
 _LOCAL_GEOMETRY_TOLERANCE_MILLIMETERS = 10
 _LOCAL_GEOMETRY_TOLERANCE_METERS = (
     _LOCAL_GEOMETRY_TOLERANCE_MILLIMETERS / _MILLIMETERS_PER_METER
+)
+# Outer room landmarks may refine by one native voxel. This does not relax
+# the separate 10 mm wall/occupancy checks around the actual cleaning area.
+_ROOM_FRAME_TOLERANCE_MILLIMETERS = (
+    math.ceil(VOXEL_SCALE_METERS * _MILLIMETERS_PER_METER) + 1
 )
 _COORDINATE_QUANTIZATION_ERROR_MILLIMETERS = 0.5
 _SEGMENT_QUANTIZATION_ERROR_MILLIMETERS = math.sqrt(
@@ -63,6 +70,7 @@ _MIN_SIGNED_64 = -(1 << 63)
 _MAX_SIGNED_64 = (1 << 63) - 1
 _MAX_TRANSLATION_ROOM_ANCHORS = 256
 _MAX_TRANSLATION_ROOM_CIRCLE_ASSOCIATIONS = 8_192
+_MAX_ROOM_FRAME_POINTS = MAX_FLOOR_PLAN_BOUNDARY_POINTS
 _AREA_REPAIR_LEARN_MORE_URL = (
     "https://github.com/ProspectOre/matic-home-assistant/"
     "blob/main/docs/cleaning.md#custom-areas"
@@ -360,11 +368,97 @@ def _translation_circle_key(circle: Mapping[str, Any]) -> str:
     return digest.hexdigest()
 
 
-def _bounds_within_tolerance(old: Sequence[int], new: Sequence[int]) -> bool:
+def _bounds_within_tolerance(
+    old: Sequence[int], new: Sequence[int], *, tolerance: int
+) -> bool:
     return all(
-        abs(new_value - old_value) <= _LOCAL_GEOMETRY_TOLERANCE_MILLIMETERS
+        abs(new_value - old_value) <= tolerance
         for old_value, new_value in zip(old, new, strict=True)
     )
+
+
+def _room_polygon_fingerprint(polygon: Sequence[Sequence[int]]) -> str:
+    """Hash a canonical room polygon independently of its absolute origin."""
+    origin_x = min(point[0] for point in polygon)
+    origin_y = min(point[1] for point in polygon)
+    digest = hashlib.sha256()
+    digest.update(b"matic-room-frame-anchor-v1\0")
+    digest.update(struct.pack(">I", len(polygon)))
+    for x, y in polygon:
+        digest.update(struct.pack(">qq", x - origin_x, y - origin_y))
+    return digest.hexdigest()
+
+
+def _room_frame_matches(
+    saved: Mapping[str, Any],
+    current: Mapping[str, Any],
+    room_geometry: RoomGeometryIndex,
+) -> bool:
+    """Keep a room's absolute frame through interior outline refinements.
+
+    Compare eight directional extrema against the other boundary in both
+    directions. Unlike a bounding box alone, these are actual boundary points.
+    This tolerates retessellation and edits away from the frame landmarks;
+    local walls and occupancy must still pass the independent area checks.
+    Never replace the saved reference with a tolerated intermediate map.
+    """
+    if str(saved["fingerprint"]).casefold() == str(current["fingerprint"]).casefold():
+        return True
+    old: list[list[int]] | None = saved.get("boundary_mm")
+    new: list[list[int]] | None = current.get("boundary_mm")
+    if not old or not new:
+        return False
+    directions = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1))
+    for source, target in ((old, new), (new, old)):
+        room_geometry.charge_query_work(len(source) * len(directions))
+        landmarks: set[_QuantizedPoint] = set()
+        for dx, dy in directions:
+            extreme = max(source, key=lambda p: (p[0] * dx + p[1] * dy, p[0], p[1]))
+            landmarks.add((extreme[0], extreme[1]))
+        # Thin/degenerate outlines cannot establish a two-dimensional frame.
+        points = sorted(landmarks)
+        if len(points) < 3 or not any(
+            (b[0] - points[0][0]) * (c[1] - points[0][1])
+            != (b[1] - points[0][1]) * (c[0] - points[0][0])
+            for b, c in pairwise(points[1:])
+        ):
+            return False
+        for point in landmarks:
+            for index, start in enumerate(target):
+                room_geometry.charge_query_work()
+                end = target[(index + 1) % len(target)]
+                if _point_near_segment(
+                    point,
+                    (start[0], start[1], end[0], end[1]),
+                    tolerance=_ROOM_FRAME_TOLERANCE_MILLIMETERS,
+                ):
+                    break
+            else:
+                return False
+    return True
+
+
+def _room_anchor_bounds_match(
+    saved: Mapping[str, Any], current: Mapping[str, Any]
+) -> bool:
+    """Compare bounds, including the old last-vertex-as-max-x storage bug."""
+    tolerance = (
+        _ROOM_FRAME_TOLERANCE_MILLIMETERS
+        if "boundary_mm" in saved
+        else _LOCAL_GEOMETRY_TOLERANCE_MILLIMETERS
+    )
+    if _bounds_within_tolerance(
+        saved["bounds"], current["bounds"], tolerance=tolerance
+    ):
+        return True
+    if "boundary_mm" in saved or not current.get("boundary_mm"):
+        return False
+    # Legacy writers accidentally captured the final loop x instead of max(x).
+    # Reproduce that representation for comparison only. The unchanged room
+    # fingerprint is still mandatory for an anchor without a boundary snapshot.
+    legacy_bounds = [*current["bounds"]]
+    legacy_bounds[2] = current["boundary_mm"][-1][0]
+    return _bounds_within_tolerance(saved["bounds"], legacy_bounds, tolerance=tolerance)
 
 
 def _translation_room_anchors(
@@ -402,27 +496,25 @@ def _translation_room_anchors(
                 keys.add(circle_key)
                 association_count += 1
     anchors = []
+    point_count = 0
     for index, room in enumerate(floor_plan.rooms):
         circle_keys = circle_keys_by_room.get(index)
         if not circle_keys:
             continue
         polygon = _canonical_polygon(room.boundary)
-        origin_x = min(x for x, _y in polygon)
-        origin_y = min(y for _x, y in polygon)
-        digest = hashlib.sha256()
-        digest.update(b"matic-room-frame-anchor-v1\0")
-        digest.update(struct.pack(">I", len(polygon)))
-        for x, y in polygon:
-            digest.update(struct.pack(">qq", x - origin_x, y - origin_y))
+        point_count += len(polygon)
+        if point_count > _MAX_ROOM_FRAME_POINTS:
+            raise ValueError("too many room frame boundary points")
         anchors.append(
             {
-                "fingerprint": digest.hexdigest(),
+                "fingerprint": _room_polygon_fingerprint(polygon),
+                "boundary_mm": [list(point) for point in polygon],
                 "room_key": _translation_room_key(room),
                 "circle_keys": sorted(circle_keys),
                 "bounds": [
                     min(x for x, _y in polygon),
                     min(y for _x, y in polygon),
-                    max(x for _x, y in polygon),
+                    max(x for x, _y in polygon),
                     max(y for _x, y in polygon),
                 ],
             }
@@ -865,7 +957,10 @@ def area_binding_status(
 
     if saved["mission_id"] != current["mission_id"]:
         return AreaBindingStatus.MISSION_CHANGED
-    if saved["partition_id"] != current["partition_id"]:
+    if (
+        saved["partition_id"] != current["partition_id"]
+        and str(saved["geometry_sha256"]).casefold() != current["geometry_sha256"]
+    ):
         return AreaBindingStatus.PARTITION_CHANGED
     saved_geometry = str(saved["geometry_sha256"]).casefold()
     if saved["version"] == MAP_BINDING_VERSION:
@@ -992,7 +1087,6 @@ def area_binding_status(
             if room_key in current_by_room_key:
                 return AreaBindingStatus.GEOMETRY_CHANGED
             current_by_room_key[room_key] = anchor
-        room_shape_changed = False
         for anchor in saved_anchors:
             current_anchor = current_by_room_key.get(str(anchor["room_key"]).casefold())
             if (
@@ -1000,17 +1094,14 @@ def area_binding_status(
                 or not {str(key).casefold() for key in anchor["circle_keys"]}.issubset(
                     {str(key).casefold() for key in current_anchor["circle_keys"]}
                 )
-                or not _bounds_within_tolerance(
-                    anchor["bounds"], current_anchor["bounds"]
-                )
+                or not _room_anchor_bounds_match(anchor, current_anchor)
             ):
                 return AreaBindingStatus.GEOMETRY_CHANGED
-            room_shape_changed |= (
-                str(anchor["fingerprint"]).casefold()
-                != str(current_anchor["fingerprint"]).casefold()
-            )
-        if room_shape_changed:
-            return AreaBindingStatus.GEOMETRY_CHANGED
+            try:
+                if not _room_frame_matches(anchor, current_anchor, room_geometry):
+                    return AreaBindingStatus.GEOMETRY_CHANGED
+            except GeometryTooComplex:
+                return AreaBindingStatus.GEOMETRY_CHANGED
     local_geometry = _local_geometry_fingerprint(shape, occupancy, segments)
     if str(saved["local_geometry_sha256"]).casefold() == local_geometry:
         if (
@@ -1215,14 +1306,48 @@ def _valid_translation_room_anchors(value: Any) -> bool:
     if not isinstance(value, list) or len(value) > _MAX_TRANSLATION_ROOM_ANCHORS:
         return False
     associations = 0
+    point_count = 0
     for anchor in value:
         if not isinstance(anchor, Mapping) or set(anchor) not in (
             {"fingerprint", "bounds"},
             {"fingerprint", "bounds", "room_key", "circle_keys"},
+            {"fingerprint", "bounds", "room_key", "circle_keys", "boundary_mm"},
         ):
             return False
         if not _valid_digest(anchor["fingerprint"]):
             return False
+        if "boundary_mm" in anchor:
+            polygon = anchor["boundary_mm"]
+            if not isinstance(polygon, list) or len(polygon) < 3:
+                return False
+            point_count += len(polygon)
+            if point_count > _MAX_ROOM_FRAME_POINTS or not all(
+                isinstance(point, list)
+                and len(point) == 2
+                and all(
+                    isinstance(coordinate, int)
+                    and not isinstance(coordinate, bool)
+                    and _MIN_SIGNED_64 <= coordinate <= _MAX_SIGNED_64
+                    for coordinate in point
+                )
+                for point in polygon
+            ):
+                return False
+            try:
+                if (
+                    _room_polygon_fingerprint(polygon)
+                    != anchor["fingerprint"].casefold()
+                ):
+                    return False
+            except OverflowError, struct.error:
+                return False
+            if anchor["bounds"] != [
+                min(p[0] for p in polygon),
+                min(p[1] for p in polygon),
+                max(p[0] for p in polygon),
+                max(p[1] for p in polygon),
+            ]:
+                return False
         bounds = anchor["bounds"]
         if not (
             isinstance(bounds, list)
@@ -1773,7 +1898,12 @@ def _point_near_supporting_line(
     return cross * cross <= tolerance * tolerance * length_squared
 
 
-def _point_near_segment(point: tuple[float, float], segment: _LocalSegment) -> bool:
+def _point_near_segment(
+    point: tuple[float, float],
+    segment: _LocalSegment,
+    *,
+    tolerance: float | None = None,
+) -> bool:
     """Return whether a probe is near a millimeter-quantized source wall."""
     start_x, start_y, end_x, end_y = segment
     delta_x = end_x - start_x
@@ -1793,9 +1923,11 @@ def _point_near_segment(point: tuple[float, float], segment: _LocalSegment) -> b
         nearest_y = start_y + projection * delta_y
     distance_x = point[0] - nearest_x
     distance_y = point[1] - nearest_y
-    tolerance = (
-        _LOCAL_GEOMETRY_TOLERANCE_MILLIMETERS + _SEGMENT_QUANTIZATION_ERROR_MILLIMETERS
-    )
+    if tolerance is None:
+        tolerance = (
+            _LOCAL_GEOMETRY_TOLERANCE_MILLIMETERS
+            + _SEGMENT_QUANTIZATION_ERROR_MILLIMETERS
+        )
     return distance_x * distance_x + distance_y * distance_y <= tolerance * tolerance
 
 

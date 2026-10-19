@@ -746,6 +746,13 @@ async def test_clean_area_blocks_every_stale_map_binding_before_robot_command(
         live_floor_plan = _area_floor_plan(mission_id=43)
     elif mismatch == "partition":
         live_floor_plan = _area_floor_plan(partition_id="new-partition")
+        # A changed partition with identical geometry preserves coordinates.
+        # Keep this blocked-command case spatially different as well.
+        room = live_floor_plan.rooms[0]
+        live_floor_plan = replace(
+            live_floor_plan,
+            rooms=(replace(room, boundary=((0.05, 0), *room.boundary[1:])),),
+        )
     else:
         room = saved_floor_plan.rooms[0]
         live_floor_plan = FloorPlan(
