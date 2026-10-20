@@ -22,9 +22,9 @@ async function loadAreaMutationHarness(page) {
   await page.goto("/", { waitUntil: "domcontentloaded" });
 }
 
-async function createPendingAreaSave(page, { holdPlans = false } = {}) {
+async function createPendingAreaSave(page, { holdPlans = false, existingAreaId = null } = {}) {
   await loadAreaMutationHarness(page);
-  await page.evaluate(async (holdPlans) => {
+  await page.evaluate(async ({ holdPlans, existingAreaId }) => {
     const { EffectController, WorkspaceStore, createGalleryState } = await import("/area-mutation-ownership.js");
     const base = createGalleryState("ready");
     const store = new WorkspaceStore();
@@ -54,8 +54,8 @@ async function createPendingAreaSave(page, { holdPlans = false } = {}) {
         ? new Promise((resolve) => { run.pendingPlans = { signal, resolve }; })
         : Promise.resolve(base.resources.plans.value),
       areas: async () => base.resources.areas.value,
-      saveArea: (_path, _value, signal) => new Promise((resolve, reject) => {
-        run.saves.push({ signal, resolve, reject });
+      saveArea: (_path, value, signal) => new Promise((resolve, reject) => {
+        run.saves.push({ value, signal, resolve, reject });
       }),
     };
     run.effects = new EffectController(store, backend);
@@ -74,12 +74,23 @@ async function createPendingAreaSave(page, { holdPlans = false } = {}) {
     const current = store.value;
     store.patch({
       workflow: "areaReview",
-      areaDraft: { ...current.areaDraft, id: null, name: "First area", dirty: true },
+      areaDraft: { ...current.areaDraft, id: existingAreaId, name: existingAreaId ? "Hallway" : "First area", status: existingAreaId ? "stale" : "new", canRebind: Boolean(existingAreaId), dirty: !existingAreaId },
       draw: { ...current.draw, circles: [{ x: 1, y: 1, radius: 0.2 }], dirty: true },
     });
     run.saving = run.effects.saveArea();
-  }, holdPlans);
+  }, { holdPlans, existingAreaId });
 }
+
+test("confirming a stale area writes its existing ID so the backend replaces its binding", async ({ page }) => {
+  await createPendingAreaSave(page, { existingAreaId: "hallway-saved-id" });
+  const result = await page.evaluate(() => {
+    const run = window.__areaMutationOwnership;
+    const request = run.saves[0].value;
+    run.effects.dispose();
+    return { areaId: request.areaId, name: request.name };
+  });
+  expect(result).toEqual({ areaId: "hallway-saved-id", name: "Hallway" });
+});
 
 async function replaceEntry(page, update) {
   const generation = await page.evaluate((changes) => {

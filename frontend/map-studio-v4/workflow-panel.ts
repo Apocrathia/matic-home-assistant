@@ -342,6 +342,8 @@ line-height: var(--ms-lh-snug);
     const draft = this.state.areaDraft;
     const areas = this.state.resources.areas;
     const needsReview = draft.canRebind || draft.status === "review";
+    const reviewHasOutline = this.state.draw.outline?.closed === true && this.state.draw.outline.points.length >= 3;
+    const reviewHasCircles = this.state.draw.circles.length > 0;
     const stale = !needsReview && (draft.status === "stale" || draft.status === "unknown");
     // Held while a command runs (R12): fields stay focusable and say why.
     const held = this.#heldReason();
@@ -353,7 +355,11 @@ line-height: var(--ms-lh-snug);
     const canDelete = deleteSubject(this.state, "confirmDeleteArea") !== undefined;
     return html`
       <div class="stack">
-        ${needsReview ? html`<div class="notice" data-tone="warning" role="status">${this.#t("area_review_required", "The map changed since you saved this area, so save it again or redraw it.")}</div>` : nothing}
+        ${needsReview ? html`<div class="notice" data-tone="warning" role="status">${reviewHasOutline
+          ? this.#t("area_review_outline_required", "The map changed since this area was saved. Inspect its outline and coverage on the current map, then confirm to update the saved map binding, or redraw it.")
+          : reviewHasCircles
+            ? this.#t("area_review_circles_required", "The map changed since this area was saved. Inspect its saved circle coverage on the current map, then confirm to update the saved map binding. Redraw it if the coverage is uncertain.")
+            : this.#t("area_review_geometry_unavailable", "The map changed since this area was saved, but its saved coverage is unavailable to inspect. Redraw the area before confirming its map binding.")}</div>` : nothing}
         ${stale ? html`<div class="problem" role="alert">${this.#t("area_redraw_required", "Home Assistant can't use this area as it was saved, so redraw it.")}</div>` : nothing}
         ${areas.status === "error" ? html`
           <div class="stack">

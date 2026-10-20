@@ -784,8 +784,8 @@ export const sharedCadenceDeleteRequestIsCurrent = (
   );
 };
 
-// Selecting a saved area loads its draft and outline; null starts a fresh
-// one. Pure, so the review gallery can play it without the effects.
+// Selecting a saved area loads its draft and saved geometry; null starts a
+// fresh one. Pure, so the review gallery can play it without the effects.
 export const areaSelection = (state: WorkspaceState, areaId: string | null): Pick<WorkspaceState, "selection" | "areaDraft" | "draw"> => {
   const area = state.resources.areas.value?.areas.find((candidate) => candidate.id === areaId);
   return {
@@ -1389,10 +1389,15 @@ export const selectPrimaryAction = (state: WorkspaceState): PrimaryAction | NoBu
       const editable = canEditCoordinates(state);
       const drawn = state.draw.circles.length > 0;
       const named = state.areaDraft.name.trim().length > 0;
+      const label = state.areaDraft.canRebind || state.areaDraft.status === "review"
+        ? {
+          label: "Confirm area on current map",
+          labelKey: "v4_action_confirm_area_binding",
+        }
+        : { label: "Save area", labelKey: "v4_action_save_area" };
       return {
         id: "save-area",
-        label: "Save area",
-        labelKey: "v4_action_save_area",
+        ...label,
         kind: "primary",
         enabled: editable && drawn && named,
         ...(!editable

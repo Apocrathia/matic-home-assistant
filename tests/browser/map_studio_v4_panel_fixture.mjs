@@ -171,6 +171,8 @@ export async function installPanelFixture(page, {
     const pendingServices = [];
     let deferredAreaWrites = 0;
     const pendingAreaWrites = [];
+    let areaCatalog = structuredClone(areas);
+    const areaRequests = [];
     let planReads = 0;
     let deltaReads = 0;
     let deltaPayloadResponses = 0;
@@ -212,11 +214,30 @@ export async function installPanelFixture(page, {
     const fetchWithAuth = async (path, options = {}) => {
       const entryB = path.endsWith("-b");
       if (/areas\/synthetic(?:-b)?$/.test(path) && options.method === "POST") {
-        const result = json({ id: "synthetic-area" });
+        const body = JSON.parse(options.body);
+        areaRequests.push({ method: "POST", body });
+        const savedId = typeof body.area_id === "string" ? body.area_id : "synthetic-area";
+        const commitArea = () => {
+          if (!areaCatalog?.areas) return;
+          areaCatalog = {
+            ...areaCatalog,
+            areas: areaCatalog.areas.some((candidate) => candidate.id === savedId)
+              ? areaCatalog.areas.map((candidate) => candidate.id === savedId
+                ? { ...candidate, name: body.name, circles: body.circles, outline: body.outline ?? null,
+                    cleaning_mode: body.cleaning_mode, coverage_setting: body.coverage_setting,
+                    status: "current", can_rebind: false }
+                : candidate)
+              : [...areaCatalog.areas, { id: savedId, name: body.name, circles: body.circles,
+                  outline: body.outline ?? null, cleaning_mode: body.cleaning_mode,
+                  coverage_setting: body.coverage_setting, status: "current", can_rebind: false }],
+          };
+        };
+        const result = json({ id: savedId });
         if (deferredAreaWrites > 0) {
           deferredAreaWrites -= 1;
-          return new Promise((resolve, reject) => pendingAreaWrites.push({ release: () => resolve(result), reject }));
+          return new Promise((resolve, reject) => pendingAreaWrites.push({ release: () => { commitArea(); resolve(result); }, reject }));
         }
+        commitArea();
         return result;
       }
       if (path.endsWith("slam_entries")) {
@@ -238,12 +259,15 @@ export async function installPanelFixture(page, {
         map_session_key: entryB ? "b".repeat(64) : "a".repeat(64),
         pose_freshness: "live",
       });
-      if (/areas\/synthetic(?:-b)?$/.test(path)) return json(areas ?? {
+      if (/areas\/synthetic(?:-b)?$/.test(path)) {
+        areaRequests.push({ method: "GET" });
+        return json(areaCatalog ?? {
         scene_url: `/api/matic_robot/slam_scene/${entryB ? "synthetic-b" : "synthetic"}`,
         rooms: [],
         areas: [],
         selected_area: null,
-      });
+        });
+      }
       if (/plans\/synthetic(?:-b)?$/.test(path)) {
         planReads += 1;
         if (failedPlanReads > 0) {
@@ -408,6 +432,7 @@ export async function installPanelFixture(page, {
       pendingHistoryScenes,
       get planReads() { return planReads; },
       setPlanCatalog: (value) => Object.assign(planCatalog, structuredClone(value)),
+      areaRequests,
       userData: () => structuredClone(userStore),
       userDataCalls,
       // Reject the next frontend user data message of `type` once.

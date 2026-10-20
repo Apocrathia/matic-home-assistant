@@ -1042,9 +1042,10 @@ test.describe("Map Studio v0.4 foundation", () => {
           ...state,
           workflow: "areaReview",
           areaDraft: { ...state.areaDraft, status: "stale", canRebind: reviewable },
+          draw: { ...state.draw, circles: [{ x: 1.5, y: 1.4, radius: 0.3 }] },
         });
       }, { tag: GALLERY_TAG, reviewable: canRebind });
-      const review = gallery.getByText("The map changed since you saved this area, so save it again or redraw it.", { exact: true });
+      const review = gallery.getByText("The map changed since this area was saved. Inspect its saved circle coverage on the current map, then confirm to update the saved map binding. Redraw it if the coverage is uncertain.", { exact: true });
       const redraw = gallery.getByText("Home Assistant can't use this area as it was saved, so redraw it.", { exact: true });
       await expect(canRebind ? review : redraw).toBeVisible();
       await expect(canRebind ? redraw : review).toHaveCount(0);

@@ -122,8 +122,9 @@ Only administrators get tools; anyone else gets no tools and a one-line prompt
 to ask an administrator.
 
 **Matic: Robot status (administrators only)** reads robot status, a plan's next
-run, robot-reported history, recent events and command activity
-(`MaticGetOperations`, `MaticGetPlan`, `MaticGetNativeHistory`,
+run, whether its saved areas are ready on the current map, robot-reported
+history, recent events and command activity (`MaticGetOperations`,
+`MaticGetPlan`, `MaticGetPlanReadiness`, `MaticGetNativeHistory`,
 `MaticGetRecentEvents`, `MaticGetActivity`, `MaticGetFirmware`). Its write tools
 use Matic Map's own actions and checks: `MaticRunPlan` (a plan name or the
 default plan), `MaticCleanRooms` (room names and a cleaning mode),
@@ -134,6 +135,9 @@ when the robot is exposed to Assist.
 Recent events keep room and final-state evidence separate from the
 [command and raw-state observation trail](activity-diagnostics.md).
 Dust-bag observations are available through `MaticGetOperations` only.
+`MaticGetPlanReadiness` reports only map and saved-area readiness for a
+preview; the normal robot control checks still decide whether a cleaning run
+can start.
 
 **Matic: Firmware research (administrators only)** reads the
 [firmware intelligence inbox](firmware-intelligence.md) (`MaticGetFirmware`) and

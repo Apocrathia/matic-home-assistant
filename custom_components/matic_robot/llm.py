@@ -25,9 +25,16 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import llm, translation
 from homeassistant.util.json import JsonObjectType
 
+from .area_binding import (
+    AreaBindingStatus,
+    area_binding_allows_review,
+    area_binding_needs_geometry_index,
+    area_binding_status,
+)
+from .area_geometry import RoomGeometryIndex
 from .client.commands import CleaningMode
 from .client.exceptions import MaticError
-from .client.models import CleaningSession
+from .client.models import CleaningSession, FloorPlan
 from .client.observations import MAX_OBSERVATIONS
 from .const import (
     DATA_LLM_API,
@@ -46,6 +53,7 @@ from .plans import (
     CleaningPlanManager,
     CleaningRoom,
     leg_groups,
+    plan_entries,
     plan_floor_token,
     resolve_room_reference,
     room_cadence_identity,
@@ -307,6 +315,7 @@ class MaticRobotStatusAPI(_AdministratorAPI):
         return [
             MaticGetOperationsTool(exposed_only=exposed_only),
             MaticGetPlanTool(exposed_only=exposed_only),
+            MaticGetPlanReadinessTool(exposed_only=exposed_only),
             MaticGetNativeHistoryTool(exposed_only=exposed_only),
             MaticGetRecentEventsTool(self, exposed_only=exposed_only),
             MaticGetActivityTool(exposed_only=exposed_only),
@@ -799,6 +808,216 @@ class MaticGetPlanTool(_MaticTool):
                 },
             )
         )
+
+
+class MaticGetPlanReadinessTool(_MaticTool):
+    """Report whether a saved plan's map and areas are safe to use."""
+
+    name = "MaticGetPlanReadiness"
+    title = "Check plan readiness"
+    description = (
+        "Read-only check of whether a saved plan can be previewed on the current "
+        "map. Reports plain-language area states and never returns map geometry "
+        "or internal map details. It does not change the plan or control the "
+        "robot; normal robot controls still decide whether a run can start."
+    )
+    annotations = _READ_ONLY
+    parameters = llm.Tool.parameters.extend(
+        {
+            **_ROBOT_FIELD,
+            probatio.Optional("plan"): probatio.All(
+                cv.string, probatio.Length(min=1, max=128)
+            ),
+        }
+    )
+
+    @override
+    async def async_run(
+        self,
+        hass: HomeAssistant,
+        args: dict[str, Any],
+        llm_context: llm.LLMContext,
+    ) -> llm.ToolResult:
+        entry = self.resolve_entry(hass, llm_context, args.get("robot"))
+        runtime = entry.runtime_data
+        state = runtime.coordinator.data
+        floor_plan = state.floor_plan
+        manager = runtime.cleaning_plans
+        serial_number = state.info.serial_number
+        map_status = "ready"
+        if floor_plan is None or not floor_plan.rooms:
+            map_status = "unavailable"
+        elif not runtime.slam_map.floor_plan_is_current(floor_plan):
+            map_status = "rechecking"
+
+        plan_id = _resolve_plan_id(manager, serial_number, args.get("plan"))
+        if plan_id is None:
+            plan_id = manager.snapshot(serial_number).get("selected_plan")
+        plans = manager.plans(serial_number)
+        plan = plans.get(plan_id) if isinstance(plan_id, str) else None
+        if not isinstance(plan, Mapping):
+            return _plan_readiness_result(
+                "unavailable",
+                map_status,
+                {"id": plan_id, "name": None},
+                [],
+                "No saved plan is selected or available.",
+            )
+
+        plan_summary = {"id": plan_id, "name": str(plan.get("name", plan_id))}
+        if floor_plan is None or not floor_plan.rooms:
+            return _plan_readiness_result(
+                "unavailable",
+                "unavailable",
+                plan_summary,
+                [],
+                "The room map is unavailable.",
+            )
+        if map_status == "rechecking":
+            return _plan_readiness_result(
+                "unavailable",
+                "rechecking",
+                plan_summary,
+                [],
+                "The room map is being checked. Try again in a moment.",
+            )
+
+        try:
+            entries = plan_entries(plan)
+            saved_areas = manager.areas(serial_number)
+        except KeyError, TypeError, ValueError:
+            return _plan_readiness_result(
+                "unavailable",
+                "ready",
+                plan_summary,
+                [],
+                "The saved plan could not be checked.",
+            )
+
+        area_states: list[dict[str, str]] = []
+        has_unreviewable_area = False
+        needs_confirmation = False
+        room_geometry: RoomGeometryIndex | None = None
+        for item in entries:
+            if item["kind"] != "area":
+                continue
+            area_id = item["area_id"]
+            area = saved_areas.get(area_id)
+            if not isinstance(area, Mapping):
+                area_states.append({"name": "Custom area", "status": "redraw_required"})
+                has_unreviewable_area = True
+                continue
+            name = str(area.get("name", area_id))
+            uses_indexed_binding = area_binding_needs_geometry_index(area)
+            if uses_indexed_binding and room_geometry is None:
+                room_geometry = _room_geometry_index(floor_plan)
+            status = area_binding_status(area, floor_plan, room_geometry=room_geometry)
+            if status is AreaBindingStatus.CURRENT:
+                area_states.append({"name": name, "status": "ready"})
+            elif status is AreaBindingStatus.GEOMETRY_CHANGED:
+                if room_geometry is None:
+                    room_geometry = _room_geometry_index(floor_plan)
+                can_rebind = area_binding_allows_review(
+                    area,
+                    floor_plan,
+                    status=status,
+                    room_geometry=room_geometry,
+                    circles_already_validated=uses_indexed_binding,
+                )
+                if can_rebind:
+                    area_states.append({"name": name, "status": "needs_confirmation"})
+                    needs_confirmation = True
+                else:
+                    area_states.append({"name": name, "status": "redraw_required"})
+                    has_unreviewable_area = True
+            else:
+                area_states.append({"name": name, "status": "redraw_required"})
+                has_unreviewable_area = True
+
+        if has_unreviewable_area:
+            return _plan_readiness_result(
+                "redraw_required",
+                "ready",
+                plan_summary,
+                area_states,
+                "At least one area must be redrawn before this plan can be used.",
+            )
+        if needs_confirmation:
+            return _plan_readiness_result(
+                "needs_confirmation",
+                "ready",
+                plan_summary,
+                area_states,
+                "Confirm each marked area on the current map before using this plan.",
+            )
+
+        try:
+            room_map = {room.id: room.name for room in floor_plan.rooms}
+            manager.preview(
+                serial_number,
+                room_map,
+                plan_id,
+                floor_token=plan_floor_token(floor_plan),
+                room_identities={
+                    room.id: room_cadence_identity(floor_plan, room.id)
+                    for room in floor_plan.rooms
+                },
+                floor_plan=floor_plan,
+            )
+        except KeyError, ValueError:
+            return _plan_readiness_result(
+                "unavailable",
+                "ready",
+                plan_summary,
+                area_states,
+                "The saved plan is not currently valid for preview.",
+            )
+        return _plan_readiness_result(
+            "ready",
+            "ready",
+            plan_summary,
+            area_states,
+            "The saved plan is ready for preview on the current map. Robot controls "
+            "still check whether a run can start.",
+        )
+
+
+def _plan_readiness_result(
+    status: str,
+    map_status: str,
+    plan: dict[str, Any],
+    areas: list[dict[str, str]],
+    message: str,
+) -> llm.ToolResult:
+    ready = status == "ready"
+    return llm.ToolResult(
+        data=cast(
+            JsonObjectType,
+            {
+                "read_only": True,
+                "status": status,
+                "map_status": map_status,
+                "can_preview": ready,
+                "plan": plan,
+                "areas": areas,
+                "message": message,
+            },
+        )
+    )
+
+
+def _room_geometry_index(floor_plan: FloorPlan) -> RoomGeometryIndex:
+    """Build one bounded index for a single plan-readiness scan."""
+    return RoomGeometryIndex(
+        [
+            {
+                "room_id": room.id,
+                "name": room.name,
+                "boundary": [list(point) for point in room.boundary],
+            }
+            for room in floor_plan.rooms
+        ]
+    )
 
 
 def _resolve_plan_id(

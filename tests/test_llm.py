@@ -22,6 +22,9 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.matic_robot.area_binding import (
     AREA_SCHEMA_VERSION,
+    BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+    AreaBindingStatus,
+    binding_for_area,
     binding_for_floor_plan,
 )
 from custom_components.matic_robot.client.exceptions import CannotConnectError
@@ -55,6 +58,7 @@ from custom_components.matic_robot.llm import (
     MaticGetFirmwareTool,
     MaticGetNativeHistoryTool,
     MaticGetOperationsTool,
+    MaticGetPlanReadinessTool,
     MaticGetPlanTool,
     MaticGetRecentEventsTool,
     MaticResetScheduleTool,
@@ -366,6 +370,7 @@ async def test_api_registration_event_capture_and_admin_gate() -> None:
     assert [tool.name for tool in instance.tools] == [
         "MaticGetOperations",
         "MaticGetPlan",
+        "MaticGetPlanReadiness",
         "MaticGetNativeHistory",
         "MaticGetRecentEvents",
         "MaticGetActivity",
@@ -971,6 +976,350 @@ def _area_leg(index: int, area_id: str, name: str, mode: str, handoff: str):
         "coverage_setting": "quick",
         "handoff_after_leg": handoff,
     }
+
+
+@pytest.mark.parametrize(
+    ("binding_status", "reviewable", "expected"),
+    [
+        (AreaBindingStatus.CURRENT, False, "ready"),
+        (AreaBindingStatus.GEOMETRY_CHANGED, True, "needs_confirmation"),
+        (AreaBindingStatus.GEOMETRY_CHANGED, False, "redraw_required"),
+        (AreaBindingStatus.MISSION_CHANGED, False, "redraw_required"),
+    ],
+)
+async def test_plan_readiness_reports_safe_area_state_without_private_binding_data(
+    hass, binding_status, reviewable, expected
+) -> None:
+    floor_plan = FloorPlan(
+        1,
+        "partition",
+        b"partition",
+        (Room("kitchen", "Kitchen", "k", b"k", ((0, 0), (1, 0), (0, 1))),),
+    )
+    entry = _entry(floor_plan=floor_plan)
+    manager = entry.runtime_data.cleaning_plans
+    manager.plans.return_value = {
+        "saved": {
+            "name": "Saved plan",
+            "rooms": [],
+            "entries": [_area_entry("secret-area-id")],
+        }
+    }
+    manager.areas.return_value = {
+        "secret-area-id": {
+            "name": "Rug",
+            "circles": [{"x": 0.123, "y": 0.456, "radius": 0.2}],
+            "map_binding": {"geometry_sha256": "SECRET_HASH"},
+        }
+    }
+    manager.preview.return_value = {"valid": True}
+    robot_hass = _hass(entry)
+    with (
+        patch(
+            "custom_components.matic_robot.llm.area_binding_status",
+            return_value=binding_status,
+        ),
+        patch(
+            "custom_components.matic_robot.llm.area_binding_allows_review",
+            return_value=reviewable,
+        ),
+    ):
+        result = await MaticGetPlanReadinessTool().async_call(
+            robot_hass,
+            llm.ToolInput("MaticGetPlanReadiness", {"plan": "saved"}),
+            _context(),
+        )
+
+    data = result.data
+    assert data["status"] == expected
+    assert data["areas"] == [{"name": "Rug", "status": expected}]
+    assert data["can_preview"] is (expected == "ready")
+    assert "can_run" not in data
+    assert "secret-area-id" not in json.dumps(data)
+    assert "SECRET_HASH" not in json.dumps(data)
+    assert "0.123" not in json.dumps(data)
+    if expected != "ready":
+        manager.preview.assert_not_called()
+
+
+async def test_plan_readiness_reuses_one_geometry_index_for_reviewable_areas() -> None:
+    floor_plan = FloorPlan(
+        1,
+        "partition",
+        b"partition",
+        (Room("kitchen", "Kitchen", "k", b"k", ()),),
+    )
+    entry = _entry(floor_plan=floor_plan)
+    manager = entry.runtime_data.cleaning_plans
+    manager.plans.return_value = {
+        "saved": {
+            "name": "Saved plan",
+            "rooms": [],
+            "entries": [_area_entry("rug"), _area_entry("mat")],
+        }
+    }
+    manager.areas.return_value = {
+        "rug": {"name": "Rug"},
+        "mat": {"name": "Mat"},
+    }
+    geometry = MagicMock()
+    with (
+        patch(
+            "custom_components.matic_robot.llm.area_binding_needs_geometry_index",
+            return_value=True,
+        ),
+        patch(
+            "custom_components.matic_robot.llm._room_geometry_index",
+            return_value=geometry,
+        ) as build_index,
+        patch(
+            "custom_components.matic_robot.llm.area_binding_status",
+            return_value=AreaBindingStatus.GEOMETRY_CHANGED,
+        ) as status,
+        patch(
+            "custom_components.matic_robot.llm.area_binding_allows_review",
+            return_value=True,
+        ) as allows_review,
+    ):
+        result = await MaticGetPlanReadinessTool().async_call(
+            _hass(entry),
+            llm.ToolInput("MaticGetPlanReadiness", {"plan": "saved"}),
+            _context(),
+        )
+
+    assert result.data["status"] == "needs_confirmation"
+    build_index.assert_called_once_with(floor_plan)
+    assert [call.kwargs["room_geometry"] for call in status.call_args_list] == [
+        geometry,
+        geometry,
+    ]
+    assert [call.kwargs["room_geometry"] for call in allows_review.call_args_list] == [
+        geometry,
+        geometry,
+    ]
+    assert [
+        call.kwargs["circles_already_validated"]
+        for call in allows_review.call_args_list
+    ] == [True, True]
+
+
+async def test_plan_readiness_fails_closed_when_no_saved_plan_is_selected() -> None:
+    entry = _entry(
+        floor_plan=FloorPlan(
+            1,
+            "partition",
+            b"partition",
+            (Room("kitchen", "Kitchen", "k", b"k", ((0, 0), (1, 0), (0, 1))),),
+        )
+    )
+    manager = entry.runtime_data.cleaning_plans
+    manager.snapshot.return_value = {"selected_plan": "missing"}
+    manager.plans.return_value = {}
+
+    result = await MaticGetPlanReadinessTool().async_call(
+        _hass(entry), llm.ToolInput("MaticGetPlanReadiness", {}), _context()
+    )
+
+    assert result.data == {
+        "read_only": True,
+        "status": "unavailable",
+        "map_status": "ready",
+        "can_preview": False,
+        "plan": {"id": "missing", "name": None},
+        "areas": [],
+        "message": "No saved plan is selected or available.",
+    }
+
+
+async def test_plan_readiness_fails_closed_for_invalid_plan_entries() -> None:
+    entry = _entry(
+        floor_plan=FloorPlan(
+            1,
+            "partition",
+            b"partition",
+            (Room("kitchen", "Kitchen", "k", b"k", ((0, 0), (1, 0), (0, 1))),),
+        )
+    )
+    manager = entry.runtime_data.cleaning_plans
+    manager.plans.return_value = {"saved": {"name": "Saved"}}
+    with patch(
+        "custom_components.matic_robot.llm.plan_entries", side_effect=ValueError
+    ):
+        result = await MaticGetPlanReadinessTool().async_call(
+            _hass(entry),
+            llm.ToolInput("MaticGetPlanReadiness", {"plan": "saved"}),
+            _context(),
+        )
+
+    assert result.data["status"] == "unavailable"
+    assert result.data["message"] == "The saved plan could not be checked."
+    manager.preview.assert_not_called()
+
+
+async def test_plan_readiness_requires_missing_areas_to_be_redrawn() -> None:
+    entry = _entry(
+        floor_plan=FloorPlan(
+            1,
+            "partition",
+            b"partition",
+            (Room("kitchen", "Kitchen", "k", b"k", ((0, 0), (1, 0), (0, 1))),),
+        )
+    )
+    manager = entry.runtime_data.cleaning_plans
+    manager.plans.return_value = {"saved": {"name": "Saved"}}
+    manager.areas.return_value = {}
+    with patch(
+        "custom_components.matic_robot.llm.plan_entries",
+        return_value=[
+            {"kind": "room", "room_id": "kitchen"},
+            {"kind": "area", "area_id": "missing"},
+        ],
+    ):
+        result = await MaticGetPlanReadinessTool().async_call(
+            _hass(entry),
+            llm.ToolInput("MaticGetPlanReadiness", {"plan": "saved"}),
+            _context(),
+        )
+
+    assert result.data["status"] == "redraw_required"
+    assert result.data["areas"] == [
+        {"name": "Custom area", "status": "redraw_required"}
+    ]
+    manager.preview.assert_not_called()
+
+
+async def test_plan_readiness_reports_preview_rejection_without_commanding_robot() -> (
+    None
+):
+    floor_plan = FloorPlan(
+        1,
+        "partition",
+        b"partition",
+        (Room("kitchen", "Kitchen", "k", b"k", ((0, 0), (1, 0), (0, 1))),),
+    )
+    entry = _entry(floor_plan=floor_plan)
+    manager = entry.runtime_data.cleaning_plans
+    manager.plans.return_value = {"saved": {"name": "Saved", "rooms": []}}
+    manager.preview.side_effect = ValueError("stale plan")
+
+    result = await MaticGetPlanReadinessTool().async_call(
+        _hass(entry),
+        llm.ToolInput("MaticGetPlanReadiness", {"plan": "saved"}),
+        _context(),
+    )
+
+    assert result.data["status"] == "unavailable"
+    assert result.data["can_preview"] is False
+    assert (
+        result.data["message"] == "The saved plan is not currently valid for preview."
+    )
+
+
+async def test_plan_readiness_distinguishes_unavailable_and_rechecking_maps() -> None:
+    floor_plan = FloorPlan(
+        1, "partition", b"partition", (Room("kitchen", "Kitchen", "k", b"k", ()),)
+    )
+    entry = _entry(floor_plan=floor_plan)
+    manager = entry.runtime_data.cleaning_plans
+    manager.plans.return_value = {"saved": {"name": "Saved", "rooms": []}}
+    tool = MaticGetPlanReadinessTool()
+
+    no_map = _entry()
+    no_map.runtime_data.cleaning_plans.plans.return_value = {
+        "saved": {"name": "Saved", "rooms": []}
+    }
+    unavailable = await tool.async_call(
+        _hass(no_map), llm.ToolInput(tool.name, {"plan": "saved"}), _context()
+    )
+    assert unavailable.data["status"] == "unavailable"
+    assert unavailable.data["map_status"] == "unavailable"
+
+    empty_map = _entry(floor_plan=FloorPlan(1, "partition", b"partition", ()))
+    empty_map.runtime_data.cleaning_plans.plans.return_value = {
+        "saved": {"name": "Saved", "rooms": []}
+    }
+    unavailable_empty_map = await tool.async_call(
+        _hass(empty_map), llm.ToolInput(tool.name, {"plan": "saved"}), _context()
+    )
+    assert unavailable_empty_map.data["status"] == "unavailable"
+    assert unavailable_empty_map.data["map_status"] == "unavailable"
+
+    entry.runtime_data.slam_map.floor_plan_is_current.return_value = False
+    rechecking = await tool.async_call(
+        _hass(entry), llm.ToolInput(tool.name, {"plan": "saved"}), _context()
+    )
+    assert rechecking.data["status"] == "unavailable"
+    assert rechecking.data["map_status"] == "rechecking"
+
+
+async def test_plan_readiness_recognizes_reviewable_stale_v4_area(hass) -> None:
+    from dataclasses import replace
+
+    boundary = (
+        (0.0, 0.0),
+        (10.0, 0.0),
+        (10.0, 10.0),
+        (5.5, 10.0),
+        *tuple((5.4 - index / 750, 5.3 if index % 2 else 4.7) for index in range(601)),
+        (0.0, 10.0),
+    )
+    original = FloorPlan(
+        42,
+        "synthetic-partition",
+        b"synthetic-partition",
+        (Room("dense", "Dense", "dense", b"dense", boundary),),
+    )
+    changed_boundary = list(boundary)
+    changed_boundary[304] = (changed_boundary[304][0], 4.9)
+    changed = replace(
+        original,
+        rooms=(replace(original.rooms[0], boundary=tuple(changed_boundary)),),
+    )
+    circles = [{"x": 5.0, "y": 4.4, "radius": 0.1}]
+    with patch(
+        "custom_components.matic_robot.area_binding._translation_room_anchors",
+        return_value=None,
+    ):
+        saved_area = {
+            "schema_version": AREA_SCHEMA_VERSION,
+            "name": "Rug",
+            "circles": circles,
+            "map_binding": binding_for_area(original, circles),
+        }
+    assert (
+        saved_area["map_binding"]["version"]
+        == BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+    )
+    entry = _entry(floor_plan=changed)
+    manager = entry.runtime_data.cleaning_plans
+    manager.plans.return_value = {
+        "saved": {
+            "name": "Saved plan",
+            "rooms": [],
+            "entries": [_area_entry("area-private-id")],
+        }
+    }
+    manager.areas.return_value = {"area-private-id": saved_area}
+
+    result = await MaticGetPlanReadinessTool().async_call(
+        _hass(entry),
+        llm.ToolInput("MaticGetPlanReadiness", {"plan": "saved"}),
+        _context(),
+    )
+    assert result.data["status"] == "needs_confirmation"
+    assert result.data["areas"] == [{"name": "Rug", "status": "needs_confirmation"}]
+    assert result.data["can_preview"] is False
+    assert "can_run" not in result.data
+    manager.preview.assert_not_called()
+
+
+async def test_plan_readiness_requires_current_administrator() -> None:
+    with pytest.raises(HomeAssistantError, match="administrator"):
+        await MaticGetPlanReadinessTool().async_call(
+            _hass(_entry(), user=SimpleNamespace(is_admin=False)),
+            llm.ToolInput("MaticGetPlanReadiness", {}),
+            _context(),
+        )
 
 
 async def test_plan_tool_previews_custom_areas_in_run_order(hass) -> None:
