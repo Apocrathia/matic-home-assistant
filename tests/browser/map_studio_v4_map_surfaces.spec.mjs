@@ -928,15 +928,15 @@ test.describe("Area review", () => {
     await expect(remove).toBeFocused();
   });
 
-  test("a changed map titles the review Check {name} with the warning first and Save area ready", async ({ page }) => {
+  test("a changed map asks for explicit current-map confirmation before rebinding", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "area-review-rebind" });
     const panel = panelOf(gallery);
     await expect(panel.getByRole("heading", { level: 2 })).toHaveText("Check Entryway");
     const body = panel.locator(".workflow-body .stack");
-    await expect(body.locator("> :first-child")).toHaveText("The map changed since you saved this area, so save it again or redraw it.");
+    await expect(body.locator("> :first-child")).toHaveText("The map changed since this area was saved. Inspect its saved circle coverage on the current map, then confirm to update the saved map binding. Redraw it if the coverage is uncertain.");
     await expect(body.locator("> :first-child")).toHaveAttribute("data-tone", "warning");
-    const save = gallery.locator(".action-bar").getByRole("button", { name: "Save area", exact: true });
-    await expect(save).toBeEnabled();
+    const confirm = gallery.locator(".action-bar").getByRole("button", { name: "Confirm area on current map", exact: true });
+    await expect(confirm).toBeEnabled();
     const state = await snapshot(page);
     await patchState(gallery, { areaDraft: { ...state.areaDraft, status: "stale", canRebind: false } });
     await expect(panel.getByRole("heading", { level: 2 })).toHaveText("Entryway");
