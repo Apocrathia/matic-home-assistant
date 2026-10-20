@@ -2202,7 +2202,11 @@ test.describe("Map Studio v0.4 foundation", () => {
     const save = gallery.getByRole("button", { name: "Save", exact: true });
     await expect(save).toBeInViewport({ ratio: 1 });
     const body = gallery.locator(".workflow-body");
-    expect(await body.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+    // replaceWorkspaceState schedules the Lit render; wait for its expanded
+    // room form to contribute overflow before asserting the body can scroll.
+    await expect.poll(() => body.evaluate((element) => element.scrollHeight > element.clientHeight), {
+      message: "the expanded plan form makes the workflow body scrollable",
+    }).toBe(true);
     await body.evaluate((element) => { element.scrollTop = element.scrollHeight; });
     await expect(save).toBeInViewport({ ratio: 1 });
     await expect(gallery.getByText("When a run ends", { exact: true })).toBeInViewport();
