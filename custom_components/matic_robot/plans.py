@@ -194,6 +194,14 @@ class AreaFramePointLimitError(ValueError):
     """Raised when saved area room-frame snapshots exceed storage capacity."""
 
 
+class AreaSavePreconditionError(ValueError):
+    """Raised when an area save's identity or map precondition changed."""
+
+    def __init__(self, *, not_found: bool = False) -> None:
+        super().__init__("saved-area precondition changed before commit")
+        self.not_found = not_found
+
+
 class RoomSequenceLimitError(ValueError):
     """Raised when a cleaning definition exceeds the supported room count."""
 
@@ -2564,7 +2572,12 @@ class CleaningPlanManager:
         raise KeyError(requested)
 
     async def async_save_area(
-        self, serial_number: str, area_id: str, area: Mapping[str, Any]
+        self,
+        serial_number: str,
+        area_id: str,
+        area: Mapping[str, Any],
+        *,
+        precondition: Callable[[], None] | None = None,
     ) -> None:
         """Create or replace a private local drawn-area definition."""
 
@@ -2582,7 +2595,9 @@ class CleaningPlanManager:
             robot["areas"][area_id] = deepcopy(dict(area))
             robot["selected_area"] = area_id
 
-        await self._async_mutate_area_metadata(serial_number, save)
+        await self._async_mutate_area_metadata(
+            serial_number, save, precondition=precondition
+        )
 
     async def async_delete_area(self, serial_number: str, area_id: str) -> None:
         """Delete one local drawn area and every plan entry that names it.
@@ -6079,11 +6094,15 @@ class CleaningPlanManager:
         self,
         serial_number: str,
         mutate: Callable[[dict[str, Any]], None],
+        *,
+        precondition: Callable[[], None] | None = None,
     ) -> None:
         """Own an admitted Area metadata commit independently of its waiter."""
 
         async def persist(_lease: _MetadataLockLease) -> None:
-            await self._async_persist_area_metadata(serial_number, mutate)
+            await self._async_persist_area_metadata(
+                serial_number, mutate, precondition=precondition
+            )
 
         await self._async_run_owned_metadata(
             serial_number,
@@ -6254,6 +6273,8 @@ class CleaningPlanManager:
         self,
         serial_number: str,
         mutate: Callable[[dict[str, Any]], None],
+        *,
+        precondition: Callable[[], None] | None = None,
     ) -> None:
         """Persist current shared state while retaining its per-robot fence."""
         async with self._user_metadata_store_transaction(serial_number):
@@ -6265,6 +6286,10 @@ class CleaningPlanManager:
             area_keys = ("areas", "selected_area")
             before = {key: deepcopy(robot[key]) for key in area_keys if key in robot}
             try:
+                # The caller's synchronous guard and mutation share this locked
+                # transaction. No await may separate them.
+                if precondition is not None:
+                    precondition()
                 mutate(robot)
             except BaseException:
                 current = {
@@ -6302,7 +6327,9 @@ class CleaningPlanManager:
                 self._metadata_persistence_tasks.pop(serial_number, None)
         if task.cancelled():
             _LOGGER.error("Metadata persistence task was cancelled")
-        elif task.exception() is not None:
+        elif task.exception() is not None and not isinstance(
+            task.exception(), AreaSavePreconditionError
+        ):
             _LOGGER.error("Metadata persistence task failed")
 
     async def _async_wait_metadata_persistence(self, serial_number: str) -> None:

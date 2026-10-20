@@ -42,6 +42,7 @@ from .const import CONF_LIVE_WORKSPACE_TRANSPORT, DOMAIN
 from .plans import (
     AreaFramePointLimitError,
     AreaInUseError,
+    AreaSavePreconditionError,
     CleaningRoom,
     MetadataAdmissionClosedError,
     PlanAreaMapChangedError,
@@ -1213,6 +1214,29 @@ class MaticAreasView(HomeAssistantView):
             return web.Response(
                 status=HTTPStatus.CONFLICT, headers=PRIVATE_NO_STORE_HEADERS
             )
+
+        def validate_commit() -> None:
+            """Keep request identities valid through the area metadata commit."""
+            if (
+                _runtime_for_entry(hass, entry_id) is not runtime
+                or runtime.coordinator.data.floor_plan != floor_plan
+                or runtime.slam_map.mission_identity != map_identity
+                or not runtime.slam_map.floor_plan_is_current(floor_plan)
+            ):
+                raise AreaSavePreconditionError
+            current_areas = runtime.cleaning_plans.areas(serial_number)
+            if requested_id is None:
+                if area_id in current_areas:
+                    raise AreaSavePreconditionError
+            elif area_id not in current_areas:
+                raise AreaSavePreconditionError(not_found=True)
+            if any(
+                key != area_id
+                and str(value.get("name", key)).casefold() == name.casefold()
+                for key, value in current_areas.items()
+            ):
+                raise AreaSavePreconditionError
+
         try:
             await runtime.cleaning_plans.async_save_area(
                 serial_number,
@@ -1226,6 +1250,12 @@ class MaticAreasView(HomeAssistantView):
                     "coverage_setting": coverage_setting.value,
                     "map_binding": binding,
                 },
+                precondition=validate_commit,
+            )
+        except AreaSavePreconditionError as err:
+            return web.Response(
+                status=(HTTPStatus.NOT_FOUND if err.not_found else HTTPStatus.CONFLICT),
+                headers=PRIVATE_NO_STORE_HEADERS,
             )
         except MetadataAdmissionClosedError:
             return web.Response(

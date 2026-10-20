@@ -2079,7 +2079,9 @@ async def test_area_workspace_saves_updates_and_deletes_validated_areas() -> Non
     created = await view.post(_json_request(hass, "POST", values), "entry")
 
     assert json.loads(created.body) == {"id": "under_table"}
-    runtime.cleaning_plans.async_save_area.assert_awaited_once_with(
+    runtime.cleaning_plans.async_save_area.assert_awaited_once()
+    saved_args = runtime.cleaning_plans.async_save_area.await_args
+    assert saved_args.args == (
         "synthetic-serial",
         "under_table",
         {
@@ -2093,6 +2095,7 @@ async def test_area_workspace_saves_updates_and_deletes_validated_areas() -> Non
             ),
         },
     )
+    assert callable(saved_args.kwargs["precondition"])
 
     runtime.cleaning_plans.areas.return_value = {"under_table": {"name": "Under table"}}
     updated = await view.post(
