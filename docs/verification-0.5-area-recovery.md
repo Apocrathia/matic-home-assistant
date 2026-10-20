@@ -8,11 +8,17 @@ and then previewed for a saved plan. It does not authorize robot motion.
 
 ## Candidate identity
 
-- Repository candidate: `fix/home-shortcuts-half-sheet-fit` (PR
-  [#283](https://github.com/ProspectOre/matic-home-assistant/pull/283)). Its
-  final head and base must be recorded again when this receipt is frozen for
-  review; the earlier `106c4bd28c027c0ba658e799c81c76da28b2d7e6` source result
-  does not qualify later changes.
+- Recovery implementation: `fix/home-shortcuts-half-sheet-fit` (PR
+  [#283](https://github.com/ProspectOre/matic-home-assistant/pull/283)), with
+  intended base `614b0b60b24f918366cf7d2950935657f7860a44`, final head
+  `b68165c3df44c8f196b48c22e3450aac773c7cd4`, and merge commit
+  `080e213f73a4754e8d63aa9c4e439a9a1b740aa6`.
+- Qualification snapshot: `main`
+  `17a6eecf6c486eb82b4e1a1fc60ca3c1a6d41350`, which contains the recovery
+  implementation and the later GitHub-hosted-runner guard from PR #282.
+- The earlier PR #281 source result at
+  `106c4bd28c027c0ba658e799c81c76da28b2d7e6` is historical only; it does not
+  qualify the recovery implementation or this snapshot.
 - Target manifest version: `0.5.0rc34`.
 - This receipt describes source work only. It does not identify the code
   currently loaded by Home Assistant; installed identity is **open**.
@@ -73,8 +79,8 @@ live-robot evidence remain separate open gates.
 
 | Gate | Evidence recorded | Status / closure evidence |
 |---|---|---|
-| Source logic and regression tests | PR #281 includes v5 anchored binding checks and regression coverage for map/frame changes and room associations. | **Source evidence only.** Re-run the relevant tests on the final exact head and retain the command/result. Source tests cannot prove installed state, user review, or robot behavior. |
-| Hosted CI | PR #281 exact head previously reported passing Browser UI, Test, HACS, and Hassfest. | **Pass at `106c4bd…`.** Recheck if the head changes. This does not substitute for complete review or runtime gates. |
+| Source logic and regression tests | Exact `main` snapshot `17a6eecf6c486eb82b4e1a1fc60ca3c1a6d41350`: `python -m pytest --cov=custom_components/matic_robot --cov-report=term-missing` passed 5,135 tests at 100.00% coverage. It includes saved-area recovery and the later runner guard. | **Pass — source evidence only.** The suite cannot prove installed state, user review, or robot behavior. Re-run if the release source changes. |
+| Hosted CI | Exact `main` snapshot `17a6eecf6c486eb82b4e1a1fc60ca3c1a6d41350` passed Browser UI, Test, HACS, and Hassfest. PR #283's final head also passed those four checks. | **Pass — exact snapshot.** This does not substitute for complete review or runtime gates. Recheck if the release source changes. |
 | Regular review and findings | No complete exact-head/base review receipt is recorded here. The review request was reported blocked by quota. | **Open.** Obtain an authentic complete review for the final head and disposition all findings; do not infer review from CI. See [review and manual-merge checklist](maintenance-reviews.md). |
 | Installed runtime identity | The Home Assistant loaded integration version and source fingerprint have not been established for this candidate. | **Open.** Record installed version, exact file identity, startup/reload result, and rollback/preservation evidence. |
 | Saved-area recovery E2E | The owner has not used **Confirm area on current map** on the affected area. No current-map confirmation/readback receipt exists. | **Open.** On the installed candidate, exercise the review → explicit confirmation → area readback → `MaticGetPlanReadiness` → fresh `MaticGetPlan` preview flow. Preserve plan ID and expected target counts in the private evidence record; do not put map coordinates or secrets here. |
