@@ -51,9 +51,12 @@ font-weight: var(--ms-w-bold);
 line-height: var(--ms-lh-tight);
 white-space: nowrap;
 }
+/* Safety confirmations can have long localized labels. Let full-width action
+   buttons wrap inside their available inline size instead of clipping text. */
 .ms-btn--sm { min-inline-size: var(--ms-control-sm); min-block-size: var(--ms-control-sm); padding-inline: var(--ms-space-2); font-size: var(--ms-t-xs); }
 .ms-btn--lg { min-block-size: var(--ms-control-lg); font-size: var(--ms-t-md); }
-.ms-btn--block { display: flex; inline-size: 100%; }
+.ms-btn--block { display: flex; inline-size: 100%; min-inline-size: 0; }
+.ms-btn--block, .action-bar .ms-btn--primary { white-space: normal; overflow-wrap: anywhere; }
 .ms-btn--icon { padding-inline: 0; inline-size: var(--ms-control); }
 .ms-btn--primary { --ms-local: var(--ms-resolved-accent-fill, var(--ms-accent)); color: var(--ms-resolved-on-accent-fill, var(--ms-on-accent)); background: var(--ms-local); box-shadow: var(--ms-shadow-1); }
 .ms-btn--secondary { --ms-local: var(--ms-surface-card); border-color: var(--ms-line-strong); background: var(--ms-local); }
