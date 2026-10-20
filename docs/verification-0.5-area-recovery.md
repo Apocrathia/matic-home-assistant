@@ -9,7 +9,7 @@ and then previewed for a saved plan. It does not authorize robot motion.
 ## Candidate identity
 
 - Repository candidate: `fix/home-shortcuts-half-sheet-fit` (PR
-  [#281](https://github.com/ProspectOre/matic-home-assistant/pull/281)). Its
+  [#283](https://github.com/ProspectOre/matic-home-assistant/pull/283)). Its
   final head and base must be recorded again when this receipt is frozen for
   review; the earlier `106c4bd28c027c0ba658e799c81c76da28b2d7e6` source result
   does not qualify later changes.
