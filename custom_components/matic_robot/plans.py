@@ -39,6 +39,8 @@ from homeassistant.util.json import SerializationError
 
 from .area_binding import (
     _MAX_PERSISTED_ROOM_FRAME_POINTS_PER_ROBOT,
+    ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+    BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
     HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
     MAP_BINDING_VERSION,
     SCOPED_MAP_BINDING_VERSION,
@@ -2452,8 +2454,12 @@ class CleaningPlanManager:
             if version not in {
                 MAP_BINDING_VERSION,
                 HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+                BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+                ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
                 SCOPED_MAP_BINDING_VERSION,
             }:
+                continue
+            if version == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION:
                 continue
             if version == SCOPED_MAP_BINDING_VERSION:
                 anchors = binding.get("translation_room_anchors")
@@ -2474,6 +2480,7 @@ class CleaningPlanManager:
                 continue
             if version in {
                 HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+                BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
                 SCOPED_MAP_BINDING_VERSION,
             }:
                 if room_geometry is None:

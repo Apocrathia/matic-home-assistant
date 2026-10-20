@@ -121,16 +121,14 @@ export const topView = (state: WorkspaceState): MapView => forcesTop(state) ? "t
 const roomColours = (state: WorkspaceState | null): boolean =>
   !!state && topView(state) === "top" && state.appearance === "rooms";
 
-// Match the categorical room hues used by the native top-down map. Blend
-// with the theme surface so both light and dark maps keep readable labels.
-const ROOM_COLORS: readonly Channel[] = [
-  [91, 143, 249], [97, 221, 170], [120, 211, 248],
-  [114, 98, 253], [246, 144, 61], [240, 139, 180],
-];
-const roomColor = (index: number, palette: CanvasPalette): Channel => palette.forced
-  ? palette.roomFill
-  : (ROOM_COLORS[index % ROOM_COLORS.length] ?? palette.roomFill)
-    .map((value, channel) => Math.round(value * .45 + (palette.roomFill[channel] ?? 0) * .55)) as unknown as Channel;
+// Encode the sorted room index in an 8×8×4 color grid. Its channel steps keep
+// all 256 supported rooms distinct after blending with the theme.
+const roomColor = (index: number, palette: CanvasPalette): Channel => {
+  if (palette.forced) return palette.roomFill;
+  const color = [80 + Math.floor(index / 32) * 25, 80 + Math.floor(index / 4) % 8 * 25, 80 + index % 4 * 58];
+  return color.map((value, channel) => Math.round(value * .45
+    + (palette.roomFill[channel] ?? 0) * .55)) as unknown as Channel;
+};
 
 const cameraPreferenceIsFit = (view: MapView, preference: CameraPreference | undefined): boolean => {
   if (!preference) return true;
@@ -1510,11 +1508,9 @@ export class RendererController {
         if (!allRooms && !selected) continue;
         context.strokeStyle = selected ? rgba(palette.accent, 1)
           : palette.forced ? rgba(palette.text, 1) : rgba(palette.quiet, .7);
-        context.fillStyle = selected
-          ? rgba(palette.accent, .26)
-          : roomColours(state)
-            ? rgba(roomColor(roomIndexes.get(room.id) ?? 0, palette), .94)
-            : rgba(palette.plate, .04);
+        context.fillStyle = roomColours(state)
+          ? rgba(roomColor(roomIndexes.get(room.id) ?? 0, palette), .94)
+          : selected ? rgba(palette.accent, .26) : rgba(palette.plate, .04);
         context.beginPath();
         const step = Math.max(1, Math.ceil(room.boundary.length / 512));
         let started = false;

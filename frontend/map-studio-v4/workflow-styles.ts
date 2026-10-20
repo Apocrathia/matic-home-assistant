@@ -14,6 +14,8 @@ export const shellWorkflowStyles = css`
     .home-shortcuts-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--ms-space-2); }
     .home-shortcuts-heading .ms-btn--icon { flex: none; margin-inline-start: auto; }
     .quick-actions.home-shortcuts { gap: 0; border: 1px solid var(--ms-line); border-radius: var(--ms-radius-lg); }
+    /* Keep the first standard cleaning choice in reach at the phone peek. */
+    .narrow .home-shortcuts + .ms-section-heading { margin-block-start: var(--ms-space-4); }
     .home-shortcuts .shortcut-edit { cursor: default; }
     .home-shortcuts .shortcut-edit .ms-row__body { flex: 1; }
     .shortcut-order { display: flex; flex: none; gap: var(--ms-space-1); }

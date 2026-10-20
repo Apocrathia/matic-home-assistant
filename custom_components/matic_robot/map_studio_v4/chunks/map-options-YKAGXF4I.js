@@ -1,4 +1,4 @@
-import{a as u}from"./chunk-CEDW6BZF.js";import{a as d}from"./chunk-JB2UGJXF.js";import{h as c}from"./chunk-HFV2NO5P.js";import{Q as m,x as p}from"./chunk-55QOUSBC.js";import{pa as t,ta as r}from"./chunk-HJIYWYJF.js";var v=class{constructor(a){this.menu=new u(a,".overflow-wrap",".overflow")}render({state:a,narrow:b,t:e,intent:n,diagnostics:y}){let i=(o,l,g)=>t`
+import{a as u}from"./chunk-CEDW6BZF.js";import{a as d}from"./chunk-JB2UGJXF.js";import{h as c}from"./chunk-EEURRM3G.js";import{Q as m,x as p}from"./chunk-55QOUSBC.js";import{pa as t,ta as r}from"./chunk-HJIYWYJF.js";var v=class{constructor(a){this.menu=new u(a,".overflow-wrap",".overflow")}render({state:a,narrow:b,t:e,intent:n,diagnostics:y}){let i=(o,l,g)=>t`
 <button class="ms-row ms-row--menu" type="button" role="menuitemradio" aria-checked=${String(o)} data-selected=${o?"true":r} tabindex="-1" @click=${g}><span>${l}</span>${o?m(p):r}</button>
 `,s=(o,l)=>i(a.quality===o,l,()=>n({type:"set-quality",quality:o}));return t`
 <style>

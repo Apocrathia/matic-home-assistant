@@ -10,6 +10,7 @@ import pytest
 
 import custom_components.matic_robot.area_binding as area_binding_module
 from custom_components.matic_robot.area_binding import (
+    ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
     AREA_SCHEMA_VERSION,
     BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
     HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
@@ -234,8 +235,7 @@ def test_hash_fingerprint_work_exhaustion_keeps_valid_drift_reviewable() -> None
     circles = [{"x": 5.0, "y": 4.4, "radius": 0.1}]
     area = _scoped_area(floor_plan, circles)
     assert (
-        area["map_binding"]["version"]
-        == area_binding_module.BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+        area["map_binding"]["version"] == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
     )
     changed_boundary = (*boundary[:-1], (0.0, 10.1))
     changed = replace(
@@ -292,8 +292,7 @@ def test_hash_fingerprint_exhaustion_keeps_saved_center_tolerance() -> None:
     with patch.object(area_binding_module, "_MAX_LOCAL_SEGMENT_MATCH_SEGMENTS", 0):
         area = _scoped_area(floor_plan, circles)
     assert (
-        area["map_binding"]["version"]
-        == area_binding_module.BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+        area["map_binding"]["version"] == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
     )
     changed = replace(
         floor_plan,
@@ -397,7 +396,7 @@ def test_saved_local_segments_keep_legacy_numeric_shape() -> None:
     assert not area_binding_module._valid_local_segments([[0, 0, 1, "bad"]])
 
 
-def test_large_local_geometry_uses_hash_only_binding() -> None:
+def test_large_local_geometry_uses_room_anchored_hash_binding() -> None:
     floor_plan = _floor_plan()
     circles = [{"x": 0.5, "y": 0.5, "radius": 0.5}]
     boundary = [
@@ -410,7 +409,7 @@ def test_large_local_geometry_uses_hash_only_binding() -> None:
         floor_plan, rooms=(replace(floor_plan.rooms[0], boundary=tuple(boundary)),)
     )
     binding = binding_for_area(floor_plan, circles)
-    assert binding["version"] == BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+    assert binding["version"] == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
     area = {
         "schema_version": AREA_SCHEMA_VERSION,
         "circles": circles,
@@ -422,6 +421,269 @@ def test_large_local_geometry_uses_hash_only_binding() -> None:
         rooms=(replace(floor_plan.rooms[0], boundary=(*boundary[:-1], (0.0, 0.9))),),
     )
     assert area_binding_status(area, changed) is not AreaBindingStatus.CURRENT
+
+
+def test_anchored_hash_binding_survives_unrelated_map_updates() -> None:
+    circles = [{"x": 0.5, "y": 0.5, "radius": 0.5}]
+    boundary = tuple(
+        [(index / 75, 0.0) for index in range(75)]
+        + [(1.0, index / 75) for index in range(75)]
+        + [(1.0 - index / 75, 1.0) for index in range(75)]
+        + [(0.0, 1.0 - index / 75) for index in range(75)]
+    )
+    floor_plan = FloorPlan(
+        42,
+        "synthetic-partition",
+        b"synthetic-partition",
+        (_room("room", "Room", boundary),),
+    )
+    binding = binding_for_area(floor_plan, circles)
+    area = {
+        "schema_version": AREA_SCHEMA_VERSION,
+        "circles": circles,
+        "map_binding": binding,
+    }
+    assert binding["version"] == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+
+    unrelated_room = _room(
+        "remote", "Remote", ((20.0, 20.0), (21.0, 20.0), (21.0, 21.0), (20.0, 21.0))
+    )
+    changed = replace(floor_plan, rooms=(*floor_plan.rooms, unrelated_room))
+    assert floor_plan_geometry_fingerprint(changed) != binding["geometry_sha256"]
+    assert (
+        translation_invariant_geometry_fingerprint(changed)
+        != binding["translation_invariant_geometry_sha256"]
+    )
+    assert area_binding_status(area, changed) is AreaBindingStatus.CURRENT
+    assert area_binding_allows_review(area, changed) is False
+
+
+def test_anchored_hash_binding_rejects_new_room_covering_saved_circle() -> None:
+    circles = [{"x": 0.5, "y": 0.5, "radius": 0.5}]
+    boundary = tuple(
+        [(index / 75, 0.0) for index in range(75)]
+        + [(1.0, index / 75) for index in range(75)]
+        + [(1.0 - index / 75, 1.0) for index in range(75)]
+        + [(0.0, 1.0 - index / 75) for index in range(75)]
+    )
+    floor_plan = FloorPlan(
+        42,
+        "synthetic-partition",
+        b"synthetic-partition",
+        (_room("room", "Room", boundary),),
+    )
+    binding = binding_for_area(floor_plan, circles)
+    area = {
+        "schema_version": AREA_SCHEMA_VERSION,
+        "circles": circles,
+        "map_binding": binding,
+    }
+    assert binding["version"] == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+
+    overlapping_room = _room(
+        "overlap",
+        "Overlap",
+        ((-10.0, -10.0), (11.0, -10.0), (11.0, 11.0), (-10.0, 11.0)),
+    )
+    changed = replace(floor_plan, rooms=(*floor_plan.rooms, overlapping_room))
+    assert area_binding_status(area, changed) is AreaBindingStatus.GEOMETRY_CHANGED
+
+
+def test_anchored_hash_binding_rejects_area_room_frame_translation() -> None:
+    circles = [{"x": 0.5, "y": 0.5, "radius": 0.5}]
+    boundary = tuple(
+        [(index / 75, 0.0) for index in range(75)]
+        + [(1.0, index / 75) for index in range(75)]
+        + [(1.0 - index / 75, 1.0) for index in range(75)]
+        + [(0.0, 1.0 - index / 75) for index in range(75)]
+    )
+    floor_plan = FloorPlan(
+        42,
+        "synthetic-partition",
+        b"synthetic-partition",
+        (_room("room", "Room", boundary),),
+    )
+    binding = binding_for_area(floor_plan, circles)
+    area = {
+        "schema_version": AREA_SCHEMA_VERSION,
+        "circles": circles,
+        "map_binding": binding,
+    }
+    translated = replace(
+        floor_plan,
+        rooms=(
+            replace(
+                floor_plan.rooms[0],
+                boundary=tuple((x + 0.1, y) for x, y in boundary),
+            ),
+        ),
+    )
+    assert area_binding_status(area, translated) is AreaBindingStatus.GEOMETRY_CHANGED
+
+
+def test_saved_room_frame_match_rejects_incomplete_or_inconsistent_evidence() -> None:
+    floor_plan = _floor_plan()
+    circles = [{"x": 1.0, "y": 0.75, "radius": 0.2}]
+    room_geometry = area_binding_module._room_geometry_index(floor_plan)
+    anchors = area_binding_module._translation_room_anchors(
+        floor_plan, circles, room_geometry=room_geometry
+    )
+    assert anchors
+    match = area_binding_module._saved_room_frames_match
+
+    assert not match(None, circles, floor_plan, room_geometry)
+    assert not match(
+        [{key: value for key, value in anchors[0].items() if key != "boundary_mm"}],
+        circles,
+        floor_plan,
+        room_geometry,
+    )
+    assert not match([anchors[0], anchors[0]], circles, floor_plan, room_geometry)
+    assert not match(
+        [{**anchors[0], "circle_keys": []}],
+        circles,
+        floor_plan,
+        room_geometry,
+    )
+
+    with patch.object(
+        area_binding_module,
+        "_translation_room_anchors",
+        return_value=[anchors[0], anchors[0]],
+    ):
+        assert not match(anchors, circles, floor_plan, room_geometry)
+    with patch.object(
+        area_binding_module, "_translation_room_anchors", return_value=[]
+    ):
+        assert not match(anchors, circles, floor_plan, room_geometry)
+    with (
+        patch.object(
+            area_binding_module, "_translation_room_anchors", return_value=anchors
+        ),
+        patch.object(area_binding_module, "_room_frame_matches", return_value=False),
+    ):
+        assert not match(anchors, circles, floor_plan, room_geometry)
+
+
+def test_anchored_hash_binding_fails_closed_without_frame_proof() -> None:
+    floor_plan = _floor_plan()
+    circles = [{"x": 1.0, "y": 0.75, "radius": 0.2}]
+    with patch.object(area_binding_module, "_MAX_LOCAL_SEGMENT_MATCH_SEGMENTS", -1):
+        binding = binding_for_area(floor_plan, circles)
+    assert binding["version"] == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+    area = {
+        "schema_version": AREA_SCHEMA_VERSION,
+        "circles": circles,
+        "map_binding": binding,
+    }
+    changed = replace(
+        floor_plan,
+        rooms=(
+            *floor_plan.rooms,
+            _room(
+                "remote",
+                "Remote",
+                ((20.0, 20.0), (21.0, 20.0), (21.0, 21.0), (20.0, 21.0)),
+            ),
+        ),
+    )
+    local_hash = binding["local_geometry_sha256"]
+
+    with (
+        patch.object(
+            area_binding_module,
+            "_bounded_hash_only_area_geometry_fingerprint",
+            return_value=local_hash,
+        ),
+        patch.object(
+            area_binding_module, "_saved_room_frames_match", return_value=False
+        ),
+    ):
+        assert area_binding_status(area, changed) is AreaBindingStatus.GEOMETRY_CHANGED
+
+    with (
+        patch.object(
+            area_binding_module,
+            "_bounded_hash_only_area_geometry_fingerprint",
+            return_value=local_hash,
+        ),
+        patch.object(
+            area_binding_module, "_saved_room_frames_match", return_value=True
+        ),
+        patch.object(
+            area_binding_module,
+            "translation_invariant_geometry_fingerprint",
+            return_value=binding["translation_invariant_geometry_sha256"],
+        ),
+    ):
+        assert area_binding_status(area, changed) is AreaBindingStatus.GEOMETRY_CHANGED
+
+    with (
+        patch.object(
+            area_binding_module,
+            "_bounded_hash_only_area_geometry_fingerprint",
+            return_value=local_hash,
+        ),
+        patch.object(
+            area_binding_module,
+            "_saved_room_frames_match",
+            side_effect=GeometryTooComplex("frame evidence budget exhausted"),
+        ),
+    ):
+        assert area_binding_status(area, changed) is AreaBindingStatus.GEOMETRY_CHANGED
+
+
+def test_incomplete_room_anchors_fall_back_to_bounded_hash_binding() -> None:
+    floor_plan = _floor_plan()
+    circles = [{"x": 1.0, "y": 0.75, "radius": 0.2}]
+    with (
+        patch.object(area_binding_module, "_MAX_LOCAL_SEGMENT_MATCH_SEGMENTS", -1),
+        patch.object(area_binding_module, "_translation_room_anchors", return_value=[]),
+    ):
+        binding = binding_for_area(floor_plan, circles)
+
+    assert binding["version"] == BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+
+
+def test_legacy_bounded_hash_binding_still_fails_closed_on_map_drift() -> None:
+    circles = [{"x": 0.5, "y": 0.5, "radius": 0.5}]
+    boundary = tuple(
+        [(index / 75, 0.0) for index in range(75)]
+        + [(1.0, index / 75) for index in range(75)]
+        + [(1.0 - index / 75, 1.0) for index in range(75)]
+        + [(0.0, 1.0 - index / 75) for index in range(75)]
+    )
+    floor_plan = FloorPlan(
+        42,
+        "synthetic-partition",
+        b"synthetic-partition",
+        (_room("room", "Room", boundary),),
+    )
+    with patch.object(
+        area_binding_module,
+        "_translation_room_anchors",
+        side_effect=GeometryTooComplex("synthetic anchor work exhausted"),
+    ):
+        binding = binding_for_area(floor_plan, circles)
+    assert binding["version"] == BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+
+    area = {
+        "schema_version": AREA_SCHEMA_VERSION,
+        "circles": circles,
+        "map_binding": binding,
+    }
+    changed = replace(
+        floor_plan,
+        rooms=(
+            *floor_plan.rooms,
+            _room(
+                "remote",
+                "Remote",
+                ((20.0, 20.0), (21.0, 20.0), (21.0, 21.0), (20.0, 21.0)),
+            ),
+        ),
+    )
+    assert area_binding_status(area, changed) is AreaBindingStatus.GEOMETRY_CHANGED
 
 
 def test_dense_area_hash_keeps_separated_circle_union_scope(monkeypatch) -> None:
@@ -438,21 +700,17 @@ def test_dense_area_hash_keeps_separated_circle_union_scope(monkeypatch) -> None
     ]
     monkeypatch.setattr(area_binding_module, "_MAX_LOCAL_SEGMENT_MATCH_SEGMENTS", 1)
     binding = binding_for_area(base, circles)
-    assert binding["version"] == BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+    assert binding["version"] == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
 
     gap = _room("gap", "Gap", ((9.5, 0.5), (10.5, 0.5), (10.5, 1.5), (9.5, 1.5)))
     changed = replace(base, rooms=(*base.rooms, gap))
-    assert (
-        area_binding_status(
-            {
-                "schema_version": AREA_SCHEMA_VERSION,
-                "circles": circles,
-                "map_binding": binding,
-            },
-            changed,
-        )
-        is AreaBindingStatus.GEOMETRY_CHANGED
-    )
+    area = {
+        "schema_version": AREA_SCHEMA_VERSION,
+        "circles": circles,
+        "map_binding": binding,
+    }
+    assert area_binding_status(area, changed) is AreaBindingStatus.CURRENT
+    assert area_binding_allows_review(area, changed) is False
     duplicated_boundary = replace(
         base,
         rooms=(*base.rooms, _room("duplicate", "Duplicate", edge)),
@@ -497,7 +755,7 @@ def test_dense_hash_verification_accepts_saved_center_boundary_tolerance(
         "map_binding": binding,
     }
 
-    assert binding["version"] == BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+    assert binding["version"] == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
     assert (
         area_binding_status(area, boundary_moved_inward)
         is AreaBindingStatus.GEOMETRY_CHANGED

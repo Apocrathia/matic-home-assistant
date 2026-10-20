@@ -16,6 +16,7 @@ from homeassistant.util import dt as dt_util
 
 import custom_components.matic_robot.plans as plans_module
 from custom_components.matic_robot.area_binding import (
+    ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
     AREA_SCHEMA_VERSION,
     BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
     HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
@@ -1989,6 +1990,23 @@ async def test_area_binding_upgrade_ignores_malformed_area_record(hass) -> None:
     manager._store.async_save.assert_not_awaited()
 
 
+async def test_area_binding_upgrade_ignores_unknown_binding_version(hass) -> None:
+    manager = CleaningPlanManager(hass)
+    manager._store = SimpleNamespace(async_save=AsyncMock())
+    manager._robot("serial")["areas"] = {
+        "future": {
+            "schema_version": AREA_SCHEMA_VERSION,
+            "circles": [],
+            "map_binding": {"version": 99},
+        }
+    }
+
+    assert await manager.async_upgrade_area_bindings(
+        "serial", None
+    ) == AreaBindingUpgradeResult(0, False)
+    manager._store.async_save.assert_not_awaited()
+
+
 async def test_dense_hash_only_area_upgrade_is_a_noop(hass) -> None:
     manager = CleaningPlanManager(hass)
     manager._store = SimpleNamespace(async_save=AsyncMock())
@@ -2010,7 +2028,7 @@ async def test_dense_hash_only_area_upgrade_is_a_noop(hass) -> None:
     )
     circles = [{"x": 0.5, "y": 0.5, "radius": 0.5}]
     binding = binding_for_area(floor_plan, circles)
-    assert binding["version"] == BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+    assert binding["version"] == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
     area = {
         "schema_version": AREA_SCHEMA_VERSION,
         "circles": circles,
@@ -2026,6 +2044,51 @@ async def test_dense_hash_only_area_upgrade_is_a_noop(hass) -> None:
     ) == AreaBindingUpgradeResult(0, False)
     assert area["map_binding"] == binding
     manager._store.async_save.assert_not_awaited()
+
+
+async def test_current_v4_bounded_area_binding_upgrades_to_room_anchored(hass) -> None:
+    manager = CleaningPlanManager(hass)
+    manager._store = SimpleNamespace(async_save=AsyncMock())
+    base = FloorPlan(
+        42,
+        "synthetic-partition",
+        b"synthetic-partition",
+        (Room("room", "Room", "protocol", b"room", ((0, 0), (1, 0), (0, 1))),),
+    )
+    boundary = [
+        *((index / 75, 0.0) for index in range(75)),
+        *((1.0, index / 75) for index in range(75)),
+        *((1.0 - index / 75, 1.0) for index in range(75)),
+        *((0.0, 1.0 - index / 75) for index in range(75)),
+    ]
+    floor_plan = replace(
+        base,
+        rooms=(replace(base.rooms[0], boundary=tuple(boundary)),),
+    )
+    circles = [{"x": 0.5, "y": 0.5, "radius": 0.5}]
+    anchored_binding = binding_for_area(floor_plan, circles)
+    assert anchored_binding["version"] == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+    binding = {
+        "version": BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+        "mission_id": anchored_binding["mission_id"],
+        "partition_id": anchored_binding["partition_id"],
+        "geometry_sha256": anchored_binding["geometry_sha256"],
+        "local_geometry_sha256": anchored_binding["local_geometry_sha256"],
+    }
+    area = {
+        "schema_version": AREA_SCHEMA_VERSION,
+        "circles": circles,
+        "map_binding": binding,
+    }
+    manager._robot("serial")["areas"] = {"dense": area}
+
+    assert await manager.async_upgrade_area_bindings(
+        "serial", floor_plan
+    ) == AreaBindingUpgradeResult(1, False)
+    assert (
+        area["map_binding"]["version"] == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+    )
+    manager._store.async_save.assert_awaited_once()
 
 
 async def test_native_history_import_records_activity_not_completion(

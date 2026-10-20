@@ -133,10 +133,12 @@ Areas may cross room boundaries. They remain saved for future runs and can be
 selected from the robot's **Custom cleaning area** entity or called by name in
 an [automation](automation.md#custom-areas).
 
-If the map changes, its row says **Map changed** and the area opens as
-**Check {name}**, asking for **Save area** or **Redraw**; an area the map can't
-place any more says **Redraw it before cleaning**. Coordinates stay in Home Assistant;
-automations need only the saved name.
+Map updates outside an area do not require resaving when its local geometry and
+room frame still match. If nearby geometry changes or the saved frame can no
+longer be matched, the row says **Map changed** and the area opens as
+**Check {name}**, asking for **Save area** or **Redraw**. An area the map can't
+place any more says **Redraw it before cleaning**. Coordinates stay in Home
+Assistant; automations need only the saved name.
 
 ## Home shortcuts
 
