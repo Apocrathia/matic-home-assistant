@@ -22,6 +22,7 @@ from custom_components.matic_robot.client.proto.hermes_bot_info_pb2 import (
     BotInformation,
 )
 from custom_components.matic_robot.config_flow import (
+    CONF_IMPORT_CREDENTIAL,
     MaticRobotConfigFlow,
     MaticRobotOptionsFlow,
     _async_discover_robots,
@@ -801,9 +802,10 @@ async def test_pairing_requires_confirmation_before_starting(hass) -> None:
 
     form = await flow.async_step_pair()
 
-    assert form["data_schema"] is None
+    # The form offers the manual pairing import alongside the confirmation.
+    assert CONF_IMPORT_CREDENTIAL in form["data_schema"].schema
     assert flow._pairing_task is None
-    # Submitting the empty form is the confirmation that Pairing mode is on.
+    # Submitting the unchecked form is the confirmation that Pairing mode is on.
     progress = await flow.async_step_pair({})
     assert progress["type"] is FlowResultType.SHOW_PROGRESS
     assert progress["progress_action"] == "wait_for_pairing"
