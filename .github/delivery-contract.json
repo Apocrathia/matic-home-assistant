@@ -1,0 +1,10 @@
+{
+  "workflows": {
+    "test.yml": "ci",
+    "browser.yml": "ci",
+    "validate.yml": "ci",
+    "windows-assistive-qualification.yml": "dispatch"
+  },
+  "hosted": true,
+  "dependabot": true
+}

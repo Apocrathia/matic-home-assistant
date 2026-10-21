@@ -15,3 +15,8 @@ After publishing a new RC, keep only its RC GitHub release and remote/local tag.
 Remove superseded RC releases/tags, retaining reviewed commit IDs in qualification
 receipts and preserving rollback copies. When publishing stable, retire its RC
 release/tag; preserve stable releases and tags.
+
+## CI
+
+- Follow the [delivery contract](https://github.com/ProspectOre/wiki/blob/main/workflows/delivery-contract.md); `.github/delivery-contract.json` allow-lists every workflow and `.github/scripts/delivery-contract.py` runs first in Test.
+- Test (`ci` job), Browser UI and Validate run on free hosted `ubuntu-latest` for every PR and push to main; `windows-assistive-qualification.yml` is manual only.
