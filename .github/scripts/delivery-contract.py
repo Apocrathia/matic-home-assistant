@@ -54,13 +54,13 @@ def check(root):
     for name, kind in allowed.items():
         if kind not in KINDS:
             errors.append(f"{name}: unknown kind {kind!r}")
-    present = sorted(p.name for p in (gh / "workflows").glob("*.y*ml")) if (gh / "workflows").is_dir() else []
-    for name in present:
-        if name not in allowed:
-            errors.append(f"{name}: not in delivery-contract.json")
-    for name in allowed:
-        if name not in present:
-            errors.append(f"{name}: listed but missing")
+    workflows = gh / "workflows"
+    found = workflows.glob("*.y*ml") if workflows.is_dir() else ()
+    present = sorted(p.name for p in found)
+    unlisted = [n for n in present if n not in allowed]
+    errors.extend(f"{n}: not in delivery-contract.json" for n in unlisted)
+    missing = [n for n in allowed if n not in present]
+    errors.extend(f"{n}: listed but missing" for n in missing)
     nightly = 0
     for name in present:
         kind = allowed.get(name)
@@ -75,7 +75,7 @@ def check(root):
         if kind == "ci":
             if not {"pull_request", "push"} <= on:
                 errors.append(f"{name}: ci must run on pull_request and push")
-            if not re.search(r"^concurrency:", text, re.M):
+            if not re.search(r"^concurrency:", text, re.MULTILINE):
                 errors.append(f"{name}: ci needs top-level concurrency")
             if "schedule" in on:
                 errors.append(f"{name}: ci must not be scheduled")
@@ -88,7 +88,7 @@ def check(root):
             if "schedule" not in on:
                 errors.append(f"{name}: nightly needs a schedule")
             if not {"schedule", "workflow_dispatch"} >= on:
-                errors.append(f"{name}: nightly runs on more than schedule/workflow_dispatch")
+                errors.append(f"{name}: nightly runs beyond schedule/workflow_dispatch")
     if nightly > 1:
         errors.append("more than one nightly workflow")
     dep = gh / "dependabot.yml"
@@ -97,8 +97,8 @@ def check(root):
         intervals = re.findall(r"interval:\s*['\"]?([a-z]+)", text)
         if any(i != "monthly" for i in intervals):
             errors.append("dependabot.yml: every interval must be monthly")
-        blocks = len(re.findall(r"^\s*-\s*package-ecosystem:", text, re.M))
-        if blocks and len(re.findall(r"^\s*groups:", text, re.M)) < blocks:
+        blocks = len(re.findall(r"^\s*-\s*package-ecosystem:", text, re.MULTILINE))
+        if blocks and len(re.findall(r"^\s*groups:", text, re.MULTILINE)) < blocks:
             errors.append("dependabot.yml: every ecosystem needs a groups: entry")
         limits = re.findall(r"open-pull-requests-limit:\s*(\d+)", text)
         if any(int(x) > 2 for x in limits):
@@ -111,7 +111,8 @@ def main():
     errors = check(root)
     for e in errors:
         print(f"delivery-contract: {e}", file=sys.stderr)
-    print("delivery-contract: ok" if not errors else f"delivery-contract: {len(errors)} violation(s)")
+    summary = f"{len(errors)} violation(s)" if errors else "ok"
+    print(f"delivery-contract: {summary}")
     return 1 if errors else 0
 
 
