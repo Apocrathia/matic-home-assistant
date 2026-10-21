@@ -45,6 +45,7 @@ async function startRecovery(page, failure = null) {
       poseReads: 0,
       mismatchNextPose: false,
       cooldownTimers: 0,
+      cooldownDelays: [],
       sceneFailuresRemaining: failure === "scene" ? 1 : 0,
       catalogFailuresRemaining: failure === "catalog" ? 1 : 0,
       replacementDeltaFailuresRemaining: failure === "delta" ? 1 : 0,
@@ -56,7 +57,12 @@ async function startRecovery(page, failure = null) {
     const setTimeoutBase = window.__deltaRecoveryWaitSetTimeoutBase
       ?? (window.__deltaRecoveryWaitSetTimeoutBase = window.setTimeout.bind(window));
     window.setTimeout = (callback, delay, ...args) => {
-      if (delay === 5_000) window.__deltaRecoveryWait.cooldownTimers += 1;
+      // Count only the spatial read recovery cooldown. A live pose also arms a
+      // freshness expiry that can share the 5 s delay but is not a retry.
+      if (typeof callback === "function" && String(callback).includes("retryTimer = null")) {
+        window.__deltaRecoveryWait.cooldownTimers += 1;
+        window.__deltaRecoveryWait.cooldownDelays.push(delay);
+      }
       return setTimeoutBase(callback, delay, ...args);
     };
     const store = new WorkspaceStore({
