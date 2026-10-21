@@ -69,7 +69,9 @@ pass before merging; installed retesting remains open.
 
 ## Installed and physical evidence
 
-These results belong to **RC34**, not the uninstalled RC35 change. Private raw
+Rows marked RC34 belong to the observed RC34 run. RC35 rows were observed on the
+installed RC35 prerelease (2026-10-21) through read-only Home Assistant reads and
+on-screen checks; no robot command was sent. Private raw
 receipts retain timestamps, plan/area identities, session fingerprints, state
 hashes, command journals, and preservation evidence. Private map data is not
 included here.
@@ -86,8 +88,14 @@ included here.
 | Idle integration reload continuity | **Fail:** saved area/binding unchanged, but newly fetched contours return `geometry_changed` and block preview. Mission/partition session key and room IDs remain stable. |
 | Full Home Assistant restart continuity | **Fail for readiness:** area/binding remain unchanged; the same geometry blocker persists. HA restarts successfully and the robot remains docked. |
 | Home shortcut recovery | **Fail after integration reload:** stored pins and catalog IDs remain intact, but the existing page hides both shortcuts. Fresh page load restores them; full HA restart also restores them. |
-| RC35 exact-head CI and complete regular review | Pending for the final candidate; source regressions pass. |
-| RC35 owner manual merge, installation and runtime qualification | Pending. |
+| RC35 exact-head CI and complete regular review | Pass: PR #287 CI green on the merged head. |
+| RC35 owner manual merge and installation | Pass: owner merged #287; RC35 published as a prerelease with RC34 retained for rollback; installed through HACS, `update.matic_unofficial_update` reports v0.5.0-rc35. |
+| RC35 full Home Assistant restart continuity | Pass: the saved custom area reports `current` after restart with no confirmation, save or rebind. |
+| RC35 idle integration reload continuity | Pass: the same area remains `current` across two integration reloads. |
+| RC35 Home shortcut recovery | Pass: on the same open page, both saved shortcuts return within 30 to 90 seconds of a reload, after a read-only "Locating" interval. A tab already stalled before the reload stayed on "Map unavailable" until refreshed; that tab had been disturbed by test scripting and is not counted as a product result. |
+| RC35 stale position | Pass: a native pose about 13 hours old reports `pose_observation_current=false` and no robot marker is drawn. |
+| RC35 installed room colors | Pass for colors: room fills are distinct. **Fail for labels:** later room fills clipped two adjacent room names and hid a third label. Fixed in PR #293 for RC36. |
+| RC36 installation and label recheck | Pending. |
 | Final physical/owner acceptance and stable publication | Open. |
 
 ## Reproduced release blockers
@@ -116,8 +124,9 @@ through the real parser, including the input room-count cap. Two-pixel neutral b
 separate rooms, with a three-pixel selection boundary. Forced colors retain the
 system palette. Chromium and WebKit checks cover uniqueness, first-sixteen
 OKLab separation, selection, labels, dark mode and forced colors; synthetic
-12-room light/dark captures were visually inspected. Installed-map inspection
-is pending with RC35. The Node 24 startup graph is 92,138 bytes on 24.19.0
+12-room light/dark captures were visually inspected. Installed RC35 inspection
+confirmed distinct fills but found room names clipped by later room fills; RC36
+draws every name after all fills, with a draw-order regression. The Node 24 startup graph is 92,138 bytes on 24.19.0
 and 91,984 on 24.22.0, within the unchanged 92,160-byte budget. Developer notes no longer ship inside
 a rendered HTML template. Syntax-aware build compaction removes ordinary HTML
 newline whitespace while preserving expressions, escapes and preformatted text;
