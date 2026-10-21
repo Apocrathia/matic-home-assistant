@@ -1,6 +1,4 @@
-import{a as u}from"./chunk-CEDW6BZF.js";import{a as d}from"./chunk-3O6LHM67.js";import{h as c}from"./chunk-APNHYARM.js";import{Q as m,x as p}from"./chunk-QUPN34FU.js";import{pa as t,ta as r}from"./chunk-UIUBL5DN.js";var v=class{constructor(a){this.menu=new u(a,".overflow-wrap",".overflow")}render({state:a,narrow:b,t:e,intent:n,diagnostics:y}){let i=(o,l,g)=>t`
-<button class="ms-row ms-row--menu" type="button" role="menuitemradio" aria-checked=${String(o)} data-selected=${o?"true":r} tabindex="-1" @click=${g}><span>${l}</span>${o?m(p):r}</button>
-`,s=(o,l)=>i(a.quality===o,l,()=>n({type:"set-quality",quality:o}));return t`
+import{a as u}from"./chunk-CEDW6BZF.js";import{a as d}from"./chunk-WTAQ5MJO.js";import{h as c}from"./chunk-WZG4FNI2.js";import{Q as m,x as p}from"./chunk-B37N7IBI.js";import{pa as t,ta as r}from"./chunk-DZBANVAM.js";var v=class{constructor(a){this.menu=new u(a,".overflow-wrap",".overflow")}render({state:a,narrow:b,t:e,intent:n,diagnostics:y}){let i=(o,l,g)=>t` <button class="ms-row ms-row--menu" type="button" role="menuitemradio" aria-checked=${String(o)} data-selected=${o?"true":r} tabindex="-1" @click=${g}><span>${l}</span>${o?m(p):r}</button> `,s=(o,l)=>i(a.quality===o,l,()=>n({type:"set-quality",quality:o}));return t`
 <style>
 ${d.cssText}
 .overflow-menu {

@@ -1643,7 +1643,7 @@ def area_binding_status(
         }
         if saved_circle_keys != expected_circle_keys:
             return AreaBindingStatus.GEOMETRY_CHANGED
-        all_frames_strongly_proven = True
+        frames_needing_witnesses: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
         try:
             current_anchors = _translation_room_anchors(
                 floor_plan, area["circles"], room_geometry=room_geometry
@@ -1676,21 +1676,27 @@ def area_binding_status(
                     and _room_anchor_bounds_match(saved_anchor, current_anchor)
                     and _room_frame_matches(saved_anchor, current_anchor, room_geometry)
                 )
-                # Preserve the established cheap frame/local path before
-                # spending any optional witness budget. Legacy v3 records
-                # may omit the global digest required by strong recovery.
-                strongly_proven = (
-                    not frame_matches
-                    and "translation_invariant_geometry_sha256" in saved
-                    and _room_has_strong_frame_witnesses(
-                        saved_anchor, current_anchor, room_geometry
-                    )
-                )
-                all_frames_strongly_proven &= strongly_proven
-                if not frame_matches and not strongly_proven:
-                    return AreaBindingStatus.GEOMETRY_CHANGED
+                if not frame_matches:
+                    frames_needing_witnesses.append((saved_anchor, current_anchor))
             except GeometryTooComplex:
                 return AreaBindingStatus.GEOMETRY_CHANGED
+        # Finish every room's established frame checks before optional work.
+        # One early refinement must not spend a later room's legacy budget.
+        # Legacy v3 records can omit the global digest needed by strong proof.
+        if frames_needing_witnesses:
+            if "translation_invariant_geometry_sha256" not in saved:
+                return AreaBindingStatus.GEOMETRY_CHANGED
+            try:
+                for saved_anchor, current_anchor in frames_needing_witnesses:
+                    if not _room_has_strong_frame_witnesses(
+                        saved_anchor, current_anchor, room_geometry
+                    ):
+                        return AreaBindingStatus.GEOMETRY_CHANGED
+            except GeometryTooComplex:
+                return AreaBindingStatus.GEOMETRY_CHANGED
+        all_frames_strongly_proven = len(frames_needing_witnesses) == len(
+            saved_by_room_key
+        )
         if _current_room_anchors is not None:
             _current_room_anchors.extend(current_anchors)
     local_geometry = _local_geometry_fingerprint(shape, occupancy, segments)

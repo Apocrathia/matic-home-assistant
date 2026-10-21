@@ -3,6 +3,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { STAMP_FILE, hashSources } from "./source_stamp.mjs";
+import { compactHtmlTemplates } from "./compact_html_templates.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const production = resolve(root, "custom_components/matic_robot/map_studio_v4");
@@ -28,7 +29,7 @@ const styleComments = {
       // Indentation inside template literals ships as text, though HTML and
       // CSS collapse it and the shader and worker sources ignore it; no
       // template here keeps whitespace (no <pre>, no white-space: pre).
-      return { contents: contents.replace(/\n[ \t]+/gu, "\n"), loader: "ts" };
+      return { contents: compactHtmlTemplates(contents).replace(/\n[ \t]+/gu, "\n"), loader: "ts" };
     });
   },
 };
@@ -82,7 +83,11 @@ for (const output of result.outputFiles) {
 }
 // Records which sources this review bundle was compiled from, so the audit
 // harness can refuse a bundle that no longer matches the working tree.
-const inputs = Object.keys(result.metafile.inputs).sort();
+const inputs = [...new Set([...Object.keys(result.metafile.inputs),
+  "scripts/build_map_studio_bundle.mjs", "scripts/compact_html_templates.mjs",
+  "scripts/normalize_map_studio_bundle.mjs", "scripts/source_stamp.mjs",
+  "package.json", "package-lock.json",
+])].sort();
 await writeFile(
   resolve(review, STAMP_FILE),
   `${JSON.stringify({ inputs, sourceHash: await hashSources(root, inputs) }, null, 2)}\n`,

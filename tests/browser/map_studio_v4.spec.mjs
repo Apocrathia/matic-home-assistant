@@ -4338,8 +4338,10 @@ test.describe("Map Studio v0.4 foundation", () => {
     const scene = gallery.locator("matic-map-canvas-v4 .scene-window");
     await expect(scene).toHaveAttribute(
       "aria-label",
-      "Saved read-only map for House. Live robot position is hidden.",
+      "Saved read-only map for Shed. Live robot position is hidden.",
     );
+    await expect(gallery.getByRole("combobox", { name: "Choose floor" })).toHaveValue("saved-1");
+    await expect(gallery.locator(".floor-switcher option:checked")).toContainText("Shed");
     await expect(gallery.getByText("The current private map is not available.", { exact: true })).toHaveCount(0);
 
     await page.evaluate((tag) => {

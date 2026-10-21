@@ -129,7 +129,7 @@ const parseTransfer = (buffer: ArrayBuffer): ParsedScene => {
     if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return [];
     const room = candidate as Record<string, unknown>;
     const name = typeof room.name === "string" ? room.name.trim() : "";
-    if (!name || Array.from(name).length > 128 || /[\u0000-\u001f\u007f]/u.test(name)) return [];
+    if (!name || new TextEncoder().encode(name).length > 256 || /[\u0000-\u001f\u007f]/u.test(name)) return [];
     if (!Array.isArray(room.boundary) || room.boundary.length < 3 || room.boundary.length > 8192) return [];
     const boundary = room.boundary.flatMap((point) => {
       if (!Array.isArray(point) || point.length !== 2) return [];

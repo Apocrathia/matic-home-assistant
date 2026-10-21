@@ -2,6 +2,58 @@ import { expect, test } from "@playwright/test";
 import { build } from "esbuild";
 import { writeFile } from "node:fs/promises";
 
+test("scene parser retains native room labels up to the UTF-8 byte limit", async ({ page }) => {
+  const bundle = await build({
+    stdin: {
+      contents: 'export { parseSceneBuffer } from "./frontend/map-studio-v4/scene-parser";',
+      resolveDir: process.cwd(),
+    },
+    bundle: true,
+    format: "esm",
+    write: false,
+  });
+  await page.route("**/scene-parser.js", (route) => route.fulfill({
+    contentType: "text/javascript", body: bundle.outputFiles[0].text,
+  }));
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  const result = await page.evaluate(async () => {
+    const { parseSceneBuffer } = await import("/scene-parser.js");
+    const encode = (rooms) => {
+      const metadata = new TextEncoder().encode(JSON.stringify({
+        meters_per_cell: .05, origin_cells: [0, 0], span_cells: [10, 10],
+        rooms,
+      }));
+      const buffer = new ArrayBuffer(32 + metadata.length);
+      new Uint8Array(buffer).set(new TextEncoder().encode("MATIC3D\0"));
+      const view = new DataView(buffer);
+      view.setUint16(8, 1, true); view.setUint16(10, 8, true);
+      view.setUint32(12, metadata.length, true); view.setUint32(16, 1, true);
+      new Uint8Array(buffer, 24, metadata.length).set(metadata);
+      return parseSceneBuffer(buffer).metadata.rooms;
+    };
+    return {
+      ascii129: encode([{ name: "a".repeat(129), boundary: [[0,0], [1,0], [1,1]], center: [.5,.5] }]).length,
+      ascii256: encode([{ name: "a".repeat(256), boundary: [[0,0], [1,0], [1,1]], center: [.5,.5] }]).length,
+      ascii257: encode([{ name: "a".repeat(257), boundary: [[0,0], [1,0], [1,1]], center: [.5,.5] }]).length,
+      unicode256: encode([{ name: "é".repeat(128), boundary: [[0,0], [1,0], [1,1]], center: [.5,.5] }]).length,
+      overLimit: encode([{ name: "é".repeat(129), boundary: [[0,0], [1,0], [1,1]], center: [.5,.5] }]).length,
+      allLong: (() => {
+        const rooms = Array.from({ length: 256 }, (_, index) => ({
+          room_id: `room_${index.toString(16).padStart(16, "0")}`,
+          name: "x".repeat(256), boundary: [[0,0], [1,0], [1,1]], center: [.5,.5],
+        }));
+        const parsed = encode(rooms);
+        return { count: parsed.length, ids: parsed.map(({ id }) => id), namesRetained: parsed.every(({ name }) => name.length === 256) };
+      })(),
+    };
+  });
+  expect(result.ascii257).toBe(0);
+  expect(result.allLong.count).toBe(256);
+  expect(new Set(result.allLong.ids).size).toBe(256);
+  expect(result.allLong.namesRetained).toBe(true);
+  expect(result).toMatchObject({ ascii129: 1, ascii256: 1, unicode256: 1, overLimit: 0 });
+});
+
 test("precomputes room selection once for the supported 100-room bound", async ({ page }) => {
   const bundle = await build({
     stdin: {

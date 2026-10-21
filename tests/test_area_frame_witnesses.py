@@ -587,3 +587,93 @@ def test_v3_optional_digest_is_required_only_for_strong_recovery(
     )
     assert area_binding_status(area, refined) is AreaBindingStatus.GEOMETRY_CHANGED
     assert area == unchanged
+
+
+@pytest.mark.parametrize("refined_room_first", [False, True])
+def test_all_room_frames_are_checked_before_optional_witnesses(
+    refined_room_first, monkeypatch
+):
+    witness = _witness_plan().rooms[0]
+    subdivisions = 400
+    boundary = tuple(
+        [(30 + i / subdivisions * 20, 0.0) for i in range(subdivisions + 1)]
+        + [(50.0, i / 200 * 2) for i in range(201)]
+        + [(50 - i / subdivisions * 20, 2.0) for i in range(subdivisions + 1)]
+        + [(30.0, 2 - i / 200 * 2) for i in range(201)]
+    )
+    dense = _room(boundary, room_id="dense")
+    plan = replace(_witness_plan(), rooms=(witness, dense))
+    circles = [
+        {"x": 3.3, "y": 3.0, "radius": 0.2},
+        {"x": 40.0, "y": 1.0, "radius": 0.2},
+    ]
+    area = {
+        "schema_version": AREA_SCHEMA_VERSION,
+        "circles": circles,
+        "map_binding": binding_for_area(plan, circles),
+    }
+    assert area["map_binding"]["version"] == 3
+    anchors = area["map_binding"]["translation_room_anchors"]
+    witness_key = next(
+        anchor["room_key"] for anchor in anchors if len(anchor["boundary_mm"]) < 100
+    )
+    anchors.sort(
+        key=lambda anchor: (anchor["room_key"] == witness_key) != refined_room_first
+    )
+    points = list(witness.boundary)
+    index = min(range(len(points)), key=lambda i: points[i][0])
+    x, y = points[index]
+    points[index] = (x - 0.08, y)
+    # Retessellation makes the dense room use its full legacy frame proof.
+    left, right = boundary[700:702]
+    midpoint = ((left[0] + right[0]) / 2, (left[1] + right[1]) / 2)
+    refreshed = replace(
+        plan,
+        rooms=(
+            replace(witness, boundary=tuple(points)),
+            replace(dense, boundary=(*boundary[:701], midpoint, *boundary[701:])),
+        ),
+    )
+    events = []
+    frame = area_binding_module._room_frame_matches
+    strong = area_binding_module._room_has_strong_frame_witnesses
+
+    def track_frame(saved, current, geometry):
+        events.append(("frame", saved["room_key"]))
+        before = geometry._query_work_remaining
+        result = frame(saved, current, geometry)
+        assert before - geometry._query_work_remaining > 10_000
+        return result
+
+    def track_strong(saved, current, geometry):
+        assert any(kind == "frame" for kind, _ in events)
+        events.append(("witness", saved["room_key"]))
+        return strong(saved, current, geometry)
+
+    monkeypatch.setattr(area_binding_module, "_room_frame_matches", track_frame)
+    monkeypatch.setattr(
+        area_binding_module, "_room_has_strong_frame_witnesses", track_strong
+    )
+    unchanged = deepcopy(area)
+    assert area_binding_status(area, refreshed) is AreaBindingStatus.CURRENT
+    assert [kind for kind, _ in events] == ["frame", "witness"]
+    assert area == unchanged
+
+
+def test_required_frame_witness_exhaustion_stays_blocked(monkeypatch):
+    plan = _witness_plan()
+    area = _area(plan)
+
+    def exhausted(*args, **kwargs):
+        raise GeometryTooComplex("required witness query exhausted")
+
+    monkeypatch.setattr(
+        area_binding_module, "_room_anchor_bounds_match", lambda *a: False
+    )
+    monkeypatch.setattr(
+        area_binding_module, "_room_has_strong_frame_witnesses", exhausted
+    )
+    assert (
+        area_binding_status(area, _locally_refined(plan))
+        is AreaBindingStatus.GEOMETRY_CHANGED
+    )

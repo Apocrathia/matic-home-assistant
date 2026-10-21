@@ -39,8 +39,8 @@ It does not add automatic rebinding or coordinate transformations.
 
 ## Source evidence
 
-The complete local run at candidate `46b41879` passed **5,216 tests with
-100.00% coverage** across 20,007 statements (`python -m pytest
+The complete local run at candidate `ce4904ea` passed **5,226 tests with
+100.00% coverage** across 20,012 statements (`python -m pytest
 --cov=custom_components/matic_robot --cov-report=term-missing`). Subsequent
 review fixes require refreshed exact-head PR CI; installed retesting remains open.
 
@@ -59,6 +59,9 @@ review fixes require refreshed exact-head PR CI; installed retesting remains ope
   local validation remains usable; strong recovery requires that digest and
   safely reports changed geometry when it is absent. Persistence, reload,
   readiness, preview and service-validation regressions cover this format.
+- Multi-room v3 areas finish every legacy frame check before any optional
+  witness query. A two-circle regression exercises both anchor orders and a
+  retessellated 1,204-point room whose frame query exceeds 10,000 work units.
 
 ## Installed and physical evidence
 
@@ -109,15 +112,21 @@ separate rooms, with a three-pixel selection boundary. Forced colors retain the
 system palette. Chromium and WebKit checks cover uniqueness, first-sixteen
 OKLab separation, selection, labels, dark mode and forced colors; synthetic
 12-room light/dark captures were visually inspected. Installed-map inspection
-is pending with RC35. The canonical Node 24 startup graph is 92,150 bytes,
+is pending with RC35. The canonical Node 24 startup graph is 92,091 bytes,
 within the unchanged 92,160-byte budget. Developer notes no longer ship inside
-a rendered HTML template.
+a rendered HTML template. Syntax-aware build compaction removes ordinary HTML
+newline whitespace while preserving expressions, escapes and preformatted text;
+thirteen Node tests and the Browser workflow cover this build step.
 
 A real 256-room, tile-clipped map regression reproduces the metadata ceiling
 crossing introduced by room IDs. Lossless integer-coordinate serialization
 preserves every room and fractional center while reducing its metadata from
 1,050,719 to 739,423 bytes. Encoder and header parser share the unchanged 1 MiB
 limit; an unrepresentable scene returns the existing explicit error path.
+The encoded regression also passes through the real Chromium and WebKit scene
+parsers with all identities, 256-byte room names and geometry intact. Native
+room-name limits now follow the backend's 256 UTF-8 bytes in scenes, catalogs
+and previews; user-created area/plan name limits remain unchanged.
 
 ## Boundaries
 

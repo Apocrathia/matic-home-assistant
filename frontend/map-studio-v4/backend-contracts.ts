@@ -313,10 +313,11 @@ const objectValue = (value: unknown, code: string): Record<string, unknown> => {
   return value as Record<string, unknown>;
 };
 
-const boundedString = (value: unknown, maximum: number, code: string): string => {
+const boundedString = (value: unknown, maximum: number, code: string, utf8Bytes = false): string => {
   if (typeof value !== "string") throw new ContractError(code);
   const text = value.trim();
-  if (!text || Array.from(text).length > maximum || /[\u0000-\u001f\u007f]/u.test(text)) {
+  const length = utf8Bytes ? new TextEncoder().encode(text).length : Array.from(text).length;
+  if (!text || length > maximum || /[\u0000-\u001f\u007f]/u.test(text)) {
     throw new ContractError(code);
   }
   return text;
@@ -513,7 +514,7 @@ const parseRooms = (value: unknown, includeBoundary: boolean): readonly MapRoom[
     const room = objectValue(candidate, "invalid-room");
     return {
       roomId: boundedString(room.room_id, 128, "invalid-room-id"),
-      name: boundedString(room.name, 128, "invalid-room-name"),
+      name: boundedString(room.name, 256, "invalid-room-name", true),
       boundary: includeBoundary ? boundary(room.boundary, "invalid-room-boundary") : [],
     };
   });
@@ -665,7 +666,8 @@ const parseNextRunPreview = (value: unknown): NextRunPreview | undefined => {
       ...(step.kind === "area"
         ? { areaId: boundedString(step.area_id, 128, "invalid-plan-preview-room-id") }
         : { roomId: boundedString(step.room_id, 128, "invalid-plan-preview-room-id") }),
-      name: boundedString(step.name, 128, "invalid-plan-preview-room-name"),
+      name: boundedString(step.name, step.kind === "area" ? 128 : 256,
+        "invalid-plan-preview-room-name", step.kind !== "area"),
       cleaningMode: parseCleaningMode(step.cleaning_mode),
       coverageSetting: parseCoverage(step.coverage_setting),
       cadenceReasons: parseCadenceReasons(step.cadence_reasons),

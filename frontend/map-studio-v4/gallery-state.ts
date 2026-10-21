@@ -375,7 +375,7 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
         ...state,
         dataMode: "history",
         workflow: "history",
-        floor: { ...state.floor, readOnly: true },
+        floor: { ...state.floor, displayName: "Shed", readOnly: true },
         map: { ...state.map, exactPose: false },
         selection: {
           ...state.selection,
@@ -388,6 +388,7 @@ export const createGalleryState = (scenario: GalleryScenario): WorkspaceState =>
       // on show (the scrubber needs three or more).
       return {
         ...createGalleryState("history"),
+        floor: { ...state.floor, displayName: "Saved floor 1", readOnly: true },
         resources: {
           ...state.resources,
           history: { status: "ready", problem: null, value: {
