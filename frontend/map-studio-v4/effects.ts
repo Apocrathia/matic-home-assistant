@@ -2214,6 +2214,10 @@ export class EffectController {
     const owner = this.#currentPinsOwner();
     if (owner === this.#pinsOwner) return;
     this.#pinsOwner = owner;
+    // A transient owner loss can be followed by the same user/robot tuple.
+    // Its prior read belongs to the old runtime incarnation, so allow the
+    // resumed workspace to read that owner's persisted shortcuts again.
+    this.#pinsReadFor = null;
     this.#pinsEpoch += 1;
     this.#pinsToken += 1;
     this.#homePinsPersistence?.reset();

@@ -81,7 +81,7 @@ def test_one_corner_one_millimeter_refinement_keeps_other_frame_anchors():
     )
 
 
-def test_partition_churn_requires_identical_spatial_evidence():
+def test_partition_churn_requires_verified_spatial_evidence():
     original = _floor()
     area = _area(original)
     repartitioned = replace(
@@ -98,7 +98,7 @@ def test_partition_churn_requires_identical_spatial_evidence():
     )
     assert (
         binding.area_binding_status(area, changed)
-        is binding.AreaBindingStatus.PARTITION_CHANGED
+        is binding.AreaBindingStatus.GEOMETRY_CHANGED
     )
 
 
@@ -574,6 +574,18 @@ async def test_legacy_graft_fails_closed_without_exact_room_frame(hass, change):
     assert manager.areas("serial") == before
 
 
+def _admit_malformed_binding_for_graft(
+    area, floor_plan, *, room_geometry, _current_room_anchors
+):
+    """Isolate migration guards from the stricter normal status validator."""
+    _current_room_anchors.extend(
+        binding._translation_room_anchors(
+            floor_plan, area["circles"], room_geometry=room_geometry
+        )
+    )
+    return binding.AreaBindingStatus.CURRENT
+
+
 async def test_legacy_graft_rejects_changed_target_circle_association(hass):
     polygon = ((0, 0), (10, 0), (10, 10), (0, 10))
     floor = FloorPlan(
@@ -618,7 +630,8 @@ async def test_legacy_graft_rejects_changed_target_circle_association(hass):
         ),
     )
     assert (
-        binding.area_binding_status(area, changed) is binding.AreaBindingStatus.CURRENT
+        binding.area_binding_status(area, changed)
+        is binding.AreaBindingStatus.GEOMETRY_CHANGED
     )
     manager = CleaningPlanManager(hass)
     manager._store = SimpleNamespace(async_save=AsyncMock())
@@ -627,6 +640,18 @@ async def test_legacy_graft_rejects_changed_target_circle_association(hass):
     assert await manager.async_upgrade_area_bindings(
         "serial", changed
     ) == AreaBindingUpgradeResult(0, True)
+    manager._store.async_save.assert_not_awaited()
+    assert manager.areas("serial") == before
+
+    # Exercise the migration's independent defensive checks even if its caller
+    # were to admit this malformed association. Real status rejects it above.
+    with patch(
+        "custom_components.matic_robot.plans.area_binding_status",
+        side_effect=_admit_malformed_binding_for_graft,
+    ):
+        assert await manager.async_upgrade_area_bindings(
+            "serial", changed
+        ) == AreaBindingUpgradeResult(0, True)
     manager._store.async_save.assert_not_awaited()
     assert manager.areas("serial") == before
 
@@ -668,7 +693,8 @@ async def test_legacy_graft_rejects_duplicate_saved_room_key(hass):
         ),
     )
     assert (
-        binding.area_binding_status(area, changed) is binding.AreaBindingStatus.CURRENT
+        binding.area_binding_status(area, changed)
+        is binding.AreaBindingStatus.GEOMETRY_CHANGED
     )
     manager = CleaningPlanManager(hass)
     manager._store = SimpleNamespace(async_save=AsyncMock())
@@ -677,6 +703,18 @@ async def test_legacy_graft_rejects_duplicate_saved_room_key(hass):
     assert await manager.async_upgrade_area_bindings(
         "serial", changed
     ) == AreaBindingUpgradeResult(0, True)
+    manager._store.async_save.assert_not_awaited()
+    assert manager.areas("serial") == before
+
+    # Exercise the migration's independent defensive checks even if its caller
+    # were to admit this malformed association. Real status rejects it above.
+    with patch(
+        "custom_components.matic_robot.plans.area_binding_status",
+        side_effect=_admit_malformed_binding_for_graft,
+    ):
+        assert await manager.async_upgrade_area_bindings(
+            "serial", changed
+        ) == AreaBindingUpgradeResult(0, True)
     manager._store.async_save.assert_not_awaited()
     assert manager.areas("serial") == before
 

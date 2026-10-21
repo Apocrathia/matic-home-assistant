@@ -67,7 +67,7 @@ async function setup(page, stores) {
     };
     const entry = (entryId) => ({ ...syntheticEntry(), entryId, deltaUrl: null });
     const backend = {
-      catalog: async () => [entry("synthetic-entry"), entry("entry-b")],
+      catalog: async () => h.catalogEntries ?? [entry("synthetic-entry"), entry("entry-b")],
       plans: async () => {
         if (h.plansFail > 0) { h.plansFail -= 1; throw new Error("synthetic plans failure"); }
         return h.planCatalog(syntheticPlans());
@@ -552,6 +552,36 @@ test("a user with no plans yet gets the default shortcut once they save their fi
     return tab.store.value.homePins.pins;
   });
   expect(reloaded).toEqual([plan("first")]);
+});
+
+test("returning to the same entry rereads shortcuts and ignores its stale read", async ({ page }) => {
+  const saved = [plan("daily"), { kind: "area", id: "entryway" }];
+  await setup(page, { u1: record(saved) });
+  await hold(page, "frontend/get_user_data");
+  await sync(page, "u1", "synthetic-entry");
+  await expect.poll(() => heldCount(page)).toBe(1);
+
+  // An integration reload can temporarily remove the selected entry. The
+  // same user and entry may return before the old user-data read settles.
+  await page.evaluate(() => { window.pinsHarness.catalogEntries = []; });
+  await sync(page, "u1", null);
+  await page.evaluate(() => { window.pinsHarness.catalogEntries = null; });
+  await hold(page, "frontend/get_user_data");
+  await sync(page, "u1", "synthetic-entry");
+  // The returning entry is admitted by the catalog poll, which resumes the
+  // pinned catalogs and user-data read for the restored owner.
+  await page.evaluate(() => window.pinsHarness.controller.refreshCatalog(true));
+  await expect.poll(() => heldCount(page)).toBe(2);
+
+  // The result from before the owner loss must not commit. The fresh read for
+  // the returned owner restores the same saved pins and explicit exclusions.
+  await release(page, 0);
+  expect(await pins(page)).toMatchObject({ status: "loading", pins: [] });
+  await release(page, 1);
+  await expect.poll(() => pins(page)).toEqual({ entry: "synthetic-entry", status: "ready", pins: saved });
+  expect(await page.evaluate(() => window.pinsHarness.log.filter((call) => call.type === "frontend/get_user_data").length)).toBe(2);
+  expect(await page.evaluate(() => window.pinsHarness.data.u1["matic_robot_home_shortcuts.synthetic-entry"].excluded))
+    .toEqual(ALL.filter((pin) => !saved.some((shown) => shown.kind === pin.kind && shown.id === pin.id)));
 });
 
 test("with no plans, a reload after the first plan was saved elsewhere seeds it then", async ({ page }) => {

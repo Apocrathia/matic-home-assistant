@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { build } from "esbuild";
+import { writeFile } from "node:fs/promises";
 
 test("precomputes room selection once for the supported 100-room bound", async ({ page }) => {
   const bundle = await build({
@@ -151,6 +152,7 @@ test("all 256 room colors stay distinct by room ID, retain selection and labels,
     const capture = async (orderedRooms, options = {}, forced = false, dark = false) => {
       const fills = [];
       const strokes = [];
+      const widths = [];
       let textCount = 0;
       const originalFill = CanvasRenderingContext2D.prototype.fill;
       const originalStroke = CanvasRenderingContext2D.prototype.stroke;
@@ -160,7 +162,7 @@ test("all 256 room colors stay distinct by room ID, retain selection and labels,
         return originalFill.apply(this, args);
       };
       CanvasRenderingContext2D.prototype.stroke = function (...args) {
-        if (this.canvas === overlayCanvas) strokes.push(String(this.strokeStyle));
+        if (this.canvas === overlayCanvas) { strokes.push(String(this.strokeStyle)); widths.push(this.lineWidth); }
         return originalStroke.apply(this, args);
       };
       CanvasRenderingContext2D.prototype.fillText = function (...args) {
@@ -172,11 +174,12 @@ test("all 256 room colors stay distinct by room ID, retain selection and labels,
       renderer.setState(makeState(orderedRooms, options));
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       const diagnostics = renderer.diagnostics();
+      const png = options.preview ? overlayCanvas.toDataURL() : null;
       renderer.dispose();
       CanvasRenderingContext2D.prototype.fill = originalFill;
       CanvasRenderingContext2D.prototype.stroke = originalStroke;
       CanvasRenderingContext2D.prototype.fillText = originalFillText;
-      return { fills, strokes, textCount, renderedPoints: diagnostics.renderedPoints };
+      return { png, fills, strokes, widths, textCount, renderedPoints: diagnostics.renderedPoints };
     };
     const first = await capture(rooms);
     const reordered = await capture([...rooms].reverse());
@@ -184,11 +187,19 @@ test("all 256 room colors stay distinct by room ID, retain selection and labels,
     const forced = await capture(rooms, {}, true);
     const dark = await capture(rooms, {}, false, true);
     const photo = await capture(rooms, { appearance: "photo" });
+    const previewRooms = rooms.slice(0, 12).map((room, index) => {
+      const x = index % 4 * 45, y = Math.floor(index / 4) * 45;
+      return { ...room, id: `preview-${String(index).padStart(2, "0")}`,
+        boundary: [[x,y], [x+45,y], [x+45,y+45], [x,y+45]], center: [x+22.5,y+22.5] };
+    });
+    const previewLight = await capture(previewRooms, { labelsVisible: true, preview: true });
+    const previewDark = await capture(previewRooms, { labelsVisible: true, preview: true }, false, true);
     sceneCanvas.remove();
     overlayCanvas.remove();
     const byId = (order, fills) => Object.fromEntries(order.map((room, index) => [room.id, fills[index]]));
     return {
       first,
+      previewLight, previewDark,
       reordered,
       labeled,
       forced,
@@ -199,8 +210,35 @@ test("all 256 room colors stay distinct by room ID, retain selection and labels,
     };
   });
 
+  for (const [scheme, preview] of [["light", result.previewLight], ["dark", result.previewDark]]) {
+    const path = test.info().outputPath(`12-room-${scheme}.png`);
+    await writeFile(path, Buffer.from(preview.png.split(",")[1], "base64"));
+    await test.info().attach(`12-room-${scheme}`, { path, contentType: "image/png" });
+  }
   const selectedIndex = result.first.strokes.findIndex((style) => style === "#0c78c8");
   expect(result.first.strokes[selectedIndex]).toBe("#0c78c8");
+  expect(result.first.widths[selectedIndex]).toBe(3);
+  expect(result.first.widths.slice(0, 256).filter((_, index) => index !== selectedIndex).every((width) => width === 2)).toBe(true);
+  expect(result.first.strokes.slice(0, 256).filter((_, index) => index !== selectedIndex).every((style) => style === "#141e28")).toBe(true);
+  // Perceptual separation for the first sixteen rooms, beyond byte uniqueness.
+  const oklab = (style) => {
+    const [r, g, b] = style.match(/rgba\((\d+), (\d+), (\d+),/).slice(1, 4).map(Number)
+      .map((value) => value > 10 ? ((value / 255 + .055) / 1.055) ** 2.4 : value / 3294.6);
+    const l = Math.cbrt(.4122214708 * r + .5363325363 * g + .0514459929 * b);
+    const m = Math.cbrt(.2119034982 * r + .6806995451 * g + .1073969566 * b);
+    const s = Math.cbrt(.0883024619 * r + .2817188376 * g + .6299787005 * b);
+    return [.2104542553 * l + .793617785 * m - .0040720468 * s,
+      1.9779984951 * l - 2.428592205 * m + .4505937099 * s,
+      .0259040371 * l + .7827717662 * m - .808675766 * s];
+  };
+  const ids = Object.keys(result.firstById).sort().slice(0, 16);
+  for (const fills of [result.first.fills, result.dark.fills]) {
+    const order = Object.keys(result.firstById);
+    const colors = ids.map((id) => oklab(fills[order.indexOf(id)]));
+    const distances = colors.flatMap((color, index) => colors.slice(index + 1)
+      .map((other) => Math.hypot(...color.map((value, channel) => value - other[channel]))));
+    expect(Math.min(...distances)).toBeGreaterThan(.10);
+  }
   const roomCount = Object.keys(result.firstById).length;
   const roomFills = result.first.fills.slice(0, roomCount);
   const unselectedFills = roomFills.filter((_, index) => index !== selectedIndex);

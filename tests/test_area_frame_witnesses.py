@@ -1,0 +1,471 @@
+"""Strong absolute-frame witnesses for mapped-room refinements."""
+
+from __future__ import annotations
+
+import math
+from collections import Counter
+from copy import deepcopy
+from dataclasses import replace
+
+import pytest
+
+import custom_components.matic_robot.area_binding as area_binding_module
+from custom_components.matic_robot.area_binding import (
+    AREA_SCHEMA_VERSION,
+    SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+    AreaBindingStatus,
+    _room_geometry_index,
+    _room_has_strong_frame_witnesses,
+    _translation_room_anchors,
+    area_binding_status,
+    binding_for_area,
+)
+from custom_components.matic_robot.area_geometry import GeometryTooComplex
+from custom_components.matic_robot.client.models import FloorPlan, Room
+
+
+def _room(boundary: tuple[tuple[float, float], ...], *, room_id: str = "room") -> Room:
+    return Room(room_id, "Room", f"protocol-{room_id}", room_id.encode(), boundary)
+
+
+def _witness_plan() -> FloorPlan:
+    """Make an asymmetric, toothed room with a local boundary near one circle."""
+    points: list[tuple[float, float]] = []
+    center_x, center_y = 3.3, 3.0
+    radii = [
+        1.00,
+        0.94,
+        1.05,
+        0.97,
+        1.08,
+        0.93,
+        1.02,
+        0.96,
+        1.07,
+        0.92,
+        1.04,
+        0.98,
+        1.09,
+        0.91,
+        1.03,
+        0.95,
+        1.06,
+        0.90,
+        1.01,
+        0.97,
+        1.08,
+        0.93,
+        1.05,
+        0.96,
+        1.02,
+        0.91,
+        1.07,
+        0.98,
+        1.04,
+        0.92,
+        1.09,
+        0.95,
+        1.03,
+        0.90,
+        1.06,
+        0.97,
+        1.01,
+        0.93,
+        1.08,
+        0.96,
+        1.04,
+        0.91,
+        1.07,
+        0.98,
+        1.02,
+        0.92,
+        1.09,
+        0.95,
+        1.05,
+        0.90,
+        1.03,
+        0.97,
+        1.08,
+        0.93,
+        1.06,
+        0.96,
+        1.01,
+        0.91,
+        1.07,
+        0.98,
+        1.04,
+        0.92,
+        1.09,
+        0.95,
+    ]
+    for index, radius_scale in enumerate(radii):
+        angle = 2 * math.pi * index / len(radii)
+        points.append(
+            (
+                center_x + 2.55 * radius_scale * math.cos(angle),
+                center_y + 2.5 * radius_scale * math.sin(angle),
+            )
+        )
+    return FloorPlan(42, "partition", b"partition", (_room(tuple(points)),))
+
+
+def _locally_refined(plan: FloorPlan, *, shift_x: float = 0.015) -> FloorPlan:
+    room = plan.rooms[0]
+    # Move only a narrow left-side contour patch. It remains the same room and
+    # still contains the saved circle center, while local occupancy/segments
+    # near the circle differ by more than the existing 10 mm matching rule.
+    boundary = tuple(
+        (x + shift_x, y) if x < 0.95 and 2.3 <= y <= 3.7 else (x, y)
+        for x, y in room.boundary
+    )
+    # A separate remote perturbation makes this a genuine full-map refinement.
+    boundary = tuple(
+        (x, y + 0.015) if x > 5.0 and y > 2.0 else (x, y) for x, y in boundary
+    )
+    return replace(plan, rooms=(replace(room, boundary=boundary),))
+
+
+def _area(plan: FloorPlan, *, anchored_bounded: bool = False) -> dict:
+    circles = [{"x": 1.0, "y": 3.0, "radius": 0.2}]
+    if anchored_bounded:
+        original = area_binding_module._MAX_LOCAL_SEGMENT_MATCH_SEGMENTS
+        area_binding_module._MAX_LOCAL_SEGMENT_MATCH_SEGMENTS = 1
+        try:
+            binding = binding_for_area(plan, circles)
+        finally:
+            area_binding_module._MAX_LOCAL_SEGMENT_MATCH_SEGMENTS = original
+        assert binding["version"] == SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+    else:
+        binding = binding_for_area(plan, circles)
+    return {
+        "schema_version": AREA_SCHEMA_VERSION,
+        "circles": circles,
+        "map_binding": binding,
+    }
+
+
+@pytest.mark.parametrize("anchored_bounded", [False, True])
+def test_strong_witness_fallback_accepts_local_refinement(
+    anchored_bounded: bool,
+) -> None:
+    original = _witness_plan()
+    area = _area(original, anchored_bounded=anchored_bounded)
+    refined = _locally_refined(original)
+
+    assert area_binding_status(area, refined) is AreaBindingStatus.CURRENT
+
+
+def _translated_rectangle(step: float) -> tuple[tuple[float, float], ...]:
+    points = []
+    for index in range(81):
+        x = step + index * 0.125
+        points.append((x, 0.0))
+    for index in range(41):
+        y = index * 0.125
+        points.append((step + 10.0, y))
+    for index in range(81):
+        x = step + 10.0 - index * 0.125
+        points.append((x, 5.0))
+    for index in range(41):
+        y = 5.0 - index * 0.125
+        points.append((step, y))
+    return tuple(points)
+
+
+def test_turn_witnesses_ignore_dense_collinear_rectangle_vertices() -> None:
+    old = _translated_rectangle(0.0)
+    moved = _translated_rectangle(0.125)
+    old_vertices = set(old)
+    moved_vertices = set(moved)
+    shared = old_vertices & moved_vertices
+    assert len(shared) > 100
+    assert max(x for x, _y in shared) - min(x for x, _y in shared) > 9.0
+    assert max(y for _x, y in shared) - min(y for _x, y in shared) == 5.0
+    saved = {"boundary_mm": [[round(x * 1000), round(y * 1000)] for x, y in old]}
+    current = {"boundary_mm": [[round(x * 1000), round(y * 1000)] for x, y in moved]}
+
+    assert not _room_has_strong_frame_witnesses(
+        saved, current, _room_geometry_index(_witness_plan())
+    )
+
+
+def _periodic_staircase(
+    offset: float, *, perturbation: bool = False
+) -> tuple[tuple[float, float], ...]:
+    points = [(offset, 0.0)]
+    for index in range(60):
+        x = offset + (index + 1) * 0.1
+        y = 0.0 if index % 2 == 0 else 0.1
+        if perturbation and index == 27:
+            y += 0.01
+        points.extend(((x, y), (x, 0.3)))
+    points.append((offset + 6.0, 4.0))
+    for index in range(60):
+        x = offset + 6.0 - (index + 1) * 0.1
+        y = 4.0 if index % 2 == 0 else 3.9
+        points.extend(((x, y), (x, 3.7)))
+    points.append((offset, 0.0))
+    return tuple(points)
+
+
+def test_periodic_staircase_shift_does_not_prove_identity() -> None:
+    old = _periodic_staircase(0.0)
+    moved = _periodic_staircase(0.2, perturbation=True)
+    old_mm = [[round(x * 1000), round(y * 1000)] for x, y in old]
+    new_mm = [[round(x * 1000), round(y * 1000)] for x, y in moved]
+    assert len(set(map(tuple, old_mm)) & set(map(tuple, new_mm))) > 3
+
+    assert not _room_has_strong_frame_witnesses(
+        {"boundary_mm": old_mm},
+        {"boundary_mm": new_mm},
+        _room_geometry_index(_witness_plan()),
+    )
+
+
+def test_short_edge_and_small_rotation_do_not_prove_identity() -> None:
+    old = ((0.0, 0.0), (0.001, 0.0), (10.0, 0.0), (10.0, 1.0), (0.0, 1.0))
+    pivot = old[0]
+    angle = math.radians(0.2)
+    moved = tuple(
+        (
+            pivot[0]
+            + (x - pivot[0]) * math.cos(angle)
+            - (y - pivot[1]) * math.sin(angle),
+            pivot[1]
+            + (x - pivot[0]) * math.sin(angle)
+            + (y - pivot[1]) * math.cos(angle),
+        )
+        for x, y in old
+    )
+    saved = {"boundary_mm": [[round(x * 1000), round(y * 1000)] for x, y in old]}
+    current = {"boundary_mm": [[round(x * 1000), round(y * 1000)] for x, y in moved]}
+
+    assert not _room_has_strong_frame_witnesses(
+        saved, current, _room_geometry_index(_witness_plan())
+    )
+
+
+@pytest.mark.parametrize("degrees", [0.2, 15.0, 180.0])
+def test_rotation_about_one_fixed_corner_does_not_prove_identity(
+    degrees: float,
+) -> None:
+    old = _witness_plan().rooms[0].boundary
+    pivot = old[0]
+    angle = math.radians(degrees)
+    moved = tuple(
+        (
+            pivot[0]
+            + (x - pivot[0]) * math.cos(angle)
+            - (y - pivot[1]) * math.sin(angle),
+            pivot[1]
+            + (x - pivot[0]) * math.sin(angle)
+            + (y - pivot[1]) * math.cos(angle),
+        )
+        for x, y in old
+    )
+    saved = {"boundary_mm": [[round(x * 1000), round(y * 1000)] for x, y in old]}
+    current = {"boundary_mm": [[round(x * 1000), round(y * 1000)] for x, y in moved]}
+
+    assert not _room_has_strong_frame_witnesses(
+        saved, current, _room_geometry_index(_witness_plan())
+    )
+
+
+def test_strong_witness_work_budget_exhaustion_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan = _witness_plan()
+    saved = _translation_room_anchors(plan, [{"x": 1.0, "y": 3.0, "radius": 0.2}])[0]
+    geometry = _room_geometry_index(plan)
+
+    def exhausted(self, work: int = 1) -> None:
+        raise GeometryTooComplex("budget exhausted")
+
+    monkeypatch.setattr(type(geometry), "charge_query_work", exhausted)
+    with pytest.raises(GeometryTooComplex):
+        _room_has_strong_frame_witnesses(saved, saved, geometry)
+
+
+@pytest.mark.parametrize("anchored_bounded", [False, True])
+def test_duplicate_circle_edit_cannot_use_refinement_fallback(
+    anchored_bounded: bool,
+) -> None:
+    plan = _witness_plan()
+    area = _area(plan, anchored_bounded=anchored_bounded)
+    area["circles"].append(dict(area["circles"][0]))
+    assert (
+        area_binding_status(area, _locally_refined(plan))
+        is not AreaBindingStatus.CURRENT
+    )
+
+
+@pytest.mark.parametrize("boundary", [[[0, 0]], [[0, 0], ["bad", 1], [1, 0]]])
+def test_frame_witness_rejects_incomplete_or_malformed_points(boundary) -> None:
+    assert not _room_has_strong_frame_witnesses(
+        {"boundary_mm": boundary},
+        {"boundary_mm": boundary},
+        _room_geometry_index(_witness_plan()),
+    )
+
+
+def test_frame_witness_rejects_poor_two_dimensional_conditioning() -> None:
+    points = [
+        [round(x * 1000), round(y * 10)] for x, y in _witness_plan().rooms[0].boundary
+    ]
+    features = area_binding_module._turn_witness_features(points)
+    assert len(features) >= 3
+    assert not _room_has_strong_frame_witnesses(
+        {"boundary_mm": points},
+        {"boundary_mm": points},
+        _room_geometry_index(_witness_plan()),
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["absent", "incomplete", "duplicate_saved", "wrong_circle", "duplicate_current"],
+)
+def test_strong_saved_frame_rejects_incomplete_association_evidence(
+    mutation, monkeypatch
+) -> None:
+    plan = _witness_plan()
+    area = _area(plan, anchored_bounded=True)
+    anchors = deepcopy(area["map_binding"]["translation_room_anchors"])
+    if mutation == "absent":
+        anchors = None
+    elif mutation == "incomplete":
+        anchors = [{"room_key": "missing-fields"}]
+    elif mutation == "duplicate_saved":
+        anchors.append(deepcopy(anchors[0]))
+    elif mutation == "wrong_circle":
+        anchors[0]["circle_keys"] = ["0" * 64]
+    else:
+        current = _translation_room_anchors(plan, area["circles"])
+        monkeypatch.setattr(
+            area_binding_module,
+            "_translation_room_anchors",
+            lambda *a, **kw: [current[0], current[0]],
+        )
+    assert not area_binding_module._saved_room_frames_have_strong_witnesses(
+        anchors, area["circles"], plan, _room_geometry_index(plan)
+    )
+
+
+def test_v6_strong_proof_budget_failure_stays_blocked(monkeypatch) -> None:
+    plan = _witness_plan()
+    area = _area(plan, anchored_bounded=True)
+
+    def exhausted(*args, **kwargs):
+        raise GeometryTooComplex("witness budget exhausted")
+
+    monkeypatch.setattr(
+        area_binding_module, "_saved_room_frames_have_strong_witnesses", exhausted
+    )
+    assert (
+        area_binding_status(area, _locally_refined(plan))
+        is AreaBindingStatus.GEOMETRY_CHANGED
+    )
+
+
+@pytest.mark.parametrize("fingerprint_failure", [False, True])
+def test_global_frame_guard_remains_independent_of_witness_matcher(
+    monkeypatch, fingerprint_failure
+) -> None:
+    plan = _witness_plan()
+    area = _area(plan)
+    moved = replace(
+        plan,
+        rooms=(
+            replace(
+                plan.rooms[0],
+                boundary=tuple((x + 0.1, y) for x, y in plan.rooms[0].boundary),
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        area_binding_module, "_room_has_strong_frame_witnesses", lambda *a, **kw: True
+    )
+    if fingerprint_failure:
+
+        def exhausted(*args, **kwargs):
+            raise GeometryTooComplex("global frame budget exhausted")
+
+        monkeypatch.setattr(
+            area_binding_module, "translation_invariant_geometry_fingerprint", exhausted
+        )
+    assert area_binding_status(area, moved) is AreaBindingStatus.GEOMETRY_CHANGED
+
+
+def test_sparse_unique_endcap_does_not_anchor_a_repeated_sliding_contour() -> None:
+    old = list(_periodic_staircase(0.0))[:-1]
+    old.extend([(-0.12, 3.6), (-0.28, 2.9), (-0.35, 2.1), (-0.18, 1.2), (-0.08, 0.4)])
+    new = [(x if x < 0.6 else x + 0.2, y) for x, y in old]
+    old_mm = [[round(x * 1000), round(y * 1000)] for x, y in old]
+    new_mm = [[round(x * 1000), round(y * 1000)] for x, y in new]
+    old_features = area_binding_module._turn_witness_features(old_mm)
+    new_features = area_binding_module._turn_witness_features(new_mm)
+    counts_old = Counter(feature for _, feature in old_features)
+    counts_new = Counter(feature for _, feature in new_features)
+    current = dict(new_features)
+    shared = [
+        p
+        for p, f in old_features
+        if counts_old[f] == counts_new[f] == 1 and current.get(p) == f
+    ]
+    assert len(shared) >= 3
+    assert max(x for x, _ in shared) - min(x for x, _ in shared) < 1000
+    assert not _room_has_strong_frame_witnesses(
+        {"boundary_mm": old_mm},
+        {"boundary_mm": new_mm},
+        _room_geometry_index(_witness_plan()),
+    )
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("mutation", ["append", "remove", "unchanged"])
+def test_bounded_shape_multiplicity_through_local_refinement(
+    legacy, mutation, monkeypatch
+) -> None:
+    plan = _witness_plan()
+    circles = [{"x": 1.0, "y": 3.0, "radius": 0.2}]
+    if mutation in {"remove", "unchanged"}:
+        circles.append(dict(circles[0]))
+    monkeypatch.setattr(area_binding_module, "_MAX_LOCAL_SEGMENT_MATCH_SEGMENTS", 1)
+    binding = binding_for_area(plan, circles)
+    assert binding["version"] == SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+    if legacy:
+        binding["version"] = (
+            area_binding_module.ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+        )
+        binding.pop("area_shape_sha256")
+    area = {
+        "schema_version": AREA_SCHEMA_VERSION,
+        "circles": circles,
+        "map_binding": binding,
+    }
+    if mutation == "append":
+        circles.append(dict(circles[0]))
+    elif mutation == "remove":
+        circles.pop()
+    expected_current = not legacy and mutation == "unchanged"
+    assert (
+        area_binding_status(area, _locally_refined(plan)) is AreaBindingStatus.CURRENT
+    ) is expected_current
+
+
+def test_v6_shape_validation_failure_cannot_use_matching_local_hash(
+    monkeypatch,
+) -> None:
+    plan = _witness_plan()
+    area = _area(plan, anchored_bounded=True)
+    monkeypatch.setattr(
+        area_binding_module,
+        "_bounded_hash_only_area_geometry_fingerprint",
+        lambda *a, **kw: area["map_binding"]["local_geometry_sha256"],
+    )
+
+    def invalid_shape(*args, **kwargs):
+        raise ValueError("shape validation failed")
+
+    monkeypatch.setattr(area_binding_module, "_area_geometry_components", invalid_shape)
+    assert area_binding_status(area, plan) is AreaBindingStatus.INVALID

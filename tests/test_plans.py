@@ -16,11 +16,11 @@ from homeassistant.util import dt as dt_util
 
 import custom_components.matic_robot.plans as plans_module
 from custom_components.matic_robot.area_binding import (
-    ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
     AREA_SCHEMA_VERSION,
     BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
     HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
     SCOPED_MAP_BINDING_VERSION,
+    SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
     _hash_only_area_geometry_fingerprint,
     area_binding_status,
     binding_for_area,
@@ -2007,7 +2007,8 @@ async def test_area_binding_upgrade_ignores_unknown_binding_version(hass) -> Non
     manager._store.async_save.assert_not_awaited()
 
 
-async def test_dense_hash_only_area_upgrade_is_a_noop(hass) -> None:
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_dense_hash_only_area_upgrade_is_a_noop(hass, legacy) -> None:
     manager = CleaningPlanManager(hass)
     manager._store = SimpleNamespace(async_save=AsyncMock())
     base = FloorPlan(
@@ -2028,7 +2029,10 @@ async def test_dense_hash_only_area_upgrade_is_a_noop(hass) -> None:
     )
     circles = [{"x": 0.5, "y": 0.5, "radius": 0.5}]
     binding = binding_for_area(floor_plan, circles)
-    assert binding["version"] == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+    assert binding["version"] == SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+    if legacy:
+        binding["version"] = 5
+        binding.pop("area_shape_sha256")
     area = {
         "schema_version": AREA_SCHEMA_VERSION,
         "circles": circles,
@@ -2067,7 +2071,10 @@ async def test_current_v4_bounded_area_binding_upgrades_to_room_anchored(hass) -
     )
     circles = [{"x": 0.5, "y": 0.5, "radius": 0.5}]
     anchored_binding = binding_for_area(floor_plan, circles)
-    assert anchored_binding["version"] == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+    assert (
+        anchored_binding["version"]
+        == SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+    )
     binding = {
         "version": BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
         "mission_id": anchored_binding["mission_id"],
@@ -2086,7 +2093,8 @@ async def test_current_v4_bounded_area_binding_upgrades_to_room_anchored(hass) -
         "serial", floor_plan
     ) == AreaBindingUpgradeResult(1, False)
     assert (
-        area["map_binding"]["version"] == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+        area["map_binding"]["version"]
+        == SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
     )
     manager._store.async_save.assert_awaited_once()
 

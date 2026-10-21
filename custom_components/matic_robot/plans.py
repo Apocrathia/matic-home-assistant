@@ -44,6 +44,7 @@ from .area_binding import (
     HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
     MAP_BINDING_VERSION,
     SCOPED_MAP_BINDING_VERSION,
+    SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
     AreaBindingStatus,
     _graft_legacy_room_frame_boundaries,
     _room_geometry_index,
@@ -2464,10 +2465,14 @@ class CleaningPlanManager:
                 HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
                 BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
                 ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+                SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
                 SCOPED_MAP_BINDING_VERSION,
             }:
                 continue
-            if version == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION:
+            if version in {
+                ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+                SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+            }:
                 continue
             if version == SCOPED_MAP_BINDING_VERSION:
                 anchors = binding.get("translation_room_anchors")
