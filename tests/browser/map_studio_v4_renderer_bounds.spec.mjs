@@ -352,3 +352,76 @@ test("all 256 room colors stay distinct by room ID, retain selection and labels,
     .toEqual(Array(roomCount - 1).fill("#141e28"));
   expect(result.photo.renderedPoints).toBeGreaterThan(0);
 });
+
+test("room labels draw after every room fill so an overlapping room cannot cover a name", async ({ page }) => {
+  const bundle = await build({
+    stdin: {
+      contents: 'export { RendererController } from "./frontend/map-studio-v4/renderer-controller"; export { createGalleryState } from "./frontend/map-studio-v4/gallery-state";',
+      resolveDir: process.cwd(),
+    },
+    bundle: true,
+    format: "esm",
+    write: false,
+  });
+  await page.route("**/renderer-label-order.js", (route) => route.fulfill({
+    contentType: "text/javascript",
+    body: bundle.outputFiles[0].text,
+  }));
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  const result = await page.evaluate(async () => {
+    const { RendererController, createGalleryState } = await import("/renderer-label-order.js");
+    const base = createGalleryState("ready");
+    // The second room's polygon covers the first room's label position, as a
+    // narrow hallway beside a bathroom does on a real floor plan.
+    const rooms = [
+      { id: "room-a", roomId: "a", name: "Bathroom", boundary: [[40, 40], [60, 40], [60, 60], [40, 60]], center: [50, 50] },
+      { id: "room-b", roomId: "b", name: "Hallway", boundary: [[20, 45], [80, 45], [80, 55], [20, 55]], center: [50, 70] },
+    ];
+    const sceneCanvas = document.createElement("canvas");
+    const overlayCanvas = document.createElement("canvas");
+    for (const canvas of [sceneCanvas, overlayCanvas]) {
+      Object.assign(canvas.style, { position: "absolute", width: "900px", height: "700px" });
+      document.body.append(canvas);
+    }
+    const operations = [];
+    const originalFill = CanvasRenderingContext2D.prototype.fill;
+    const originalFillText = CanvasRenderingContext2D.prototype.fillText;
+    CanvasRenderingContext2D.prototype.fill = function (...args) {
+      if (this.canvas === overlayCanvas) operations.push("fill");
+      return originalFill.apply(this, args);
+    };
+    CanvasRenderingContext2D.prototype.fillText = function (text, ...args) {
+      if (this.canvas === overlayCanvas) operations.push(`text:${text}`);
+      return originalFillText.call(this, text, ...args);
+    };
+    const renderer = new RendererController(sceneCanvas, overlayCanvas);
+    renderer.setState({
+      ...base,
+      view: "top",
+      appearance: "rooms",
+      labelsVisible: true,
+      resources: {
+        ...base.resources,
+        scene: { ...base.resources.scene, value: {
+          ...base.resources.scene.value,
+          metadata: { ...base.resources.scene.value.metadata, rooms },
+        } },
+      },
+    });
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    renderer.dispose();
+    CanvasRenderingContext2D.prototype.fill = originalFill;
+    CanvasRenderingContext2D.prototype.fillText = originalFillText;
+    sceneCanvas.remove();
+    overlayCanvas.remove();
+    return operations;
+  });
+
+  const firstText = result.findIndex((operation) => operation.startsWith("text:"));
+  expect(firstText).toBeGreaterThan(-1);
+  // Both room fills land before the first name. Later overlay fills, such as
+  // the robot marker, are meant to sit above the labels.
+  expect(result.slice(0, firstText).filter((operation) => operation === "fill").length).toBe(2);
+  expect(result.filter((operation) => operation.startsWith("text:"))).toEqual(["text:Bathroom", "text:Hallway"]);
+});
