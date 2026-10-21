@@ -46,8 +46,7 @@ It does not add automatic rebinding or coordinate transformations.
 The assembled PR #287 candidate passed **5,278 tests with 100.00% coverage**
 across 20,147 statements (`python -m pytest --cov=custom_components/matic_robot
 --cov-report=term-missing`). Exact-head PR CI and complete regular review must
-pass before merging. Installed RC35 and RC36 retesting is recorded below;
-RC37 installation and the label recheck remain pending.
+pass before merging. Installed RC35, RC36 and RC37 retesting is recorded below.
 
 - Binding regressions cover partition churn, unrelated room changes,
   containing-room contour reshaping, fractional wall refinements, new overlaps,
@@ -97,7 +96,7 @@ included here.
 | RC35 stale position | Pass: a native pose about 13 hours old reports `pose_observation_current=false` and no robot marker is drawn. |
 | RC35 installed room colors | Pass for colors: room fills are distinct. **Fail for labels:** later room fills clipped two adjacent room names and hid a third label. Fixed in PR #293 for RC36. |
 | RC36 installation and label recheck | Pass: installed through Home Assistant updates after a HACS refresh; `update.matic_unofficial_update` and the integration report 0.5.0rc36; after restart the saved area reports `current`, both shortcuts show, no stale marker is drawn, and previously clipped names show in full. One small room's 2D label was still hidden by label-collision suppression (present since before RC35); RC37 moves colliding labels aside. |
-| RC37 installation and label recheck | Pending. |
+| RC37 installation and label recheck | Pass: installed through Home Assistant updates after a HACS refresh; `update.matic_unofficial_update` reports 0.5.0rc37 and the integration entry is loaded after restart; the saved area reports `current`; both shortcuts show. In 2D with Room colors and with Photo, all twelve room names draw, including the small room that RC36 hid, with no overlapping labels. A map opened in a background browser tab showed "Map unavailable" until the tab was brought forward, after which the map loaded without a manual retry. |
 | Final physical/owner acceptance and stable publication | Open. |
 
 ## Reproduced release blockers
