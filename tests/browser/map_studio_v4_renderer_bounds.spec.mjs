@@ -425,3 +425,72 @@ test("room labels draw after every room fill so an overlapping room cannot cover
   expect(result.slice(0, firstText).filter((operation) => operation === "fill").length).toBe(2);
   expect(result.filter((operation) => operation.startsWith("text:"))).toEqual(["text:Bathroom", "text:Hallway"]);
 });
+
+test("a room label that would cover another moves aside instead of disappearing", async ({ page }) => {
+  const bundle = await build({
+    stdin: {
+      contents: 'export { RendererController } from "./frontend/map-studio-v4/renderer-controller"; export { createGalleryState } from "./frontend/map-studio-v4/gallery-state";',
+      resolveDir: process.cwd(),
+    },
+    bundle: true,
+    format: "esm",
+    write: false,
+  });
+  await page.route("**/renderer-label-spacing.js", (route) => route.fulfill({
+    contentType: "text/javascript",
+    body: bundle.outputFiles[0].text,
+  }));
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  const result = await page.evaluate(async () => {
+    const { RendererController, createGalleryState } = await import("/renderer-label-spacing.js");
+    const base = createGalleryState("ready");
+    // Two neighbouring rooms whose centres are a cell apart, as a small
+    // bedroom beside a bathroom is on a real floor plan.
+    const rooms = [
+      { id: "room-a", roomId: "a", name: "Bathroom", boundary: [[40, 40], [50, 40], [50, 60], [40, 60]], center: [49, 50] },
+      { id: "room-b", roomId: "b", name: "Quinns Room", boundary: [[50, 40], [60, 40], [60, 60], [50, 60]], center: [51, 50] },
+    ];
+    const sceneCanvas = document.createElement("canvas");
+    const overlayCanvas = document.createElement("canvas");
+    for (const canvas of [sceneCanvas, overlayCanvas]) {
+      Object.assign(canvas.style, { position: "absolute", width: "900px", height: "700px" });
+      document.body.append(canvas);
+    }
+    const labels = [];
+    const originalFillText = CanvasRenderingContext2D.prototype.fillText;
+    CanvasRenderingContext2D.prototype.fillText = function (text, x, y, ...args) {
+      if (this.canvas === overlayCanvas) {
+        const width = this.measureText(text).width;
+        labels.push({ text, left: x - width / 2, right: x + width / 2, top: y - 8, bottom: y + 8 });
+      }
+      return originalFillText.call(this, text, x, y, ...args);
+    };
+    const renderer = new RendererController(sceneCanvas, overlayCanvas);
+    renderer.setState({
+      ...base,
+      view: "top",
+      appearance: "rooms",
+      labelsVisible: true,
+      resources: {
+        ...base.resources,
+        scene: { ...base.resources.scene, value: {
+          ...base.resources.scene.value,
+          metadata: { ...base.resources.scene.value.metadata, rooms },
+        } },
+      },
+    });
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    renderer.dispose();
+    CanvasRenderingContext2D.prototype.fillText = originalFillText;
+    sceneCanvas.remove();
+    overlayCanvas.remove();
+    return labels;
+  });
+
+  expect(result.map((label) => label.text)).toEqual(["Bathroom", "Quinns Room"]);
+  const [first, second] = result;
+  const overlaps = first.left < second.right && second.left < first.right
+    && first.top < second.bottom && second.top < first.bottom;
+  expect(overlaps, "both names stay readable without overlapping").toBe(false);
+});
