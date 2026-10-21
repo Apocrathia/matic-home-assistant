@@ -517,9 +517,9 @@ async def test_area_failure_cannot_leak_into_queued_other_robot_write(
     area_worker_waiting = asyncio.Event()
     original_area_worker = manager._async_persist_area_metadata
 
-    async def observe_area_worker(serial_number, mutate) -> None:
+    async def observe_area_worker(serial_number, mutate, *, precondition=None) -> None:
         area_worker_waiting.set()
-        await original_area_worker(serial_number, mutate)
+        await original_area_worker(serial_number, mutate, precondition=precondition)
 
     monkeypatch.setattr(manager, "_async_persist_area_metadata", observe_area_worker)
     await manager._store_lock.acquire()
@@ -878,10 +878,10 @@ async def test_removal_before_area_worker_mutation_rejects_accepted_task(
     release_worker = asyncio.Event()
     original_worker = manager._async_persist_area_metadata
 
-    async def defer_worker(serial_number, mutate):
+    async def defer_worker(serial_number, mutate, *, precondition=None):
         worker_started.set()
         await release_worker.wait()
-        await original_worker(serial_number, mutate)
+        await original_worker(serial_number, mutate, precondition=precondition)
 
     monkeypatch.setattr(manager, "_async_persist_area_metadata", defer_worker)
     waiter = asyncio.create_task(

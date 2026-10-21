@@ -945,6 +945,60 @@ test.describe("Area review", () => {
     await expect(gallery.locator(".action-bar").getByRole("button", { name: "Clean this area", exact: true })).toHaveAccessibleDescription("Can't clean this area until you redraw it.");
   });
 
+  test("the current-map confirmation label wraps without clipping at responsive widths and in RTL", async ({ page }) => {
+    for (const viewport of [
+      { width: 320, height: 640 },
+      { width: 390, height: 844 },
+      { width: 844, height: 390 },
+      { width: 1024, height: 768 },
+      { width: 1440, height: 900 },
+    ]) {
+      const gallery = await loadGallery(page, { scenario: "area-review-rebind", viewport });
+      const confirm = gallery.locator(".action-bar").getByRole("button", { name: "Confirm area on current map", exact: true });
+      await expect(confirm).toBeVisible();
+      const checkTextBounds = async () => confirm.evaluate((button) => {
+        const range = document.createRange();
+        range.selectNodeContents(button);
+        const textRects = [...range.getClientRects()];
+        const bounds = button.getBoundingClientRect();
+        const style = getComputedStyle(button);
+        const insetInlineStart = Number.parseFloat(style.paddingInlineStart);
+        const insetInlineEnd = Number.parseFloat(style.paddingInlineEnd);
+        const insetBlockStart = Number.parseFloat(style.paddingBlockStart);
+        const insetBlockEnd = Number.parseFloat(style.paddingBlockEnd);
+        return {
+          label: button.textContent.trim(),
+          textRects: textRects.map(({ left, right, top, bottom, width, height }) => ({ left, right, top, bottom, width, height })),
+          contentLeft: bounds.left + insetInlineStart,
+          contentRight: bounds.right - insetInlineEnd,
+          contentTop: bounds.top + insetBlockStart,
+          contentBottom: bounds.bottom - insetBlockEnd,
+          scrollWidth: button.scrollWidth,
+          clientWidth: button.clientWidth,
+        };
+      });
+      const assertFits = (measure) => {
+        expect(measure.label).toBe("Confirm area on current map");
+        expect(measure.textRects.length, "label has rendered text bounds").toBeGreaterThan(0);
+        expect(measure.scrollWidth, "button has no horizontal overflow").toBeLessThanOrEqual(measure.clientWidth);
+        for (const rect of measure.textRects) {
+          expect(rect.width, "label text has visible width").toBeGreaterThan(0);
+          expect(rect.height, "label text has visible height").toBeGreaterThan(0);
+          expect(rect.left, "label begins inside button content").toBeGreaterThanOrEqual(measure.contentLeft - 1);
+          expect(rect.right, "label ends inside button content").toBeLessThanOrEqual(measure.contentRight + 1);
+          expect(rect.top, "label begins inside button content vertically").toBeGreaterThanOrEqual(measure.contentTop - 1);
+          expect(rect.bottom, "label ends inside button content vertically").toBeLessThanOrEqual(measure.contentBottom + 1);
+        }
+      };
+      assertFits(await checkTextBounds());
+      if (viewport.width === 390 || viewport.width === 320) {
+        await page.evaluate(() => { document.documentElement.dir = "rtl"; });
+        assertFits(await checkTextBounds());
+      }
+      await gallery.evaluate((element) => element.remove());
+    }
+  });
+
   test("entering the review frames the area in the top view and dims the rest; leaving restores the camera", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "draw", viewport: { width: 1024, height: 768 } });
     await page.waitForTimeout(150);

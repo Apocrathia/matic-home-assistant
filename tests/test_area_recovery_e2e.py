@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 from dataclasses import replace
@@ -185,20 +186,48 @@ async def test_stale_v4_area_recovers_through_catalog_and_saved_plan_preview(
         }
     ]
 
-    response = await api.post(
-        _json_request(
-            _hass(entry),
-            "POST",
-            {
-                "area_id": "saved-zone",
-                "name": "Saved zone",
-                "circles": circles,
-                "cleaning_mode": "vacuum",
-                "coverage_setting": "standard",
-            },
-        ),
-        "entry",
+    rebind_request = _json_request(
+        _hass(entry),
+        "POST",
+        {
+            "area_id": "saved-zone",
+            "name": "Saved zone",
+            "circles": circles,
+            "cleaning_mode": "vacuum",
+            "coverage_setting": "standard",
+        },
     )
+    original_identity = runtime.slam_map.mission_identity
+    await manager._store_lock.acquire()
+    rebind_task = asyncio.create_task(api.post(rebind_request, "entry"))
+    try:
+        for _ in range(100):
+            if manager._metadata_persistence_tasks.get("synthetic-serial"):
+                break
+            await asyncio.sleep(0)
+        assert manager._metadata_persistence_tasks.get("synthetic-serial")
+        # The HTTP checks already passed, but the owned Store transaction is
+        # queued. Revoke the captured map before releasing it.
+        runtime.slam_map.mission_identity = None
+    finally:
+        manager._store_lock.release()
+    stale_commit = await rebind_task
+    assert stale_commit.status == 409
+    assert manager._store.async_save.await_count == 0
+    assert manager.area("synthetic-serial", "saved-zone")["map_binding"]["version"] == (
+        BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+    )
+    still_stale = await readiness.async_call(
+        tool_hass,
+        llm.ToolInput(readiness.name, {"plan": "area-plan"}),
+        _llm_context(),
+    )
+    assert still_stale.data["status"] == "needs_confirmation"
+    assert still_stale.data["can_preview"] is False
+    runtime.client.async_send_command.assert_not_awaited()
+
+    runtime.slam_map.mission_identity = original_identity
+    response = await api.post(rebind_request, "entry")
     assert response.status == 200
     assert json.loads(response.body) == {"id": "saved-zone"}
     rebound = manager.area("synthetic-serial", "saved-zone")
@@ -229,6 +258,220 @@ async def test_stale_v4_area_recovers_through_catalog_and_saved_plan_preview(
     assert ready.data["areas"] == [{"name": "Saved zone", "status": "ready"}]
     assert ready.data["can_preview"] is True
     runtime.client.async_send_command.assert_not_awaited()
+
+
+@pytest.mark.parametrize("drift", ["floor", "runtime", "map_currentness"])
+@pytest.mark.asyncio
+async def test_area_commit_rejects_floor_or_runtime_drift_while_store_queued(
+    hass: HomeAssistant, drift: str
+) -> None:
+    """A queued save cannot outlive the runtime or floor it was authored for."""
+    manager = CleaningPlanManager(hass)
+    manager._store = SimpleNamespace(async_save=AsyncMock())
+    runtime = _runtime()
+    runtime.client.async_send_command = AsyncMock()
+    runtime.cleaning_plans = manager
+    entry = _entry(runtime)
+    hass = _hass(entry)
+    request = _json_request(
+        hass,
+        "POST",
+        {
+            "name": "Queued zone",
+            "circles": [{"x": 0.1, "y": 0.1, "radius": 0.2}],
+            "cleaning_mode": "vacuum",
+            "coverage_setting": "standard",
+        },
+    )
+    original_floor = runtime.coordinator.data.floor_plan
+    await manager._store_lock.acquire()
+    pending = asyncio.create_task(MaticAreasView().post(request, "entry"))
+    try:
+        for _ in range(100):
+            if manager._metadata_persistence_tasks.get("synthetic-serial"):
+                break
+            await asyncio.sleep(0)
+        assert manager._metadata_persistence_tasks.get("synthetic-serial")
+        if drift == "floor":
+            runtime.coordinator.data.floor_plan = replace(
+                original_floor,
+                partition_protocol_id="queued-replacement-partition",
+                partition_id_wire=b"queued-replacement-partition",
+            )
+        elif drift == "runtime":
+            entry.runtime_data = _runtime()
+        else:
+            runtime.slam_map.floor_plan_is_current.side_effect = None
+            runtime.slam_map.floor_plan_is_current.return_value = False
+    finally:
+        manager._store_lock.release()
+
+    response = await pending
+    assert response.status == 409
+    assert manager.areas("synthetic-serial") == {}
+    assert manager._store.async_save.await_count == 0
+    runtime.client.async_send_command.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_area_creates_cannot_overwrite_same_slug(
+    hass: HomeAssistant,
+) -> None:
+    """Commit-time catalog checks reject the second create for a slug."""
+    manager = CleaningPlanManager(hass)
+    manager._store = SimpleNamespace(async_save=AsyncMock())
+    runtime = _runtime()
+    runtime.cleaning_plans = manager
+    entry = _entry(runtime)
+    api = MaticAreasView()
+    hass = _hass(entry)
+    body = {
+        "name": "Kitchen nook",
+        "circles": [{"x": 0.1, "y": 0.1, "radius": 0.2}],
+        "cleaning_mode": "vacuum",
+        "coverage_setting": "standard",
+    }
+    await manager._store_lock.acquire()
+    first = asyncio.create_task(api.post(_json_request(hass, "POST", body), "entry"))
+    second = asyncio.create_task(api.post(_json_request(hass, "POST", body), "entry"))
+    try:
+        for _ in range(100):
+            if manager._metadata_admissions.get("synthetic-serial", 0) >= 1:
+                break
+            await asyncio.sleep(0)
+        assert manager._metadata_admissions.get("synthetic-serial", 0) >= 1
+    finally:
+        manager._store_lock.release()
+
+    responses = await asyncio.gather(first, second)
+    assert sorted(response.status for response in responses) == [200, 409]
+    assert set(manager.areas("synthetic-serial")) == {"kitchen_nook"}
+    assert manager._store.async_save.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_area_renames_enforce_casefold_name_uniqueness(
+    hass: HomeAssistant,
+) -> None:
+    """Distinct area IDs cannot commit duplicate casefolded names."""
+    manager = CleaningPlanManager(hass)
+    manager._store = SimpleNamespace(async_save=AsyncMock())
+    manager._robot("synthetic-serial")["areas"].update(
+        {"first-zone": {"name": "First"}, "second-zone": {"name": "Second"}}
+    )
+    runtime = _runtime()
+    runtime.cleaning_plans = manager
+    entry = _entry(runtime)
+    api = MaticAreasView()
+    hass = _hass(entry)
+    common = {
+        "circles": [{"x": 0.1, "y": 0.1, "radius": 0.2}],
+        "cleaning_mode": "vacuum",
+        "coverage_setting": "standard",
+    }
+    first = asyncio.create_task(
+        api.post(
+            _json_request(
+                hass,
+                "POST",
+                {**common, "area_id": "first-zone", "name": "Shared name"},
+            ),
+            "entry",
+        )
+    )
+    second = asyncio.create_task(
+        api.post(
+            _json_request(
+                hass,
+                "POST",
+                {**common, "area_id": "second-zone", "name": "sHARED NAME"},
+            ),
+            "entry",
+        )
+    )
+    await manager._store_lock.acquire()
+    try:
+        for _ in range(100):
+            if manager._metadata_admissions.get("synthetic-serial", 0) >= 1:
+                break
+            await asyncio.sleep(0)
+        assert manager._metadata_admissions.get("synthetic-serial", 0) >= 1
+    finally:
+        manager._store_lock.release()
+
+    responses = await asyncio.gather(first, second)
+    assert sorted(response.status for response in responses) == [200, 409]
+    areas = manager.areas("synthetic-serial")
+    assert (
+        areas["first-zone"]["name"],
+        areas["second-zone"]["name"],
+    ) in {("Shared name", "Second"), ("First", "sHARED NAME")}
+    assert manager._store.async_save.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_queued_area_update_does_not_recreate_deleted_area(
+    hass: HomeAssistant,
+) -> None:
+    """A queued update preserves 404 semantics when its area is deleted first."""
+    manager = CleaningPlanManager(hass)
+    manager._store = SimpleNamespace(async_save=AsyncMock())
+    runtime = _runtime()
+    saved_area = {
+        "schema_version": AREA_SCHEMA_VERSION,
+        "name": "Saved zone",
+        "circles": [{"x": 0.1, "y": 0.1, "radius": 0.2}],
+        "cleaning_mode": "vacuum",
+        "coverage_setting": "standard",
+        "map_binding": binding_for_area(
+            runtime.coordinator.data.floor_plan,
+            [{"x": 0.1, "y": 0.1, "radius": 0.2}],
+        ),
+    }
+    manager._robot("synthetic-serial")["areas"]["saved-zone"] = saved_area
+    runtime.cleaning_plans = manager
+    entry = _entry(runtime)
+    hass = _hass(entry)
+    api = MaticAreasView()
+    await manager._store_lock.acquire()
+    deleting = asyncio.create_task(
+        manager.async_delete_area("synthetic-serial", "saved-zone")
+    )
+    try:
+        for _ in range(100):
+            if manager._metadata_persistence_tasks.get("synthetic-serial"):
+                break
+            await asyncio.sleep(0)
+        assert manager._metadata_persistence_tasks.get("synthetic-serial")
+        updating = asyncio.create_task(
+            api.post(
+                _json_request(
+                    hass,
+                    "POST",
+                    {
+                        "area_id": "saved-zone",
+                        "name": "Saved zone",
+                        "circles": saved_area["circles"],
+                        "cleaning_mode": "vacuum",
+                        "coverage_setting": "standard",
+                    },
+                ),
+                "entry",
+            )
+        )
+        for _ in range(100):
+            if manager._metadata_admissions.get("synthetic-serial", 0) >= 1:
+                break
+            await asyncio.sleep(0)
+        assert manager._metadata_admissions["synthetic-serial"] >= 1
+    finally:
+        manager._store_lock.release()
+
+    await deleting
+    response = await updating
+    assert response.status == 404
+    assert manager.areas("synthetic-serial") == {}
+    assert manager._store.async_save.await_count == 1
 
 
 @pytest.mark.asyncio
