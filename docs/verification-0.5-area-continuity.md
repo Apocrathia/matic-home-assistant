@@ -46,7 +46,8 @@ It does not add automatic rebinding or coordinate transformations.
 The assembled PR #287 candidate passed **5,278 tests with 100.00% coverage**
 across 20,147 statements (`python -m pytest --cov=custom_components/matic_robot
 --cov-report=term-missing`). Exact-head PR CI and complete regular review must
-pass before merging; installed retesting remains open.
+pass before merging. Installed RC35 retesting is recorded below; RC36
+installation and the label recheck remain pending.
 
 - Binding regressions cover partition churn, unrelated room changes,
   containing-room contour reshaping, fractional wall refinements, new overlaps,
@@ -105,13 +106,15 @@ to 90 mm, its local occupancy and segment evidence, while retaining the same
 map session and room associations. The initial RC35 partition fix also rejected
 this recorded pair. Offline replay accepts the recorded contours with the area
 and binding unchanged. It reconstructs room IDs from saved anchors/API identities;
-the installed stored-identity check remains open. Do not use another confirmation
-to conceal a failure.
+installed RC35 readbacks report the saved area `current` after a full restart and
+two integration reloads with no confirmation, save or rebind. Do not use another
+confirmation to conceal a failure.
 
 The shortcut failure is a frontend recovery problem, not demonstrated storage
 loss. The returning same-user/same-entry lifecycle now rereads saved pins in source.
 The packaged-panel regression passes Chromium and WebKit with no preference
-writes or robot commands; installed retesting remains pending.
+writes or robot commands. Installed RC35 retesting passed: both shortcuts return
+on the same page after an integration reload.
 
 ## Room-color readability
 
