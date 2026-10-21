@@ -114,6 +114,8 @@ export interface PoseModel {
   readonly floorCoherent: boolean;
   readonly mapSessionKey: string | null;
   readonly freshness: "live" | "coordinator_fallback" | "unavailable";
+  /** Native observation age; undefined only for pre-age-field responses. */
+  readonly nativeObservationAgeSeconds?: number | null;
 }
 
 export interface HistorySnapshot {
@@ -810,6 +812,12 @@ export const parsePose = (value: unknown): PoseModel => {
   if (freshness !== "live" && freshness !== "coordinator_fallback") {
     throw new ContractError("invalid-pose-freshness");
   }
+  const nativeObservationAgeSeconds = Object.hasOwn(payload, "pose_age_seconds")
+    ? typeof payload.pose_age_seconds === "number" && Number.isFinite(payload.pose_age_seconds)
+      && payload.pose_age_seconds >= -2 && payload.pose_age_seconds <= 5
+      ? payload.pose_age_seconds
+      : null
+    : undefined;
   return {
     position,
     source: boundedString(payload.source, 64, "invalid-pose-source"),
@@ -821,6 +829,7 @@ export const parsePose = (value: unknown): PoseModel => {
     floorCoherent: booleanValue(payload.map_floor_coherent, "invalid-pose-floor"),
     mapSessionKey: mapSessionKey(payload.map_session_key),
     freshness,
+    ...(nativeObservationAgeSeconds === undefined ? {} : { nativeObservationAgeSeconds }),
   };
 };
 

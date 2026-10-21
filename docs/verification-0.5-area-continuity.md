@@ -43,8 +43,8 @@ It does not add automatic rebinding or coordinate transformations.
 
 ## Source evidence
 
-The assembled PR #287 candidate passed **5,232 tests with 100.00% coverage**
-across 20,041 statements (`python -m pytest --cov=custom_components/matic_robot
+The assembled PR #287 candidate passed **5,278 tests with 100.00% coverage**
+across 20,147 statements (`python -m pytest --cov=custom_components/matic_robot
 --cov-report=term-missing`). Exact-head PR CI and complete regular review must
 pass before merging; installed retesting remains open.
 
@@ -86,7 +86,7 @@ included here.
 | Idle integration reload continuity | **Fail:** saved area/binding unchanged, but newly fetched contours return `geometry_changed` and block preview. Mission/partition session key and room IDs remain stable. |
 | Full Home Assistant restart continuity | **Fail for readiness:** area/binding remain unchanged; the same geometry blocker persists. HA restarts successfully and the robot remains docked. |
 | Home shortcut recovery | **Fail after integration reload:** stored pins and catalog IDs remain intact, but the existing page hides both shortcuts. Fresh page load restores them; full HA restart also restores them. |
-| RC35 exact-head CI and complete regular review | Pending; actual reload fixes still in progress. |
+| RC35 exact-head CI and complete regular review | Pending for the final candidate; source regressions pass. |
 | RC35 owner manual merge, installation and runtime qualification | Pending. |
 | Final physical/owner acceptance and stable publication | Open. |
 
@@ -95,9 +95,10 @@ included here.
 Routine post-run contour refinement changed the containing-room bounds by up
 to 90 mm, its local occupancy and segment evidence, while retaining the same
 map session and room associations. The initial RC35 partition fix also rejected
-this recorded pair. The revised distinctive-witness fallback accepts the exact
-private pair offline with the original area unchanged. Its installed-runtime
-retest is still pending. Do not use another confirmation to conceal a failure.
+this recorded pair. Offline replay accepts the recorded contours with the area
+and binding unchanged. It reconstructs room IDs from saved anchors/API identities;
+the installed stored-identity check remains open. Do not use another confirmation
+to conceal a failure.
 
 The shortcut failure is a frontend recovery problem, not demonstrated storage
 loss. The returning same-user/same-entry lifecycle now rereads saved pins in source.
@@ -116,8 +117,8 @@ separate rooms, with a three-pixel selection boundary. Forced colors retain the
 system palette. Chromium and WebKit checks cover uniqueness, first-sixteen
 OKLab separation, selection, labels, dark mode and forced colors; synthetic
 12-room light/dark captures were visually inspected. Installed-map inspection
-is pending with RC35. The canonical Node 24 startup graph is 92,091 bytes,
-within the unchanged 92,160-byte budget. Developer notes no longer ship inside
+is pending with RC35. The Node 24 startup graph is 92,138 bytes on 24.19.0
+and 91,984 on 24.22.0, within the unchanged 92,160-byte budget. Developer notes no longer ship inside
 a rendered HTML template. Syntax-aware build compaction removes ordinary HTML
 newline whitespace while preserving expressions, escapes and preformatted text;
 thirteen Node tests and the Browser workflow cover this build step.
@@ -143,5 +144,5 @@ would require a separately proven transform, not a relaxed validation check.
 The historical PR #283 pre-merge review-sequencing gap remains recorded in the
 [recovery receipt](verification-0.5-area-recovery.md). New reviews do not repair
 that historical sequence. The broader [acceptance matrix](acceptance-0.5.md),
-[Gate F run sheet](owner-gate-f-run-sheet.md), and
+[position qualification](verification-0.5-pose-provenance.md), [Gate F run sheet](owner-gate-f-run-sheet.md), and
 [manual-merge contract](maintenance-reviews.md) continue to apply.

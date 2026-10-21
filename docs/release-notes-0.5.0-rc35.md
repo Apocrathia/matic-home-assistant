@@ -26,3 +26,9 @@ v5 bindings keep their original conservative validation and saved anchors.
 The 2D map uses stronger, more distinct room colors and clearer boundaries.
 Colors remain stable when room metadata reorders; selected rooms retain a
 stronger outline, and forced colors continue to use the system palette.
+
+Robot markers now require a fresh native observation for the displayed map's
+mission. Old or foreign-mission poses, failed reads and unavailable positions
+clear the marker, including camera caches. Native observation age is reported
+separately from fetch age. See the [position qualification](verification-0.5-pose-provenance.md)
+for evidence and the remaining installed-runtime checks.

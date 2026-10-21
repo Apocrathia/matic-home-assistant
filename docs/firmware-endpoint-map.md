@@ -25,7 +25,7 @@ Hermes is Matic's local gRPC protocol. The registry in
 | --- | --- |
 | `kabuki_state` | State, battery, errors, current area, Cues lifecycle, and read-only bag observations |
 | `coverage_plan` | Rooms, geometry, cleaning targets, and floor identity |
-| `latest_pose` | Robot position and heading on the map |
+| `latest_pose` | Mission-keyed robot translation and native observation time; only a verified current position appears on the map |
 | `map_compressed_rgb`, `map_integrated` | Local photographic/structural map layers |
 | `current_version`, `update_config`, `update_state` | Software/protocol versions, update channel and state |
 | `wifi_status` | Connection and signal; SSID is a live, unrecorded attribute |

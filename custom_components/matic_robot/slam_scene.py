@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from functools import partial
 from hashlib import sha256
 from http import HTTPStatus
-from time import monotonic
+from time import monotonic, time
 from typing import TYPE_CHECKING, cast
 
 import probatio
@@ -35,7 +35,11 @@ from .area_outline import validate_outline
 from .cadence import CoverageCadenceRequiresVacuumError
 from .client.commands import CleaningMode, CoverageSetting
 from .client.exceptions import MaticError
-from .client.floor_plan import resolve_robot_map_position, robot_location_source
+from .client.floor_plan import (
+    pose_observation_age_seconds,
+    resolve_robot_map_position,
+    robot_location_source,
+)
 from .client.models import FloorPlan, HermesCollectionEntry, RobotPose
 from .client.slam_map import decode_slam_tile, encode_slam_scene
 from .const import CONF_LIVE_WORKSPACE_TRANSPORT, DOMAIN
@@ -873,6 +877,9 @@ class MaticSlamPoseView(HomeAssistantView):
             )
         epoch = self._epochs.get(entry_id, 0)
         frame_key = _pose_frame_key(runtime)
+        floor_plan = runtime.coordinator.data.floor_plan
+        if floor_plan is None or not runtime.slam_map.floor_plan_is_current(floor_plan):
+            return self._unavailable_frame(entry_id, runtime)
         cached = self._cache.get(entry_id)
         now = monotonic()
         if (
@@ -900,7 +907,9 @@ class MaticSlamPoseView(HomeAssistantView):
                 ):
                     pose: RobotPose | None
                     try:
-                        pose = await runtime.client.async_get_pose()
+                        pose = await runtime.client.async_get_pose(
+                            expected_mission_id=floor_plan.mission_id
+                        )
                         freshness = "live"
                     except MaticError:
                         pose = runtime.coordinator.data.pose
@@ -931,16 +940,27 @@ class MaticSlamPoseView(HomeAssistantView):
                     self._cache[entry_id] = cached
         data = runtime.coordinator.data
         floor_plan_coherent = runtime.slam_map.floor_plan_is_current(data.floor_plan)
+        pose_now = time()
+        native_age = pose_observation_age_seconds(cached.pose, now=pose_now)
+        # Transport fallback cannot certify a current position. Keep room-only
+        # presence available without moving an old point onto the current map.
+        visible_pose = cached.pose if cached.freshness == "live" else None
         position = (
             resolve_robot_map_position(
-                data.floor_plan, cached.pose, data.operational.current_area
+                data.floor_plan,
+                visible_pose,
+                data.operational.current_area,
+                now=pose_now,
             )
             if floor_plan_coherent
             else None
         )
         source = (
             robot_location_source(
-                data.floor_plan, cached.pose, data.operational.current_area
+                data.floor_plan,
+                visible_pose,
+                data.operational.current_area,
+                now=pose_now,
             )
             if floor_plan_coherent
             else "unavailable"
@@ -962,7 +982,15 @@ class MaticSlamPoseView(HomeAssistantView):
                 ),
                 "map_floor_coherent": floor_plan_coherent,
                 "pose_revision": cached.revision,
-                "pose_age_seconds": round(max(0.0, monotonic() - cached.fetched_at), 3),
+                "pose_age_seconds": (
+                    round(native_age, 3) if native_age is not None else None
+                ),
+                "pose_fetch_age_seconds": round(
+                    max(0.0, monotonic() - cached.fetched_at), 3
+                ),
+                "pose_observation_current": position is not None,
+                # Compatibility enum describes transport; native observation
+                # age and admission above determine whether a point exists.
                 "pose_freshness": cached.freshness,
                 "map_session_key": (
                     _map_session_key(runtime) if floor_plan_coherent else None
@@ -992,7 +1020,9 @@ class MaticSlamPoseView(HomeAssistantView):
                 ),
                 "map_floor_coherent": False,
                 "pose_revision": 0,
-                "pose_age_seconds": 0.0,
+                "pose_age_seconds": None,
+                "pose_fetch_age_seconds": None,
+                "pose_observation_current": False,
                 "pose_freshness": "coordinator_fallback",
                 "map_session_key": None,
             },

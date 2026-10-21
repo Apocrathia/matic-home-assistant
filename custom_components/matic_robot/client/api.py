@@ -125,9 +125,45 @@ _RPC_TIMEOUT = 10.0
 _COLLECTION_TIMEOUT = 30.0
 MAX_HERMES_MESSAGE_BYTES = 16 * 1024 * 1024
 _COLLECTION_MAX_BYTES = 64 * 1024 * 1024
+_LATEST_POSE_ENTRY_LIMIT = 64
+_LATEST_POSE_VALUE_MAX_BYTES = 16 * 1024
+_LATEST_POSE_READ_TIMEOUT = 3.0
 _DISPLAYED_MISSION_LIMIT = 256
 _SESSION_COMPLETED_STATUS = 0
 _ROOM_MODE_COMPLETED_STATUS = 2
+
+
+def _decode_pose_observation_time(payload: bytes) -> float:
+    """Decode the native Timestamp at pose field 5 -> field 1."""
+    fields = decode_fields(payload, max_fields=64)
+    timestamp_values = [
+        field.value
+        for field in fields
+        if field.number == 5 and field.wire_type == 2 and isinstance(field.value, bytes)
+    ]
+    if len(timestamp_values) != 1:
+        raise DecodeError("latest pose has no unique observation timestamp")
+    timestamp = decode_fields(timestamp_values[0], max_fields=4)
+    nested = [
+        field.value
+        for field in timestamp
+        if field.number == 1 and field.wire_type == 2 and isinstance(field.value, bytes)
+    ]
+    if len(nested) != 1:
+        raise DecodeError("latest pose timestamp has no unique value")
+    values = decode_fields(nested[0], max_fields=4)
+    seconds = [int(f.value) for f in values if f.number == 1 and f.wire_type == 0]
+    nanos = [int(f.value) for f in values if f.number == 2 and f.wire_type == 0]
+    if (
+        len(seconds) != 1
+        or len(nanos) != 1
+        or not 0 <= nanos[0] < 1_000_000_000
+        or seconds[0] < 0
+    ):
+        raise DecodeError("latest pose timestamp is malformed")
+    return seconds[0] + nanos[0] / 1_000_000_000
+
+
 # Verified from the native KabukiDisplayedError mapping in the Matic client:
 # 205 = BAG_MISSING and 206 = BAG_FULL.  These are error-list values, not
 # state-list values (206 is also a low-charge state code when present in the
@@ -784,12 +820,60 @@ class MaticHermesClient(AbstractAsyncContextManager["MaticHermesClient"]):
             raise CannotConnectError("Hermes returned no photorealistic SLAM tile")
         return entries[0]
 
-    async def async_get_pose(self) -> RobotPose:
-        """Read and decode the latest local map pose."""
+    async def async_get_pose(
+        self, *, expected_mission_id: int | None = None
+    ) -> RobotPose:
+        """Read the uniquely keyed latest local pose for the active mission."""
+        if (
+            isinstance(expected_mission_id, bool)
+            or not isinstance(expected_mission_id, int)
+            or not 0 <= expected_mission_id <= 0xFFFFFFFF
+        ):
+            raise CannotConnectError("active mission identity is unavailable for pose")
+        iterator = self.async_subscribe_collection_entries("latest_pose")
         try:
-            return decode_pose(await self.async_get_property("latest_pose"))
+            deadline = monotonic() + _LATEST_POSE_READ_TIMEOUT
+            for _ in range(_LATEST_POSE_ENTRY_LIMIT + 1):
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    raise CannotConnectError("latest pose read exceeded its time bound")
+                try:
+                    async with asyncio.timeout(remaining):
+                        entry = await anext(iterator)
+                except StopAsyncIteration as err:
+                    raise CannotConnectError(
+                        "latest pose stream ended without active pose"
+                    ) from err
+                except TimeoutError as err:
+                    raise CannotConnectError(
+                        "latest pose read exceeded its time bound"
+                    ) from err
+                if len(entry.key) != 5:
+                    raise DecodeError("latest pose has a malformed mission key")
+                if len(entry.value) > _LATEST_POSE_VALUE_MAX_BYTES:
+                    raise DecodeError("latest pose exceeds its value size bound")
+                key_fields = decode_fields(entry.key, max_fields=2)
+                if (
+                    len(key_fields) != 1
+                    or key_fields[0].number != 2
+                    or key_fields[0].wire_type != 5
+                    or not isinstance(key_fields[0].value, bytes)
+                    or len(key_fields[0].value) != 4
+                ):
+                    raise DecodeError("latest pose has a malformed mission key")
+                mission_id = struct.unpack("<I", key_fields[0].value)[0]
+                if mission_id == expected_mission_id:
+                    observed_at = _decode_pose_observation_time(entry.value)
+                    return decode_pose(
+                        entry.value,
+                        mission_id=expected_mission_id,
+                        observed_at=observed_at,
+                    )
+            raise CannotConnectError("latest pose stream exceeded its entry bound")
         except DecodeError as err:
             raise CannotConnectError("Hermes returned a malformed robot pose") from err
+        finally:
+            await iterator.aclose()
 
     async def async_get_flythrough(self, *, expected_mission_token: str) -> Flythrough:
         """Read the native map tour correlated to the active SLAM mission."""

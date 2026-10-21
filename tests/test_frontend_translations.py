@@ -160,6 +160,25 @@ _SITE_FORMS = {
         [("notice", "v4_n", "N", set())],
         [],
     ),
+    "notice catalog tuple": (
+        "const notices = {\n"
+        "  coverage_identity_unavailable: "
+        '["v4_notice_coverage_task_unknown", "Check the robot."],\n};',
+        [("notice", "v4_notice_coverage_task_unknown", "Check the robot.", set())],
+        [],
+    ),
+    "notice catalog tuple in comment": (
+        "// coverage_identity_unavailable: "
+        '["v4_notice_coverage_task_unknown", "Check the robot."]',
+        [],
+        [],
+    ),
+    "notice catalog tuple in unrelated string": (
+        "const example = 'coverage_identity_unavailable: "
+        '["v4_notice_coverage_task_unknown", "Check the robot."]\';',
+        [],
+        [],
+    ),
     "notice with a concatenated fallback": (
         'notice("info", "v4_n", "N" + suffix)',
         [],

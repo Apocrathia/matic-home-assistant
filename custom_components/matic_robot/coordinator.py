@@ -381,13 +381,13 @@ class MaticCoordinator(DataUpdateCoordinator[RobotState]):
         full_refresh_generation = self._full_refresh_generation
         floor_read_generation = self._floor_read_generation
         try:
-            info, operational, floor_plan, pose, telemetry = await asyncio.gather(
+            info, operational, map_state, telemetry = await asyncio.gather(
                 self._async_info(),
                 self.client.async_get_state(),
-                self._async_optional_floor_plan(),
-                self._async_optional_pose(),
+                self._async_optional_map_state(),
                 self._async_optional_telemetry(),
             )
+            floor_plan, pose = map_state
             # Task evidence belongs to this raw snapshot, before presentation
             # confirms/suppresses transient problem codes.
             telemetry = replace(
@@ -467,7 +467,9 @@ class MaticCoordinator(DataUpdateCoordinator[RobotState]):
             # or later enrichment. Revalidate at publication, including a
             # revoke/recover cycle that has already cleared the unknown flag.
             if self._floor_read_generation != floor_read_generation:
-                state = replace(state, floor_plan=self._current_published_floor_plan())
+                state = replace(
+                    state, floor_plan=self._current_published_floor_plan(), pose=None
+                )
             return state
         except AuthenticationRequiredError as err:
             raise ConfigEntryAuthFailed(
@@ -773,10 +775,23 @@ class MaticCoordinator(DataUpdateCoordinator[RobotState]):
         """Return the latest mission selected by the robot's display state."""
         return self._displayed_floor_mission_id
 
-    async def _async_optional_pose(self) -> RobotPose | None:
+    async def _async_optional_map_state(
+        self,
+    ) -> tuple[FloorPlan | None, RobotPose | None]:
+        """Read a pose only after identifying its expected floor mission."""
+        floor_plan = await self._async_optional_floor_plan()
+        return floor_plan, await self._async_optional_pose(floor_plan)
+
+    async def _async_optional_pose(
+        self, floor_plan: FloorPlan | None
+    ) -> RobotPose | None:
         """Read map pose without hiding core state if unavailable."""
+        if floor_plan is None:
+            return None
         try:
-            return await self.client.async_get_pose()
+            return await self.client.async_get_pose(
+                expected_mission_id=floor_plan.mission_id
+            )
         except MaticError as err:
             _LOGGER.debug("Optional Hermes pose unavailable: %s", err)
             return None

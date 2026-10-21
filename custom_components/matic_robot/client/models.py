@@ -376,6 +376,8 @@ class RobotPose:
     x: float
     y: float
     z: float
+    mission_id: int | None = None
+    observed_at: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
