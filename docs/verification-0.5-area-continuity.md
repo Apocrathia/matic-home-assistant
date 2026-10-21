@@ -29,8 +29,9 @@ digest before refinement recovery. Legacy v5 bindings retain their original
 local-hash and frame checks; their anchors are not silently rebased. Legacy
 bindings without adequate historical evidence retain their review requirement.
 
-Optional witness work is admitted atomically with a bounded reserve for
-existing frame validation; large unchanged contours retain their fallback.
+Existing frame/local checks run before optional witness work. Witness work
+is admitted atomically only when needed and affordable; unchanged and
+retessellated large contours retain their established fallback.
 
 The change also closes a v3 association gap: an additional room covering saved
 circles can no longer pass merely because all original anchors still match.
@@ -38,8 +39,8 @@ It does not add automatic rebinding or coordinate transformations.
 
 ## Source evidence
 
-The final local source run passed **5,208 tests with 100.00% coverage** across
-20,009 statements (`python -m pytest --cov=custom_components/matic_robot
+The final local source run passed **5,216 tests with 100.00% coverage** across
+20,007 statements (`python -m pytest --cov=custom_components/matic_robot
 --cov-report=term-missing`). Required PR CI and installed retesting remain open.
 
 - Binding regressions cover partition churn, unrelated room changes,

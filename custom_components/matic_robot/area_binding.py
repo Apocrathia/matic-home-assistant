@@ -1548,53 +1548,48 @@ def area_binding_status(
                     saved["area_shape_sha256"]
                 ).casefold() != _area_shape_fingerprint(shape):
                     return AreaBindingStatus.INVALID
-            strong_frames = False
-            if (
-                version == SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
-                and saved_geometry != current["geometry_sha256"]
+            local_geometry_matches = (
+                str(saved["local_geometry_sha256"]).casefold() == local_geometry
+            )
+            if not local_geometry_matches and (
+                version == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+                or not geometry_changed
             ):
+                return (
+                    AreaBindingStatus.GEOMETRY_CHANGED
+                    if geometry_changed
+                    else AreaBindingStatus.INVALID
+                )
+            if geometry_changed:
                 try:
                     room_geometry = room_geometry or _room_geometry_index(floor_plan)
-                    strong_frames = _saved_room_frames_have_strong_witnesses(
+                    frame_matches = _saved_room_frames_match(
                         saved["translation_room_anchors"],
                         area["circles"],
                         floor_plan,
                         room_geometry,
                     )
-                except GeometryTooComplex, OverflowError, TypeError, ValueError:
-                    return AreaBindingStatus.GEOMETRY_CHANGED
-            local_geometry_matches = (
-                str(saved["local_geometry_sha256"]).casefold() == local_geometry
-            )
-            if not local_geometry_matches and not strong_frames:
-                return (
-                    AreaBindingStatus.GEOMETRY_CHANGED
-                    if saved_geometry != current["geometry_sha256"]
-                    else AreaBindingStatus.INVALID
-                )
-            if saved_geometry != current["geometry_sha256"]:
-                try:
-                    room_geometry = room_geometry or _room_geometry_index(floor_plan)
-                    if not strong_frames and not _saved_room_frames_match(
-                        saved["translation_room_anchors"],
-                        area["circles"],
-                        floor_plan,
-                        room_geometry,
-                    ):
-                        return AreaBindingStatus.GEOMETRY_CHANGED
+                    if not (local_geometry_matches and frame_matches):
+                        if (
+                            version
+                            != SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+                            or not _saved_room_frames_have_strong_witnesses(
+                                saved["translation_room_anchors"],
+                                area["circles"],
+                                floor_plan,
+                                room_geometry,
+                            )
+                        ):
+                            return AreaBindingStatus.GEOMETRY_CHANGED
                     if saved[
                         "translation_invariant_geometry_sha256"
                     ].casefold() == translation_invariant_geometry_fingerprint(
                         floor_plan
                     ):
-                        # The whole map only moved in its coordinate frame.
                         return AreaBindingStatus.GEOMETRY_CHANGED
                 except GeometryTooComplex, OverflowError, TypeError, ValueError:
                     return AreaBindingStatus.GEOMETRY_CHANGED
-            if strong_frames:
-                return AreaBindingStatus.CURRENT
-            if local_geometry_matches:
-                return AreaBindingStatus.CURRENT
+            return AreaBindingStatus.CURRENT
         if str(saved["local_geometry_sha256"]).casefold() == local_geometry:
             return AreaBindingStatus.CURRENT
         return AreaBindingStatus.INVALID
@@ -1676,17 +1671,21 @@ def area_binding_status(
             } != {str(key).casefold() for key in current_anchor["circle_keys"]}:
                 return AreaBindingStatus.GEOMETRY_CHANGED
             try:
-                strongly_proven = _room_has_strong_frame_witnesses(
-                    saved_anchor, current_anchor, room_geometry
+                frame_matches = (
+                    not (partition_changed and "boundary_mm" not in saved_anchor)
+                    and _room_anchor_bounds_match(saved_anchor, current_anchor)
+                    and _room_frame_matches(saved_anchor, current_anchor, room_geometry)
                 )
-                all_frames_strongly_proven &= strongly_proven
-                if not strongly_proven and (
-                    (partition_changed and "boundary_mm" not in saved_anchor)
-                    or not _room_anchor_bounds_match(saved_anchor, current_anchor)
-                    or not _room_frame_matches(
+                # Preserve the established cheap frame/local path before
+                # spending any optional witness budget.
+                strongly_proven = (
+                    not frame_matches
+                    and _room_has_strong_frame_witnesses(
                         saved_anchor, current_anchor, room_geometry
                     )
-                ):
+                )
+                all_frames_strongly_proven &= strongly_proven
+                if not frame_matches and not strongly_proven:
                     return AreaBindingStatus.GEOMETRY_CHANGED
             except GeometryTooComplex:
                 return AreaBindingStatus.GEOMETRY_CHANGED
@@ -1738,7 +1737,19 @@ def area_binding_status(
         if saved_geometry != current["geometry_sha256"]:
             return AreaBindingStatus.GEOMETRY_CHANGED
         return AreaBindingStatus.INVALID
-    if saved_geometry != current["geometry_sha256"]:
+    if geometry_changed:
+        try:
+            if _saved_room_frames_have_strong_witnesses(
+                saved["translation_room_anchors"],
+                area["circles"],
+                floor_plan,
+                room_geometry,
+            ) and saved[
+                "translation_invariant_geometry_sha256"
+            ].casefold() != translation_invariant_geometry_fingerprint(floor_plan):
+                return AreaBindingStatus.CURRENT
+        except GeometryTooComplex, OverflowError, TypeError, ValueError:
+            pass
         return AreaBindingStatus.GEOMETRY_CHANGED
     return AreaBindingStatus.INVALID
 

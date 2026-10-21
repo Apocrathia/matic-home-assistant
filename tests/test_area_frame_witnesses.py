@@ -466,15 +466,17 @@ def test_v6_shape_validation_failure_cannot_use_matching_local_hash(
     assert area_binding_status(area, plan) is AreaBindingStatus.INVALID
 
 
+@pytest.mark.parametrize("subdivisions", [200, 400])
+@pytest.mark.parametrize("retessellate", [False, True])
 @pytest.mark.parametrize("bounded", [False, True])
 def test_large_unchanged_room_retains_fallback_after_remote_change(
-    bounded, monkeypatch
+    bounded, retessellate, subdivisions, monkeypatch
 ):
     boundary = tuple(
-        [(i / 400 * 20, 0.0) for i in range(401)]
-        + [(20.0, i / 200 * 2) for i in range(201)]
-        + [(20 - i / 400 * 20, 2.0) for i in range(401)]
-        + [(0.0, 2 - i / 200 * 2) for i in range(201)]
+        [(i / subdivisions * 20, 0.0) for i in range(subdivisions + 1)]
+        + [(20.0, i / (subdivisions // 2) * 2) for i in range(subdivisions // 2 + 1)]
+        + [(20 - i / subdivisions * 20, 2.0) for i in range(subdivisions + 1)]
+        + [(0.0, 2 - i / (subdivisions // 2) * 2) for i in range(subdivisions // 2 + 1)]
     )
     original = FloorPlan(42, "partition", b"partition", (_room(boundary),))
     circles = [{"x": 1.0, "y": 0.3, "radius": 0.2}]
@@ -489,5 +491,53 @@ def test_large_unchanged_room_retains_fallback_after_remote_change(
     remote = _room(
         ((30.0, 0.0), (31.0, 0.0), (31.0, 1.0), (30.0, 1.0)), room_id="remote"
     )
-    refreshed = replace(original, rooms=(*original.rooms, remote))
+    containing = original.rooms[0]
+    if retessellate:
+        points = containing.boundary
+        index = subdivisions + subdivisions // 2 + subdivisions // 2
+        left, right = points[index - 1], points[index]
+        point = ((left[0] + right[0]) / 2, (left[1] + right[1]) / 2)
+        containing = replace(
+            containing, boundary=(*points[:index], point, *points[index:])
+        )
+    refreshed = replace(original, rooms=(containing, remote))
+
+    def optional_proof_must_not_run(*args, **kwargs):
+        raise AssertionError("legacy proof must run before optional witnesses")
+
+    monkeypatch.setattr(
+        area_binding_module,
+        "_room_has_strong_frame_witnesses",
+        optional_proof_must_not_run,
+    )
     assert area_binding_status(area, refreshed) is AreaBindingStatus.CURRENT
+
+
+def test_distributed_witnesses_accept_changed_bounds_after_local_refinement():
+    plan = _witness_plan()
+    area = _area(plan)
+    refined = _locally_refined(plan)
+    boundary = list(refined.rooms[0].boundary)
+    index = min(range(len(boundary)), key=lambda i: boundary[i][0])
+    x, y = boundary[index]
+    boundary[index] = (x - 0.08, y)
+    refined = replace(
+        refined, rooms=(replace(refined.rooms[0], boundary=tuple(boundary)),)
+    )
+    assert area_binding_status(area, refined) is AreaBindingStatus.CURRENT
+
+
+def test_late_witness_failure_preserves_geometry_changed(monkeypatch):
+    plan = _witness_plan()
+    area = _area(plan)
+
+    def exhausted(*args, **kwargs):
+        raise GeometryTooComplex("late optional proof unavailable")
+
+    monkeypatch.setattr(
+        area_binding_module, "_saved_room_frames_have_strong_witnesses", exhausted
+    )
+    assert (
+        area_binding_status(area, _locally_refined(plan))
+        is AreaBindingStatus.GEOMETRY_CHANGED
+    )
