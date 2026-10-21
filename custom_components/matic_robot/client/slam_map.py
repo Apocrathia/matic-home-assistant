@@ -39,6 +39,7 @@ MAX_SCENE_SPAN = 65_536
 # remaining well below the tile and wire-byte limits.
 MAX_SCENE_RASTER_CELLS = 4 * 1024 * 1024
 MAX_RENDER_PIXELS = 16 * 1024 * 1024
+MAX_SCENE_METADATA_BYTES = 1024 * 1024
 _SCENE_HEADER = struct.Struct("<8sHHIII")
 
 
@@ -362,8 +363,17 @@ def encode_slam_scene(
             if geometry is None:
                 continue
             boundary, center = geometry
+            # Clipped geometry lies on integer cell edges (centers may end in
+            # .5). Emit integral coordinates as JSON integers to avoid wasting
+            # two bytes per coordinate on a decimal suffix at the metadata cap.
+            boundary = [
+                [int(value) if value.is_integer() else value for value in point]
+                for point in boundary
+            ]
+            center = [int(value) if value.is_integer() else value for value in center]
             rooms.append(
                 {
+                    "room_id": room.id,
                     "name": room.name,
                     "boundary": boundary,
                     "boundary_closed": True,
@@ -381,6 +391,12 @@ def encode_slam_scene(
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode()
+    # Keep the encoder and both scene consumers on the same protocol limit.
+    # Geometry and stable room identities are required for correct selection;
+    # reject an unrepresentable scene rather than silently omitting rooms or
+    # identities and producing a payload that the renderer will discard.
+    if len(metadata) > MAX_SCENE_METADATA_BYTES:
+        raise DecodeError("photorealistic SLAM scene metadata exceeds its byte limit")
     header = _SCENE_HEADER.pack(
         SCENE_MAGIC,
         SCENE_VERSION,
@@ -405,7 +421,7 @@ def parse_slam_scene_header(payload: bytes) -> SlamSceneHeader:
         magic != SCENE_MAGIC
         or version != SCENE_VERSION
         or stride != SCENE_POINT_STRIDE
-        or metadata_bytes > 1024 * 1024
+        or metadata_bytes > MAX_SCENE_METADATA_BYTES
         or point_count < 1
         or point_count > MAX_SCENE_POINTS
         or point_offset + point_count * stride != len(payload)

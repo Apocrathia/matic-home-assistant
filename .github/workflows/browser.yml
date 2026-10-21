@@ -33,6 +33,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: npm run test:build
       # The browser suite loads the committed bundle, so a source-only edit
       # would pass every check while shipping the previous UI. Rebuild and fail
       # if the result differs from what is committed.

@@ -30,6 +30,7 @@ from custom_components.matic_robot.client.models import (
     MappedFloor,
     RobotInfo,
     RobotOperationalState,
+    RobotPose,
     RobotTelemetry,
     Room,
 )
@@ -1036,6 +1037,59 @@ async def test_optional_map_failures_do_not_hide_core_state(hass) -> None:
 
     state = await _coordinator(hass, client)._async_update_data()
 
+    assert state.floor_plan is None
+    assert state.pose is None
+
+
+async def test_pose_read_waits_for_identified_floor(hass) -> None:
+    client = _client()
+    floor = FloorPlan(42, "partition", b"", ())
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def read_floor(**_kwargs):
+        started.set()
+        await release.wait()
+        return floor
+
+    client.async_get_floor_plan.side_effect = read_floor
+    coordinator = _coordinator(hass, client)
+    pending = asyncio.create_task(coordinator._async_update_data())
+    await started.wait()
+    client.async_get_pose.assert_not_awaited()
+    release.set()
+    state = await pending
+    assert state.floor_plan == floor
+    client.async_get_pose.assert_awaited_once_with(expected_mission_id=42)
+
+
+async def test_pose_read_is_skipped_without_a_floor(hass) -> None:
+    client = _client()
+    await _coordinator(hass, client)._async_update_data()
+    client.async_get_pose.assert_not_awaited()
+
+
+async def test_optional_pose_failure_preserves_identified_floor(hass) -> None:
+    client = _client()
+    floor = FloorPlan(42, "partition", b"", ())
+    client.async_get_floor_plan.return_value = floor
+    client.async_get_pose.side_effect = MaticError("no active-mission pose")
+    state = await _coordinator(hass, client)._async_update_data()
+    assert state.floor_plan == floor
+    assert state.pose is None
+
+
+async def test_floor_revocation_during_pose_read_clears_pose_publication(hass) -> None:
+    client = _client()
+    client.async_get_floor_plan.return_value = FloorPlan(42, "partition", b"", ())
+    coordinator = _coordinator(hass, client)
+
+    async def read_pose(**_kwargs):
+        coordinator._floor_read_generation += 1
+        coordinator._displayed_floor_unknown = True
+        return RobotPose(1, 2, 0, mission_id=42, observed_at=1_000_000.0)
+
+    client.async_get_pose.side_effect = read_pose
+    state = await coordinator._async_update_data()
     assert state.floor_plan is None
     assert state.pose is None
 

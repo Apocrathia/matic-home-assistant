@@ -199,6 +199,48 @@ test("cadence flags preserve supplied booleans and default omitted flags to fals
   expect(result).toEqual({ supplied: [true, false, false, true], omitted: [false, false, false, false] });
 });
 
+test("native plan catalog accepts room names up to 256 UTF-8 bytes", async ({ page }) => {
+  await load(page);
+  const result = await page.evaluate(async payload => {
+    const { parsePlansCatalog } = await import("/backend-contracts.js");
+    const parseName = name => {
+      const candidate = structuredClone(payload);
+      candidate.rooms.push({ room_id: "room-native", name, boundary: [] });
+      return parsePlansCatalog(candidate).rooms[0].name.length;
+    };
+    const rejects = name => {
+      const candidate = structuredClone(payload);
+      candidate.rooms.push({ room_id: "room-native", name, boundary: [] });
+      try { parsePlansCatalog(candidate); return false; } catch { return true; }
+    };
+    const invalidNamesRejected = ["   ", "bad\nname", "bad\u0000name"].every(rejects);
+    return [parseName("a".repeat(129)), parseName("a".repeat(256)), parseName("é".repeat(128)), rejects("é".repeat(129)), invalidNamesRejected];
+  }, plansPayload());
+  expect(result).toEqual([129, 256, 128, true, true]);
+});
+
+test("plan preview keeps area labels bounded while accepting native room labels", async ({ page }) => {
+  await load(page);
+  const result = await page.evaluate(async payload => {
+    const { parsePlansCatalog } = await import("/backend-contracts.js");
+    const step = (kind, name) => ({ kind, room_id: "room-native", area_id: "area-native", name,
+      cleaning_mode: "vacuum", coverage_setting: "standard", cadence_reasons: [] });
+    const candidate = structuredClone(payload);
+    candidate.plans[0].next_run_preview = {
+      rooms: [], entries: [step("room", "r".repeat(256)), step("area", "a".repeat(128))],
+      mission_boundaries: [], blocker: "plan_room_limit",
+    };
+    const parsed = parsePlansCatalog(candidate).plans[0].nextRunPreview;
+    const rejectsAreaOverLimit = () => {
+      const invalid = structuredClone(candidate);
+      invalid.plans[0].next_run_preview.entries[1].name = "a".repeat(129);
+      try { parsePlansCatalog(invalid); return false; } catch { return true; }
+    };
+    return [parsed.steps[0].name.length, parsed.steps[1].name.length, rejectsAreaOverLimit()];
+  }, plansPayload());
+  expect(result).toEqual([256, 128, true]);
+});
+
 test("provided cadence flags reject malformed values instead of becoming false", async ({ page }) => {
   await load(page);
   const result = await page.evaluate(async payload => {

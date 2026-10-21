@@ -10,12 +10,12 @@ import pytest
 
 import custom_components.matic_robot.area_binding as area_binding_module
 from custom_components.matic_robot.area_binding import (
-    ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
     AREA_SCHEMA_VERSION,
     BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
     HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
     MAP_BINDING_VERSION,
     SCOPED_MAP_BINDING_VERSION,
+    SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
     AreaBindingStatus,
     _add_flow_edge,
     _hash_only_area_geometry_fingerprint,
@@ -73,6 +73,185 @@ def _floor_plan() -> FloorPlan:
                 ((2.0, 0.0), (3.0, 0.0), (3.0, 1.0), (2.0, 1.0)),
             ),
         ),
+    )
+
+
+def _partition_refinement(
+    floor_plan: FloorPlan, *, partition_changed: bool = True
+) -> FloorPlan:
+    """Add remote room geometry, optionally under a new partition identifier."""
+    return replace(
+        floor_plan,
+        partition_protocol_id=(
+            "refined-partition"
+            if partition_changed
+            else floor_plan.partition_protocol_id
+        ),
+        partition_id_wire=(
+            b"refined-partition" if partition_changed else floor_plan.partition_id_wire
+        ),
+        rooms=(
+            *floor_plan.rooms,
+            _room(
+                "remote",
+                "Remote",
+                ((30.0, 30.0), (31.0, 30.0), (31.0, 31.0), (30.0, 31.0)),
+            ),
+        ),
+    )
+
+
+@pytest.mark.parametrize("partition_changed", [False, True])
+def test_v3_binding_accepts_exactly_anchored_remote_refinement(
+    partition_changed: bool,
+) -> None:
+    floor_plan = _floor_plan()
+    circles = [{"x": 0.5, "y": 0.5, "radius": 0.2}]
+    area = _scoped_area(floor_plan, circles)
+    assert area["map_binding"]["version"] == SCOPED_MAP_BINDING_VERSION
+
+    assert (
+        area_binding_status(
+            area,
+            _partition_refinement(floor_plan, partition_changed=partition_changed),
+        )
+        is AreaBindingStatus.CURRENT
+    )
+
+
+@pytest.mark.parametrize("partition_changed", [False, True])
+def test_v3_binding_rejects_new_overlapping_room(partition_changed: bool) -> None:
+    floor_plan = _floor_plan()
+    circles = [{"x": 0.5, "y": 0.5, "radius": 0.2}]
+    area = _scoped_area(floor_plan, circles)
+    changed = _partition_refinement(floor_plan, partition_changed=partition_changed)
+    overlap = _room(
+        "overlap",
+        "Overlap",
+        ((-10.0, -10.0), (11.0, -10.0), (11.0, 11.0), (-10.0, 11.0)),
+    )
+    changed = replace(changed, rooms=(*changed.rooms, overlap))
+
+    assert area_binding_status(area, changed) is AreaBindingStatus.GEOMETRY_CHANGED
+
+
+@pytest.mark.parametrize("partition_changed", [False, True])
+@pytest.mark.parametrize("drift", ["global_shift", "local_move", "rekey"])
+def test_v3_binding_rejects_frame_or_identity_drift(
+    partition_changed: bool, drift: str
+) -> None:
+    floor_plan = _floor_plan()
+    circles = [{"x": 0.5, "y": 0.5, "radius": 0.2}]
+    area = _scoped_area(floor_plan, circles)
+    if drift == "global_shift":
+        rooms = tuple(
+            replace(
+                room,
+                boundary=tuple((x + 1.0, y + 1.0) for x, y in room.boundary),
+            )
+            for room in floor_plan.rooms
+        )
+    elif drift == "local_move":
+        moved = replace(
+            floor_plan.rooms[0],
+            boundary=tuple((x + 0.2, y) for x, y in floor_plan.rooms[0].boundary),
+        )
+        rooms = (moved, floor_plan.rooms[1])
+    else:
+        rekeyed = replace(
+            floor_plan.rooms[0],
+            id="renamed-kitchen",
+            protocol_id="protocol-renamed-kitchen",
+            id_wire=b"renamed-kitchen",
+        )
+        rooms = (rekeyed, floor_plan.rooms[1])
+    changed = replace(
+        _partition_refinement(floor_plan, partition_changed=partition_changed),
+        rooms=(*rooms, _partition_refinement(floor_plan).rooms[-1]),
+    )
+
+    assert area_binding_status(area, changed) in {
+        AreaBindingStatus.GEOMETRY_CHANGED,
+        AreaBindingStatus.INVALID,
+    }
+
+
+@pytest.mark.parametrize("version", [1, 2, 4])
+def test_older_bindings_fail_closed_on_partition_and_geometry_churn(
+    version: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    floor_plan = _floor_plan()
+    circles = [{"x": 0.5, "y": 0.5, "radius": 0.2}]
+    if version == MAP_BINDING_VERSION:
+        binding = binding_for_floor_plan(floor_plan)
+    elif version == HASH_ONLY_SCOPED_MAP_BINDING_VERSION:
+        binding = _hash_only_scoped_area(floor_plan, circles)["map_binding"]
+    else:
+        monkeypatch.setattr(
+            area_binding_module,
+            "_MAX_LOCAL_SEGMENT_MATCH_SEGMENTS",
+            1,
+        )
+        binding = binding_for_area(floor_plan, circles)
+        binding = {
+            "version": BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+            "mission_id": binding["mission_id"],
+            "partition_id": binding["partition_id"],
+            "geometry_sha256": binding["geometry_sha256"],
+            "local_geometry_sha256": binding["local_geometry_sha256"],
+        }
+    area = {
+        "schema_version": AREA_SCHEMA_VERSION,
+        "circles": circles,
+        "map_binding": binding,
+    }
+
+    assert (
+        area_binding_status(area, _partition_refinement(floor_plan))
+        is AreaBindingStatus.PARTITION_CHANGED
+    )
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("partition_changed", [False, True])
+def test_bounded_binding_accepts_exactly_anchored_remote_refinement(
+    monkeypatch: pytest.MonkeyPatch, partition_changed: bool, legacy: bool
+) -> None:
+    edge = tuple(
+        [(index / 200 * 20, 0.0) for index in range(201)]
+        + [(20.0, index / 100 * 2) for index in range(101)]
+        + [(20 - index / 200 * 20, 2.0) for index in range(201)]
+        + [(0.0, 2 - index / 100 * 2) for index in range(101)]
+    )
+    floor_plan = FloorPlan(
+        42,
+        "synthetic-partition",
+        b"synthetic-partition",
+        (_room("main", "Main", edge),),
+    )
+    circles = [
+        {"x": 1.0, "y": 0.3, "radius": 0.2},
+        {"x": 19.0, "y": 0.3, "radius": 0.2},
+    ]
+    monkeypatch.setattr(area_binding_module, "_MAX_LOCAL_SEGMENT_MATCH_SEGMENTS", 1)
+    area = _scoped_area(floor_plan, circles)
+    assert (
+        area["map_binding"]["version"]
+        == SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+    )
+
+    if legacy:
+        area["map_binding"]["version"] = (
+            area_binding_module.ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+        )
+        area["map_binding"].pop("area_shape_sha256")
+
+    assert (
+        area_binding_status(
+            area,
+            _partition_refinement(floor_plan, partition_changed=partition_changed),
+        )
+        is AreaBindingStatus.CURRENT
     )
 
 
@@ -235,7 +414,8 @@ def test_hash_fingerprint_work_exhaustion_keeps_valid_drift_reviewable() -> None
     circles = [{"x": 5.0, "y": 4.4, "radius": 0.1}]
     area = _scoped_area(floor_plan, circles)
     assert (
-        area["map_binding"]["version"] == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+        area["map_binding"]["version"]
+        == SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
     )
     changed_boundary = (*boundary[:-1], (0.0, 10.1))
     changed = replace(
@@ -292,7 +472,8 @@ def test_hash_fingerprint_exhaustion_keeps_saved_center_tolerance() -> None:
     with patch.object(area_binding_module, "_MAX_LOCAL_SEGMENT_MATCH_SEGMENTS", 0):
         area = _scoped_area(floor_plan, circles)
     assert (
-        area["map_binding"]["version"] == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+        area["map_binding"]["version"]
+        == SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
     )
     changed = replace(
         floor_plan,
@@ -409,7 +590,7 @@ def test_large_local_geometry_uses_room_anchored_hash_binding() -> None:
         floor_plan, rooms=(replace(floor_plan.rooms[0], boundary=tuple(boundary)),)
     )
     binding = binding_for_area(floor_plan, circles)
-    assert binding["version"] == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+    assert binding["version"] == SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
     area = {
         "schema_version": AREA_SCHEMA_VERSION,
         "circles": circles,
@@ -443,7 +624,7 @@ def test_anchored_hash_binding_survives_unrelated_map_updates() -> None:
         "circles": circles,
         "map_binding": binding,
     }
-    assert binding["version"] == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+    assert binding["version"] == SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
 
     unrelated_room = _room(
         "remote", "Remote", ((20.0, 20.0), (21.0, 20.0), (21.0, 21.0), (20.0, 21.0))
@@ -458,7 +639,10 @@ def test_anchored_hash_binding_survives_unrelated_map_updates() -> None:
     assert area_binding_allows_review(area, changed) is False
 
 
-def test_anchored_hash_binding_rejects_new_room_covering_saved_circle() -> None:
+@pytest.mark.parametrize("partition_changed", [False, True])
+def test_anchored_hash_binding_rejects_new_room_covering_saved_circle(
+    partition_changed: bool,
+) -> None:
     circles = [{"x": 0.5, "y": 0.5, "radius": 0.5}]
     boundary = tuple(
         [(index / 75, 0.0) for index in range(75)]
@@ -478,15 +662,19 @@ def test_anchored_hash_binding_rejects_new_room_covering_saved_circle() -> None:
         "circles": circles,
         "map_binding": binding,
     }
-    assert binding["version"] == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+    assert binding["version"] == SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
 
     overlapping_room = _room(
         "overlap",
         "Overlap",
         ((-10.0, -10.0), (11.0, -10.0), (11.0, 11.0), (-10.0, 11.0)),
     )
-    changed = replace(floor_plan, rooms=(*floor_plan.rooms, overlapping_room))
-    assert area_binding_status(area, changed) is AreaBindingStatus.GEOMETRY_CHANGED
+    changed = _partition_refinement(floor_plan, partition_changed=partition_changed)
+    changed = replace(changed, rooms=(*changed.rooms, overlapping_room))
+    assert area_binding_status(area, changed) in {
+        AreaBindingStatus.GEOMETRY_CHANGED,
+        AreaBindingStatus.INVALID,
+    }
 
 
 def test_anchored_hash_binding_rejects_area_room_frame_translation() -> None:
@@ -545,6 +733,18 @@ def test_saved_room_frame_match_rejects_incomplete_or_inconsistent_evidence() ->
         floor_plan,
         room_geometry,
     )
+    failed_room_keys = {"stale-room"}
+    associations_valid = [True]
+    assert not match(
+        [{**anchors[0], "circle_keys": ["0" * 64]}],
+        circles,
+        floor_plan,
+        room_geometry,
+        failed_room_keys=failed_room_keys,
+        associations_valid=associations_valid,
+    )
+    assert not failed_room_keys
+    assert associations_valid == [False]
 
     with patch.object(
         area_binding_module,
@@ -570,7 +770,7 @@ def test_anchored_hash_binding_fails_closed_without_frame_proof() -> None:
     circles = [{"x": 1.0, "y": 0.75, "radius": 0.2}]
     with patch.object(area_binding_module, "_MAX_LOCAL_SEGMENT_MATCH_SEGMENTS", -1):
         binding = binding_for_area(floor_plan, circles)
-    assert binding["version"] == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+    assert binding["version"] == SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
     area = {
         "schema_version": AREA_SCHEMA_VERSION,
         "circles": circles,
@@ -700,7 +900,7 @@ def test_dense_area_hash_keeps_separated_circle_union_scope(monkeypatch) -> None
     ]
     monkeypatch.setattr(area_binding_module, "_MAX_LOCAL_SEGMENT_MATCH_SEGMENTS", 1)
     binding = binding_for_area(base, circles)
-    assert binding["version"] == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+    assert binding["version"] == SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
 
     gap = _room("gap", "Gap", ((9.5, 0.5), (10.5, 0.5), (10.5, 1.5), (9.5, 1.5)))
     changed = replace(base, rooms=(*base.rooms, gap))
@@ -755,7 +955,7 @@ def test_dense_hash_verification_accepts_saved_center_boundary_tolerance(
         "map_binding": binding,
     }
 
-    assert binding["version"] == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+    assert binding["version"] == SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
     assert (
         area_binding_status(area, boundary_moved_inward)
         is AreaBindingStatus.GEOMETRY_CHANGED
@@ -1703,7 +1903,10 @@ def test_scoped_binding_preserves_raw_semantic_bounds_after_quantization() -> No
     assert area_binding_status(area, changed) is AreaBindingStatus.GEOMETRY_CHANGED
 
 
-def test_scoped_binding_automatically_recovers_after_fractional_wall_movement() -> None:
+@pytest.mark.parametrize("partition_changed", [False, True])
+def test_scoped_binding_automatically_recovers_after_fractional_wall_movement(
+    partition_changed: bool,
+) -> None:
     circle = {"x": 0.963543, "y": 0.0, "radius": 1.533657}
     saved_wall = 2.737451
     current_wall = 2.747381
@@ -1735,6 +1938,12 @@ def test_scoped_binding_automatically_recovers_after_fractional_wall_movement() 
             ),
         ),
     )
+    if partition_changed:
+        jittered = replace(
+            jittered,
+            partition_protocol_id="refined-partition",
+            partition_id_wire=b"refined-partition",
+        )
 
     current_binding = binding_for_area(jittered, circles)
     assert area["map_binding"]["local_segments_mm"] == [[2737, -3000, 2737, 3000]]
@@ -3238,7 +3447,10 @@ def test_mixed_room_anchors_cannot_substitute_another_room() -> None:
     )
 
 
-def test_room_frame_reconciles_remote_reshaping_with_unchanged_bounds() -> None:
+@pytest.mark.parametrize("partition_changed", [False, True])
+def test_room_frame_reconciles_remote_reshaping_with_unchanged_bounds(
+    partition_changed: bool,
+) -> None:
     floor_plan = FloorPlan(
         42,
         "synthetic-partition",
@@ -3271,6 +3483,12 @@ def test_room_frame_reconciles_remote_reshaping_with_unchanged_bounds() -> None:
             ),
         ),
     )
+    if partition_changed:
+        reshaped = replace(
+            reshaped,
+            partition_protocol_id="refined-partition",
+            partition_id_wire=b"refined-partition",
+        )
 
     saved_anchor = area["map_binding"]["translation_room_anchors"][0]
     current_anchor = area_binding_module._translation_room_anchors(reshaped, circles)[0]

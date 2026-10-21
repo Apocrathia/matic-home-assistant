@@ -66,7 +66,7 @@ HERMES_ENDPOINTS = (
     _collection("jukebox_state"),
     _property("kabuki_state", HermesEndpointSensitivity.DIAGNOSTIC),
     _collection("labeled_missions"),
-    _property("latest_pose"),
+    _collection("latest_pose", tracked=True),
     _collection("map_combined_coverage"),
     _collection("map_compressed_rgb", tracked=True),
     _collection("map_compressed_rgb_higher", tracked=True),

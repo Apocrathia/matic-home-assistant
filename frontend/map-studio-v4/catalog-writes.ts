@@ -21,6 +21,24 @@ export interface CatalogWriteHelpers {
   readonly sharedDeleteCurrent: typeof import("./state").sharedCadenceDeleteRequestIsCurrent;
 }
 
+/** Coverage guards are command errors; keep their copy in this deferred module. */
+const COVERAGE_GUARD_NOTICES: Readonly<Record<string, readonly [string, string]>> = {
+  coverage_identity_unavailable: ["v4_notice_coverage_task_unknown", "Home Assistant can't confirm the current clean, so check the robot first."],
+  coverage_activity_unavailable: ["v4_notice_coverage_activity_unknown", "Home Assistant can't confirm whether the robot is cleaning, so check it first."],
+  coverage_native_session_active: ["v4_notice_coverage_robot_busy", "The robot is already cleaning, so wait for it to finish."],
+  coverage_identity_changed: ["v4_notice_coverage_task_changed", "The clean changed while starting, so check the robot first."],
+};
+
+export const coverageGuardNotice = (
+  makeNotice: CatalogWriteHelpers["notice"],
+  error: unknown,
+): WorkspaceNotice | null => {
+  const { translation_domain: domain, translation_key: key } = (error ?? {}) as Record<string, unknown>;
+  if (domain !== "matic_robot" || typeof key !== "string" || !Object.hasOwn(COVERAGE_GUARD_NOTICES, key)) return null;
+  const copy = COVERAGE_GUARD_NOTICES[key];
+  return copy ? makeNotice("error", copy[0], copy[1]) : null;
+};
+
 /**
  * One write, as EffectController started it. The write belongs to the moment
  * it was asked for: `state` is the workspace then, and `signal` is its

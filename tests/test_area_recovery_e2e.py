@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+from copy import deepcopy
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -15,9 +16,10 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import llm
 
 from custom_components.matic_robot.area_binding import (
-    ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
     AREA_SCHEMA_VERSION,
     BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+    SCOPED_MAP_BINDING_VERSION,
+    SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
     AreaBindingStatus,
     area_binding_status,
     binding_for_area,
@@ -32,8 +34,18 @@ from custom_components.matic_robot.plans import (
     CleaningPlanManager,
     PlanAreaMapChangedError,
 )
-from custom_components.matic_robot.services import _saved_plan_preview
+from custom_components.matic_robot.services import (
+    _saved_plan_preview,
+    _validated_area_command,
+)
 from custom_components.matic_robot.slam_scene import MaticAreasView
+from tests.test_area_frame_witnesses import (
+    _area as _witness_area,
+)
+from tests.test_area_frame_witnesses import (
+    _locally_refined,
+    _witness_plan,
+)
 from tests.test_llm import (
     _context as _llm_context,
 )
@@ -77,7 +89,7 @@ def _map_with_unrelated_room(floor_plan: FloorPlan) -> FloorPlan:
 
 def _legacy_v4_binding(floor_plan: FloorPlan, circles: list[dict]) -> dict:
     current = binding_for_area(floor_plan, circles)
-    assert current["version"] == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+    assert current["version"] == SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
     return {
         "version": BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
         "mission_id": current["mission_id"],
@@ -85,6 +97,82 @@ def _legacy_v4_binding(floor_plan: FloorPlan, circles: list[dict]) -> dict:
         "geometry_sha256": current["geometry_sha256"],
         "local_geometry_sha256": current["local_geometry_sha256"],
     }
+
+
+def _simple_floor_plan() -> FloorPlan:
+    """Build a V3 area map with a room that the mixed plan can clean."""
+    return FloorPlan(
+        1,
+        "partition",
+        b"partition",
+        (
+            Room(
+                "room-1",
+                "Kitchen",
+                "kitchen",
+                b"kitchen",
+                ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)),
+            ),
+        ),
+        "Main floor",
+    )
+
+
+def _translated_floor_plan(floor_plan: FloorPlan) -> FloorPlan:
+    """Move the saved room frame while keeping the saved area coordinates."""
+    return replace(
+        floor_plan,
+        rooms=tuple(
+            replace(
+                room,
+                boundary=tuple((x + 0.1, y) for x, y in room.boundary),
+            )
+            for room in floor_plan.rooms
+        ),
+    )
+
+
+def _with_partition_churn(floor_plan: FloorPlan) -> FloorPlan:
+    return replace(
+        floor_plan,
+        partition_protocol_id="refreshed-partition",
+        partition_id_wire=b"refreshed-partition",
+    )
+
+
+def _map_with_overlapping_room(floor_plan: FloorPlan) -> FloorPlan:
+    overlapping = Room(
+        "room-overlap",
+        "Overlapping room",
+        "overlap",
+        b"overlap",
+        ((-10.0, -10.0), (11.0, -10.0), (11.0, 11.0), (-10.0, 11.0)),
+    )
+    return replace(floor_plan, rooms=(*floor_plan.rooms, overlapping))
+
+
+def _mixed_saved_plan(manager: CleaningPlanManager) -> None:
+    _saved_plan(manager)
+    plan = manager._robot("synthetic-serial")["plans"]["area-plan"]
+    plan["rooms"] = [
+        {
+            "room_id": "room-1",
+            "cleaning_mode": "vacuum",
+            "coverage_setting": "standard",
+        }
+    ]
+    plan["entries"] = [
+        {
+            "kind": "room",
+            "room_id": "room-1",
+        },
+        {
+            "kind": "area",
+            "area_id": "saved-zone",
+            "cleaning_mode": "vacuum",
+            "coverage_setting": "standard",
+        },
+    ]
 
 
 def _saved_plan(manager: CleaningPlanManager) -> None:
@@ -234,7 +322,7 @@ async def test_stale_v4_area_recovers_through_catalog_and_saved_plan_preview(
     assert rebound is not None
     assert (
         rebound["map_binding"]["version"]
-        == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+        == SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
     )
     assert area_binding_status(rebound, current_map) is AreaBindingStatus.CURRENT
 
@@ -257,6 +345,190 @@ async def test_stale_v4_area_recovers_through_catalog_and_saved_plan_preview(
     assert ready.data["status"] == "ready"
     assert ready.data["areas"] == [{"name": "Saved zone", "status": "ready"}]
     assert ready.data["can_preview"] is True
+    runtime.client.async_send_command.assert_not_awaited()
+
+
+@pytest.mark.parametrize("binding_kind", ["v3", "v3_without_invariant_digest", "v6"])
+@pytest.mark.parametrize(
+    "refresh",
+    [
+        "map_revision_only",
+        "unrelated_room",
+        "partition_unrelated_room",
+        "translated",
+        "partition_overlapping_room",
+        "local_refinement",
+    ],
+)
+@pytest.mark.asyncio
+async def test_run_like_map_refresh_preserves_only_proven_area_continuity(
+    hass: HomeAssistant, binding_kind: str, refresh: str
+) -> None:
+    """Refresh continuity survives reload; an actually moved frame stays blocked."""
+    manager = CleaningPlanManager(hass)
+    if refresh == "local_refinement":
+        original_map = _witness_plan()
+        original_map = replace(
+            original_map,
+            mission_id=1,
+            rooms=(replace(original_map.rooms[0], id="room-1"),),
+        )
+        saved_area = {
+            **_witness_area(original_map, anchored_bounded=binding_kind == "v6"),
+            "name": "Saved zone",
+            "cleaning_mode": "vacuum",
+            "coverage_setting": "standard",
+        }
+        circles = saved_area["circles"]
+    else:
+        original_map = (
+            _dense_floor_plan() if binding_kind == "v6" else _simple_floor_plan()
+        )
+        circles = [{"x": 0.5, "y": 0.5, "radius": 0.2}]
+        saved_area = {
+            "schema_version": AREA_SCHEMA_VERSION,
+            "name": "Saved zone",
+            "circles": circles,
+            "cleaning_mode": "vacuum",
+            "coverage_setting": "standard",
+            "map_binding": binding_for_area(original_map, circles),
+        }
+    assert saved_area["map_binding"]["version"] == (
+        SCOPED_MAP_BINDING_VERSION
+        if binding_kind != "v6"
+        else SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+    )
+    if binding_kind == "v3_without_invariant_digest":
+        del saved_area["map_binding"]["translation_invariant_geometry_sha256"]
+    manager._robot("synthetic-serial")["areas"]["saved-zone"] = saved_area
+    _mixed_saved_plan(manager)
+
+    refreshed_map = (
+        _locally_refined(original_map)
+        if refresh == "local_refinement"
+        else original_map
+    )
+    if refresh in {"unrelated_room", "partition_unrelated_room"}:
+        refreshed_map = _map_with_unrelated_room(refreshed_map)
+    elif refresh == "partition_overlapping_room":
+        refreshed_map = _map_with_overlapping_room(refreshed_map)
+    if refresh in {"partition_unrelated_room", "partition_overlapping_room"}:
+        refreshed_map = _with_partition_churn(refreshed_map)
+    elif refresh == "translated":
+        refreshed_map = _translated_floor_plan(refreshed_map)
+    original_record = deepcopy(saved_area)
+    runtime = _runtime()
+    runtime.coordinator.data.floor_plan = refreshed_map
+    runtime.slam_map.revision += 1
+    runtime.cleaning_plans = manager
+    runtime.client.async_send_command = AsyncMock()
+
+    # Persist the starting catalog through the real HA Store, then observe
+    # writes caused by the automatic map-revision upgrade path.
+    await manager._store.async_save(manager._data)
+    store_save = manager._store.async_save
+    manager._store.async_save = AsyncMock(wraps=store_save)
+
+    # This is the manager operation scheduled by the coordinator on a fresh
+    # supported floor-plan revision. It may upgrade legacy records, but must
+    # not rebind a current anchored area as a side effect of unrelated map churn.
+    upgrade = await manager.async_upgrade_area_bindings(
+        "synthetic-serial", refreshed_map
+    )
+    unsafe_drift = refresh in {"translated", "partition_overlapping_room"} or (
+        refresh == "local_refinement" and binding_kind == "v3_without_invariant_digest"
+    )
+    assert upgrade == AreaBindingUpgradeResult(0, False)
+    assert saved_area == original_record
+    manager._store.async_save.assert_not_awaited()
+
+    # Simulate HA Store reload after that automatic refresh, then run the same
+    # read-only readiness, plan preview, and service-side area validation used
+    # by automations. No explicit area POST/save is involved.
+    reloaded = CleaningPlanManager(hass)
+    await reloaded.async_load()
+    runtime.cleaning_plans = reloaded
+    entry = _entry(runtime)
+    tool_entry = _llm_entry(floor_plan=refreshed_map)
+    tool_entry.runtime_data.cleaning_plans = reloaded
+    tool_hass = _llm_hass(tool_entry)
+    readiness = await MaticGetPlanReadinessTool().async_call(
+        tool_hass,
+        llm.ToolInput("MaticGetPlanReadiness", {"plan": "area-plan"}),
+        _llm_context(),
+    )
+
+    if unsafe_drift:
+        assert readiness.data["status"] == "needs_confirmation"
+        assert readiness.data["can_preview"] is False
+        with pytest.raises(PlanAreaMapChangedError):
+            _saved_plan_preview(
+                reloaded,
+                "synthetic-serial",
+                entry,
+                {room.id: room.name for room in refreshed_map.rooms},
+                "area-plan",
+            )
+        with pytest.raises(HomeAssistantError):
+            await MaticGetPlanTool().async_call(
+                tool_hass,
+                llm.ToolInput("MaticGetPlan", {"plan": "area-plan"}),
+                _llm_context(),
+            )
+        with pytest.raises(HomeAssistantError):
+            _validated_area_command(
+                reloaded.area("synthetic-serial", "saved-zone"),
+                refreshed_map,
+                None,
+                None,
+            )
+        assert (
+            area_binding_status(
+                reloaded.area("synthetic-serial", "saved-zone"), refreshed_map
+            )
+            is not AreaBindingStatus.CURRENT
+        )
+    else:
+        assert readiness.data["status"] == "ready"
+        assert readiness.data["can_preview"] is True
+        assert readiness.data["areas"] == [{"name": "Saved zone", "status": "ready"}]
+        assert (
+            area_binding_status(
+                reloaded.area("synthetic-serial", "saved-zone"), refreshed_map
+            )
+            is AreaBindingStatus.CURRENT
+        )
+        _floor, preview, _token = _saved_plan_preview(
+            reloaded,
+            "synthetic-serial",
+            entry,
+            {room.id: room.name for room in refreshed_map.rooms},
+            "area-plan",
+        )
+        assert preview["valid"] is True
+        assert [item["kind"] for item in preview["entries"]] == ["room", "area"]
+        llm_preview = await MaticGetPlanTool().async_call(
+            tool_hass,
+            llm.ToolInput("MaticGetPlan", {"plan": "area-plan"}),
+            _llm_context(),
+        )
+        assert [room["id"] for room in llm_preview.data["legs"][0]["rooms"]] == [
+            "room-1"
+        ]
+        assert llm_preview.data["legs"][1]["custom_area"]["id"] == "saved-zone"
+        _validated_area_command(
+            reloaded.area("synthetic-serial", "saved-zone"),
+            refreshed_map,
+            None,
+            None,
+        )
+
+    loaded_area = reloaded.areas("synthetic-serial")["saved-zone"]
+    assert loaded_area == original_record
+    assert set(reloaded.areas("synthetic-serial")) == {"saved-zone"}
+    assert loaded_area["circles"] == circles
+    assert loaded_area["cleaning_mode"] == "vacuum"
+    assert loaded_area["coverage_setting"] == "standard"
     runtime.client.async_send_command.assert_not_awaited()
 
 
@@ -493,7 +765,8 @@ async def test_v5_area_survives_unrelated_room_addition_but_not_room_translation
         "map_binding": binding_for_area(original_map, circles),
     }
     assert (
-        area["map_binding"]["version"] == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+        area["map_binding"]["version"]
+        == SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
     )
     manager._robot("synthetic-serial")["areas"]["saved-zone"] = area
     _saved_plan(manager)

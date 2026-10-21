@@ -8,6 +8,7 @@ and recognize the few forms in which a localization key reaches the UI:
 ``pair``      ``label: "Fallback", labelKey: "key"`` in one object literal
 ``disabled``  ``disabledAction("id", "Label", "Reason", "labelKey", "reasonKey")``
 ``notice``    ``notice("tone", "key", "Fallback", { name })``
+``catalog``   ``reason: ["key", "Fallback"]`` in a notice copy catalog
 
 Only real code counts: a match inside a comment, a regex literal, a string or the
 static part of a template literal is not a site. A ``"v4_*"`` literal, or a quoted
@@ -362,6 +363,9 @@ _NOTICE = re.compile(
     + _FALLBACK
     + r"(?=\s*[,)])"
 )
+_NOTICE_CATALOG_ENTRY = re.compile(
+    r'(?m)^\s*[\w$]+:\s*\[\s*"([A-Za-z0-9_]+)"\s*,\s*' + _FALLBACK + r"\s*\]"
+)
 
 
 def _unescape(raw: str) -> str:
@@ -395,6 +399,10 @@ def _sites_in(module: str, text: str) -> list[tuple[KeySite, int]]:
     for match in live_matches(_NOTICE, text):
         supplied = _supplied_in_arguments(text, match.end())
         add("notice", match.start(1) - 1, match[1], match[2], supplied)
+    # Some notices are selected by a reason code from a typed copy catalog.
+    # Count its key/fallback pairs as localization sites too.
+    for match in live_matches(_NOTICE_CATALOG_ENTRY, text):
+        add("notice", match.start(1) - 1, match[1], match[2], frozenset())
     for match in live_matches(_DISABLED, text):
         add("disabled", match.start(3) - 1, match[3], match[1], frozenset())
         if match[4]:

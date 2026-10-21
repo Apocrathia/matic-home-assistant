@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import struct
+import time
 from io import BytesIO
 from itertools import combinations
 from time import perf_counter
@@ -120,8 +121,9 @@ def test_decode_mapped_floors_rejects_duplicate_or_excessive_identities(
 def test_decode_pose_and_render_local_png() -> None:
     pose_payload = _field(2, _field(1, _field(1, struct.pack("<3f", 2, 1, 0))))
     pose = decode_pose(pose_payload)
+    current_pose = decode_pose(pose_payload, mission_id=42, observed_at=time.time())
     image_bytes = render_floor_plan(
-        decode_floor_plan(_floor_plan_payload()), pose, width=512, height=384
+        decode_floor_plan(_floor_plan_payload()), current_pose, width=512, height=384
     )
 
     assert (pose.x, pose.y, pose.z) == (2.0, 1.0, 0.0)
@@ -157,6 +159,25 @@ def test_decode_pose_rejects_incomplete_repeated_translation() -> None:
     with pytest.raises(DecodeError):
         decode_pose(payload)
 
+    timestamp_shaped = _field(
+        5, _field(1, _varint_field(1, 1_800_000_000) + _varint_field(2, 0))
+    )
+    with pytest.raises(DecodeError):
+        decode_pose(timestamp_shaped)
+    timestamp_body = _varint_field(1, 1 << 56) + _varint_field(2, 0)
+    assert len(timestamp_body) == 12
+    exact_twelve_byte_timestamp = _field(5, _field(1, timestamp_body))
+    with pytest.raises(DecodeError):
+        decode_pose(exact_twelve_byte_timestamp)
+    with pytest.raises(DecodeError):
+        decode_pose(_field(2, b"bad") + exact_twelve_byte_timestamp)
+    with pytest.raises(DecodeError):
+        decode_pose(_field(2, b"bad") + _field(2, b"also-bad"))
+    with pytest.raises(DecodeError):
+        decode_pose(_field(2, b""))
+    with pytest.raises(DecodeError):
+        decode_pose(_field(5, _varint_field(1, 1) + _varint_field(2, 2)))
+
 
 def test_pose_vector_path_inspection_is_bounded_and_ignores_invalid_data() -> None:
     too_deep = struct.pack("<3f", 1, 2, 3)
@@ -175,19 +196,20 @@ def test_pose_vector_path_inspection_is_bounded_and_ignores_invalid_data() -> No
 def test_robot_position_requires_exact_coordinates_and_tracks_room_presence() -> None:
     floor_plan = decode_floor_plan(_floor_plan_payload())
 
-    assert resolve_robot_map_position(floor_plan, RobotPose(2, 1, 0), "Test room") == (
+    pose = RobotPose(2, 1, 0, floor_plan.mission_id, time.time())
+    assert resolve_robot_map_position(floor_plan, pose, "Test room") == (
         2,
         1,
         "exact_pose",
     )
-    invalid_pose = RobotPose(float("nan"), 999, 0)
+    invalid_pose = RobotPose(float("nan"), 999, 0, floor_plan.mission_id, time.time())
     assert (
         resolve_robot_map_position(floor_plan, invalid_pose, "the  Test room") is None
     )
     assert robot_location_source(floor_plan, invalid_pose, "the  Test room") == (
         "current_area"
     )
-    assert robot_location_source(floor_plan, RobotPose(2, 1, 0), None) == ("exact_pose")
+    assert robot_location_source(floor_plan, pose, None) == ("exact_pose")
     assert robot_location_source(floor_plan, None, "Garage") == "unavailable"
     assert robot_location_source(floor_plan, None, None) == "unavailable"
     assert robot_location_source(None, None, "Test room") == "unavailable"
@@ -198,6 +220,54 @@ def test_robot_position_requires_exact_coordinates_and_tracks_room_presence() ->
         resolve_robot_map_position(FloorPlan(1, "partition", b"", ()), None, None)
         is None
     )
+
+
+def test_robot_position_rejects_wrong_mission_unknown_or_stale_observation() -> None:
+    floor_plan = decode_floor_plan(_floor_plan_payload())
+    now = 1_800_000_000.0
+    assert (
+        resolve_robot_map_position(
+            floor_plan,
+            RobotPose(2, 1, 0, floor_plan.mission_id + 1, now),
+            None,
+            now=now,
+        )
+        is None
+    )
+    assert (
+        resolve_robot_map_position(floor_plan, RobotPose(2, 1, 0), None, now=now)
+        is None
+    )
+    assert (
+        resolve_robot_map_position(
+            floor_plan, RobotPose(2, 1, 0, floor_plan.mission_id, 0), None, now=0
+        )
+        is None
+    )
+    assert (
+        resolve_robot_map_position(
+            floor_plan,
+            RobotPose(2, 1, 0, floor_plan.mission_id, now - 5.01),
+            None,
+            now=now,
+        )
+        is None
+    )
+    assert (
+        resolve_robot_map_position(
+            floor_plan,
+            RobotPose(2, 1, 0, floor_plan.mission_id, now + 2.01),
+            None,
+            now=now,
+        )
+        is None
+    )
+    assert resolve_robot_map_position(
+        floor_plan,
+        RobotPose(2, 1, 0, floor_plan.mission_id, now - 5),
+        None,
+        now=now,
+    ) == (2, 1, "exact_pose")
 
     without_marker = render_floor_plan(floor_plan, None, width=256, height=256)
     fallback_marker = render_floor_plan(
@@ -222,7 +292,7 @@ def test_robot_position_prefers_verified_geometry_over_reported_room() -> None:
             ),
         ),
     )
-    conflicting_pose = RobotPose(4, 1, 0)
+    conflicting_pose = RobotPose(4, 1, 0, floor_plan.mission_id, time.time())
 
     assert resolve_robot_map_position(floor_plan, conflicting_pose, "Office") == (
         4,
@@ -235,17 +305,23 @@ def test_robot_position_prefers_verified_geometry_over_reported_room() -> None:
     assert resolve_robot_map_position(
         floor_plan, conflicting_pose, "the Living room"
     ) == (4, 1, "exact_pose")
-    assert resolve_robot_map_position(floor_plan, RobotPose(2, 1, 0), "Office") == (
+    assert resolve_robot_map_position(
+        floor_plan, RobotPose(2, 1, 0, 1, time.time()), "Office"
+    ) == (
         2,
         1,
         "exact_pose",
     )
-    assert resolve_robot_map_position(floor_plan, RobotPose(2.5, 1, 0), None) == (
+    assert resolve_robot_map_position(
+        floor_plan, RobotPose(2.5, 1, 0, 1, time.time()), None
+    ) == (
         2.5,
         1,
         "exact_pose",
     )
-    assert resolve_robot_map_position(floor_plan, RobotPose(6, 1, 0), None) == (
+    assert resolve_robot_map_position(
+        floor_plan, RobotPose(6, 1, 0, 1, time.time()), None
+    ) == (
         6,
         1,
         "exact_pose",
@@ -253,7 +329,7 @@ def test_robot_position_prefers_verified_geometry_over_reported_room() -> None:
     assert (
         resolve_robot_map_position(
             floor_plan,
-            RobotPose(10_001, 1, 0),
+            RobotPose(10_001, 1, 0, floor_plan.mission_id, time.time()),
             None,
         )
         is None
@@ -274,7 +350,7 @@ def test_robot_position_prefers_verified_geometry_over_reported_room() -> None:
         ),
     )
     assert resolve_robot_map_position(
-        duplicate_vertex_plan, RobotPose(1, 1, 0), "Office"
+        duplicate_vertex_plan, RobotPose(1, 1, 0, 1, time.time()), "Office"
     ) == (1, 1, "exact_pose")
 
     incomplete_boundary_plan = FloorPlan(

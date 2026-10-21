@@ -454,6 +454,43 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect.poll(() => requested.length).toBe(1);
   });
 
+  test("Stop failure is reported while the deferred catalog module is still loading @safety", async ({ page }) => {
+    const fixture = await installPanelFixture(page, {
+      moduleSource: "packaged",
+      initialRobotStates: { "vacuum.synthetic": { state: "cleaning", attributes: { matic_entry_id: "synthetic-entry" } } },
+    });
+    let releaseModule;
+    let moduleRequested = false;
+    let moduleLoaded = false;
+    const heldModule = new Promise((resolve) => { releaseModule = resolve; });
+    await page.route("**/chunks/catalog-writes-*.js", async (route) => {
+      moduleRequested = true;
+      await heldModule;
+      await route.continue();
+      moduleLoaded = true;
+    });
+    await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+    await expect.poll(() => page.evaluate((tag) => document.querySelector(tag).getWorkspaceSnapshot().activity, fixture.panelTag))
+      .toBe("cleaning");
+    await page.evaluate((tag) => document.querySelector(tag).shadowRoot.querySelector("matic-map-shell-v4")
+      .dispatchEvent(new CustomEvent("matic-workspace-intent", {
+        detail: { type: "open-workflow", workflow: "plans" }, bubbles: true, composed: true,
+      })), fixture.panelTag);
+    await expect.poll(() => moduleRequested).toBe(true);
+    await page.evaluate((tag) => {
+      window.__panelFixture.failNextService("stop_intelligent_cleaning", new Error("stop failed"));
+      document.querySelector(tag).shadowRoot.querySelector("matic-map-shell-v4")
+        .dispatchEvent(new CustomEvent("matic-workspace-action", {
+          detail: { id: "stop" }, bubbles: true, composed: true,
+        }));
+    }, fixture.panelTag);
+    await expect.poll(() => page.evaluate((tag) => document.querySelector(tag).getWorkspaceSnapshot().notice?.key, fixture.panelTag))
+      .toBe("v4_notice_stop_unconfirmed");
+    expect(moduleLoaded).toBe(false);
+    releaseModule();
+    await expect.poll(() => moduleLoaded).toBe(true);
+  });
+
   // A resumed Try again opens only what the entry screen would: a limited map
   // offers no room choice, so the reload stays on the entry screen.
   test("Try again in Rooms reloads onto the entry screen when the map is then limited", async ({ page }) => {
@@ -1900,7 +1937,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     }))));
   });
   // Home Assistant's service error carries the integration's translation key;
-  // effects.ts maps a Matic coverage guard key to its notice and treats any
+  // The catalog write helper maps a Matic coverage guard key to its notice and treats any
   // other error, whatever its text or domain, as an unconfirmed action.
   test("maps Matic coverage guard rejections to their notices and keeps other service errors generic", async ({ page }) => {
     await loadEffectHarness(page);
@@ -4338,8 +4375,10 @@ test.describe("Map Studio v0.4 foundation", () => {
     const scene = gallery.locator("matic-map-canvas-v4 .scene-window");
     await expect(scene).toHaveAttribute(
       "aria-label",
-      "Saved read-only map for House. Live robot position is hidden.",
+      "Saved read-only map for Shed. Live robot position is hidden.",
     );
+    await expect(gallery.getByRole("combobox", { name: "Choose floor" })).toHaveValue("saved-1");
+    await expect(gallery.locator(".floor-switcher option:checked")).toContainText("Shed");
     await expect(gallery.getByText("The current private map is not available.", { exact: true })).toHaveCount(0);
 
     await page.evaluate((tag) => {
@@ -6338,9 +6377,15 @@ test.describe("Map Studio v0.4 foundation", () => {
     let poseSessionKey = "a".repeat(64);
     let posePosition = [10, 12];
     let poseFreshness = "live";
+    let poseAgeSeconds;
     let poseFloorCoherent = true;
     let poseRequests = 0;
     let failNextPose = false;
+    let holdNextPose = false;
+    let holdAfterNextAgedPose = false;
+    let heldPoseRequests = 0;
+    let releaseHeldPose;
+    const heldPoseGate = new Promise((resolve) => { releaseHeldPose = resolve; });
     let holdDeltaRecoveryScene = false;
     let releaseDeltaRecoveryScene;
     const deltaRecoverySceneGate = new Promise((resolve) => { releaseDeltaRecoveryScene = resolve; });
@@ -6432,13 +6477,18 @@ test.describe("Map Studio v0.4 foundation", () => {
         },
       });
     });
-    await page.route("**/api/matic_robot/slam_pose/synthetic-entry", (route) => {
+    await page.route("**/api/matic_robot/slam_pose/synthetic-entry", async (route) => {
       poseRequests += 1;
       if (failNextPose) {
         failNextPose = false;
         return route.fulfill({ status: 503, body: "temporary" });
       }
-      return route.fulfill({
+      if (holdNextPose) {
+        holdNextPose = false;
+        heldPoseRequests += 1;
+        await heldPoseGate;
+      }
+      await route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
@@ -6448,9 +6498,14 @@ test.describe("Map Studio v0.4 foundation", () => {
           pose_revision: poseRequests,
           map_floor_coherent: poseFloorCoherent,
           pose_freshness: poseFreshness,
+          ...(poseAgeSeconds === undefined ? {} : { pose_age_seconds: poseAgeSeconds }),
           map_session_key: poseSessionKey,
         }),
       });
+      if (holdAfterNextAgedPose && poseAgeSeconds === 3) {
+        holdAfterNextAgedPose = false;
+        holdNextPose = true;
+      }
     });
     await page.route("**/api/matic_robot/slam_history/synthetic-entry", (route) => route.fulfill({
       status: 200,
@@ -6546,7 +6601,7 @@ test.describe("Map Studio v0.4 foundation", () => {
         position: state.resources.pose.value?.position,
       };
     }), { timeout: 5_000 }).toEqual({
-      exactPose: true,
+      exactPose: false,
       freshness: "coordinator_fallback",
       position: [11, 13],
     });
@@ -6556,8 +6611,11 @@ test.describe("Map Studio v0.4 foundation", () => {
       .toBeGreaterThan(requestsBeforeMissingFallback);
     expect(await page.evaluate(() => {
       const state = window.__deltaPanel.getWorkspaceSnapshot();
-      return { exactPose: state.map.exactPose, position: state.resources.pose.value?.position };
-    })).toEqual({ exactPose: true, position: [11, 13] });
+      return { exactPose: state.map.exactPose, pose: state.resources.pose.value };
+    })).toEqual({
+      exactPose: false,
+      pose: expect.objectContaining({ freshness: "coordinator_fallback", position: null }),
+    });
     poseFreshness = "live";
     const requestsBeforeMissingLivePose = poseRequests;
     await expect.poll(() => poseRequests, { timeout: 5_000 })
@@ -6569,11 +6627,19 @@ test.describe("Map Studio v0.4 foundation", () => {
         freshness: state.resources.pose.value?.freshness,
         position: state.resources.pose.value?.position,
       };
-    })).toEqual({ exactPose: true, freshness: "coordinator_fallback", position: [11, 13] });
+    })).toEqual({ exactPose: false, freshness: "live", position: null });
     failNextPose = true;
     const requestsBeforeFailure = poseRequests;
     await expect.poll(() => poseRequests, { timeout: 5_000 }).toBeGreaterThan(requestsBeforeFailure);
     expect(await page.evaluate(() => {
+      const state = window.__deltaPanel.getWorkspaceSnapshot();
+      return { exactPose: state.map.exactPose, pose: state.resources.pose.value };
+    })).toEqual({ exactPose: false, pose: null });
+    posePosition = [11, 13];
+    const requestsBeforeRecovery = poseRequests;
+    await expect.poll(() => poseRequests, { timeout: 5_000 })
+      .toBeGreaterThan(requestsBeforeRecovery);
+    await expect.poll(() => page.evaluate(() => {
       const state = window.__deltaPanel.getWorkspaceSnapshot();
       return { exactPose: state.map.exactPose, position: state.resources.pose.value?.position };
     })).toEqual({ exactPose: true, position: [11, 13] });
@@ -6620,6 +6686,50 @@ test.describe("Map Studio v0.4 foundation", () => {
       const state = window.__deltaPanel.getWorkspaceSnapshot();
       return { exactPose: state.map.exactPose, pose: state.resources.pose.value };
     })).toEqual({ exactPose: false, pose: null });
+    // A point read near the backend's freshness limit gets only its remaining
+    // lifetime locally. The next request hangs, but expiry still clears it.
+    poseFloorCoherent = true;
+    poseSessionKey = "a".repeat(64);
+    posePosition = [11, 13];
+    poseAgeSeconds = 3.0;
+    holdAfterNextAgedPose = true;
+    const requestsBeforeAgedPose = poseRequests;
+    await expect.poll(() => poseRequests, { timeout: 5_000 })
+      .toBeGreaterThan(requestsBeforeAgedPose);
+    await expect.poll(() => page.evaluate(() => {
+      const state = window.__deltaPanel.getWorkspaceSnapshot();
+      return {
+        exactPose: state.map.exactPose,
+        age: state.resources.pose.value?.nativeObservationAgeSeconds,
+        revision: state.resources.pose.value?.poseRevision,
+      };
+    }), { timeout: 1_000 }).toMatchObject({ exactPose: true, age: 3 });
+    await expect.poll(() => heldPoseRequests, { timeout: 5_000 })
+      .toBeGreaterThan(0);
+    expect(await page.evaluate(() => window.__deltaPanel.getWorkspaceSnapshot().map.exactPose)).toBe(true);
+    await expect.poll(() => page.evaluate(() => {
+      const state = window.__deltaPanel.getWorkspaceSnapshot();
+      return { exactPose: state.map.exactPose, pose: state.resources.pose.value };
+    }), { timeout: 2_500, intervals: [50, 100, 200] }).toEqual({ exactPose: false, pose: null });
+    holdNextPose = false;
+    poseAgeSeconds = 0;
+    releaseHeldPose();
+    await expect.poll(() => page.evaluate(() => window.__deltaPanel.getWorkspaceSnapshot().map.exactPose)).toBe(true);
+    await page.waitForTimeout(250);
+    expect(await page.evaluate(() => window.__deltaPanel.getWorkspaceSnapshot().map.exactPose)).toBe(true);
+    poseAgeSeconds = null;
+    const requestsBeforeUnknownAge = poseRequests;
+    await expect.poll(() => poseRequests, { timeout: 5_000 })
+      .toBeGreaterThan(requestsBeforeUnknownAge);
+    await expect.poll(() => page.evaluate(() => {
+      const state = window.__deltaPanel.getWorkspaceSnapshot();
+      return { exactPose: state.map.exactPose, age: state.resources.pose.value?.nativeObservationAgeSeconds };
+    })).toEqual({ exactPose: false, age: null });
+    poseAgeSeconds = 0;
+    const requestsBeforeFinalRecovery = poseRequests;
+    await expect.poll(() => poseRequests, { timeout: 5_000 })
+      .toBeGreaterThan(requestsBeforeFinalRecovery);
+    await expect.poll(() => page.evaluate(() => window.__deltaPanel.getWorkspaceSnapshot().map.exactPose)).toBe(true);
     await page.evaluate(() => window.__deltaPanel.remove());
   });
 

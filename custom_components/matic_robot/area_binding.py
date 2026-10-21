@@ -27,6 +27,7 @@ HASH_ONLY_SCOPED_MAP_BINDING_VERSION = 2
 SCOPED_MAP_BINDING_VERSION = 3
 BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION = 4
 ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION = 5
+SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION = 6
 _FINGERPRINT_DOMAIN = b"matic-area-geometry\0"
 _SCOPED_FINGERPRINT_DOMAIN = b"matic-area-local-geometry\0"
 _AREA_SHAPE_FINGERPRINT_DOMAIN = b"matic-area-shape\0"
@@ -42,6 +43,13 @@ _LOCAL_GEOMETRY_TOLERANCE_METERS = (
 _ROOM_FRAME_TOLERANCE_MILLIMETERS = (
     math.ceil(VOXEL_SCALE_METERS * _MILLIMETERS_PER_METER) + 1
 )
+_FRAME_WITNESS_MIN_TURN_DEGREES = 25
+_FRAME_WITNESS_TURN_BUCKET_DEGREES = 5
+_FRAME_WITNESS_EDGE_BUCKET_MILLIMETERS = 25
+_FRAME_WITNESS_CONTEXT_RADIUS = 2
+_FRAME_WITNESS_MIN_TURN_COVERAGE = 0.04
+_FRAME_WITNESS_MIN_SPAN_FRACTION = 0.5
+_FRAME_WITNESS_MIN_TRIANGLE_FRACTION = 0.05
 _COORDINATE_QUANTIZATION_ERROR_MILLIMETERS = 0.5
 _SEGMENT_QUANTIZATION_ERROR_MILLIMETERS = math.sqrt(
     2 * _COORDINATE_QUANTIZATION_ERROR_MILLIMETERS**2
@@ -531,6 +539,159 @@ def _room_frame_matches(
     return True
 
 
+def _turn_witness_features(
+    boundary: Sequence[Sequence[int]],
+) -> tuple[tuple[_QuantizedPoint, tuple[tuple[int, int, int], ...]], ...]:
+    """Describe genuine turns with a bounded, reversal-invariant context."""
+    points = tuple((int(point[0]), int(point[1])) for point in boundary)
+    turns: list[tuple[_QuantizedPoint, tuple[int, int, int]]] = []
+    for index, point in enumerate(points):
+        previous = points[index - 1]
+        following = points[(index + 1) % len(points)]
+        incoming = (point[0] - previous[0], point[1] - previous[1])
+        outgoing = (following[0] - point[0], following[1] - point[1])
+        cross = incoming[0] * outgoing[1] - incoming[1] * outgoing[0]
+        if cross == 0:
+            continue
+        dot = incoming[0] * outgoing[0] + incoming[1] * outgoing[1]
+        angle = abs(math.degrees(math.atan2(cross, dot)))
+        if angle < _FRAME_WITNESS_MIN_TURN_DEGREES:
+            continue
+        turns.append(
+            (
+                point,
+                (
+                    round(angle / _FRAME_WITNESS_TURN_BUCKET_DEGREES),
+                    round(
+                        math.hypot(*incoming) / _FRAME_WITNESS_EDGE_BUCKET_MILLIMETERS
+                    ),
+                    round(
+                        math.hypot(*outgoing) / _FRAME_WITNESS_EDGE_BUCKET_MILLIMETERS
+                    ),
+                ),
+            )
+        )
+    if len(turns) < 3:
+        return ()
+
+    features = []
+    for index, (point, _feature) in enumerate(turns):
+        context = tuple(
+            turns[(index + offset) % len(turns)][1]
+            for offset in range(
+                -_FRAME_WITNESS_CONTEXT_RADIUS,
+                _FRAME_WITNESS_CONTEXT_RADIUS + 1,
+            )
+        )
+        reversed_context = tuple(
+            (angle, outgoing, incoming)
+            for angle, incoming, outgoing in reversed(context)
+        )
+        features.append((point, min(context, reversed_context)))
+    return tuple(features)
+
+
+def _room_has_strong_frame_witnesses(
+    saved: Mapping[str, Any],
+    current: Mapping[str, Any],
+    room_geometry: RoomGeometryIndex,
+) -> bool:
+    """Prove an absolute room frame from unique, distributed saved turns.
+
+    Witnesses are immutable integer-millimeter boundary points. Repeated
+    contour motifs are ambiguous and cannot establish a frame. The three-point
+    area condition prevents a single fixed corner or a short edge from serving
+    as evidence for a two-dimensional coordinate frame.
+    """
+    old = saved.get("boundary_mm")
+    new = current.get("boundary_mm")
+    if not isinstance(old, list) or not isinstance(new, list):
+        return False
+    if len(old) < 3 or len(new) < 3:
+        return False
+    # Cover feature extraction plus the bounded extreme/match comparisons up
+    # front. If this optional proof cannot fit, leave the legacy frame/local
+    # validation budget intact instead of consuming it on a failed attempt.
+    if not room_geometry.try_charge_query_work(
+        (len(old) + len(new)) * 64, reserve=10_000
+    ):
+        return False
+    try:
+        old_features = _turn_witness_features(old)
+        new_features = _turn_witness_features(new)
+    except IndexError, TypeError, ValueError, OverflowError:
+        return False
+    if not old_features or not new_features:
+        return False
+
+    old_counts = Counter(feature for _point, feature in old_features)
+    new_counts = Counter(feature for _point, feature in new_features)
+    new_by_point = dict(new_features)
+    matches = tuple(
+        point
+        for point, feature in old_features
+        if old_counts[feature] == 1
+        and new_counts[feature] == 1
+        and new_by_point.get(point) == feature
+    )
+    minimum_matches = max(
+        3,
+        math.ceil(
+            min(len(old_features), len(new_features)) * _FRAME_WITNESS_MIN_TURN_COVERAGE
+        ),
+    )
+    if len(matches) < minimum_matches:
+        return False
+
+    # The bounding-box diagonal is a conservative upper bound on room
+    # diameter. Directional extrema give a small deterministic candidate set;
+    # testing each pair against all witnesses stays linear in boundary size.
+    min_x = min(point[0] for point in old)
+    max_x = max(point[0] for point in old)
+    min_y = min(point[1] for point in old)
+    max_y = max(point[1] for point in old)
+    diameter_bound = math.hypot(max_x - min_x, max_y - min_y)
+    # Three genuine turns already imply a nonzero boundary diameter.
+    required_span = diameter_bound * _FRAME_WITNESS_MIN_SPAN_FRACTION
+    required_twice_area = (
+        2 * diameter_bound * diameter_bound * _FRAME_WITNESS_MIN_TRIANGLE_FRACTION
+    )
+    extremes: set[_QuantizedPoint] = set()
+    for dx, dy in (
+        (1, 0),
+        (-1, 0),
+        (0, 1),
+        (0, -1),
+        (1, 1),
+        (1, -1),
+        (-1, 1),
+        (-1, -1),
+    ):
+        extremes.add(
+            max(matches, key=lambda point: (point[0] * dx + point[1] * dy, point))
+        )
+    candidates = tuple(extremes)
+    for index, left in enumerate(candidates):
+        for right in candidates[index + 1 :]:
+            if math.dist(left, right) < required_span:
+                continue
+            if (
+                max(
+                    (
+                        abs(
+                            (right[0] - left[0]) * (point[1] - left[1])
+                            - (right[1] - left[1]) * (point[0] - left[0])
+                        )
+                        for point in matches
+                    ),
+                    default=0,
+                )
+                >= required_twice_area
+            ):
+                return True
+    return False
+
+
 def room_frame_point_count(area: Mapping[str, Any]) -> int:
     """Count persisted room-frame boundary vertices in one saved area."""
     binding = area.get("map_binding")
@@ -657,8 +818,8 @@ def _graft_legacy_room_frame_boundaries(
     and supplied anchors generated from the current floor plan. Thus saved
     fields, circle coverage, current anchor fields, boundaries, and bounds have
     already passed their respective validators. Keep the extra uniqueness and
-    exact per-room association checks here because CURRENT permits subset
-    associations and does not reject duplicate saved room keys.
+    exact per-room association checks here as independent defensive checks
+    for this migration helper.
     """
     saved_anchors = binding["translation_room_anchors"]
     room_geometry.charge_query_work(len(saved_anchors) + len(current_anchors))
@@ -678,7 +839,7 @@ def _graft_legacy_room_frame_boundaries(
     ):
         room_key = saved_anchor["room_key"].casefold()
         # CURRENT status proved that every saved room key resolves to a
-        # generated current anchor with a subset of the saved circle set.
+        # generated current anchor with the same saved circle association.
         current_anchor = current_by_room_key[room_key]
         saved_keys = {str(key).casefold() for key in saved_anchor["circle_keys"]}
         current_keys = current_anchor["circle_keys"]
@@ -690,7 +851,7 @@ def _graft_legacy_room_frame_boundaries(
             continue
         # A snapshot may only be added when this room still has the exact old
         # canonical shape, absolute origin, and circle association. The normal
-        # status check permits subset associations, so require equality here.
+        # status check is also strict; retain equality as an independent guard.
         if (
             saved_keys != normalized_current_keys
             or not _legacy_room_frame_matches_exactly(saved_anchor, current_anchor)
@@ -743,9 +904,10 @@ def binding_for_area(
             ):
                 raise ValueError("bounded area has incomplete room-frame anchors")
             return {
-                "version": ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+                "version": SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
                 **floor_binding,
                 "local_geometry_sha256": local_geometry,
+                "area_shape_sha256": _area_shape_fingerprint(shape),
                 "translation_invariant_geometry_sha256": (
                     translation_invariant_geometry_fingerprint(floor_plan)
                 ),
@@ -1153,14 +1315,33 @@ def _saved_room_frames_match(
     circles: Sequence[Mapping[str, Any]],
     floor_plan: FloorPlan,
     room_geometry: RoomGeometryIndex,
+    *,
+    failed_room_keys: set[str] | None = None,
+    associations_valid: list[bool] | None = None,
 ) -> bool:
-    """Require complete, unchanged room-frame evidence for every circle."""
+    """Check every legacy room frame and collect those needing stronger proof.
+
+    ``associations_valid`` distinguishes malformed or incomplete evidence from
+    a complete association set whose legacy frame checks failed. Callers may
+    combine legacy and strong evidence only for the latter.
+    """
+    if failed_room_keys is not None:
+        failed_room_keys.clear()
+    if associations_valid is not None:
+        associations_valid[:] = [False]
     if not isinstance(saved_anchors, list) or not saved_anchors:
         return False
     if any(
-        "room_key" not in anchor
+        not isinstance(anchor, Mapping)
+        or "room_key" not in anchor
         or "circle_keys" not in anchor
         or "boundary_mm" not in anchor
+        or not isinstance(anchor.get("room_key"), str)
+        or not isinstance(anchor.get("circle_keys"), list)
+        or not anchor.get("circle_keys")
+        or any(not isinstance(key, str) for key in anchor.get("circle_keys", ()))
+        or len(set(anchor.get("circle_keys", ()))) != len(anchor.get("circle_keys", ()))
+        or not isinstance(anchor.get("boundary_mm"), list)
         for anchor in saved_anchors
     ):
         return False
@@ -1190,15 +1371,75 @@ def _saved_room_frames_match(
         current_by_room_key[room_key] = anchor
     if set(saved_by_room_key) != set(current_by_room_key):
         return False
+    for room_key, saved_circle_keys_for_room in saved_by_room_key.items():
+        if saved_circle_keys_for_room != {
+            str(key).casefold() for key in current_by_room_key[room_key]["circle_keys"]
+        }:
+            return False
+    if associations_valid is not None:
+        associations_valid[0] = True
+    all_frames_match = True
     for anchor in saved_anchors:
         room_key = str(anchor["room_key"]).casefold()
         current_anchor = current_by_room_key.get(room_key)
         if (
             current_anchor is None
-            or saved_by_room_key[room_key]
-            != {str(key).casefold() for key in current_anchor["circle_keys"]}
             or not _room_anchor_bounds_match(anchor, current_anchor)
             or not _room_frame_matches(anchor, current_anchor, room_geometry)
+        ):
+            all_frames_match = False
+            if failed_room_keys is not None:
+                failed_room_keys.add(room_key)
+    return all_frames_match
+
+
+def _saved_room_frames_have_strong_witnesses(
+    saved_anchors: Any,
+    circles: Sequence[Mapping[str, Any]],
+    floor_plan: FloorPlan,
+    room_geometry: RoomGeometryIndex,
+) -> bool:
+    """Require exact circle-room associations and strong immutable frame proof."""
+    if not isinstance(saved_anchors, list) or not saved_anchors:
+        return False
+    if any(
+        not isinstance(anchor, Mapping)
+        or not {"room_key", "circle_keys", "boundary_mm"}.issubset(anchor)
+        for anchor in saved_anchors
+    ):
+        return False
+    expected_circle_keys = {
+        _translation_circle_key(circle).casefold() for circle in circles
+    }
+    saved_by_room_key: dict[str, Mapping[str, Any]] = {}
+    for anchor in saved_anchors:
+        room_key = str(anchor["room_key"]).casefold()
+        if room_key in saved_by_room_key:
+            return False
+        saved_by_room_key[room_key] = anchor
+    saved_circle_keys = {
+        str(key).casefold() for anchor in saved_anchors for key in anchor["circle_keys"]
+    }
+    if saved_circle_keys != expected_circle_keys:
+        return False
+
+    current_anchors = _translation_room_anchors(
+        floor_plan, circles, room_geometry=room_geometry
+    )
+    current_by_room_key: dict[str, Mapping[str, Any]] = {}
+    for anchor in current_anchors:
+        room_key = str(anchor["room_key"]).casefold()
+        if room_key in current_by_room_key:
+            return False
+        current_by_room_key[room_key] = anchor
+    if set(saved_by_room_key) != set(current_by_room_key):
+        return False
+    for room_key, saved_anchor in saved_by_room_key.items():
+        current_anchor = current_by_room_key[room_key]
+        if {str(key).casefold() for key in saved_anchor["circle_keys"]} != {
+            str(key).casefold() for key in current_anchor["circle_keys"]
+        } or not _room_has_strong_frame_witnesses(
+            saved_anchor, current_anchor, room_geometry
         ):
             return False
     return True
@@ -1234,12 +1475,21 @@ def area_binding_status(
 
     if saved["mission_id"] != current["mission_id"]:
         return AreaBindingStatus.MISSION_CHANGED
+    saved_geometry = str(saved["geometry_sha256"]).casefold()
+    version = saved["version"]
+    partition_changed = saved["partition_id"] != current["partition_id"]
+    geometry_changed = saved_geometry != current["geometry_sha256"]
     if (
-        saved["partition_id"] != current["partition_id"]
-        and str(saved["geometry_sha256"]).casefold() != current["geometry_sha256"]
+        partition_changed
+        and geometry_changed
+        and saved["version"]
+        not in {
+            SCOPED_MAP_BINDING_VERSION,
+            ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+            SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+        }
     ):
         return AreaBindingStatus.PARTITION_CHANGED
-    saved_geometry = str(saved["geometry_sha256"]).casefold()
     if saved["version"] == MAP_BINDING_VERSION:
         if saved_geometry != current["geometry_sha256"]:
             return AreaBindingStatus.GEOMETRY_CHANGED
@@ -1263,6 +1513,7 @@ def area_binding_status(
         HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
         BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
         ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+        SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
     }:
         try:
             fingerprint = (
@@ -1287,6 +1538,7 @@ def area_binding_status(
                 in {
                     BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
                     ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+                    SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
                 }
                 and saved_geometry != current["geometry_sha256"]
             ):
@@ -1304,29 +1556,99 @@ def area_binding_status(
             # frame stayed fixed when the full map changed. Keep these areas
             # reviewable until room anchors are available for this version.
             return AreaBindingStatus.GEOMETRY_CHANGED
-        if saved["version"] == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION:
-            if str(saved["local_geometry_sha256"]).casefold() != local_geometry:
-                return (
-                    AreaBindingStatus.GEOMETRY_CHANGED
-                    if saved_geometry != current["geometry_sha256"]
-                    else AreaBindingStatus.INVALID
-                )
-            if saved_geometry != current["geometry_sha256"]:
+        if version in {
+            ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+            SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+        }:
+            if version == SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION:
                 try:
                     room_geometry = room_geometry or _room_geometry_index(floor_plan)
-                    if not _saved_room_frames_match(
+                    shape, _, _ = _area_geometry_components(
+                        floor_plan,
+                        area["circles"],
+                        center_tolerance=_LOCAL_GEOMETRY_TOLERANCE_METERS,
+                        room_geometry=room_geometry,
+                    )
+                except KeyError, OverflowError, TypeError, ValueError:
+                    return AreaBindingStatus.INVALID
+                if str(
+                    saved["area_shape_sha256"]
+                ).casefold() != _area_shape_fingerprint(shape):
+                    return AreaBindingStatus.INVALID
+            local_geometry_matches = (
+                str(saved["local_geometry_sha256"]).casefold() == local_geometry
+            )
+            if not local_geometry_matches and (
+                version == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+                or not geometry_changed
+            ):
+                return (
+                    AreaBindingStatus.GEOMETRY_CHANGED
+                    if geometry_changed
+                    else AreaBindingStatus.INVALID
+                )
+            if geometry_changed:
+                try:
+                    room_geometry = room_geometry or _room_geometry_index(floor_plan)
+                    failed_room_keys: set[str] = set()
+                    associations_valid: list[bool] = []
+                    frame_matches = _saved_room_frames_match(
                         saved["translation_room_anchors"],
                         area["circles"],
                         floor_plan,
                         room_geometry,
-                    ):
-                        return AreaBindingStatus.GEOMETRY_CHANGED
+                        failed_room_keys=failed_room_keys,
+                        associations_valid=associations_valid,
+                    )
+                    if not (local_geometry_matches and frame_matches):
+                        if (
+                            version
+                            != SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+                        ):
+                            return AreaBindingStatus.GEOMETRY_CHANGED
+                        if local_geometry_matches and associations_valid == [True]:
+                            bounded_saved_by_room_key = {
+                                str(anchor["room_key"]).casefold(): anchor
+                                for anchor in saved["translation_room_anchors"]
+                            }
+                            bounded_current_by_room_key = {
+                                str(anchor["room_key"]).casefold(): anchor
+                                for anchor in _translation_room_anchors(
+                                    floor_plan,
+                                    area["circles"],
+                                    room_geometry=room_geometry,
+                                )
+                            }
+                            all_required_proofs_match = bool(failed_room_keys) and all(
+                                room_key in bounded_saved_by_room_key
+                                and room_key in bounded_current_by_room_key
+                                and _room_has_strong_frame_witnesses(
+                                    bounded_saved_by_room_key[room_key],
+                                    bounded_current_by_room_key[room_key],
+                                    room_geometry,
+                                )
+                                for room_key in failed_room_keys
+                            )
+                        else:
+                            # Aggregate local drift cannot identify which room
+                            # moved. Incomplete associations also cannot count
+                            # as an empty set, so either case requires proof of
+                            # every room before the geometry-change bypass.
+                            all_required_proofs_match = (
+                                _saved_room_frames_have_strong_witnesses(
+                                    saved["translation_room_anchors"],
+                                    area["circles"],
+                                    floor_plan,
+                                    room_geometry,
+                                )
+                            )
+                        if not all_required_proofs_match:
+                            return AreaBindingStatus.GEOMETRY_CHANGED
                     if saved[
                         "translation_invariant_geometry_sha256"
                     ].casefold() == translation_invariant_geometry_fingerprint(
                         floor_plan
                     ):
-                        # The whole map only moved in its coordinate frame.
                         return AreaBindingStatus.GEOMETRY_CHANGED
                 except GeometryTooComplex, OverflowError, TypeError, ValueError:
                     return AreaBindingStatus.GEOMETRY_CHANGED
@@ -1384,6 +1706,7 @@ def area_binding_status(
         }
         if saved_circle_keys != expected_circle_keys:
             return AreaBindingStatus.GEOMETRY_CHANGED
+        frames_needing_witnesses: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
         try:
             current_anchors = _translation_room_anchors(
                 floor_plan, area["circles"], room_geometry=room_geometry
@@ -1396,24 +1719,59 @@ def area_binding_status(
             if room_key in current_by_room_key:
                 return AreaBindingStatus.GEOMETRY_CHANGED
             current_by_room_key[room_key] = anchor
+        saved_by_room_key: dict[str, Mapping[str, Any]] = {}
         for anchor in saved_anchors:
-            current_anchor = current_by_room_key.get(str(anchor["room_key"]).casefold())
-            if (
-                current_anchor is None
-                or not {str(key).casefold() for key in anchor["circle_keys"]}.issubset(
-                    {str(key).casefold() for key in current_anchor["circle_keys"]}
-                )
-                or not _room_anchor_bounds_match(anchor, current_anchor)
-            ):
+            room_key = str(anchor["room_key"]).casefold()
+            if room_key in saved_by_room_key:
+                return AreaBindingStatus.GEOMETRY_CHANGED
+            saved_by_room_key[room_key] = anchor
+        if set(saved_by_room_key) != set(current_by_room_key):
+            return AreaBindingStatus.GEOMETRY_CHANGED
+        for room_key, saved_anchor in saved_by_room_key.items():
+            current_anchor = current_by_room_key.get(room_key)
+            if current_anchor is None or {
+                str(key).casefold() for key in saved_anchor["circle_keys"]
+            } != {str(key).casefold() for key in current_anchor["circle_keys"]}:
                 return AreaBindingStatus.GEOMETRY_CHANGED
             try:
-                if not _room_frame_matches(anchor, current_anchor, room_geometry):
-                    return AreaBindingStatus.GEOMETRY_CHANGED
+                frame_matches = (
+                    not (partition_changed and "boundary_mm" not in saved_anchor)
+                    and _room_anchor_bounds_match(saved_anchor, current_anchor)
+                    and _room_frame_matches(saved_anchor, current_anchor, room_geometry)
+                )
+                if not frame_matches:
+                    frames_needing_witnesses.append((saved_anchor, current_anchor))
             except GeometryTooComplex:
                 return AreaBindingStatus.GEOMETRY_CHANGED
+        # Finish every room's established frame checks before optional work.
+        # One early refinement must not spend a later room's legacy budget.
+        # Legacy v3 records can omit the global digest needed by strong proof.
+        if frames_needing_witnesses:
+            if "translation_invariant_geometry_sha256" not in saved:
+                return AreaBindingStatus.GEOMETRY_CHANGED
+            try:
+                for saved_anchor, current_anchor in frames_needing_witnesses:
+                    if not _room_has_strong_frame_witnesses(
+                        saved_anchor, current_anchor, room_geometry
+                    ):
+                        return AreaBindingStatus.GEOMETRY_CHANGED
+            except GeometryTooComplex:
+                return AreaBindingStatus.GEOMETRY_CHANGED
+        all_frames_strongly_proven = len(frames_needing_witnesses) == len(
+            saved_by_room_key
+        )
         if _current_room_anchors is not None:
             _current_room_anchors.extend(current_anchors)
     local_geometry = _local_geometry_fingerprint(shape, occupancy, segments)
+    if saved_geometry != current["geometry_sha256"] and all_frames_strongly_proven:
+        try:
+            if saved[
+                "translation_invariant_geometry_sha256"
+            ].casefold() == translation_invariant_geometry_fingerprint(floor_plan):
+                return AreaBindingStatus.GEOMETRY_CHANGED
+        except GeometryTooComplex, OverflowError, TypeError, ValueError:
+            return AreaBindingStatus.GEOMETRY_CHANGED
+        return AreaBindingStatus.CURRENT
     if str(saved["local_geometry_sha256"]).casefold() == local_geometry:
         if (
             "translation_invariant_geometry_sha256" in saved
@@ -1450,7 +1808,22 @@ def area_binding_status(
         if saved_geometry != current["geometry_sha256"]:
             return AreaBindingStatus.GEOMETRY_CHANGED
         return AreaBindingStatus.INVALID
-    if saved_geometry != current["geometry_sha256"]:
+    if geometry_changed:
+        try:
+            if (
+                "translation_invariant_geometry_sha256" in saved
+                and _saved_room_frames_have_strong_witnesses(
+                    saved["translation_room_anchors"],
+                    area["circles"],
+                    floor_plan,
+                    room_geometry,
+                )
+                and saved["translation_invariant_geometry_sha256"].casefold()
+                != translation_invariant_geometry_fingerprint(floor_plan)
+            ):
+                return AreaBindingStatus.CURRENT
+        except GeometryTooComplex, OverflowError, TypeError, ValueError:
+            pass
         return AreaBindingStatus.GEOMETRY_CHANGED
     return AreaBindingStatus.INVALID
 
@@ -1498,13 +1871,18 @@ def _valid_saved_binding(binding: Mapping[str, Any]) -> bool:
         BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
     }:
         expected_fields = {*base_fields, "local_geometry_sha256"}
-    elif version == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION:
+    elif version in {
+        ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+        SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+    }:
         expected_fields = {
             *base_fields,
             "local_geometry_sha256",
             "translation_invariant_geometry_sha256",
             "translation_room_anchors",
         }
+        if version == SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION:
+            expected_fields.add("area_shape_sha256")
     else:
         expected_fields = {
             *base_fields,
@@ -1538,6 +1916,7 @@ def _valid_saved_binding(binding: Mapping[str, Any]) -> bool:
             HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
             BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
             ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+            SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
             SCOPED_MAP_BINDING_VERSION,
         }
         and not isinstance(mission_id, bool)
@@ -1560,6 +1939,15 @@ def _valid_saved_binding(binding: Mapping[str, Any]) -> bool:
             )
             or (
                 version == ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+                and _valid_digest(binding["local_geometry_sha256"])
+                and _valid_digest(binding["translation_invariant_geometry_sha256"])
+                and _valid_anchored_room_frame_anchors(
+                    binding["translation_room_anchors"]
+                )
+            )
+            or (
+                version == SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+                and _valid_digest(binding["area_shape_sha256"])
                 and _valid_digest(binding["local_geometry_sha256"])
                 and _valid_digest(binding["translation_invariant_geometry_sha256"])
                 and _valid_anchored_room_frame_anchors(
@@ -1615,6 +2003,7 @@ def area_binding_needs_geometry_index(area: Mapping[str, Any]) -> bool:
             HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
             BOUNDED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
             ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+            SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
             SCOPED_MAP_BINDING_VERSION,
         }
     )

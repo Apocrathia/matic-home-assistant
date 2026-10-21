@@ -1160,6 +1160,9 @@ test.describe("History", () => {
   test("the body says it once, lists floors with Live or Saved map trails and offers no row back", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "history-floors" });
     const panel = panelOf(gallery);
+    await expect(gallery.locator("matic-map-canvas-v4 .scene-window")).toHaveAttribute(
+      "aria-label", "Saved read-only map for Saved floor 1. Live robot position is hidden.",
+    );
     await expect(panel.getByText(/never show where the robot is now/)).toHaveCount(1);
     await expect(panel.getByText(/Return to current floor/)).toHaveCount(0);
     await expect(panel.getByText("Current", { exact: true })).toHaveCount(0);

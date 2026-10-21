@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import math
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 from io import BytesIO
 from itertools import combinations
+from typing import cast
 
 from google.protobuf.message import DecodeError
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
@@ -38,6 +40,8 @@ _COLORS = (
     "#6DC8EC",
     "#FF99C3",
 )
+POSE_MAX_AGE_SECONDS = 5.0
+POSE_FUTURE_ALLOWANCE_SECONDS = 2.0
 _BACKGROUND = (16, 21, 29, 255)  # "#10151D"
 _ROOM_FILL_ALPHA = 0x99
 _LABEL_BACKGROUND = (16, 21, 29, 0xCC)
@@ -228,31 +232,111 @@ def _decode_floor_plan_entry(
     )
 
 
-def decode_pose(payload: bytes) -> RobotPose:
+def decode_pose(
+    payload: bytes, *, mission_id: int | None = None, observed_at: float | None = None
+) -> RobotPose:
     """Decode the latest local robot translation across verified layouts."""
     try:
-        add_message = first_bytes(payload, 2)
-        pose_info = first_bytes(add_message, 1)
+        root_fields = decode_fields(payload, max_fields=32)
+        modern_fields = [field for field in root_fields if field.number == 2]
+        if len(modern_fields) != 1 or modern_fields[0].wire_type != 2:
+            raise DecodeError("pose modern envelope is ambiguous")
+        add_message = cast(bytes, modern_fields[0].value)
+        add_fields = decode_fields(add_message, max_fields=32)
+        info_fields = [
+            field
+            for field in add_fields
+            if field.number == 1
+            and field.wire_type == 2
+            and isinstance(field.value, bytes)
+        ]
+        if len(info_fields) != 1:
+            raise DecodeError("pose info is missing or ambiguous")
+        pose_info = info_fields[0].value
         components = tuple(
             field.value
-            for field in decode_fields(pose_info)
+            for field in decode_fields(cast(bytes, pose_info))
             if field.number == 1
             and field.wire_type in (2, 5)
             and isinstance(field.value, bytes)
         )
         if len(components) == 1:
             translation = packed_floats(components[0], 3)
-        elif len(components) >= 3:
-            translation = tuple(packed_floats(value, 1)[0] for value in components[:3])
+        elif len(components) == 3:
+            translation = tuple(packed_floats(value, 1)[0] for value in components)
         else:
             raise DecodeError("pose translation is incomplete")
     except DecodeError:
+        root_fields = decode_fields(payload, max_fields=32)
+        if any(field.number == 2 for field in root_fields):
+            raise DecodeError(
+                "pose has a malformed modern translation; legacy fallback is unsafe"
+            ) from None
         # An earlier observed layout stores the packed translation under field
         # 5 -> field 1. Accept only this verified fallback rather than scanning
         # for a plausible vector and risking a quaternion or unrelated value.
         pose_info = first_bytes(payload, 5)
+        # Timestamp messages also occupy field 5 in a newer native layout.
+        # Never treat their nested seconds/nanos fields as a vector fallback.
+        fields = decode_fields(pose_info)
+        timestamp_fields = [
+            field
+            for field in fields
+            if field.number == 1
+            and field.wire_type == 2
+            and isinstance(field.value, bytes)
+        ]
+        if len(timestamp_fields) == 1:
+            try:
+                timestamp_body = decode_fields(cast(bytes, timestamp_fields[0].value))
+            except DecodeError:
+                timestamp_body = ()
+            if any(
+                field.number in (1, 2) and field.wire_type == 0
+                for field in timestamp_body
+            ):
+                raise DecodeError(
+                    "pose contains a timestamp instead of a legacy vector"
+                ) from None
+        if any(field.number in (1, 2) and field.wire_type == 0 for field in fields):
+            raise DecodeError(
+                "pose contains a timestamp instead of a legacy vector"
+            ) from None
         translation = packed_floats(first_bytes(pose_info, 1), 3)
-    return RobotPose(x=translation[0], y=translation[1], z=translation[2])
+    return RobotPose(
+        x=translation[0],
+        y=translation[1],
+        z=translation[2],
+        mission_id=mission_id,
+        observed_at=observed_at,
+    )
+
+
+def pose_observation_age_seconds(
+    pose: RobotPose | None, *, now: float | None = None
+) -> float | None:
+    """Return age from native robot observation time, when available."""
+    if (
+        pose is None
+        or pose.observed_at is None
+        or not math.isfinite(pose.observed_at)
+        or pose.observed_at <= 0
+    ):
+        return None
+    return (time.time() if now is None else now) - pose.observed_at
+
+
+def pose_observation_is_current(
+    pose: RobotPose | None, floor_plan: FloorPlan | None, *, now: float | None = None
+) -> bool:
+    """Admit only a fresh native pose bound to this exact mission."""
+    if pose is None or floor_plan is None or pose.mission_id != floor_plan.mission_id:
+        return False
+    age = pose_observation_age_seconds(pose, now=now)
+    return (
+        age is not None
+        and -POSE_FUTURE_ALLOWANCE_SECONDS <= age <= POSE_MAX_AGE_SECONDS
+    )
 
 
 def pose_vector_paths(
@@ -422,6 +506,8 @@ def resolve_robot_map_position(
     floor_plan: FloorPlan | None,
     pose: RobotPose | None,
     current_area: str | None,
+    *,
+    now: float | None = None,
 ) -> tuple[float, float, str] | None:
     """Return only a current-floor exact pose for a positional map marker.
 
@@ -445,6 +531,8 @@ def resolve_robot_map_position(
     )
     if not valid_boundaries:
         return None
+    if not pose_observation_is_current(pose, floor_plan, now=now):
+        return None
     if pose is None or not all(math.isfinite(value) for value in (pose.x, pose.y)):
         return None
     if abs(pose.x) > MAX_MAP_COORDINATE or abs(pose.y) > MAX_MAP_COORDINATE:
@@ -456,9 +544,11 @@ def robot_location_source(
     floor_plan: FloorPlan | None,
     pose: RobotPose | None,
     current_area: str | None,
+    *,
+    now: float | None = None,
 ) -> str:
     """Classify exact position, room-only presence, or unavailable location."""
-    if resolve_robot_map_position(floor_plan, pose, current_area) is not None:
+    if resolve_robot_map_position(floor_plan, pose, current_area, now=now) is not None:
         return "exact_pose"
     if floor_plan is None or not floor_plan.rooms:
         return "unavailable"

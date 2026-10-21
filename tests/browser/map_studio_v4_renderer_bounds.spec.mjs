@@ -1,10 +1,63 @@
 import { expect, test } from "@playwright/test";
 import { build } from "esbuild";
+import { writeFile } from "node:fs/promises";
+
+test("scene parser retains native room labels up to the UTF-8 byte limit", async ({ page }) => {
+  const bundle = await build({
+    stdin: {
+      contents: 'export { parseSceneBuffer } from "./frontend/map-studio-v4/scene-parser";',
+      resolveDir: process.cwd(),
+    },
+    bundle: true,
+    format: "esm",
+    write: false,
+  });
+  await page.route("**/scene-parser.js", (route) => route.fulfill({
+    contentType: "text/javascript", body: bundle.outputFiles[0].text,
+  }));
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  const result = await page.evaluate(async () => {
+    const { parseSceneBuffer } = await import("/scene-parser.js");
+    const encode = (rooms) => {
+      const metadata = new TextEncoder().encode(JSON.stringify({
+        meters_per_cell: .05, origin_cells: [0, 0], span_cells: [10, 10],
+        rooms,
+      }));
+      const buffer = new ArrayBuffer(32 + metadata.length);
+      new Uint8Array(buffer).set(new TextEncoder().encode("MATIC3D\0"));
+      const view = new DataView(buffer);
+      view.setUint16(8, 1, true); view.setUint16(10, 8, true);
+      view.setUint32(12, metadata.length, true); view.setUint32(16, 1, true);
+      new Uint8Array(buffer, 24, metadata.length).set(metadata);
+      return parseSceneBuffer(buffer).metadata.rooms;
+    };
+    return {
+      ascii129: encode([{ name: "a".repeat(129), boundary: [[0,0], [1,0], [1,1]], center: [.5,.5] }]).length,
+      ascii256: encode([{ name: "a".repeat(256), boundary: [[0,0], [1,0], [1,1]], center: [.5,.5] }]).length,
+      ascii257: encode([{ name: "a".repeat(257), boundary: [[0,0], [1,0], [1,1]], center: [.5,.5] }]).length,
+      unicode256: encode([{ name: "é".repeat(128), boundary: [[0,0], [1,0], [1,1]], center: [.5,.5] }]).length,
+      overLimit: encode([{ name: "é".repeat(129), boundary: [[0,0], [1,0], [1,1]], center: [.5,.5] }]).length,
+      allLong: (() => {
+        const rooms = Array.from({ length: 256 }, (_, index) => ({
+          room_id: `room_${index.toString(16).padStart(16, "0")}`,
+          name: "x".repeat(256), boundary: [[0,0], [1,0], [1,1]], center: [.5,.5],
+        }));
+        const parsed = encode(rooms);
+        return { count: parsed.length, ids: parsed.map(({ id }) => id), namesRetained: parsed.every(({ name }) => name.length === 256) };
+      })(),
+    };
+  });
+  expect(result.ascii257).toBe(0);
+  expect(result.allLong.count).toBe(256);
+  expect(new Set(result.allLong.ids).size).toBe(256);
+  expect(result.allLong.namesRetained).toBe(true);
+  expect(result).toMatchObject({ ascii129: 1, ascii256: 1, unicode256: 1, overLimit: 0 });
+});
 
 test("precomputes room selection once for the supported 100-room bound", async ({ page }) => {
   const bundle = await build({
     stdin: {
-      contents: 'export { RendererController } from "./frontend/map-studio-v4/renderer-controller"; export { createGalleryState } from "./frontend/map-studio-v4/gallery-state";',
+      contents: 'export { RendererController } from "./frontend/map-studio-v4/renderer-controller"; export { createGalleryState } from "./frontend/map-studio-v4/gallery-state"; export { parseSceneBuffer } from "./frontend/map-studio-v4/scene-parser";',
       resolveDir: process.cwd(),
     },
     bundle: true,
@@ -98,7 +151,7 @@ test("precomputes room selection once for the supported 100-room bound", async (
 test("all 256 room colors stay distinct by room ID, retain selection and labels, and yield to forced colors", async ({ page }) => {
   const bundle = await build({
     stdin: {
-      contents: 'export { RendererController } from "./frontend/map-studio-v4/renderer-controller"; export { createGalleryState } from "./frontend/map-studio-v4/gallery-state";',
+      contents: 'export { RendererController } from "./frontend/map-studio-v4/renderer-controller"; export { createGalleryState } from "./frontend/map-studio-v4/gallery-state"; export { parseSceneBuffer } from "./frontend/map-studio-v4/scene-parser";',
       resolveDir: process.cwd(),
     },
     bundle: true,
@@ -112,7 +165,7 @@ test("all 256 room colors stay distinct by room ID, retain selection and labels,
   await page.goto("/", { waitUntil: "domcontentloaded" });
 
   const result = await page.evaluate(async () => {
-    const { RendererController, createGalleryState } = await import("/renderer-room-colors.js");
+    const { RendererController, createGalleryState, parseSceneBuffer } = await import("/renderer-room-colors.js");
     const base = createGalleryState("ready");
     const rooms = Array.from({ length: 256 }, (_, index) => {
       const left = index * 12;
@@ -151,6 +204,7 @@ test("all 256 room colors stay distinct by room ID, retain selection and labels,
     const capture = async (orderedRooms, options = {}, forced = false, dark = false) => {
       const fills = [];
       const strokes = [];
+      const widths = [];
       let textCount = 0;
       const originalFill = CanvasRenderingContext2D.prototype.fill;
       const originalStroke = CanvasRenderingContext2D.prototype.stroke;
@@ -160,7 +214,7 @@ test("all 256 room colors stay distinct by room ID, retain selection and labels,
         return originalFill.apply(this, args);
       };
       CanvasRenderingContext2D.prototype.stroke = function (...args) {
-        if (this.canvas === overlayCanvas) strokes.push(String(this.strokeStyle));
+        if (this.canvas === overlayCanvas) { strokes.push(String(this.strokeStyle)); widths.push(this.lineWidth); }
         return originalStroke.apply(this, args);
       };
       CanvasRenderingContext2D.prototype.fillText = function (...args) {
@@ -172,11 +226,12 @@ test("all 256 room colors stay distinct by room ID, retain selection and labels,
       renderer.setState(makeState(orderedRooms, options));
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       const diagnostics = renderer.diagnostics();
+      const png = options.preview ? overlayCanvas.toDataURL() : null;
       renderer.dispose();
       CanvasRenderingContext2D.prototype.fill = originalFill;
       CanvasRenderingContext2D.prototype.stroke = originalStroke;
       CanvasRenderingContext2D.prototype.fillText = originalFillText;
-      return { fills, strokes, textCount, renderedPoints: diagnostics.renderedPoints };
+      return { png, fills, strokes, widths, textCount, renderedPoints: diagnostics.renderedPoints };
     };
     const first = await capture(rooms);
     const reordered = await capture([...rooms].reverse());
@@ -184,11 +239,47 @@ test("all 256 room colors stay distinct by room ID, retain selection and labels,
     const forced = await capture(rooms, {}, true);
     const dark = await capture(rooms, {}, false, true);
     const photo = await capture(rooms, { appearance: "photo" });
+    const wireRooms = rooms.map((room, index) => ({
+      ...room, room_id: `room_${index.toString(16).padStart(16, "0")}`,
+    }));
+    const parseRooms = (raw) => {
+      const metadata = new TextEncoder().encode(JSON.stringify({
+        meters_per_cell: .05, origin_cells: [0,0], span_cells: [180,140], rooms: raw,
+      }));
+      const buffer = new ArrayBuffer(24 + metadata.length + 8);
+      new Uint8Array(buffer).set(new TextEncoder().encode("MATIC3D\0"));
+      const view = new DataView(buffer);
+      view.setUint16(8,1,true); view.setUint16(10,8,true);
+      view.setUint32(12,metadata.length,true); view.setUint32(16,1,true);
+      new Uint8Array(buffer,24,metadata.length).set(metadata);
+      return parseSceneBuffer(buffer).metadata.rooms;
+    };
+    const parsed = parseRooms(wireRooms);
+    const parsedReversed = parseRooms([...wireRooms].reverse());
+    const production = await capture(parsed);
+    const productionReversed = await capture(parsedReversed);
+    const legacy = parseRooms(wireRooms.map(({ room_id, ...room }) => room));
+    const duplicate = parseRooms([wireRooms[0], wireRooms[0], { ...wireRooms[1], room_id: "bad" }]);
+    const byName = (order, fills) => Object.fromEntries(order.map((room, index) => [room.name, fills[index]]));
+    const previewRooms = rooms.slice(0, 12).map((room, index) => {
+      const x = index % 4 * 45, y = Math.floor(index / 4) * 45;
+      return { ...room, id: `preview-${String(index).padStart(2, "0")}`,
+        boundary: [[x,y], [x+45,y], [x+45,y+45], [x,y+45]], center: [x+22.5,y+22.5] };
+    });
+    const previewLight = await capture(previewRooms, { labelsVisible: true, preview: true });
+    const previewDark = await capture(previewRooms, { labelsVisible: true, preview: true }, false, true);
     sceneCanvas.remove();
     overlayCanvas.remove();
     const byId = (order, fills) => Object.fromEntries(order.map((room, index) => [room.id, fills[index]]));
     return {
       first,
+      productionByName: byName(parsed, production.fills),
+      productionReversedByName: byName(parsedReversed, productionReversed.fills),
+      parsedIds: parsed.map((room) => room.id),
+      parsedCapCount: parseRooms([...wireRooms, wireRooms[0]]).length,
+      legacyIds: legacy.map((room) => room.id),
+      duplicateIds: duplicate.map((room) => room.id),
+      previewLight, previewDark,
       reordered,
       labeled,
       forced,
@@ -199,8 +290,40 @@ test("all 256 room colors stay distinct by room ID, retain selection and labels,
     };
   });
 
+  for (const [scheme, preview] of [["light", result.previewLight], ["dark", result.previewDark]]) {
+    const path = test.info().outputPath(`12-room-${scheme}.png`);
+    await writeFile(path, Buffer.from(preview.png.split(",")[1], "base64"));
+    await test.info().attach(`12-room-${scheme}`, { path, contentType: "image/png" });
+  }
+  expect(result.productionByName).toEqual(result.productionReversedByName);
+  expect(result.parsedIds).toEqual(Array.from({ length: 256 }, (_, index) => `room_${index.toString(16).padStart(16, "0")}`));
+  expect(result.parsedCapCount).toBe(256);
+  expect(result.legacyIds[0]).toBe("scene-room-1");
+  expect(new Set(result.duplicateIds).size).toBe(3);
   const selectedIndex = result.first.strokes.findIndex((style) => style === "#0c78c8");
   expect(result.first.strokes[selectedIndex]).toBe("#0c78c8");
+  expect(result.first.widths[selectedIndex]).toBe(3);
+  expect(result.first.widths.slice(0, 256).filter((_, index) => index !== selectedIndex).every((width) => width === 2)).toBe(true);
+  expect(result.first.strokes.slice(0, 256).filter((_, index) => index !== selectedIndex).every((style) => style === "#141e28")).toBe(true);
+  // Perceptual separation for the first sixteen rooms, beyond byte uniqueness.
+  const oklab = (style) => {
+    const [r, g, b] = style.match(/rgba\((\d+), (\d+), (\d+),/).slice(1, 4).map(Number)
+      .map((value) => value > 10 ? ((value / 255 + .055) / 1.055) ** 2.4 : value / 3294.6);
+    const l = Math.cbrt(.4122214708 * r + .5363325363 * g + .0514459929 * b);
+    const m = Math.cbrt(.2119034982 * r + .6806995451 * g + .1073969566 * b);
+    const s = Math.cbrt(.0883024619 * r + .2817188376 * g + .6299787005 * b);
+    return [.2104542553 * l + .793617785 * m - .0040720468 * s,
+      1.9779984951 * l - 2.428592205 * m + .4505937099 * s,
+      .0259040371 * l + .7827717662 * m - .808675766 * s];
+  };
+  const ids = Object.keys(result.firstById).sort().slice(0, 16);
+  for (const fills of [result.first.fills, result.dark.fills]) {
+    const order = Object.keys(result.firstById);
+    const colors = ids.map((id) => oklab(fills[order.indexOf(id)]));
+    const distances = colors.flatMap((color, index) => colors.slice(index + 1)
+      .map((other) => Math.hypot(...color.map((value, channel) => value - other[channel]))));
+    expect(Math.min(...distances)).toBeGreaterThan(.10);
+  }
   const roomCount = Object.keys(result.firstById).length;
   const roomFills = result.first.fills.slice(0, roomCount);
   const unselectedFills = roomFills.filter((_, index) => index !== selectedIndex);

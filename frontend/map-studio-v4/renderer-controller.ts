@@ -121,13 +121,22 @@ export const topView = (state: WorkspaceState): MapView => forcesTop(state) ? "t
 const roomColours = (state: WorkspaceState | null): boolean =>
   !!state && topView(state) === "top" && state.appearance === "rooms";
 
-// Encode the sorted room index in an 8×8×4 color grid. Its channel steps keep
-// all 256 supported rooms distinct after blending with the theme.
+// Put clearly separated hues first for ordinary homes. Larger maps retain a
+// unique color for every supported room; IDs, rather than metadata order,
+// determine the palette position. Boundaries and labels also identify rooms.
+const ROOM_COLORS: readonly Channel[] = [
+  [47, 158, 220], [13, 255, 13], [255, 13, 13], [215, 13, 255],
+  [255, 185, 115], [7, 140, 7], [13, 53, 255], [140, 63, 115],
+  [11, 217, 182], [255, 115, 185], [178, 129, 80], [35, 105, 140],
+  [137, 98, 217], [217, 11, 148], [150, 178, 9], [140, 74, 7],
+];
 const roomColor = (index: number, palette: CanvasPalette): Channel => {
   if (palette.forced) return palette.roomFill;
-  const color = [80 + Math.floor(index / 32) * 25, 80 + Math.floor(index / 4) % 8 * 25, 80 + index % 4 * 58];
-  return color.map((value, channel) => Math.round(value * .45
-    + (palette.roomFill[channel] ?? 0) * .55)) as unknown as Channel;
+  const slot = ((index - ROOM_COLORS.length) * 149 + 53) & 255;
+  const color = ROOM_COLORS[index] ?? [40 + Math.floor(slot / 32) * 30,
+    40 + Math.floor(slot / 4) % 8 * 30, 40 + slot % 4 * 70];
+  return color.map((value, channel) => Math.round(value * .8
+    + (palette.roomFill[channel] ?? 0) * .2)) as unknown as Channel;
 };
 
 const cameraPreferenceIsFit = (view: MapView, preference: CameraPreference | undefined): boolean => {
@@ -1506,8 +1515,9 @@ export class RendererController {
       for (const room of scene.metadata.rooms) {
         const selected = selectedNames.has(room.name.toLocaleLowerCase());
         if (!allRooms && !selected) continue;
+        context.lineWidth = selected ? 3 : roomColours(state) ? 2 : 1.5;
         context.strokeStyle = selected ? rgba(palette.accent, 1)
-          : palette.forced ? rgba(palette.text, 1) : rgba(palette.quiet, .7);
+          : roomColours(state) || palette.forced ? rgba(palette.text, 1) : rgba(palette.quiet, .7);
         context.fillStyle = roomColours(state)
           ? rgba(roomColor(roomIndexes.get(room.id) ?? 0, palette), .94)
           : selected ? rgba(palette.accent, .26) : rgba(palette.plate, .04);

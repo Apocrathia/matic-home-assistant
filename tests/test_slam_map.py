@@ -374,6 +374,7 @@ def test_encode_slam_scene_packs_floor_surface_rooms_and_neutral_color() -> None
         "sample_step": 1,
         "rooms": [
             {
+                "room_id": "room-1",
                 "name": "Synthetic room",
                 "boundary": [[0.0, 0.0], [32.0, 0.0], [32.0, 32.0], [0.0, 32.0]],
                 "boundary_closed": True,
@@ -447,6 +448,7 @@ def test_encode_slam_scene_clips_room_geometry_to_photographed_floor() -> None:
 
     assert metadata["rooms"] == [
         {
+            "room_id": "room-1",
             "name": "Synthetic room",
             "boundary": [[7.0, 5.0], [25.0, 5.0], [25.0, 20.0], [7.0, 20.0]],
             "boundary_closed": True,
@@ -507,6 +509,121 @@ def test_scene_header_parser_rejects_incomplete_and_inconsistent_payloads() -> N
         parse_slam_scene_header(scene[:8])
     with pytest.raises(DecodeError, match="invalid"):
         parse_slam_scene_header(scene[:-1])
+
+
+def test_encode_slam_scene_near_limit_preserves_all_room_identities() -> None:
+    from custom_components.matic_robot.client import slam_map as slam_map_module
+
+    source = decode_slam_tile(synthetic_slam_entry(page_x=0, page_y=0))
+    # A 151-cell serpentine floor has a long, real clipped contour. Twenty-five
+    # pages cover it; all 256 protocol-valid rooms share that photographed area.
+    # This makes the legacy metadata nearly 1 MiB without synthetic geometry.
+    side = 151
+    occupancy = np.zeros((side, side), dtype=bool)
+    occupancy[::2, :] = True
+    occupancy[1::2, -1] = True
+    tiles = []
+    for page_y in range(5):
+        for page_x in range(5):
+            floor = np.zeros((32, 32, 4), dtype=np.uint8)
+            rows = slice(page_y * 32, (page_y + 1) * 32)
+            columns = slice(page_x * 32, (page_x + 1) * 32)
+            floor_height = min(32, side - page_y * 32)
+            floor_width = min(32, side - page_x * 32)
+            floor_region = occupancy[rows, columns]
+            floor[:floor_height, :floor_width][floor_region] = (40, 50, 60, 255)
+            tiles.append(
+                SlamTile(
+                    page_x,
+                    page_y,
+                    source.mission_token,
+                    floor.tobytes(),
+                    source.surface_bits,
+                    source.rgb_data,
+                )
+            )
+    floor_plan = FloorPlan(
+        1,
+        "partition",
+        b"partition",
+        tuple(
+            Room(
+                f"room_{index:016x}",
+                "x" * 253 + f"{index:03}",
+                f"protocol-{index}",
+                f"room-{index}".encode(),
+                (
+                    (0, 0),
+                    (side * 0.015, 0),
+                    (side * 0.015, side * 0.015),
+                    (0, side * 0.015),
+                ),
+            )
+            for index in range(256)
+        ),
+    )
+    scene = encode_slam_scene(tuple(tiles), floor_plan=floor_plan)
+    header = parse_slam_scene_header(scene)
+    assert header.metadata_bytes < slam_map_module.MAX_SCENE_METADATA_BYTES
+    metadata_start = struct.calcsize("<8sHHIII")
+    metadata = json.loads(
+        scene[metadata_start : metadata_start + header.metadata_bytes]
+    )
+    assert len(metadata["rooms"]) == 256
+    assert [room["room_id"] for room in metadata["rooms"]] == [
+        f"room_{index:016x}" for index in range(256)
+    ]
+
+    # Reconstruct the previous wire shape: float coordinates and the optional
+    # boundary_closed flag, but no room IDs. This valid plan used to fit below
+    # the protocol cap, so the current encoder must preserve it with identities.
+    legacy_rooms = [
+        {
+            "name": room["name"],
+            "boundary": [
+                [float(value) for value in point] for point in room["boundary"]
+            ],
+            "boundary_closed": True,
+            "center": [float(value) for value in room["center"]],
+        }
+        for room in metadata["rooms"]
+    ]
+    legacy_metadata = json.dumps(
+        {key: value for key, value in metadata.items() if key != "rooms"}
+        | {"rooms": legacy_rooms},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode()
+    assert len(legacy_metadata) < slam_map_module.MAX_SCENE_METADATA_BYTES
+    uncompacted_metadata = json.dumps(
+        {key: value for key, value in metadata.items() if key != "rooms"}
+        | {
+            "rooms": [
+                room | {"room_id": current["room_id"]}
+                for room, current in zip(legacy_rooms, metadata["rooms"], strict=True)
+            ]
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode()
+    assert len(uncompacted_metadata) > slam_map_module.MAX_SCENE_METADATA_BYTES
+
+
+def test_scene_encoder_and_header_parser_share_the_metadata_limit(monkeypatch) -> None:
+    from custom_components.matic_robot.client import slam_map as slam_map_module
+
+    tile = decode_slam_tile(synthetic_slam_entry())
+    scene = encode_slam_scene((tile,))
+    metadata_bytes = parse_slam_scene_header(scene).metadata_bytes
+    monkeypatch.setattr(slam_map_module, "MAX_SCENE_METADATA_BYTES", metadata_bytes)
+    assert parse_slam_scene_header(encode_slam_scene((tile,))).metadata_bytes == (
+        metadata_bytes
+    )
+    monkeypatch.setattr(slam_map_module, "MAX_SCENE_METADATA_BYTES", metadata_bytes - 1)
+    with pytest.raises(DecodeError, match="metadata exceeds its byte limit"):
+        encode_slam_scene((tile,))
+    with pytest.raises(DecodeError, match="invalid SLAM scene payload"):
+        parse_slam_scene_header(scene)
 
 
 def test_encode_slam_scene_rejects_empty_unbounded_or_invisible_data() -> None:

@@ -23,6 +23,7 @@ from custom_components.matic_robot.client.api import (
     _async_recv_bounded_message,
     _BoundedStream,
     _decode_cleaning_session,
+    _decode_pose_observation_time,
     _decode_schedule,
     _decode_text_field,
     _uuid_candidates,
@@ -32,6 +33,10 @@ from custom_components.matic_robot.client.commands import (
     CleaningMode,
     CoverageSetting,
     UserCommand,
+)
+from custom_components.matic_robot.client.endpoints import (
+    HERMES_ENDPOINT_MAP,
+    HermesEndpointKind,
 )
 from custom_components.matic_robot.client.exceptions import (
     AuthenticationRequiredError,
@@ -66,6 +71,16 @@ from tests.wire_builders import _bfield, _fixed64, _vfield
 def _credential() -> HermesCredential:
     user = TokenRequest(user_id="40dd38c5-0492-49de-b333-41f16f67471e")
     return HermesCredential(b"synthetic-token", user.SerializeToString())
+
+
+def _pose_key(mission_id: int) -> bytes:
+    return bytes((0x15,)) + struct.pack("<I", mission_id)
+
+
+def _pose_payload(seconds: int = 1_800_000_000, nanos: int = 0) -> bytes:
+    translation = _bfield(1, _bfield(1, struct.pack("<3f", 1.0, 2.0, 0.0)))
+    timestamp = _bfield(1, _vfield(1, seconds) + _vfield(2, nanos))
+    return _bfield(2, translation) + _bfield(5, timestamp)
 
 
 class _Stream:
@@ -1439,6 +1454,11 @@ async def test_decode_wrappers_translate_malformed_payloads(monkeypatch) -> None
     client._channel = object()
     client.async_get_property = AsyncMock(return_value=b"bad")
 
+    async def pose_stream():
+        yield HermesCollectionEntry(_pose_key(42), _pose_payload())
+
+    client.async_subscribe_collection_entries = lambda _name: pose_stream()
+
     monkeypatch.setattr(
         "custom_components.matic_robot.client.api._decode_operational_state",
         lambda payload: (_ for _ in ()).throw(DecodeError()),
@@ -1449,7 +1469,7 @@ async def test_decode_wrappers_translate_malformed_payloads(monkeypatch) -> None
     )
     monkeypatch.setattr(
         "custom_components.matic_robot.client.api.decode_pose",
-        lambda payload: (_ for _ in ()).throw(DecodeError()),
+        lambda payload, **kwargs: (_ for _ in ()).throw(DecodeError()),
     )
 
     with pytest.raises(CannotConnectError, match="malformed robot state"):
@@ -1457,7 +1477,230 @@ async def test_decode_wrappers_translate_malformed_payloads(monkeypatch) -> None
     with pytest.raises(CannotConnectError, match="malformed floor plan"):
         await client.async_get_floor_plan()
     with pytest.raises(CannotConnectError, match="malformed robot pose"):
+        await client.async_get_pose(expected_mission_id=42)
+
+
+async def test_pose_requires_expected_mission_without_reading() -> None:
+    client = MaticHermesClient("robot.invalid", 16320)
+    client.async_subscribe_collection_entries = AsyncMock()
+    with pytest.raises(CannotConnectError, match="active mission identity"):
         await client.async_get_pose()
+    client.async_subscribe_collection_entries.assert_not_awaited()
+
+
+@pytest.mark.parametrize("mission_id", [True, -1, 0x1_0000_0000, "42"])
+async def test_pose_rejects_invalid_expected_mission_before_read(mission_id) -> None:
+    client = MaticHermesClient("robot.invalid", 16320)
+    client.async_subscribe_collection_entries = AsyncMock()
+    with pytest.raises(CannotConnectError, match="active mission identity"):
+        await client.async_get_pose(expected_mission_id=mission_id)
+    client.async_subscribe_collection_entries.assert_not_awaited()
+
+
+def test_latest_pose_endpoint_is_a_keyed_collection() -> None:
+    endpoint = HERMES_ENDPOINT_MAP["latest_pose"]
+    assert endpoint.kind is HermesEndpointKind.COLLECTION
+    assert endpoint.tracked
+
+
+@pytest.mark.parametrize("payload", [_bfield(2, b""), _bfield(5, b"")])
+def test_pose_timestamp_requires_both_native_layers(payload: bytes) -> None:
+    with pytest.raises(DecodeError):
+        _decode_pose_observation_time(payload)
+
+
+async def test_pose_selects_active_mission_without_first_record_guessing() -> None:
+    client = MaticHermesClient("robot.invalid", 16320)
+    closed = []
+
+    async def entries():
+        try:
+            yield HermesCollectionEntry(_pose_key(84), _pose_payload())
+            yield HermesCollectionEntry(_pose_key(42), _pose_payload(1_800_000_000, 10))
+            raise AssertionError("same-key updates after selection must not be read")
+        finally:
+            closed.append(True)
+
+    client.async_subscribe_collection_entries = lambda _name: entries()
+    pose = await client.async_get_pose(expected_mission_id=42)
+    assert (pose.x, pose.y, pose.z, pose.mission_id) == (1.0, 2.0, 0.0, 42)
+    assert pose.observed_at == 1_800_000_000.00000001
+    assert closed == [True]
+
+
+async def test_pose_acknowledges_foreign_before_selecting_active_record(
+    monkeypatch,
+) -> None:
+    checkpoint = SequenceId(start_ts_nanos=7, sequence_no=1)
+    foreign = SequenceId(start_ts_nanos=7, sequence_no=2)
+    active = SequenceId(start_ts_nanos=7, sequence_no=3)
+    repeated = SequenceId(start_ts_nanos=7, sequence_no=4)
+    stream = _BidirectionalSequenceStream(
+        [
+            SimpleNamespace(
+                HasField=lambda field: field == "sequence_id",
+                sequence_id=checkpoint,
+            ),
+            _collection_response(
+                direct=_pose_payload(), key=_pose_key(84), sequence_id=foreign
+            ),
+            _collection_response(
+                direct=_pose_payload(), key=_pose_key(42), sequence_id=active
+            ),
+            _collection_response(
+                direct=_pose_payload(1_800_000_001),
+                key=_pose_key(42),
+                sequence_id=repeated,
+            ),
+        ]
+    )
+    method = _OpenMethod(stream)
+    monkeypatch.setattr(
+        "custom_components.matic_robot.client.api.HermesStub",
+        lambda channel: SimpleNamespace(FetchCollection=method),
+    )
+    client = MaticHermesClient("robot.invalid", 16320, credential=_credential())
+    client._channel = object()
+
+    pose = await client.async_get_pose(expected_mission_id=42)
+
+    assert pose.observed_at == 1_800_000_000
+    assert [request.sequence_id for request in stream.requests[1:]] == [
+        checkpoint,
+        foreign,
+        active,
+    ]
+    assert stream.requests[0].initial_request.collection_name == "latest_pose"
+
+
+async def test_pose_returns_first_active_key_sample_despite_later_updates() -> None:
+    client = MaticHermesClient("robot.invalid", 16320)
+    closed = []
+
+    async def entries():
+        try:
+            yield HermesCollectionEntry(_pose_key(42), _pose_payload())
+            yield HermesCollectionEntry(_pose_key(42), _pose_payload(1_800_000_001))
+        finally:
+            closed.append(True)
+
+    client.async_subscribe_collection_entries = lambda _name: entries()
+    pose = await client.async_get_pose(expected_mission_id=42)
+    assert pose.observed_at == 1_800_000_000
+    assert closed == [True]
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        lambda: (HermesCollectionEntry(b"bad", _pose_payload()),),
+        lambda: (HermesCollectionEntry(b"\x0d\x01\x00\x00\x00", _pose_payload()),),
+        lambda: (HermesCollectionEntry(_pose_key(84), _pose_payload()),),
+        lambda: (
+            HermesCollectionEntry(_pose_key(42), _pose_payload(1, 1_000_000_000)),
+        ),
+        lambda: (HermesCollectionEntry(_pose_key(42), _pose_payload()[:-15]),),
+        lambda: (
+            HermesCollectionEntry(
+                _pose_key(42),
+                _bfield(2, _bfield(1, _bfield(1, struct.pack("<3f", 1, 2, 0))))
+                + _bfield(5, b""),
+            ),
+        ),
+        lambda: (HermesCollectionEntry(_pose_key(42) + b"x", _pose_payload()),),
+        lambda: (HermesCollectionEntry(_pose_key(42), b"x" * 16_385),),
+        lambda: tuple(
+            HermesCollectionEntry(_pose_key(84 + i), _pose_payload()) for i in range(65)
+        ),
+    ],
+    ids=(
+        "malformed-key",
+        "noncanonical-key",
+        "no-active",
+        "malformed-time",
+        "missing-timestamp",
+        "missing-timestamp-value",
+        "oversized-key",
+        "oversized-value",
+        "entry-bound",
+    ),
+)
+async def test_pose_rejects_ambiguous_or_malformed_collection(entries) -> None:
+    client = MaticHermesClient("robot.invalid", 16320)
+
+    async def stream():
+        for entry in entries():
+            yield entry
+
+    client.async_subscribe_collection_entries = lambda _name: stream()
+    with pytest.raises(CannotConnectError, match="pose"):
+        await client.async_get_pose(expected_mission_id=42)
+
+
+async def test_pose_read_times_out_and_closes_stream(monkeypatch) -> None:
+    client = MaticHermesClient("robot.invalid", 16320)
+    closed = []
+
+    async def stream():
+        try:
+            await asyncio.Event().wait()
+            yield HermesCollectionEntry(_pose_key(42), _pose_payload())
+        finally:
+            closed.append(True)
+
+    client.async_subscribe_collection_entries = lambda _name: stream()
+    monkeypatch.setattr(
+        "custom_components.matic_robot.client.api._LATEST_POSE_READ_TIMEOUT", 0.001
+    )
+    with pytest.raises(CannotConnectError, match="time bound"):
+        await client.async_get_pose(expected_mission_id=42)
+    assert closed == [True]
+
+
+async def test_pose_deadline_exhausted_before_read_closes_iterator(monkeypatch) -> None:
+    client = MaticHermesClient("robot.invalid", 16320)
+    closed = []
+
+    class Iterator:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise AssertionError("deadline should stop before reading")
+
+        async def aclose(self):
+            closed.append(True)
+
+    client.async_subscribe_collection_entries = lambda _name: Iterator()
+    monkeypatch.setattr(
+        "custom_components.matic_robot.client.api.monotonic",
+        iter((10.0, 14.0)).__next__,
+    )
+    with pytest.raises(CannotConnectError, match="time bound"):
+        await client.async_get_pose(expected_mission_id=42)
+    assert closed == [True]
+
+
+async def test_pose_read_cancellation_closes_stream() -> None:
+    client = MaticHermesClient("robot.invalid", 16320)
+    started = asyncio.Event()
+    closed = []
+
+    async def stream():
+        try:
+            started.set()
+            await asyncio.Event().wait()
+            yield HermesCollectionEntry(_pose_key(42), _pose_payload())
+        finally:
+            closed.append(True)
+
+    client.async_subscribe_collection_entries = lambda _name: stream()
+    task = asyncio.create_task(client.async_get_pose(expected_mission_id=42))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert closed == [True]
 
 
 @pytest.mark.parametrize("expected_mission_id", [None, 42])

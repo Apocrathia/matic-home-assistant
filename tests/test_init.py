@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import math
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
@@ -27,6 +29,14 @@ from custom_components.matic_robot import (
     async_setup,
     async_setup_entry,
     async_unload_entry,
+)
+from custom_components.matic_robot.area_binding import (
+    AREA_SCHEMA_VERSION,
+    SCOPED_MAP_BINDING_VERSION,
+    SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+    AreaBindingStatus,
+    area_binding_status,
+    binding_for_area,
 )
 from custom_components.matic_robot.client.exceptions import CannotConnectError
 from custom_components.matic_robot.client.models import (
@@ -1388,6 +1398,221 @@ async def test_setup_refreshes_before_forwarding_platforms(
         entry.async_create_background_task.call_args.args[2]
         == "matic_robot custom area binding upgrade"
     )
+
+
+@pytest.mark.parametrize(
+    ("binding_version", "expected_version"),
+    [
+        (SCOPED_MAP_BINDING_VERSION, SCOPED_MAP_BINDING_VERSION),
+        (
+            SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+            SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION,
+        ),
+    ],
+)
+async def test_setup_listener_keeps_current_area_quiet_on_safe_map_refresh(
+    hass, binding_version: int, expected_version: int
+) -> None:
+    """The real setup listener must not alert/rebind current areas on safe churn."""
+    serial = "synthetic-serial"
+    room_boundary = (
+        ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))
+        if binding_version == SCOPED_MAP_BINDING_VERSION
+        else tuple(
+            (
+                0.5 + 0.45 * math.cos(2 * math.pi * index / 320),
+                0.5 + 0.45 * math.sin(2 * math.pi * index / 320),
+            )
+            for index in range(320)
+        )
+    )
+    original = FloorPlan(
+        42,
+        "synthetic-partition",
+        b"synthetic-partition",
+        (Room("room", "Room", "room", b"room", room_boundary),),
+    )
+    circles = [{"x": 0.5, "y": 0.5, "radius": 0.2}]
+    current_area = {
+        "schema_version": AREA_SCHEMA_VERSION,
+        "name": "Current zone",
+        "circles": circles,
+        "cleaning_mode": "vacuum",
+        "coverage_setting": "standard",
+        "map_binding": binding_for_area(original, circles),
+    }
+    assert current_area["map_binding"]["version"] == expected_version
+    if binding_version == SCOPED_MAP_BINDING_VERSION:
+        anchors = current_area["map_binding"]["translation_room_anchors"]
+        assert anchors
+        assert all("boundary_mm" in anchor for anchor in anchors)
+
+    # This separately retained reviewable legacy area keeps the coordinator's
+    # binding-upgrade work pending, so the actual setup callback schedules the
+    # manager operation while the current binding is checked for stability.
+    old_frame = replace(
+        original,
+        rooms=tuple(
+            replace(
+                room,
+                boundary=tuple((x + 0.1, y) for x, y in room.boundary),
+            )
+            for room in original.rooms
+        ),
+    )
+    legacy_circles = [{"x": 0.5, "y": 0.5, "radius": 0.1}]
+    legacy_area = {
+        "schema_version": AREA_SCHEMA_VERSION,
+        "name": "Needs review",
+        "circles": legacy_circles,
+        "cleaning_mode": "vacuum",
+        "coverage_setting": "standard",
+        "map_binding": {
+            key: value
+            for key, value in binding_for_area(old_frame, legacy_circles).items()
+            if key
+            not in {"translation_invariant_geometry_sha256", "translation_room_anchors"}
+        },
+    }
+    legacy_area["map_binding"]["version"] = 4
+
+    manager = CleaningPlanManager(hass)
+    manager._store = SimpleNamespace(async_save=AsyncMock())
+    robot = manager._robot(serial)
+    robot["areas"].update({"current": current_area, "legacy": legacy_area})
+    robot["plans"]["area-plan"] = {
+        "id": "area-plan",
+        "name": "Area plan",
+        "enabled": True,
+        "run_behavior": "saved_order",
+        "rooms": [],
+        "entries": [
+            {
+                "kind": "area",
+                "area_id": "current",
+                "cleaning_mode": "vacuum",
+                "coverage_setting": "standard",
+            }
+        ],
+        "return_to_base": True,
+    }
+    current_record = current_area.copy()
+    current_binding = current_area["map_binding"].copy()
+
+    coordinator_unsubscribe = MagicMock()
+    plan_unsubscribe = MagicMock()
+    # The first coordinator read has no usable floor, leaving the legacy
+    # binding upgrade pending until the safe map refresh is observed.
+    initial = None
+    coordinator = SimpleNamespace(
+        async_config_entry_first_refresh=AsyncMock(),
+        async_add_listener=MagicMock(return_value=coordinator_unsubscribe),
+        async_watch_cues=AsyncMock(),
+        async_watch_floor_plan=AsyncMock(),
+        displayed_floor_mission_id=None,
+        data=SimpleNamespace(floor_plan=initial),
+    )
+    manager.async_add_listener = MagicMock(return_value=plan_unsubscribe)
+    scheduled_upgrades = []
+
+    def capture_task(_hass, target, name):
+        if name == "matic_robot custom area binding upgrade":
+            scheduled_upgrades.append(target)
+        else:
+            target.close()
+
+    entry = _entry()
+    entry.async_create_background_task.side_effect = capture_task
+    client = MagicMock()
+    client.async_get_cleaning_session_records = AsyncMock(return_value=())
+    client.async_send_command = AsyncMock()
+    slam_map = SimpleNamespace(
+        async_load=AsyncMock(),
+        set_expected_mission_id=MagicMock(),
+        async_prime=AsyncMock(),
+        async_collect=MagicMock(),
+        async_shutdown=AsyncMock(),
+        async_add_listener=MagicMock(return_value=MagicMock()),
+        floor_plan_is_current=MagicMock(return_value=True),
+        mission_identity=None,
+    )
+    slam_history = SimpleNamespace(async_load=AsyncMock(), async_shutdown=AsyncMock())
+    hass.data.setdefault(DOMAIN, {})[DATA_PLAN_MANAGER] = manager
+    hass.data[DOMAIN][DATA_FIRMWARE_TRACKER] = MagicMock()
+    with (
+        patch.object(
+            hass.config_entries,
+            "async_forward_entry_setups",
+            new_callable=AsyncMock,
+        ),
+        patch("custom_components.matic_robot.MaticHermesClient", return_value=client),
+        patch(
+            "custom_components.matic_robot.MaticCoordinator", return_value=coordinator
+        ),
+        patch("custom_components.matic_robot.HermesCredential.from_storage"),
+        patch("custom_components.matic_robot.SlamMapStore", return_value=slam_map),
+        patch(
+            "custom_components.matic_robot.SlamHistoryStore", return_value=slam_history
+        ),
+        patch(
+            "custom_components.matic_robot.async_collect_slam_history",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "custom_components.matic_robot.area_binding.ir.async_create_issue"
+        ) as create_issue,
+    ):
+        assert await async_setup_entry(hass, entry) is True
+        sync_callback = coordinator.async_add_listener.call_args.args[0]
+        refresh = replace(
+            original,
+            partition_protocol_id="refreshed-partition",
+            partition_id_wire=b"refreshed-partition",
+            rooms=(
+                *original.rooms,
+                Room(
+                    "remote",
+                    "Remote room",
+                    "remote",
+                    b"remote",
+                    ((3.0, 0.0), (4.0, 0.0), (4.0, 1.0), (3.0, 1.0)),
+                ),
+            ),
+        )
+        # Simulate the reviewable legacy record being removed between startup
+        # and the new-map notification. Its pending retry still exercises the
+        # listener's real scheduling path, while the remaining current v5 area
+        # is the only saved target whose notification behavior is measured.
+        manager._robot(serial)["areas"].pop("legacy")
+        coordinator.data.floor_plan = refresh
+        sync_callback()
+        assert len(scheduled_upgrades) == 1
+        await scheduled_upgrades.pop()
+        # Repeated callbacks on the same snapshot and another safe refresh
+        # must keep the confirmed binding quiet without scheduling writes.
+        sync_callback()
+        later_refresh = replace(
+            refresh,
+            partition_protocol_id="later-partition",
+            partition_id_wire=b"later-partition",
+        )
+        coordinator.data.floor_plan = later_refresh
+        sync_callback()
+
+    assert current_area == current_record
+    assert current_area["map_binding"] == current_binding
+    assert area_binding_status(current_area, later_refresh) is AreaBindingStatus.CURRENT
+    create_issue.assert_not_called()
+    assert manager._store.async_save.await_count == 0
+    preview = manager.preview(
+        serial,
+        {room.id: room.name for room in later_refresh.rooms},
+        "area-plan",
+        floor_plan=later_refresh,
+    )
+    assert preview["valid"] is True
+    assert [entry["area_id"] for entry in preview["entries"]] == ["current"]
+    client.async_send_command.assert_not_awaited()
 
 
 async def test_setup_closes_client_when_first_refresh_fails() -> None:

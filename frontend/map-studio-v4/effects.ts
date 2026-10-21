@@ -103,21 +103,6 @@ const NOTICES = {
 const savedMapNotice = (createdAt: string): WorkspaceNotice =>
   notice("warning", "v4_notice_saved_map", "Showing the saved map from {date} without the robot's position.", { date: { date: createdAt } });
 
-/** Coverage guard rejections, keyed by the service error's Matic `translation_key`. */
-const COVERAGE_GUARD_NOTICES: Readonly<Record<string, WorkspaceNotice>> = {
-  coverage_identity_unavailable: notice("error", "v4_notice_coverage_task_unknown", "Home Assistant can't confirm the current clean, so check the robot first."),
-  coverage_activity_unavailable: notice("error", "v4_notice_coverage_activity_unknown", "Home Assistant can't confirm whether the robot is cleaning, so check it first."),
-  coverage_native_session_active: notice("error", "v4_notice_coverage_robot_busy", "The robot is already cleaning, so wait for it to finish."),
-  coverage_identity_changed: notice("error", "v4_notice_coverage_task_changed", "The clean changed while starting, so check the robot first."),
-};
-
-const coverageGuardNotice = (error: unknown): WorkspaceNotice | null => {
-  const { translation_domain: domain, translation_key: key } = (error ?? {}) as Record<string, unknown>;
-  return domain === "matic_robot" && typeof key === "string" && Object.hasOwn(COVERAGE_GUARD_NOTICES, key)
-    ? COVERAGE_GUARD_NOTICES[key] ?? null
-    : null;
-};
-
 const entryBoundaryKey = (entry: MapEntry): string => [
   entry.entryId,
   entry.selectedFloorOrdinal ?? 0,
@@ -207,6 +192,7 @@ export class EffectController {
   #projection: HassProjection | null = null;
   #catalogTimer: number | null = null;
   #poseTimer: number | null = null;
+  #poseExpiryTimer: number | null = null;
   #settleTimer: number | null = null;
   #motionRevision = 0;
   #catalogLoading = false;
@@ -268,6 +254,7 @@ export class EffectController {
     // abort. Retained geometry and drafts stay available as read-only context.
     this.#invalidateSpatialFence(false, MUTATION_RESOURCES);
     this.#stopPolling();
+    this.#clearPoseExpiry();
     // A transmitted write cannot be undone by aborting its acknowledgement.
     // Keep its independent owner until it settles or its scope changes.
     // Robot settings survive map changes; coordinate writes keep their frame.
@@ -923,6 +910,11 @@ export class EffectController {
     this.#catalogTimer = null;
     this.#poseTimer = null;
     this.#clearSpatialReadRecovery();
+  }
+
+  #clearPoseExpiry(): void {
+    if (this.#poseExpiryTimer !== null) window.clearTimeout(this.#poseExpiryTimer);
+    this.#poseExpiryTimer = null;
   }
 
   #clearSpatialReadRecovery(): void {
@@ -1804,6 +1796,7 @@ export class EffectController {
     }
     this.#poseLoading = true;
     const controller = this.#controller("pose");
+    const requestStartedAt = performance.now();
     try {
       const pose = await this.#backend.pose(entry.poseUrl, controller.signal);
       const current = this.#coherence.current();
@@ -1826,30 +1819,19 @@ export class EffectController {
           resources: { ...this.#store.value.resources, pose: resource("idle", null) },
           map: { ...this.#store.value.map, exactPose: false },
         });
+        this.#clearPoseExpiry();
         this.#recordSpatialReadFailure("pose", currentEntry);
         return;
       }
       this.#resolveSpatialReadFailure("pose", currentEntry);
       const state = this.#store.value;
-      const previousPose = state.resources.pose.value;
-      const canRetainVerifiedPose = Boolean(state.map.exactPose
-        && previousPose?.position
-        && previousPose.mapSessionKey === currentEntry.mapSessionKey);
-      if (pose.position === null && canRetainVerifiedPose) {
-        // A successful pose read can still briefly contain no coordinate while
-        // the robot relocalizes or crosses an internal room boundary. Keep the
-        // last verified point for the same floor/session instead of blinking
-        // the marker off, then retry on the next one-second tick. A first load
-        // without a point, a floor change, or a session change still clears it
-        // through the identity checks above.
-        this.#store.patch({
-          resources: {
-            ...state.resources,
-            pose: resource("ready", previousPose),
-          },
-        });
-        return;
-      }
+      const requestElapsedMs = Math.max(0, performance.now() - requestStartedAt);
+      const ageKnown = pose.nativeObservationAgeSeconds === undefined
+        || typeof pose.nativeObservationAgeSeconds === "number";
+      const remainingFreshMs = (5_000 - (pose.nativeObservationAgeSeconds ?? 0) * 1_000) - requestElapsedMs;
+      const exactLivePose = pose.position !== null && pose.freshness === "live"
+        && ageKnown && remainingFreshMs > 0;
+      this.#clearPoseExpiry();
       this.#store.patch({
         resources: {
           ...state.resources,
@@ -1857,30 +1839,49 @@ export class EffectController {
         },
         map: {
           ...state.map,
-          // A coordinator fallback is still an exact robot coordinate after
-          // the endpoint has bound it to this verified floor and map session.
-          // Freshness controls how quickly the point advances, not whether it
-          // is safe to render.
-          exactPose: pose.position !== null,
+          // Only a live response can confirm the current robot position. A
+          // coordinator fallback has no independently verifiable freshness.
+          exactPose: exactLivePose,
         },
       });
+      if (exactLivePose) {
+        this.#poseExpiryTimer = window.setTimeout(() => {
+          this.#poseExpiryTimer = null;
+          const latest = this.#store.value;
+          const latestStamp = this.#coherence.current();
+          const latestEntry = latest.resources.entry;
+          if (latest.resources.pose.value !== pose || !latest.map.exactPose
+            || !latestStamp || !sameCoherenceGeneration(stamp, latestStamp)
+            || !latestEntry || latestEntry.mapSessionKey !== pose.mapSessionKey
+            || !latest.map.floorCoherent) return;
+          this.#store.patch({
+            resources: { ...latest.resources, pose: resource("idle", null) },
+            map: { ...latest.map, exactPose: false },
+          });
+        }, remainingFreshMs);
+      }
     } catch (error) {
-      if (isAbort(error) || !this.#coherence.accepts(stamp)) return;
+      const current = this.#coherence.current();
+      const currentEntry = this.#store.value.resources.entry;
+      if (isAbort(error)
+        || !this.#coherence.accepts(stamp)
+        || !current
+        || !sameCoherenceGeneration(stamp, current)
+        || !currentEntry
+        || currentEntry.mapSessionKey !== entry.mapSessionKey
+        || !this.#store.value.map.floorCoherent) return;
       const state = this.#store.value;
-      const previousPose = state.resources.pose.value;
-      const canRetainVerifiedPose = Boolean(state.map.exactPose
-        && previousPose?.position
-        && previousPose.mapSessionKey === state.resources.entry?.mapSessionKey);
+      this.#clearPoseExpiry();
       this.#store.patch({
         resources: {
           ...state.resources,
           pose: resource(
             "error",
-            canRetainVerifiedPose ? previousPose : null,
+            null,
             problemCode(error, "pose-unavailable"),
           ),
         },
-        map: { ...state.map, exactPose: canRetainVerifiedPose },
+        map: { ...state.map, exactPose: false },
       });
     } finally {
       this.#release("pose", controller);
@@ -2214,6 +2215,10 @@ export class EffectController {
     const owner = this.#currentPinsOwner();
     if (owner === this.#pinsOwner) return;
     this.#pinsOwner = owner;
+    // A transient owner loss can be followed by the same user/robot tuple.
+    // Its prior read belongs to the old runtime incarnation, so allow the
+    // resumed workspace to read that owner's persisted shortcuts again.
+    this.#pinsReadFor = null;
     this.#pinsEpoch += 1;
     this.#pinsToken += 1;
     this.#homePinsPersistence?.reset();
@@ -2682,9 +2687,19 @@ export class EffectController {
       }, 15_000);
     } catch (error) {
       if (!current()) return;
+      let failureNotice: WorkspaceNotice;
+      if (stopping) {
+        failureNotice = NOTICES.stopUnconfirmed;
+      } else {
+        const writes = await this.#catalogWritesModule();
+        if (!current()) return;
+        failureNotice = writes?.coverageGuardNotice(CATALOG_WRITE_HELPERS.notice, error)
+          ?? NOTICES.actionUnconfirmed;
+      }
+      if (!current()) return;
       this.#store.patch({
         command: "failed",
-        notice: stopping ? NOTICES.stopUnconfirmed : coverageGuardNotice(error) ?? NOTICES.actionUnconfirmed,
+        notice: failureNotice,
       });
     }
   }
@@ -2702,6 +2717,7 @@ export class EffectController {
     this.#storeUnsubscribe = null;
     this.#store.patch({ manualRoomPreview: resource("idle", null), rechecking: false });
     this.#stopPolling();
+    this.#clearPoseExpiry();
     this.#abortResources();
     if (this.#settleTimer !== null) window.clearTimeout(this.#settleTimer);
     this.#settleTimer = null;

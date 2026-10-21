@@ -7,6 +7,7 @@ import json
 from dataclasses import replace
 from datetime import UTC, datetime
 from http import HTTPStatus
+from time import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -101,9 +102,13 @@ def _floor_plan() -> FloorPlan:
     )
 
 
+def _fresh_pose(x: float, y: float, z: float) -> RobotPose:
+    return RobotPose(x, y, z, mission_id=1, observed_at=time())
+
+
 def _runtime(*, entries=None, revision: int = 7, pose=True) -> SimpleNamespace:
     floor_plan = _floor_plan()
-    robot_pose = RobotPose(0.1, 0.2, 0.0) if pose else None
+    robot_pose = _fresh_pose(0.1, 0.2, 0.0) if pose else None
     map_entries = (
         entries
         if entries is not None
@@ -879,9 +884,15 @@ async def test_pose_view_returns_exact_fallback_and_unavailable_positions() -> N
     hass = _hass(_entry(runtime))
     view = MaticSlamPoseView()
 
-    with patch(
-        "custom_components.matic_robot.slam_scene.monotonic",
-        side_effect=(10.0, 10.0, 10.0, 10.0, 10.25, 10.25),
+    with (
+        patch(
+            "custom_components.matic_robot.slam_scene.monotonic",
+            side_effect=(10.0, 10.0, 10.0, 10.0, 10.25, 10.25),
+        ),
+        patch(
+            "custom_components.matic_robot.slam_scene.time",
+            return_value=runtime.coordinator.data.pose.observed_at,
+        ),
     ):
         exact = await view.get(_request(hass), "entry")
         cached = await view.get(_request(hass), "entry")
@@ -895,10 +906,14 @@ async def test_pose_view_returns_exact_fallback_and_unavailable_positions() -> N
         "map_floor_coherent": True,
         "pose_revision": 1,
         "pose_age_seconds": 0.0,
+        "pose_fetch_age_seconds": 0.0,
+        "pose_observation_current": True,
         "pose_freshness": "live",
         "map_session_key": _browser_session_key(runtime),
     }
-    assert json.loads(cached.body)["pose_age_seconds"] == 0.25
+    assert json.loads(cached.body)["pose_fetch_age_seconds"] == 0.25
+    assert json.loads(cached.body)["pose_age_seconds"] == 0.0
+    runtime.client.async_get_pose.assert_awaited_with(expected_mission_id=1)
     runtime.client.async_get_pose.assert_awaited_once()
     assert exact.headers["Cache-Control"] == PRIVATE_NO_STORE_HEADERS["Cache-Control"]
 
@@ -925,11 +940,85 @@ async def test_pose_view_returns_exact_fallback_and_unavailable_positions() -> N
         "scene_revision": None,
         "scene_epoch": None,
         "map_floor_coherent": False,
-        "pose_revision": 1,
-        "pose_age_seconds": 0.0,
-        "pose_freshness": "live",
+        "pose_revision": 0,
+        "pose_age_seconds": None,
+        "pose_fetch_age_seconds": None,
+        "pose_observation_current": False,
+        "pose_freshness": "coordinator_fallback",
         "map_session_key": None,
     }
+
+
+@pytest.mark.parametrize(
+    "mission_id,observed_at,expected_age",
+    [
+        (None, 999.0, 1.0),
+        (2, 999.0, 1.0),
+        (1, None, None),
+        (1, 0.0, None),
+        (1, float("nan"), None),
+        (1, 994.0, 6.0),
+        (1, 1003.0, -3.0),
+    ],
+)
+async def test_pose_successful_fetch_does_not_certify_native_observation(
+    mission_id, observed_at, expected_age
+) -> None:
+    runtime = _runtime()
+    runtime.client.async_get_pose.return_value = RobotPose(
+        0.1, 0.2, 0.0, mission_id=mission_id, observed_at=observed_at
+    )
+    with (
+        patch("custom_components.matic_robot.slam_scene.time", return_value=1000.0),
+        patch("custom_components.matic_robot.slam_scene.monotonic", return_value=10.0),
+    ):
+        response = await MaticSlamPoseView().get(
+            _request(_hass(_entry(runtime))), "entry"
+        )
+    payload = json.loads(response.body)
+    assert payload["position"] is None
+    assert payload["source"] == "current_area"
+    assert payload["pose_observation_current"] is False
+    assert payload["pose_age_seconds"] == expected_age
+    assert payload["pose_fetch_age_seconds"] == 0.0
+    assert payload["pose_freshness"] == "live"
+
+
+async def test_pose_native_age_expires_inside_transport_cache() -> None:
+    runtime = _runtime()
+    runtime.client.async_get_pose.return_value = RobotPose(
+        0.1, 0.2, 0.0, mission_id=1, observed_at=1000.0
+    )
+    hass = _hass(_entry(runtime))
+    view = MaticSlamPoseView()
+    with (
+        patch(
+            "custom_components.matic_robot.slam_scene.time",
+            side_effect=(1004.99, 1005.01),
+        ),
+        patch("custom_components.matic_robot.slam_scene.monotonic", return_value=10.0),
+    ):
+        current = json.loads((await view.get(_request(hass), "entry")).body)
+        expired = json.loads((await view.get(_request(hass), "entry")).body)
+    assert current["position"] == [0.1, 0.2]
+    assert current["pose_observation_current"] is True
+    assert expired["position"] is None
+    assert expired["pose_observation_current"] is False
+    assert expired["pose_age_seconds"] == 5.01
+    assert expired["pose_fetch_age_seconds"] == 0.0
+    runtime.client.async_get_pose.assert_awaited_once_with(expected_mission_id=1)
+
+
+async def test_pose_read_failure_does_not_present_coordinator_point_as_current() -> (
+    None
+):
+    runtime = _runtime()
+    runtime.client.async_get_pose.side_effect = CannotConnectError("offline")
+    response = await MaticSlamPoseView().get(_request(_hass(_entry(runtime))), "entry")
+    payload = json.loads(response.body)
+    assert payload["position"] is None
+    assert payload["pose_observation_current"] is False
+    assert payload["pose_freshness"] == "coordinator_fallback"
 
 
 async def test_pose_revision_shares_catalog_counter_and_rotates_epoch() -> None:
@@ -968,10 +1057,10 @@ async def test_pose_frame_revocation_uses_current_scene_revision_after_await() -
     pose_started = asyncio.Event()
     release_pose = asyncio.Event()
 
-    async def delayed_pose():
+    async def delayed_pose(**_kwargs):
         pose_started.set()
         await release_pose.wait()
-        return RobotPose(0.1, 0.2, 0.0)
+        return _fresh_pose(0.1, 0.2, 0.0)
 
     runtime.client.async_get_pose.side_effect = delayed_pose
     pending = asyncio.create_task(pose_view.get(_request(hass), "entry"))
@@ -996,10 +1085,10 @@ async def test_pose_view_coalesces_concurrent_live_reads_and_rechecks_runtime() 
     started = asyncio.Event()
     release = asyncio.Event()
 
-    async def delayed_pose():
+    async def delayed_pose(**_kwargs):
         started.set()
         await release.wait()
-        return RobotPose(0.2, 0.3, 0.0)
+        return _fresh_pose(0.2, 0.3, 0.0)
 
     runtime.client.async_get_pose.side_effect = delayed_pose
     first = asyncio.create_task(view.get(_request(hass), "entry"))
@@ -1029,7 +1118,7 @@ async def test_pose_view_cancellation_releases_waiter_for_next_live_read() -> No
     first_cancelled = asyncio.Event()
     attempts = 0
 
-    async def read_pose():
+    async def read_pose(**_kwargs):
         nonlocal attempts
         attempts += 1
         if attempts == 1:
@@ -1039,7 +1128,7 @@ async def test_pose_view_cancellation_releases_waiter_for_next_live_read() -> No
             except asyncio.CancelledError:
                 first_cancelled.set()
                 raise
-        return RobotPose(0.2, 0.3, 0.0)
+        return _fresh_pose(0.2, 0.3, 0.0)
 
     runtime.client.async_get_pose.side_effect = read_pose
     first = asyncio.create_task(view.get(_request(hass), "entry"))
@@ -1075,9 +1164,9 @@ async def test_pose_view_discards_result_if_entry_unloads_during_read() -> None:
     hass = _hass(entry)
     view = MaticSlamPoseView()
 
-    async def unload_during_read():
+    async def unload_during_read(**_kwargs):
         entry.state = ConfigEntryState.NOT_LOADED
-        return RobotPose(0.2, 0.3, 0.0)
+        return _fresh_pose(0.2, 0.3, 0.0)
 
     runtime.client.async_get_pose.side_effect = unload_during_read
 
@@ -1092,9 +1181,9 @@ async def test_pose_purge_during_live_read_does_not_retain_private_pose() -> Non
     hass = _hass(_entry(runtime))
     view = MaticSlamPoseView()
 
-    async def purge_while_reading():
+    async def purge_while_reading(**_kwargs):
         view.clear_entry("entry")
-        return RobotPose(0.2, 0.3, 0.0)
+        return _fresh_pose(0.2, 0.3, 0.0)
 
     runtime.client.async_get_pose.side_effect = purge_while_reading
 
@@ -1112,10 +1201,10 @@ async def test_pose_purge_rejects_reads_waiting_on_an_invalidated_lock() -> None
     started = asyncio.Event()
     release = asyncio.Event()
 
-    async def delayed_pose():
+    async def delayed_pose(**_kwargs):
         started.set()
         await release.wait()
-        return RobotPose(0.2, 0.3, 0.0)
+        return _fresh_pose(0.2, 0.3, 0.0)
 
     runtime.client.async_get_pose.side_effect = delayed_pose
     first = asyncio.create_task(view.get(_request(hass), "entry"))
@@ -3022,8 +3111,8 @@ async def test_area_workspace_preserves_perimeter_and_rejects_excess_coverage() 
 async def test_pose_cache_does_not_relabel_previous_floor_position() -> None:
     runtime = _runtime()
     runtime.client.async_get_pose.side_effect = [
-        RobotPose(0.1, 0.2, 0.0),
-        RobotPose(0.2, 0.3, 0.0),
+        _fresh_pose(0.1, 0.2, 0.0),
+        _fresh_pose(0.2, 0.3, 0.0),
     ]
     hass = _hass(_entry(runtime))
     view = MaticSlamPoseView()
@@ -3052,10 +3141,10 @@ async def test_pose_read_cannot_cross_floor_or_revocation_generation(same_key) -
     view = MaticSlamPoseView()
     started, release = asyncio.Event(), asyncio.Event()
 
-    async def delayed():
+    async def delayed(**_kwargs):
         started.set()
         await release.wait()
-        return RobotPose(0.1, 0.2, 0.0)
+        return _fresh_pose(0.1, 0.2, 0.0)
 
     runtime.client.async_get_pose.side_effect = delayed
     task = asyncio.create_task(view.get(_request(hass), "entry"))
@@ -3128,10 +3217,10 @@ async def test_pose_waiter_rejects_revoked_floor_before_second_rpc():
     view = MaticSlamPoseView()
     started, release = asyncio.Event(), asyncio.Event()
 
-    async def delayed():
+    async def delayed(**_kwargs):
         started.set()
         await release.wait()
-        return RobotPose(0.1, 0.2, 0.0)
+        return _fresh_pose(0.1, 0.2, 0.0)
 
     runtime.client.async_get_pose.side_effect = delayed
     first = asyncio.create_task(view.get(_request(hass), "entry"))

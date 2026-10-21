@@ -533,13 +533,13 @@ def test_every_exception_key_is_raised() -> None:
 def test_coverage_guard_text_matches_everywhere() -> None:
     from custom_components.matic_robot.client.exceptions import _COVERAGE_GUARD_MESSAGES
 
-    effects = (ROOT / "frontend/map-studio-v4/effects.ts").read_text()
+    catalog = (ROOT / "frontend/map-studio-v4/catalog-writes.ts").read_text()
     for reason, text in _COVERAGE_GUARD_MESSAGES.items():
         assert _strings()["exceptions"][reason.value]["message"] == text
         assert re.search(
-            rf'{reason.value}: notice\("error", "v4_notice_coverage_\w+", '
-            rf'"{re.escape(text)}"',
-            effects,
+            rf'{reason.value}: \["v4_notice_coverage_\w+", '
+            rf'"{re.escape(text)}"\]',
+            catalog,
         )
 
 
