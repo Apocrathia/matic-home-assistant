@@ -213,6 +213,13 @@ class RoomGeometryIndex:
         """Charge non-containment geometry work to the shared query limit."""
         self._charge_work(work)
 
+    def try_charge_query_work(self, work: int, *, reserve: int = 0) -> bool:
+        """Admit optional work atomically without exhausting a fallback's budget."""
+        if work + reserve > self._query_work_remaining:
+            return False
+        self._charge_work(work)
+        return True
+
     def contains(self, x: float, y: float, tolerance: float = 0.0) -> bool:
         """Return whether a point belongs to any mapped room."""
         key = (float(x), float(y), float(tolerance))

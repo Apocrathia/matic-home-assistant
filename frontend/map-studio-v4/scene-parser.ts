@@ -124,6 +124,7 @@ const parseTransfer = (buffer: ArrayBuffer): ParsedScene => {
     || !span.every((value) => typeof value === "number" && Number.isFinite(value) && value >= 1 && value <= 65_536)
   ) fail();
   const rawRooms = Array.isArray(payload.rooms) ? payload.rooms.slice(0, 128) : [];
+  const roomIds = new Set<string>();
   const rooms = rawRooms.flatMap((candidate, index) => {
     if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return [];
     const room = candidate as Record<string, unknown>;
@@ -143,8 +144,11 @@ const parseTransfer = (buffer: ArrayBuffer): ParsedScene => {
     const [centerX, centerY] = center;
     if (typeof centerX !== "number" || !Number.isFinite(centerX)
       || typeof centerY !== "number" || !Number.isFinite(centerY)) return [];
+    const id = typeof room.room_id === "string" && /^room_[a-f0-9]{16}$/u.test(room.room_id)
+      && !roomIds.has(room.room_id) ? room.room_id : `scene-room-${index + 1}`;
+    roomIds.add(id);
     return [{
-      id: `scene-room-${index + 1}`,
+      id,
       name,
       boundary,
       center: [centerX, centerY] as const,

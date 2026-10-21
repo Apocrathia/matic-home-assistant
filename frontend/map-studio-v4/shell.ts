@@ -1760,6 +1760,9 @@ export class MaticMapShellV4 extends LitElement {
     return status.notable ? `${status.title} · ${line}` : line;
   }
 
+  // Keep a single workflow panel: the same element is a wide grid column or
+  // narrow bottom sheet. Duplicate hidden panels break launcher focus return
+  // and make primary actions ambiguous.
   protected override render() {
     // Home stands in for the Run view while a shortcut's run starts (#pinRun).
     const state: WorkspaceState = this.#pinRun ? { ...this.state, workflow: "none" } : this.state;
@@ -1919,15 +1922,6 @@ export class MaticMapShellV4 extends LitElement {
               </${mapCanvasTag}>
             </div>
 
-            <!--
-              One panel element, not two. It is a grid column when wide and a
-              bottom sheet when narrow. Rendering both and hiding one with
-              display:none meant two live workflow panels at all times, which
-              made #dialogLauncherFor pick the hidden copy on narrow -- so
-              cancelling a delete dialog on a phone restored focus to nothing --
-              and left every primary action ambiguous under Playwright's strict
-              mode.
-            -->
             <aside
               id="map-workspace"
               class=${narrow ? "inspector mobile-sheet" : "inspector"}

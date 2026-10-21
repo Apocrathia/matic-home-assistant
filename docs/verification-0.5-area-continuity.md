@@ -29,14 +29,17 @@ digest before refinement recovery. Legacy v5 bindings retain their original
 local-hash and frame checks; their anchors are not silently rebased. Legacy
 bindings without adequate historical evidence retain their review requirement.
 
+Optional witness work is admitted atomically with a bounded reserve for
+existing frame validation; large unchanged contours retain their fallback.
+
 The change also closes a v3 association gap: an additional room covering saved
 circles can no longer pass merely because all original anchors still match.
 It does not add automatic rebinding or coordinate transformations.
 
 ## Source evidence
 
-The final local source run passed **5,206 tests with 100.00% coverage** across
-20,004 statements (`python -m pytest --cov=custom_components/matic_robot
+The final local source run passed **5,208 tests with 100.00% coverage** across
+20,009 statements (`python -m pytest --cov=custom_components/matic_robot
 --cov-report=term-missing`). Required PR CI and installed retesting remain open.
 
 - Binding regressions cover partition churn, unrelated room changes,
@@ -92,12 +95,16 @@ writes or robot commands; installed retesting remains pending.
 
 The 2D room palette now starts with sixteen perceptually separated colors and
 uses stronger fills. All 256 supported rooms retain distinct colors. Room IDs
-preserve assignment under metadata reordering. Two-pixel neutral boundaries
+preserve assignment under metadata reordering. The backend carries its stable
+room identity through the actual scene parser; production-format reorder and
+legacy/duplicate-ID fallbacks are tested. Two-pixel neutral boundaries
 separate rooms, with a three-pixel selection boundary. Forced colors retain the
 system palette. Chromium and WebKit checks cover uniqueness, first-sixteen
 OKLab separation, selection, labels, dark mode and forced colors; synthetic
 12-room light/dark captures were visually inspected. Installed-map inspection
-is pending with RC35.
+is pending with RC35. The canonical Node 24 startup graph is 92,146 bytes,
+within the unchanged 92,160-byte budget. Developer notes no longer ship inside
+a rendered HTML template.
 
 ## Boundaries
 

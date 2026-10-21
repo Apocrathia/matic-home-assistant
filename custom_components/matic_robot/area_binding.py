@@ -609,7 +609,13 @@ def _room_has_strong_frame_witnesses(
         return False
     if len(old) < 3 or len(new) < 3:
         return False
-    room_geometry.charge_query_work((len(old) + len(new)) * 48)
+    # Cover feature extraction plus the bounded extreme/match comparisons up
+    # front. If this optional proof cannot fit, leave the legacy frame/local
+    # validation budget intact instead of consuming it on a failed attempt.
+    if not room_geometry.try_charge_query_work(
+        (len(old) + len(new)) * 64, reserve=10_000
+    ):
+        return False
     try:
         old_features = _turn_witness_features(old)
         new_features = _turn_witness_features(new)
@@ -665,7 +671,6 @@ def _room_has_strong_frame_witnesses(
             max(matches, key=lambda point: (point[0] * dx + point[1] * dy, point))
         )
     candidates = tuple(extremes)
-    room_geometry.charge_query_work(len(candidates) * len(matches) * 4)
     for index, left in enumerate(candidates):
         for right in candidates[index + 1 :]:
             if math.dist(left, right) < required_span:

@@ -364,6 +364,7 @@ def encode_slam_scene(
             boundary, center = geometry
             rooms.append(
                 {
+                    "room_id": room.id,
                     "name": room.name,
                     "boundary": boundary,
                     "boundary_closed": True,

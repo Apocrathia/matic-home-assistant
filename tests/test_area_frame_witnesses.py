@@ -271,19 +271,14 @@ def test_rotation_about_one_fixed_corner_does_not_prove_identity(
     )
 
 
-def test_strong_witness_work_budget_exhaustion_fails_closed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_strong_witness_work_budget_exhaustion_fails_closed() -> None:
     plan = _witness_plan()
     saved = _translation_room_anchors(plan, [{"x": 1.0, "y": 3.0, "radius": 0.2}])[0]
     geometry = _room_geometry_index(plan)
-
-    def exhausted(self, work: int = 1) -> None:
-        raise GeometryTooComplex("budget exhausted")
-
-    monkeypatch.setattr(type(geometry), "charge_query_work", exhausted)
-    with pytest.raises(GeometryTooComplex):
-        _room_has_strong_frame_witnesses(saved, saved, geometry)
+    geometry.charge_query_work(95_000)
+    remaining = geometry._query_work_remaining
+    assert not _room_has_strong_frame_witnesses(saved, saved, geometry)
+    assert geometry._query_work_remaining == remaining
 
 
 @pytest.mark.parametrize("anchored_bounded", [False, True])
@@ -469,3 +464,30 @@ def test_v6_shape_validation_failure_cannot_use_matching_local_hash(
 
     monkeypatch.setattr(area_binding_module, "_area_geometry_components", invalid_shape)
     assert area_binding_status(area, plan) is AreaBindingStatus.INVALID
+
+
+@pytest.mark.parametrize("bounded", [False, True])
+def test_large_unchanged_room_retains_fallback_after_remote_change(
+    bounded, monkeypatch
+):
+    boundary = tuple(
+        [(i / 400 * 20, 0.0) for i in range(401)]
+        + [(20.0, i / 200 * 2) for i in range(201)]
+        + [(20 - i / 400 * 20, 2.0) for i in range(401)]
+        + [(0.0, 2 - i / 200 * 2) for i in range(201)]
+    )
+    original = FloorPlan(42, "partition", b"partition", (_room(boundary),))
+    circles = [{"x": 1.0, "y": 0.3, "radius": 0.2}]
+    if bounded:
+        monkeypatch.setattr(area_binding_module, "_MAX_LOCAL_SEGMENT_MATCH_SEGMENTS", 1)
+    area = {
+        "schema_version": AREA_SCHEMA_VERSION,
+        "circles": circles,
+        "map_binding": binding_for_area(original, circles),
+    }
+    assert area["map_binding"]["version"] == (6 if bounded else 3)
+    remote = _room(
+        ((30.0, 0.0), (31.0, 0.0), (31.0, 1.0), (30.0, 1.0)), room_id="remote"
+    )
+    refreshed = replace(original, rooms=(*original.rooms, remote))
+    assert area_binding_status(area, refreshed) is AreaBindingStatus.CURRENT

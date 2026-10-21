@@ -374,6 +374,7 @@ def test_encode_slam_scene_packs_floor_surface_rooms_and_neutral_color() -> None
         "sample_step": 1,
         "rooms": [
             {
+                "room_id": "room-1",
                 "name": "Synthetic room",
                 "boundary": [[0.0, 0.0], [32.0, 0.0], [32.0, 32.0], [0.0, 32.0]],
                 "boundary_closed": True,
@@ -447,6 +448,7 @@ def test_encode_slam_scene_clips_room_geometry_to_photographed_floor() -> None:
 
     assert metadata["rooms"] == [
         {
+            "room_id": "room-1",
             "name": "Synthetic room",
             "boundary": [[7.0, 5.0], [25.0, 5.0], [25.0, 20.0], [7.0, 20.0]],
             "boundary_closed": True,

@@ -5,7 +5,7 @@ import { writeFile } from "node:fs/promises";
 test("precomputes room selection once for the supported 100-room bound", async ({ page }) => {
   const bundle = await build({
     stdin: {
-      contents: 'export { RendererController } from "./frontend/map-studio-v4/renderer-controller"; export { createGalleryState } from "./frontend/map-studio-v4/gallery-state";',
+      contents: 'export { RendererController } from "./frontend/map-studio-v4/renderer-controller"; export { createGalleryState } from "./frontend/map-studio-v4/gallery-state"; export { parseSceneBuffer } from "./frontend/map-studio-v4/scene-parser";',
       resolveDir: process.cwd(),
     },
     bundle: true,
@@ -99,7 +99,7 @@ test("precomputes room selection once for the supported 100-room bound", async (
 test("all 256 room colors stay distinct by room ID, retain selection and labels, and yield to forced colors", async ({ page }) => {
   const bundle = await build({
     stdin: {
-      contents: 'export { RendererController } from "./frontend/map-studio-v4/renderer-controller"; export { createGalleryState } from "./frontend/map-studio-v4/gallery-state";',
+      contents: 'export { RendererController } from "./frontend/map-studio-v4/renderer-controller"; export { createGalleryState } from "./frontend/map-studio-v4/gallery-state"; export { parseSceneBuffer } from "./frontend/map-studio-v4/scene-parser";',
       resolveDir: process.cwd(),
     },
     bundle: true,
@@ -113,7 +113,7 @@ test("all 256 room colors stay distinct by room ID, retain selection and labels,
   await page.goto("/", { waitUntil: "domcontentloaded" });
 
   const result = await page.evaluate(async () => {
-    const { RendererController, createGalleryState } = await import("/renderer-room-colors.js");
+    const { RendererController, createGalleryState, parseSceneBuffer } = await import("/renderer-room-colors.js");
     const base = createGalleryState("ready");
     const rooms = Array.from({ length: 256 }, (_, index) => {
       const left = index * 12;
@@ -187,6 +187,28 @@ test("all 256 room colors stay distinct by room ID, retain selection and labels,
     const forced = await capture(rooms, {}, true);
     const dark = await capture(rooms, {}, false, true);
     const photo = await capture(rooms, { appearance: "photo" });
+    const wireRooms = rooms.slice(0, 16).map((room, index) => ({
+      ...room, room_id: `room_${index.toString(16).padStart(16, "0")}`,
+    }));
+    const parseRooms = (raw) => {
+      const metadata = new TextEncoder().encode(JSON.stringify({
+        meters_per_cell: .05, origin_cells: [0,0], span_cells: [180,140], rooms: raw,
+      }));
+      const buffer = new ArrayBuffer(24 + metadata.length + 8);
+      new Uint8Array(buffer).set(new TextEncoder().encode("MATIC3D\0"));
+      const view = new DataView(buffer);
+      view.setUint16(8,1,true); view.setUint16(10,8,true);
+      view.setUint32(12,metadata.length,true); view.setUint32(16,1,true);
+      new Uint8Array(buffer,24,metadata.length).set(metadata);
+      return parseSceneBuffer(buffer).metadata.rooms;
+    };
+    const parsed = parseRooms(wireRooms);
+    const parsedReversed = parseRooms([...wireRooms].reverse());
+    const production = await capture(parsed);
+    const productionReversed = await capture(parsedReversed);
+    const legacy = parseRooms(wireRooms.map(({ room_id, ...room }) => room));
+    const duplicate = parseRooms([wireRooms[0], wireRooms[0], { ...wireRooms[1], room_id: "bad" }]);
+    const byName = (order, fills) => Object.fromEntries(order.map((room, index) => [room.name, fills[index]]));
     const previewRooms = rooms.slice(0, 12).map((room, index) => {
       const x = index % 4 * 45, y = Math.floor(index / 4) * 45;
       return { ...room, id: `preview-${String(index).padStart(2, "0")}`,
@@ -199,6 +221,11 @@ test("all 256 room colors stay distinct by room ID, retain selection and labels,
     const byId = (order, fills) => Object.fromEntries(order.map((room, index) => [room.id, fills[index]]));
     return {
       first,
+      productionByName: byName(parsed, production.fills),
+      productionReversedByName: byName(parsedReversed, productionReversed.fills),
+      parsedIds: parsed.map((room) => room.id),
+      legacyIds: legacy.map((room) => room.id),
+      duplicateIds: duplicate.map((room) => room.id),
       previewLight, previewDark,
       reordered,
       labeled,
@@ -215,6 +242,10 @@ test("all 256 room colors stay distinct by room ID, retain selection and labels,
     await writeFile(path, Buffer.from(preview.png.split(",")[1], "base64"));
     await test.info().attach(`12-room-${scheme}`, { path, contentType: "image/png" });
   }
+  expect(result.productionByName).toEqual(result.productionReversedByName);
+  expect(result.parsedIds).toEqual(Array.from({ length: 16 }, (_, index) => `room_${index.toString(16).padStart(16, "0")}`));
+  expect(result.legacyIds[0]).toBe("scene-room-1");
+  expect(new Set(result.duplicateIds).size).toBe(3);
   const selectedIndex = result.first.strokes.findIndex((style) => style === "#0c78c8");
   expect(result.first.strokes[selectedIndex]).toBe("#0c78c8");
   expect(result.first.widths[selectedIndex]).toBe(3);
