@@ -1315,14 +1315,33 @@ def _saved_room_frames_match(
     circles: Sequence[Mapping[str, Any]],
     floor_plan: FloorPlan,
     room_geometry: RoomGeometryIndex,
+    *,
+    failed_room_keys: set[str] | None = None,
+    associations_valid: list[bool] | None = None,
 ) -> bool:
-    """Require complete, unchanged room-frame evidence for every circle."""
+    """Check every legacy room frame and collect those needing stronger proof.
+
+    ``associations_valid`` distinguishes malformed or incomplete evidence from
+    a complete association set whose legacy frame checks failed. Callers may
+    combine legacy and strong evidence only for the latter.
+    """
+    if failed_room_keys is not None:
+        failed_room_keys.clear()
+    if associations_valid is not None:
+        associations_valid[:] = [False]
     if not isinstance(saved_anchors, list) or not saved_anchors:
         return False
     if any(
-        "room_key" not in anchor
+        not isinstance(anchor, Mapping)
+        or "room_key" not in anchor
         or "circle_keys" not in anchor
         or "boundary_mm" not in anchor
+        or not isinstance(anchor.get("room_key"), str)
+        or not isinstance(anchor.get("circle_keys"), list)
+        or not anchor.get("circle_keys")
+        or any(not isinstance(key, str) for key in anchor.get("circle_keys", ()))
+        or len(set(anchor.get("circle_keys", ()))) != len(anchor.get("circle_keys", ()))
+        or not isinstance(anchor.get("boundary_mm"), list)
         for anchor in saved_anchors
     ):
         return False
@@ -1352,18 +1371,26 @@ def _saved_room_frames_match(
         current_by_room_key[room_key] = anchor
     if set(saved_by_room_key) != set(current_by_room_key):
         return False
+    for room_key, saved_circle_keys_for_room in saved_by_room_key.items():
+        if saved_circle_keys_for_room != {
+            str(key).casefold() for key in current_by_room_key[room_key]["circle_keys"]
+        }:
+            return False
+    if associations_valid is not None:
+        associations_valid[0] = True
+    all_frames_match = True
     for anchor in saved_anchors:
         room_key = str(anchor["room_key"]).casefold()
         current_anchor = current_by_room_key.get(room_key)
         if (
             current_anchor is None
-            or saved_by_room_key[room_key]
-            != {str(key).casefold() for key in current_anchor["circle_keys"]}
             or not _room_anchor_bounds_match(anchor, current_anchor)
             or not _room_frame_matches(anchor, current_anchor, room_geometry)
         ):
-            return False
-    return True
+            all_frames_match = False
+            if failed_room_keys is not None:
+                failed_room_keys.add(room_key)
+    return all_frames_match
 
 
 def _saved_room_frames_have_strong_witnesses(
@@ -1563,23 +1590,59 @@ def area_binding_status(
             if geometry_changed:
                 try:
                     room_geometry = room_geometry or _room_geometry_index(floor_plan)
+                    failed_room_keys: set[str] = set()
+                    associations_valid: list[bool] = []
                     frame_matches = _saved_room_frames_match(
                         saved["translation_room_anchors"],
                         area["circles"],
                         floor_plan,
                         room_geometry,
+                        failed_room_keys=failed_room_keys,
+                        associations_valid=associations_valid,
                     )
                     if not (local_geometry_matches and frame_matches):
                         if (
                             version
                             != SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
-                            or not _saved_room_frames_have_strong_witnesses(
-                                saved["translation_room_anchors"],
-                                area["circles"],
-                                floor_plan,
-                                room_geometry,
-                            )
                         ):
+                            return AreaBindingStatus.GEOMETRY_CHANGED
+                        if local_geometry_matches and associations_valid == [True]:
+                            bounded_saved_by_room_key = {
+                                str(anchor["room_key"]).casefold(): anchor
+                                for anchor in saved["translation_room_anchors"]
+                            }
+                            bounded_current_by_room_key = {
+                                str(anchor["room_key"]).casefold(): anchor
+                                for anchor in _translation_room_anchors(
+                                    floor_plan,
+                                    area["circles"],
+                                    room_geometry=room_geometry,
+                                )
+                            }
+                            all_required_proofs_match = bool(failed_room_keys) and all(
+                                room_key in bounded_saved_by_room_key
+                                and room_key in bounded_current_by_room_key
+                                and _room_has_strong_frame_witnesses(
+                                    bounded_saved_by_room_key[room_key],
+                                    bounded_current_by_room_key[room_key],
+                                    room_geometry,
+                                )
+                                for room_key in failed_room_keys
+                            )
+                        else:
+                            # Aggregate local drift cannot identify which room
+                            # moved. Incomplete associations also cannot count
+                            # as an empty set, so either case requires proof of
+                            # every room before the geometry-change bypass.
+                            all_required_proofs_match = (
+                                _saved_room_frames_have_strong_witnesses(
+                                    saved["translation_room_anchors"],
+                                    area["circles"],
+                                    floor_plan,
+                                    room_geometry,
+                                )
+                            )
+                        if not all_required_proofs_match:
                             return AreaBindingStatus.GEOMETRY_CHANGED
                     if saved[
                         "translation_invariant_geometry_sha256"

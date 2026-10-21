@@ -354,7 +354,7 @@ def test_v6_strong_proof_budget_failure_stays_blocked(monkeypatch) -> None:
         raise GeometryTooComplex("witness budget exhausted")
 
     monkeypatch.setattr(
-        area_binding_module, "_saved_room_frames_have_strong_witnesses", exhausted
+        area_binding_module, "_room_has_strong_frame_witnesses", exhausted
     )
     assert (
         area_binding_status(area, _locally_refined(plan))
@@ -657,6 +657,254 @@ def test_all_room_frames_are_checked_before_optional_witnesses(
     unchanged = deepcopy(area)
     assert area_binding_status(area, refreshed) is AreaBindingStatus.CURRENT
     assert [kind for kind, _ in events] == ["frame", "witness"]
+    assert area == unchanged
+
+
+def test_v6_aggregate_local_mismatch_requires_strong_proof_for_every_room(
+    monkeypatch,
+):
+    source_witness = _witness_plan().rooms[0]
+    witness = replace(
+        source_witness,
+        boundary=tuple((x * 10, y * 10) for x, y in source_witness.boundary),
+    )
+    subdivisions = 400
+    boundary = tuple(
+        [(30 + i / subdivisions * 20, 0.0) for i in range(subdivisions + 1)]
+        + [(50.0, i / 200 * 2) for i in range(201)]
+        + [(50 - i / subdivisions * 20, 2.0) for i in range(subdivisions + 1)]
+        + [(30.0, 2 - i / 200 * 2) for i in range(201)]
+    )
+    dense = _room(boundary, room_id="dense")
+    plan = replace(_witness_plan(), rooms=(witness, dense))
+    circles = [
+        {"x": 33.0, "y": 30.0, "radius": 0.2},
+        {"x": 40.0, "y": 0.3, "radius": 0.2},
+    ]
+    monkeypatch.setattr(area_binding_module, "_MAX_LOCAL_SEGMENT_MATCH_SEGMENTS", 0)
+    area = {
+        "schema_version": AREA_SCHEMA_VERSION,
+        "circles": circles,
+        "map_binding": binding_for_area(plan, circles),
+    }
+    assert area["map_binding"]["version"] == 6
+
+    witness_points = list(witness.boundary)
+    index = min(range(len(witness_points)), key=lambda item: witness_points[item][0])
+    x, y = witness_points[index]
+    witness_points[index] = (x - 0.8, y)
+    # Change the dense room near its circle while retaining the same global
+    # bounds. Its repeated rectangular turns provide no strong unique witness.
+    changed_dense = tuple(
+        (x, y + 0.05 if y == 0.0 and 39.7 <= x <= 40.3 else y)
+        for x, y in dense.boundary
+    )
+    changed = replace(
+        plan,
+        rooms=(
+            replace(witness, boundary=tuple(witness_points)),
+            replace(dense, boundary=changed_dense),
+        ),
+    )
+    changed_local = area_binding_module._bounded_hash_only_area_geometry_fingerprint(
+        changed, circles
+    )
+    assert changed_local != area["map_binding"]["local_geometry_sha256"]
+    unchanged_area = deepcopy(area)
+    assert area_binding_status(area, changed) is AreaBindingStatus.GEOMETRY_CHANGED
+    strong_room_keys = []
+
+    def prove_all_rooms(saved_anchor, current_anchor, geometry):
+        strong_room_keys.append(saved_anchor["room_key"])
+        return True
+
+    with pytest.MonkeyPatch.context() as proof_patch:
+        proof_patch.setattr(
+            area_binding_module,
+            "_room_has_strong_frame_witnesses",
+            prove_all_rooms,
+        )
+        assert area_binding_status(area, changed) is AreaBindingStatus.CURRENT
+    assert len(strong_room_keys) == 2
+    with pytest.MonkeyPatch.context() as guard_patch:
+        guard_patch.setattr(
+            area_binding_module,
+            "_room_has_strong_frame_witnesses",
+            lambda *args, **kwargs: True,
+        )
+        guard_patch.setattr(
+            area_binding_module,
+            "translation_invariant_geometry_fingerprint",
+            lambda *_args, **_kwargs: area["map_binding"][
+                "translation_invariant_geometry_sha256"
+            ],
+        )
+        assert area_binding_status(area, changed) is AreaBindingStatus.GEOMETRY_CHANGED
+    broken_association = deepcopy(area)
+    broken_association["map_binding"]["translation_room_anchors"][0]["circle_keys"] = []
+    assert (
+        area_binding_status(broken_association, changed)
+        is not AreaBindingStatus.CURRENT
+    )
+    misassociated = deepcopy(area)
+    misassociated_anchors = misassociated["map_binding"]["translation_room_anchors"]
+    first_keys = list(misassociated_anchors[0]["circle_keys"])
+    second_keys = list(misassociated_anchors[1]["circle_keys"])
+    assert first_keys and second_keys
+    misassociated_anchors[0]["circle_keys"] = second_keys
+    misassociated_anchors[1]["circle_keys"] = first_keys
+    assert area_binding_module._valid_saved_binding(misassociated["map_binding"])
+    assert area_binding_status(misassociated, changed) is not AreaBindingStatus.CURRENT
+    assert area == unchanged_area
+
+
+@pytest.mark.parametrize("refined_room_first", [False, True])
+def test_v6_mixes_legacy_valid_dense_room_with_strong_refinement_proof(
+    refined_room_first, monkeypatch
+):
+    source_witness = _witness_plan().rooms[0]
+    witness = replace(
+        source_witness,
+        boundary=tuple((x * 10, y * 10) for x, y in source_witness.boundary),
+    )
+    subdivisions = 400
+    dense_boundary = tuple(
+        [(30 + i / subdivisions * 20, 0.0) for i in range(subdivisions + 1)]
+        + [(50.0, i / 200 * 2) for i in range(201)]
+        + [(50 - i / subdivisions * 20, 2.0) for i in range(subdivisions + 1)]
+        + [(30.0, 2 - i / 200 * 2) for i in range(201)]
+    )
+    dense = _room(dense_boundary, room_id="dense")
+    plan = replace(_witness_plan(), rooms=(witness, dense))
+    circles = [
+        {"x": 33.0, "y": 30.0, "radius": 0.2},
+        {"x": 40.0, "y": 0.3, "radius": 0.2},
+    ]
+    monkeypatch.setattr(area_binding_module, "_MAX_LOCAL_SEGMENT_MATCH_SEGMENTS", 0)
+    area = {
+        "schema_version": AREA_SCHEMA_VERSION,
+        "circles": circles,
+        "map_binding": binding_for_area(plan, circles),
+    }
+    assert area["map_binding"]["version"] == 6
+    anchors = area["map_binding"]["translation_room_anchors"]
+    witness_key = next(
+        anchor["room_key"] for anchor in anchors if len(anchor["boundary_mm"]) < 100
+    )
+    anchors.sort(
+        key=lambda anchor: (anchor["room_key"] == witness_key) != refined_room_first
+    )
+
+    points = list(witness.boundary)
+    index = min(range(len(points)), key=lambda item: points[item][0])
+    x, y = points[index]
+    points[index] = (x - 0.8, y)
+    # This midpoint is far from the dense room's circle and remains accepted by
+    # the full legacy frame matcher despite the room's repeated turns.
+    midpoint_index = 700
+    left, right = dense_boundary[midpoint_index : midpoint_index + 2]
+    midpoint = ((left[0] + right[0]) / 2, (left[1] + right[1]) / 2)
+    refreshed = replace(
+        plan,
+        rooms=(
+            replace(witness, boundary=tuple(points)),
+            replace(
+                dense,
+                boundary=(
+                    *dense_boundary[: midpoint_index + 1],
+                    midpoint,
+                    *dense_boundary[midpoint_index + 1 :],
+                ),
+            ),
+        ),
+    )
+    assert area["map_binding"]["local_geometry_sha256"] == (
+        area_binding_module._bounded_hash_only_area_geometry_fingerprint(
+            refreshed, circles
+        )
+    )
+    dense_saved_anchor = next(
+        anchor for anchor in anchors if len(anchor["boundary_mm"]) >= 100
+    )
+    dense_current_anchor = next(
+        anchor
+        for anchor in _translation_room_anchors(refreshed, circles)
+        if len(anchor["boundary_mm"]) >= 100
+    )
+    assert not _room_has_strong_frame_witnesses(
+        dense_saved_anchor,
+        dense_current_anchor,
+        _room_geometry_index(refreshed),
+    )
+
+    events = []
+    bounds = area_binding_module._room_anchor_bounds_match
+    frame = area_binding_module._room_frame_matches
+    strong = area_binding_module._room_has_strong_frame_witnesses
+
+    def track_bounds(saved, current):
+        events.append(("bounds", saved["room_key"]))
+        return bounds(saved, current)
+
+    def track_frame(saved, current, geometry):
+        events.append(("frame", saved["room_key"]))
+        return frame(saved, current, geometry)
+
+    def track_strong(saved, current, geometry):
+        assert all(kind in {"bounds", "frame"} for kind, _ in events)
+        events.append(("witness", saved["room_key"]))
+        return strong(saved, current, geometry)
+
+    monkeypatch.setattr(area_binding_module, "_room_anchor_bounds_match", track_bounds)
+    monkeypatch.setattr(area_binding_module, "_room_frame_matches", track_frame)
+    monkeypatch.setattr(
+        area_binding_module, "_room_has_strong_frame_witnesses", track_strong
+    )
+    unchanged = deepcopy(area)
+    assert area_binding_status(area, refreshed) is AreaBindingStatus.CURRENT
+    witness_event_index = next(
+        index for index, (kind, _key) in enumerate(events) if kind == "witness"
+    )
+    assert sum(kind == "bounds" for kind, _key in events[:witness_event_index]) == 2
+    assert sum(kind == "frame" for kind, _key in events[:witness_event_index]) == 1
+    assert [key for kind, key in events if kind == "witness"] == [witness_key]
+    misassociated = deepcopy(area)
+    misassociated_anchors = misassociated["map_binding"]["translation_room_anchors"]
+    first_keys = list(misassociated_anchors[0]["circle_keys"])
+    second_keys = list(misassociated_anchors[1]["circle_keys"])
+    assert first_keys and second_keys
+    misassociated_anchors[0]["circle_keys"] = second_keys
+    misassociated_anchors[1]["circle_keys"] = first_keys
+    assert area_binding_module._valid_saved_binding(misassociated["map_binding"])
+    assert (
+        area_binding_status(misassociated, refreshed) is not AreaBindingStatus.CURRENT
+    )
+    events.clear()
+    with pytest.MonkeyPatch.context() as guard_patch:
+        guard_patch.setattr(
+            area_binding_module,
+            "translation_invariant_geometry_fingerprint",
+            lambda *_args, **_kwargs: area["map_binding"][
+                "translation_invariant_geometry_sha256"
+            ],
+        )
+        assert (
+            area_binding_status(area, refreshed) is AreaBindingStatus.GEOMETRY_CHANGED
+        )
+    legacy_v5 = deepcopy(area)
+    legacy_v5["map_binding"]["version"] = (
+        area_binding_module.ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
+    )
+    legacy_v5["map_binding"].pop("area_shape_sha256")
+    assert (
+        area_binding_status(legacy_v5, refreshed) is AreaBindingStatus.GEOMETRY_CHANGED
+    )
+    broken_association = deepcopy(area)
+    broken_association["map_binding"]["translation_room_anchors"][0]["circle_keys"] = []
+    assert (
+        area_binding_status(broken_association, refreshed)
+        is not AreaBindingStatus.CURRENT
+    )
     assert area == unchanged
 
 

@@ -733,6 +733,18 @@ def test_saved_room_frame_match_rejects_incomplete_or_inconsistent_evidence() ->
         floor_plan,
         room_geometry,
     )
+    failed_room_keys = {"stale-room"}
+    associations_valid = [True]
+    assert not match(
+        [{**anchors[0], "circle_keys": ["0" * 64]}],
+        circles,
+        floor_plan,
+        room_geometry,
+        failed_room_keys=failed_room_keys,
+        associations_valid=associations_valid,
+    )
+    assert not failed_room_keys
+    assert associations_valid == [False]
 
     with patch.object(
         area_binding_module,

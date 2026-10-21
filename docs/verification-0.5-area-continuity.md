@@ -32,6 +32,10 @@ bindings without adequate historical evidence retain their review requirement.
 Existing frame/local checks run before optional witness work. Witness work
 is admitted atomically only when needed and affordable; unchanged and
 retessellated large contours retain their established fallback.
+For multi-room v6 areas with an unchanged aggregate local hash, legacy-valid
+rooms retain their proof and only failed frames need stronger witnesses.
+An aggregate local-hash mismatch still requires strong proof of every room;
+incomplete or changed circle-room associations cannot count as missing work.
 
 The change also closes a v3 association gap: an additional room covering saved
 circles can no longer pass merely because all original anchors still match.
@@ -39,10 +43,10 @@ It does not add automatic rebinding or coordinate transformations.
 
 ## Source evidence
 
-The complete local run at candidate `ce4904ea` passed **5,226 tests with
-100.00% coverage** across 20,012 statements (`python -m pytest
---cov=custom_components/matic_robot --cov-report=term-missing`). Subsequent
-review fixes require refreshed exact-head PR CI; installed retesting remains open.
+The assembled PR #287 candidate passed **5,232 tests with 100.00% coverage**
+across 20,041 statements (`python -m pytest --cov=custom_components/matic_robot
+--cov-report=term-missing`). Exact-head PR CI and complete regular review must
+pass before merging; installed retesting remains open.
 
 - Binding regressions cover partition churn, unrelated room changes,
   containing-room contour reshaping, fractional wall refinements, new overlaps,
