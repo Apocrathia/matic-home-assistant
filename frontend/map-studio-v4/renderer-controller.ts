@@ -1556,10 +1556,11 @@ export class RendererController {
         // Every room keeps its name: a label that would cover another moves to
         // the nearest free slot above or below its room centre.
         const labelBounds = new DOMRect(center.x - contentWidth / 2 - 6, center.y - 10, contentWidth + 12, 20);
-        // Steps visit the centre, 24 px below, 24 px above, 48 px below, then
-        // 48 px above.
-        for (const step of [24, -48, 72, -96]) {
-          if (!occupied.some((other) => labelBounds.left < other.right + 8
+        // Steps visit the centre, 24 px below, 24 px above, 48 px below and
+        // 48 px above on the canvas, and return to the centre when none fits.
+        for (const step of [24, -48, 72, -96, 48]) {
+          if (labelBounds.top >= 0 && labelBounds.bottom <= bounds.height
+            && !occupied.some((other) => labelBounds.left < other.right + 8
             && labelBounds.right + 8 > other.left
             && labelBounds.top < other.bottom + 4
             && labelBounds.bottom + 4 > other.top)) break;

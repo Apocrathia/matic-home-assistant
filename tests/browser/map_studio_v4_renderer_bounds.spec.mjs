@@ -494,3 +494,80 @@ test("a room label that would cover another moves aside instead of disappearing"
     && first.top < second.bottom && second.top < first.bottom;
   expect(overlaps, "both names stay readable without overlapping").toBe(false);
 });
+
+test("a moved room label stays on the canvas", async ({ page }) => {
+  const bundle = await build({
+    stdin: {
+      contents: 'export { RendererController } from "./frontend/map-studio-v4/renderer-controller"; export { createGalleryState } from "./frontend/map-studio-v4/gallery-state";',
+      resolveDir: process.cwd(),
+    },
+    bundle: true,
+    format: "esm",
+    write: false,
+  });
+  await page.route("**/renderer-label-edge.js", (route) => route.fulfill({
+    contentType: "text/javascript",
+    body: bundle.outputFiles[0].text,
+  }));
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  const result = await page.evaluate(async () => {
+    const { RendererController, createGalleryState } = await import("/renderer-label-edge.js");
+    const base = createGalleryState("ready");
+    const rooms = [
+      { id: "room-a", roomId: "a", name: "Bathroom", boundary: [[40, 40], [50, 40], [50, 60], [40, 60]], center: [49, 50] },
+      { id: "room-b", roomId: "b", name: "Quinns Room", boundary: [[50, 40], [60, 40], [60, 60], [50, 60]], center: [51, 50] },
+    ];
+    const sceneCanvas = document.createElement("canvas");
+    const overlayCanvas = document.createElement("canvas");
+    for (const canvas of [sceneCanvas, overlayCanvas]) {
+      Object.assign(canvas.style, { position: "absolute", width: "900px", height: "700px" });
+      document.body.append(canvas);
+    }
+    let labels = [];
+    const originalFillText = CanvasRenderingContext2D.prototype.fillText;
+    CanvasRenderingContext2D.prototype.fillText = function (text, x, y, ...args) {
+      if (this.canvas === overlayCanvas) labels.push({ text, y });
+      return originalFillText.call(this, text, x, y, ...args);
+    };
+    const frame = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const renderer = new RendererController(sceneCanvas, overlayCanvas);
+    renderer.setState({
+      ...base,
+      view: "top",
+      appearance: "rooms",
+      labelsVisible: true,
+      resources: {
+        ...base.resources,
+        scene: { ...base.resources.scene, value: {
+          ...base.resources.scene.value,
+          metadata: { ...base.resources.scene.value.metadata, rooms },
+        } },
+      },
+    });
+    await frame();
+    // Pan so the first name sits just inside the lower edge, where the slot
+    // below the colliding second name would leave the canvas. A top-down pan
+    // moves names linearly, so two samples give the camera for that edge.
+    const start = renderer.camera;
+    const firstAt = async (targetZ) => {
+      labels = [];
+      renderer.setCamera({ ...start, distance: start.distance / 2, targetZ }, false);
+      await frame();
+      return labels.find((label) => label.text === "Bathroom")?.y;
+    };
+    const y0 = await firstAt(start.targetZ);
+    const y1 = await firstAt(start.targetZ - 1);
+    const firstY = await firstAt(start.targetZ - (680 - y0) / (y1 - y0));
+    const found = { firstY, labels };
+    renderer.dispose();
+    CanvasRenderingContext2D.prototype.fillText = originalFillText;
+    sceneCanvas.remove();
+    overlayCanvas.remove();
+    return found;
+  });
+
+  expect(result.firstY, "the first name sits at the lower edge").toBeGreaterThan(668);
+  expect(result.labels.map((label) => label.text)).toEqual(["Bathroom", "Quinns Room"]);
+  for (const label of result.labels) expect(label.y + 10, `${label.text} stays on the canvas`).toBeLessThanOrEqual(700);
+});
