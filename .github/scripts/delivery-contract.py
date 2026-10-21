@@ -9,6 +9,7 @@ Kinds: ci (pull_request + push + concurrency), dispatch (workflow_dispatch /
 workflow_call / repository_dispatch only), nightly (one schedule, at most one file).
 Contract: wiki workflows/delivery-contract.md. Stdlib only; no YAML parser needed.
 """
+
 import json
 import re
 import sys
@@ -30,7 +31,7 @@ def triggers(text):
         if inline:
             return {t.strip(" '\"") for t in inline.strip("[]").split(",") if t.strip()}
         found = set()
-        for nxt in lines[i + 1:]:
+        for nxt in lines[i + 1 :]:
             if nxt.strip() == "" or nxt.lstrip().startswith("#"):
                 continue
             if not nxt.startswith(" "):
