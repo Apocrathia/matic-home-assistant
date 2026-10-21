@@ -187,7 +187,7 @@ test("all 256 room colors stay distinct by room ID, retain selection and labels,
     const forced = await capture(rooms, {}, true);
     const dark = await capture(rooms, {}, false, true);
     const photo = await capture(rooms, { appearance: "photo" });
-    const wireRooms = rooms.slice(0, 16).map((room, index) => ({
+    const wireRooms = rooms.map((room, index) => ({
       ...room, room_id: `room_${index.toString(16).padStart(16, "0")}`,
     }));
     const parseRooms = (raw) => {
@@ -224,6 +224,7 @@ test("all 256 room colors stay distinct by room ID, retain selection and labels,
       productionByName: byName(parsed, production.fills),
       productionReversedByName: byName(parsedReversed, productionReversed.fills),
       parsedIds: parsed.map((room) => room.id),
+      parsedCapCount: parseRooms([...wireRooms, wireRooms[0]]).length,
       legacyIds: legacy.map((room) => room.id),
       duplicateIds: duplicate.map((room) => room.id),
       previewLight, previewDark,
@@ -243,7 +244,8 @@ test("all 256 room colors stay distinct by room ID, retain selection and labels,
     await test.info().attach(`12-room-${scheme}`, { path, contentType: "image/png" });
   }
   expect(result.productionByName).toEqual(result.productionReversedByName);
-  expect(result.parsedIds).toEqual(Array.from({ length: 16 }, (_, index) => `room_${index.toString(16).padStart(16, "0")}`));
+  expect(result.parsedIds).toEqual(Array.from({ length: 256 }, (_, index) => `room_${index.toString(16).padStart(16, "0")}`));
+  expect(result.parsedCapCount).toBe(256);
   expect(result.legacyIds[0]).toBe("scene-room-1");
   expect(new Set(result.duplicateIds).size).toBe(3);
   const selectedIndex = result.first.strokes.findIndex((style) => style === "#0c78c8");

@@ -123,7 +123,7 @@ const parseTransfer = (buffer: ArrayBuffer): ParsedScene => {
     || span.length !== 2
     || !span.every((value) => typeof value === "number" && Number.isFinite(value) && value >= 1 && value <= 65_536)
   ) fail();
-  const rawRooms = Array.isArray(payload.rooms) ? payload.rooms.slice(0, 128) : [];
+  const rawRooms = Array.isArray(payload.rooms) ? payload.rooms.slice(0, 256) : [];
   const roomIds = new Set<string>();
   const rooms = rawRooms.flatMap((candidate, index) => {
     if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return [];

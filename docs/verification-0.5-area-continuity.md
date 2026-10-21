@@ -98,12 +98,13 @@ The 2D room palette now starts with sixteen perceptually separated colors and
 uses stronger fills. All 256 supported rooms retain distinct colors. Room IDs
 preserve assignment under metadata reordering. The backend carries its stable
 room identity through the actual scene parser; production-format reorder and
-legacy/duplicate-ID fallbacks are tested. Two-pixel neutral boundaries
+legacy/duplicate-ID fallbacks are tested. All 256 supported rooms are exercised
+through the real parser, including the input room-count cap. Two-pixel neutral boundaries
 separate rooms, with a three-pixel selection boundary. Forced colors retain the
 system palette. Chromium and WebKit checks cover uniqueness, first-sixteen
 OKLab separation, selection, labels, dark mode and forced colors; synthetic
 12-room light/dark captures were visually inspected. Installed-map inspection
-is pending with RC35. The canonical Node 24 startup graph is 92,146 bytes,
+is pending with RC35. The canonical Node 24 startup graph is 92,150 bytes,
 within the unchanged 92,160-byte budget. Developer notes no longer ship inside
 a rendered HTML template.
 
