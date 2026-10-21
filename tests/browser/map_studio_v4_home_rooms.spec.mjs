@@ -321,6 +321,10 @@ test.describe("home by state", () => {
       }
       await expect(mapsRows(gallery)).toHaveCount(2);
       await expect(mapsRows(gallery).nth(0)).not.toHaveAttribute("aria-disabled", "true");
+      if (scenario === "starting-command") {
+        await expect(gallery.getByRole("button", { name: "Stop cleaning" })).toBeVisible();
+        await expect(gallery.getByRole("button", { name: "Stop cleaning" })).toBeEnabled();
+      }
     });
   }
 

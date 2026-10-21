@@ -1677,9 +1677,11 @@ def area_binding_status(
                     and _room_frame_matches(saved_anchor, current_anchor, room_geometry)
                 )
                 # Preserve the established cheap frame/local path before
-                # spending any optional witness budget.
+                # spending any optional witness budget. Legacy v3 records
+                # may omit the global digest required by strong recovery.
                 strongly_proven = (
                     not frame_matches
+                    and "translation_invariant_geometry_sha256" in saved
                     and _room_has_strong_frame_witnesses(
                         saved_anchor, current_anchor, room_geometry
                     )
@@ -1739,14 +1741,17 @@ def area_binding_status(
         return AreaBindingStatus.INVALID
     if geometry_changed:
         try:
-            if _saved_room_frames_have_strong_witnesses(
-                saved["translation_room_anchors"],
-                area["circles"],
-                floor_plan,
-                room_geometry,
-            ) and saved[
-                "translation_invariant_geometry_sha256"
-            ].casefold() != translation_invariant_geometry_fingerprint(floor_plan):
+            if (
+                "translation_invariant_geometry_sha256" in saved
+                and _saved_room_frames_have_strong_witnesses(
+                    saved["translation_room_anchors"],
+                    area["circles"],
+                    floor_plan,
+                    room_geometry,
+                )
+                and saved["translation_invariant_geometry_sha256"].casefold()
+                != translation_invariant_geometry_fingerprint(floor_plan)
+            ):
                 return AreaBindingStatus.CURRENT
         except GeometryTooComplex, OverflowError, TypeError, ValueError:
             pass

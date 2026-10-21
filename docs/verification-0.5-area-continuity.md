@@ -39,9 +39,10 @@ It does not add automatic rebinding or coordinate transformations.
 
 ## Source evidence
 
-The final local source run passed **5,216 tests with 100.00% coverage** across
-20,007 statements (`python -m pytest --cov=custom_components/matic_robot
---cov-report=term-missing`). Required PR CI and installed retesting remain open.
+The complete local run at candidate `46b41879` passed **5,216 tests with
+100.00% coverage** across 20,007 statements (`python -m pytest
+--cov=custom_components/matic_robot --cov-report=term-missing`). Subsequent
+review fixes require refreshed exact-head PR CI; installed retesting remains open.
 
 - Binding regressions cover partition churn, unrelated room changes,
   containing-room contour reshaping, fractional wall refinements, new overlaps,
@@ -54,6 +55,10 @@ The final local source run passed **5,216 tests with 100.00% coverage** across
   valid saved-plan preview. These are controlled integration fixtures.
 - Migration defensive guards are checked independently as well as through the
   stricter normal status path. No production guard was removed for coverage.
+- Legacy v3 records may omit the optional global-frame digest. Their original
+  local validation remains usable; strong recovery requires that digest and
+  safely reports changed geometry when it is absent. Persistence, reload,
+  readiness, preview and service-validation regressions cover this format.
 
 ## Installed and physical evidence
 
@@ -107,6 +112,12 @@ OKLab separation, selection, labels, dark mode and forced colors; synthetic
 is pending with RC35. The canonical Node 24 startup graph is 92,150 bytes,
 within the unchanged 92,160-byte budget. Developer notes no longer ship inside
 a rendered HTML template.
+
+A real 256-room, tile-clipped map regression reproduces the metadata ceiling
+crossing introduced by room IDs. Lossless integer-coordinate serialization
+preserves every room and fractional center while reducing its metadata from
+1,050,719 to 739,423 bytes. Encoder and header parser share the unchanged 1 MiB
+limit; an unrepresentable scene returns the existing explicit error path.
 
 ## Boundaries
 

@@ -541,3 +541,49 @@ def test_late_witness_failure_preserves_geometry_changed(monkeypatch):
         area_binding_status(area, _locally_refined(plan))
         is AreaBindingStatus.GEOMETRY_CHANGED
     )
+
+
+@pytest.mark.parametrize("change_bounds", [False, True])
+def test_v3_optional_digest_is_required_only_for_strong_recovery(
+    change_bounds, monkeypatch
+):
+    plan = _witness_plan()
+    area = _area(plan)
+    refined = _locally_refined(plan)
+    if change_bounds:
+        boundary = list(refined.rooms[0].boundary)
+        index = min(range(len(boundary)), key=lambda i: boundary[i][0])
+        x, y = boundary[index]
+        boundary[index] = (x - 0.08, y)
+        refined = replace(
+            refined, rooms=(replace(refined.rooms[0], boundary=tuple(boundary)),)
+        )
+    assert area_binding_status(area, refined) is AreaBindingStatus.CURRENT
+
+    del area["map_binding"]["translation_invariant_geometry_sha256"]
+    assert area_binding_module._valid_saved_binding(area["map_binding"])
+    unchanged = deepcopy(area)
+
+    def optional_proof_must_not_run(*args, **kwargs):
+        raise AssertionError("strong recovery requires the global-frame digest")
+
+    monkeypatch.setattr(
+        area_binding_module,
+        "_room_has_strong_frame_witnesses",
+        optional_proof_must_not_run,
+    )
+    monkeypatch.setattr(
+        area_binding_module,
+        "_saved_room_frames_have_strong_witnesses",
+        optional_proof_must_not_run,
+    )
+    assert area_binding_status(area, plan) is AreaBindingStatus.CURRENT
+    remote = _room(
+        ((30.0, 0.0), (31.0, 0.0), (31.0, 1.0), (30.0, 1.0)), room_id="remote"
+    )
+    assert (
+        area_binding_status(area, replace(plan, rooms=(*plan.rooms, remote)))
+        is AreaBindingStatus.CURRENT
+    )
+    assert area_binding_status(area, refined) is AreaBindingStatus.GEOMETRY_CHANGED
+    assert area == unchanged

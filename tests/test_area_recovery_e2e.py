@@ -348,7 +348,7 @@ async def test_stale_v4_area_recovers_through_catalog_and_saved_plan_preview(
     runtime.client.async_send_command.assert_not_awaited()
 
 
-@pytest.mark.parametrize("binding_kind", ["v3", "v6"])
+@pytest.mark.parametrize("binding_kind", ["v3", "v3_without_invariant_digest", "v6"])
 @pytest.mark.parametrize(
     "refresh",
     [
@@ -382,7 +382,7 @@ async def test_run_like_map_refresh_preserves_only_proven_area_continuity(
         circles = saved_area["circles"]
     else:
         original_map = (
-            _simple_floor_plan() if binding_kind == "v3" else _dense_floor_plan()
+            _dense_floor_plan() if binding_kind == "v6" else _simple_floor_plan()
         )
         circles = [{"x": 0.5, "y": 0.5, "radius": 0.2}]
         saved_area = {
@@ -395,9 +395,11 @@ async def test_run_like_map_refresh_preserves_only_proven_area_continuity(
         }
     assert saved_area["map_binding"]["version"] == (
         SCOPED_MAP_BINDING_VERSION
-        if binding_kind == "v3"
+        if binding_kind != "v6"
         else SHAPE_ANCHORED_HASH_ONLY_SCOPED_MAP_BINDING_VERSION
     )
+    if binding_kind == "v3_without_invariant_digest":
+        del saved_area["map_binding"]["translation_invariant_geometry_sha256"]
     manager._robot("synthetic-serial")["areas"]["saved-zone"] = saved_area
     _mixed_saved_plan(manager)
 
@@ -429,11 +431,13 @@ async def test_run_like_map_refresh_preserves_only_proven_area_continuity(
 
     # This is the manager operation scheduled by the coordinator on a fresh
     # supported floor-plan revision. It may upgrade legacy records, but must
-    # not rebind a current v3/v5 area as a side effect of unrelated map churn.
+    # not rebind a current anchored area as a side effect of unrelated map churn.
     upgrade = await manager.async_upgrade_area_bindings(
         "synthetic-serial", refreshed_map
     )
-    unsafe_drift = refresh in {"translated", "partition_overlapping_room"}
+    unsafe_drift = refresh in {"translated", "partition_overlapping_room"} or (
+        refresh == "local_refinement" and binding_kind == "v3_without_invariant_digest"
+    )
     assert upgrade == AreaBindingUpgradeResult(0, False)
     assert saved_area == original_record
     manager._store.async_save.assert_not_awaited()
