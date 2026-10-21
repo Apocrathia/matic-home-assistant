@@ -46,8 +46,8 @@ It does not add automatic rebinding or coordinate transformations.
 The assembled PR #287 candidate passed **5,278 tests with 100.00% coverage**
 across 20,147 statements (`python -m pytest --cov=custom_components/matic_robot
 --cov-report=term-missing`). Exact-head PR CI and complete regular review must
-pass before merging. Installed RC35 retesting is recorded below; RC36
-installation and the label recheck remain pending.
+pass before merging. Installed RC35 and RC36 retesting is recorded below;
+RC37 installation and the label recheck remain pending.
 
 - Binding regressions cover partition churn, unrelated room changes,
   containing-room contour reshaping, fractional wall refinements, new overlaps,
@@ -96,7 +96,8 @@ included here.
 | RC35 Home shortcut recovery | Pass: on the same open page, both saved shortcuts return within 30 to 90 seconds of a reload, after a read-only "Locating" interval. A tab already stalled before the reload stayed on "Map unavailable" until refreshed; that tab had been disturbed by test scripting and is not counted as a product result. |
 | RC35 stale position | Pass: a native pose about 13 hours old reports `pose_observation_current=false` and no robot marker is drawn. |
 | RC35 installed room colors | Pass for colors: room fills are distinct. **Fail for labels:** later room fills clipped two adjacent room names and hid a third label. Fixed in PR #293 for RC36. |
-| RC36 installation and label recheck | Pending. |
+| RC36 installation and label recheck | Pass: installed through Home Assistant updates after a HACS refresh; `update.matic_unofficial_update` and the integration report 0.5.0rc36; after restart the saved area reports `current`, both shortcuts show, no stale marker is drawn, and previously clipped names show in full. One small room's 2D label was still hidden by label-collision suppression (present since before RC35); RC37 moves colliding labels aside. |
+| RC37 installation and label recheck | Pending. |
 | Final physical/owner acceptance and stable publication | Open. |
 
 ## Reproduced release blockers
