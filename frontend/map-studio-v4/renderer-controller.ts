@@ -1512,6 +1512,9 @@ export class RendererController {
       context.textAlign = "center";
       context.textBaseline = "middle";
       const occupied: DOMRect[] = [];
+      // Labels draw after every fill so a later, overlapping room cannot paint
+      // over an earlier room's name.
+      const labelRooms: (typeof scene.metadata.rooms)[number][] = [];
       for (const room of scene.metadata.rooms) {
         const selected = selectedNames.has(room.name.toLocaleLowerCase());
         if (!allRooms && !selected) continue;
@@ -1541,7 +1544,9 @@ export class RendererController {
           context.fill();
           context.stroke();
         }
-        if (!state.labelsVisible) continue;
+        if (state.labelsVisible) labelRooms.push(room);
+      }
+      for (const room of labelRooms) {
         const center = this.#projectCell(room.center[0], room.center[1], 1);
         if (!center) continue;
         const position = selectedPositions?.get(room.id);
