@@ -89,6 +89,10 @@ HermesCredential = None
 new_hermes_user_id = None
 decode_fields = None
 
+# The integration's client/ uses Python 3.14 syntax; older interpreters raise
+# SyntaxError on import and must take the hand-rolled fallback too.
+_CLIENT_IMPORT_ERRORS = (ImportError, SyntaxError)
+
 try:  # client/ is Home Assistant-agnostic (client/__init__.py)
     from client.auth import HermesCredential as _HermesCredential
     from client.auth import new_hermes_user_id as _new_hermes_user_id
@@ -98,7 +102,7 @@ try:  # client/ is Home Assistant-agnostic (client/__init__.py)
     new_hermes_user_id = _new_hermes_user_id
     decode_fields = _decode_fields
     _USING_INTEGRATION_CLIENT = True
-except ImportError:
+except _CLIENT_IMPORT_ERRORS:
     _USING_INTEGRATION_CLIENT = False
 
 
@@ -436,7 +440,7 @@ def _encode_request(user_id: str) -> bytes:
 async def _safe_disconnect(client: BleakClient) -> None:
     try:
         await client.disconnect()
-    except BaseException:
+    except Exception:
         pass
 
 
@@ -475,7 +479,7 @@ async def mint_over_ble(device: BLEDevice, user_id: str):
                     await client.connect()
                     hidden_since = None
                 await asyncio.sleep(GATT_RETRY_SECONDS)
-            except BaseException as err:
+            except Exception as err:
                 # A transient failure mid-pairing is expected while the OS
                 # sheet is open; upstream retries candidates the same way
                 # (bluetooth_pairing.py:786-804). Keep retrying until the
@@ -539,7 +543,7 @@ async def mint_flow(args, user_id: str) -> int:
         try:
             with os.fdopen(fd, "w") as handle:
                 handle.write(data)
-        except BaseException:
+        except Exception:
             try:
                 os.close(fd)
             except OSError:
@@ -589,6 +593,14 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if args.user_id is not None:
+        try:
+            parsed = UUID(str(args.user_id).strip())
+        except ValueError:
+            parser.error(f"--user-id must be a UUID, got {args.user_id!r}")
+        if parsed.version != 4:
+            parser.error("--user-id must be a UUIDv4")
+        args.user_id = str(parsed)
     user_id = args.user_id or (
         new_hermes_user_id() if new_hermes_user_id else _fallback_new_hermes_user_id()
     )

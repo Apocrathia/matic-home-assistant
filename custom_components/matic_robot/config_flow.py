@@ -450,7 +450,9 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=probatio.Schema(
                 {
                     probatio.Required(CONF_HERMES_CREDENTIAL): selector.TextSelector(
-                        selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
+                        selector.TextSelectorConfig(
+                            type=selector.TextSelectorType.PASSWORD
+                        )
                     )
                 }
             ),
