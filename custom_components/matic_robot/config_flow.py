@@ -421,23 +421,34 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         step_id: str,
         errors: dict[str, str] | None = None,
     ) -> config_entries.ConfigFlowResult:
-        """Show the pairing steps; the credential import is always offered.
+        """Show the pairing steps; advanced mode offers the import.
 
         Submitting the unchecked form confirms Bluetooth pairing; checking
         the box routes to the manual import step instead, so hosts without a
         local adapter (for example ESPHome-proxy-only setups) can finish
-        with a credential minted elsewhere.
+        with a credential minted elsewhere. The option stays out of the way
+        unless the user opted into advanced mode.
         """
+        # Advanced mode gates the import (DataEntryFlow.show_advanced_options
+        # is deprecated to always-True until 2027.6; the UI still sets the
+        # context flag, so read it directly).
+        if self.context.get("show_advanced_options", False):
+            return self.async_show_form(
+                step_id=step_id,
+                errors=errors,
+                data_schema=probatio.Schema(
+                    {
+                        probatio.Optional(CONF_IMPORT_CREDENTIAL, default=False): (
+                            selector.BooleanSelector()
+                        )
+                    }
+                ),
+                description_placeholders={"help_url": BLUETOOTH_HELP_URL},
+            )
         return self.async_show_form(
             step_id=step_id,
             errors=errors,
-            data_schema=probatio.Schema(
-                {
-                    probatio.Optional(CONF_IMPORT_CREDENTIAL, default=False): (
-                        selector.BooleanSelector()
-                    )
-                }
-            ),
+            data_schema=None,
             description_placeholders={"help_url": BLUETOOTH_HELP_URL},
         )
 
@@ -450,7 +461,9 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=probatio.Schema(
                 {
                     probatio.Required(CONF_HERMES_CREDENTIAL): selector.TextSelector(
-                        selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
+                        selector.TextSelectorConfig(
+                            type=selector.TextSelectorType.PASSWORD
+                        )
                     )
                 }
             ),
@@ -846,10 +859,10 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is None:
             return self._show_import_form()
         value = str(user_input.get(CONF_HERMES_CREDENTIAL, "")).strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-            value = value[1:-1].strip()
         if value[:7].lower() == "bearer:":
             value = value[7:].strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1].strip()
         try:
             credential = HermesCredential.from_storage(value)
         except ValueError:
@@ -858,8 +871,6 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
         if self._import_mode == "reauth":
             return await self._async_import_reauth(credential)
-        if self._import_mode == "recover":
-            return await self._async_import_recover(credential)
         return await self._async_import_setup(credential)
 
     async def _async_import_setup(
@@ -911,52 +922,6 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data_updates={CONF_HERMES_CREDENTIAL: credential.to_storage()},
             reason="reauth_successful",
         )
-
-    async def _async_import_recover(
-        self, credential: HermesCredential
-    ) -> config_entries.ConfigFlowResult:
-        """Re-pin a reset robot with a credential minted on another host."""
-        entry = self._get_reconfigure_entry()
-        assert self._recovery_address is not None
-        host, port = self._recovery_address
-        try:
-            fingerprint = await _async_verify_recovered_robot(
-                host, port, entry.data, credential
-            )
-        except AuthenticationRequiredError:
-            error = "import_rejected"
-        except DifferentRobotError:
-            error = "different_robot"
-        except CannotConnectError:
-            error = "recover_cannot_connect"
-        except CertificateMismatchError, InvalidRobotCertificateError:
-            error = "invalid_certificate"
-        except MaticError as err:
-            _LOGGER.warning(
-                "Matic credential import could not recover the robot: %s", err
-            )
-            error = "recover_cannot_connect"
-        else:
-            await self.async_set_unique_id(entry.unique_id)
-            self._abort_if_unique_id_mismatch()
-            result = self.async_update_reload_and_abort(
-                entry,
-                data_updates={
-                    CONF_HOST: host,
-                    CONF_PORT: port,
-                    CONF_CERTIFICATE_FINGERPRINT: fingerprint,
-                    CONF_HERMES_CREDENTIAL: credential.to_storage(),
-                },
-                reason="identity_recovered",
-            )
-            result["description_placeholders"] = {"name": entry.title}
-            # Core deletes a Repair only when its fix flow creates an entry, and
-            # the reloaded coordinator never raised this one: delete it here.
-            ir.async_delete_issue(
-                self.hass, DOMAIN, f"robot_identity_changed_{entry.entry_id}"
-            )
-            return result
-        return self._show_import_form({"base": error})
 
     async def async_step_reauth(
         self, entry_data: dict[str, Any]
@@ -1259,9 +1224,6 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="recover_identity",
             data_schema=probatio.Schema(
                 {
-                    probatio.Optional(CONF_IMPORT_CREDENTIAL, default=False): (
-                        selector.BooleanSelector()
-                    ),
                     probatio.Required(CONF_ROBOT_ADDRESS): section(
                         probatio.Schema(
                             {
@@ -1310,9 +1272,6 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         except InvalidRobotCertificateError:
             error = "invalid_certificate"
         else:
-            if user_input.get(CONF_IMPORT_CREDENTIAL) is True:
-                self._import_mode = "recover"
-                return await self.async_step_import_credential()
             if not async_has_local_bluetooth_adapter(self.hass):
                 return self._show_recovery_form({"base": "bluetooth_unavailable"})
             self._async_start_pairing("matic_robot_recover_identity")

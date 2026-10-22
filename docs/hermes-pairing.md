@@ -2,9 +2,13 @@
 
 [Documentation](README.md) · [Install](../README.md#install)
 
-Pairing gives Home Assistant its own local robot credential. It requires a
-Bluetooth adapter built into or attached to the Home Assistant host; proxies
-cannot complete it. Normal use is over the LAN after pairing.
+Pairing gives Home Assistant its own local robot credential. On this Home
+Assistant host it needs a Bluetooth adapter built into or attached to the host;
+Bluetooth proxies cannot complete it. Without an adapter, a
+[community pairing tool](https://github.com/Apocrathia/matic-home-assistant/blob/main/docs/matic-pair.md)
+makes the pairing on any Bluetooth-capable computer, and the advanced-mode
+import step (setup and re-auth; experimental, community supported) pastes it
+here. Normal use is over the LAN after pairing.
 
 ## Setup
 

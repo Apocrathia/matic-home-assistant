@@ -17,7 +17,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResultType
-from homeassistant.helpers import issue_registry as ir
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.matic_robot import config_flow as flow_module
@@ -162,6 +161,7 @@ def _mock_robot(monkeypatch, *, reject_credentials: bool = False) -> _Recorder:
 
 
 async def _drive_setup_import(flow: MaticRobotConfigFlow, value: str):
+    flow.context["show_advanced_options"] = True
     form = await flow.async_step_pair()
     assert form["type"] is FlowResultType.FORM
     assert form["step_id"] == "pair"
@@ -296,6 +296,7 @@ async def test_pair_step_offers_import_and_keeps_bluetooth(
     )
     _mock_robot(monkeypatch)
     flow = _flow(hass)
+    flow.context["show_advanced_options"] = True
     flow._pairing_data = {"host": HOST, "port": PORT}
 
     form = await flow.async_step_pair()
@@ -333,6 +334,7 @@ async def test_reauth_import_replaces_the_saved_credential(hass, monkeypatch) ->
         "source": config_entries.SOURCE_REAUTH,
         "entry_id": entry.entry_id,
         "unique_id": "synthetic",
+        "show_advanced_options": True,
     }
 
     form = await flow.async_step_reauth_confirm()
@@ -375,74 +377,9 @@ async def test_reauth_import_reports_live_errors(hass, monkeypatch) -> None:
     assert entry.data[CONF_HERMES_CREDENTIAL] == TEST_CREDENTIAL.to_storage()
 
 
-async def test_recover_import_repins_a_reset_robot(hass, monkeypatch) -> None:
-    """Identity recovery finishes with an imported credential and a new pin."""
-    entry = MockConfigEntry(domain=DOMAIN, unique_id="synthetic", data=ENTRY_DATA)
-    entry.add_to_hass(hass)
-    issue_id = f"robot_identity_changed_{entry.entry_id}"
-    ir.async_create_issue(
-        hass,
-        DOMAIN,
-        issue_id,
-        data={"entry_id": entry.entry_id},
-        is_fixable=True,
-        severity=ir.IssueSeverity.ERROR,
-        translation_key="robot_identity_changed",
-    )
-    monkeypatch.setattr(
-        flow_module,
-        "async_fetch_peer_certificate",
-        AsyncMock(return_value=b"new certificate"),
-    )
-    monkeypatch.setattr(
-        flow_module,
-        "validate_certificate",
-        MagicMock(
-            return_value=PeerIdentity(
-                NEW_FINGERPRINT, "robot.invalid", "synthetic", "robot_server"
-            )
-        ),
-    )
-    recorder = _Recorder()
-    monkeypatch.setattr(flow_module, "MaticHermesClient", recorder.factory)
-    monkeypatch.setattr(hass.config_entries, "async_schedule_reload", MagicMock())
-    flow = MaticRobotConfigFlow()
-    flow.hass = hass
-    flow.handler = DOMAIN
-    flow.context = {
-        "source": config_entries.SOURCE_RECONFIGURE,
-        "entry_id": entry.entry_id,
-    }
-    recovery = {"robot_address": {"host": "192.0.2.9", "port": PORT}}
-
-    picked = await flow.async_step_recover_identity(
-        {**recovery, CONF_IMPORT_CREDENTIAL: True}
-    )
-    assert picked["type"] is FlowResultType.FORM
-    assert picked["step_id"] == "import_credential"
-    result = await flow.async_step_import_credential(
-        {CONF_HERMES_CREDENTIAL: REPLACEMENT_CREDENTIAL.to_storage()}
-    )
-
-    assert result["type"] is FlowResultType.ABORT
-    assert result["reason"] == "identity_recovered"
-    assert result["description_placeholders"] == {"name": entry.title}
-    assert entry.data == {
-        **ENTRY_DATA,
-        "host": "192.0.2.9",
-        CONF_CERTIFICATE_FINGERPRINT: NEW_FINGERPRINT,
-        CONF_HERMES_CREDENTIAL: REPLACEMENT_CREDENTIAL.to_storage(),
-    }
-    assert recorder.calls[0]["kwargs"]["credential"] == REPLACEMENT_CREDENTIAL
-    assert recorder.calls[0]["kwargs"]["certificate_fingerprint"] == NEW_FINGERPRINT
-    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None
-
-
 @pytest.mark.parametrize("adapter", [False, True])
-async def test_recover_step_offers_import_and_keeps_bluetooth(
-    hass, monkeypatch, adapter
-) -> None:
-    """The recovery form always offers the import path, adapter or not."""
+async def test_recover_step_has_no_import(hass, monkeypatch, adapter) -> None:
+    """Recovery stays local-adapter only, with no import option."""
     monkeypatch.setattr(
         flow_module,
         "async_has_local_bluetooth_adapter",
@@ -456,9 +393,7 @@ async def test_recover_step_offers_import_and_keeps_bluetooth(
         AsyncMock(return_value=b"new certificate"),
     )
     monkeypatch.setattr(
-        flow_module,
-        "validate_certificate",
-        MagicMock(return_value=IDENTITY),
+        flow_module, "validate_certificate", MagicMock(return_value=IDENTITY)
     )
     # Keep the live Bluetooth runner from touching real BLE machinery.
     monkeypatch.setattr(
@@ -479,28 +414,16 @@ async def test_recover_step_offers_import_and_keeps_bluetooth(
 
     form = await flow.async_step_recover_identity()
     assert form["step_id"] == "recover_identity"
-    assert CONF_IMPORT_CREDENTIAL in form["data_schema"].schema
+    assert CONF_IMPORT_CREDENTIAL not in form["data_schema"].schema
     unchecked = await flow.async_step_recover_identity(dict(recovery))
     if adapter:
-        # The Bluetooth path is untouched: the live pairing runner starts.
         assert unchecked["type"] is FlowResultType.SHOW_PROGRESS
-        assert flow._pairing_task is not None
         await flow._pairing_task
-        result = await flow.async_step_finish()
-        assert result["type"] is FlowResultType.FORM
-        assert result["errors"] == {"base": "robot_not_found"}
     else:
-        # Without an adapter the old hard failure stays, and the import
-        # checkbox is presented alongside it on the same form.
         assert unchecked["type"] is FlowResultType.FORM
         assert unchecked["step_id"] == "recover_identity"
-        assert CONF_IMPORT_CREDENTIAL in unchecked["data_schema"].schema
         assert unchecked["errors"] == {"base": "bluetooth_unavailable"}
         assert flow._pairing_task is None
-        picked = await flow.async_step_recover_identity(
-            {**recovery, CONF_IMPORT_CREDENTIAL: True}
-        )
-        assert picked["step_id"] == "import_credential"
 
 
 @pytest.mark.parametrize(
@@ -563,77 +486,19 @@ async def test_reauth_import_reports_connection_errors(
     assert entry.data[CONF_HERMES_CREDENTIAL] == TEST_CREDENTIAL.to_storage()
 
 
-@pytest.mark.parametrize(
-    ("case", "expected"),
-    [
-        pytest.param("second_fetch_offline", "recover_cannot_connect", id="offline"),
-        pytest.param("refused", "import_rejected", id="refused"),
-        pytest.param("wrong_serial", "invalid_certificate", id="wrong-serial"),
-        pytest.param("another_robot", "different_robot", id="another-robot"),
-        pytest.param("unsupported", "recover_cannot_connect", id="unsupported"),
-    ],
-)
-async def test_recover_import_reports_live_errors(
-    hass, monkeypatch, case, expected
-) -> None:
-    """A refused import never writes the entry or dismisses the Repair."""
-    entry = MockConfigEntry(domain=DOMAIN, unique_id="synthetic", data=ENTRY_DATA)
-    entry.add_to_hass(hass)
-    issue_id = f"robot_identity_changed_{entry.entry_id}"
-    ir.async_create_issue(
-        hass,
-        DOMAIN,
-        issue_id,
-        data={"entry_id": entry.entry_id},
-        is_fixable=True,
-        severity=ir.IssueSeverity.ERROR,
-        translation_key="robot_identity_changed",
-    )
-    same_robot = PeerIdentity(
-        NEW_FINGERPRINT, "robot.invalid", "synthetic", "robot_server"
-    )
-    other_robot = PeerIdentity(
-        NEW_FINGERPRINT, "robot.invalid", "another-serial", "robot_server"
-    )
+async def test_import_hidden_without_advanced_mode(hass, monkeypatch) -> None:
+    """Basic mode keeps the stock pairing form; no import checkbox appears."""
     monkeypatch.setattr(
-        flow_module,
-        "async_fetch_peer_certificate",
-        AsyncMock(side_effect=[b"new certificate", CannotConnectError("offline")])
-        if case == "second_fetch_offline"
-        else AsyncMock(return_value=b"new certificate"),
+        flow_module, "async_has_local_bluetooth_adapter", lambda _hass: False
     )
-    monkeypatch.setattr(
-        flow_module,
-        "validate_certificate",
-        MagicMock(
-            side_effect=[same_robot, same_robot, other_robot, other_robot]
-            if case == "another_robot"
-            else MagicMock(return_value=same_robot)
-        ),
-    )
-    recorder = _Recorder(
-        reject_credentials=case == "refused",
-        wrong_serial=case == "wrong_serial",
-        client_error=EndpointUnsupportedError("no Handshake")
-        if case == "unsupported"
-        else None,
-    )
-    monkeypatch.setattr(flow_module, "MaticHermesClient", recorder.factory)
-    flow = MaticRobotConfigFlow()
-    flow.hass = hass
-    flow.handler = DOMAIN
-    flow.context = {
-        "source": config_entries.SOURCE_RECONFIGURE,
-        "entry_id": entry.entry_id,
-    }
-    recovery = {"robot_address": {"host": "192.0.2.9", "port": PORT}}
+    flow = _flow(hass)
+    flow._pairing_data = {"host": HOST, "port": PORT}
 
-    await flow.async_step_recover_identity({**recovery, CONF_IMPORT_CREDENTIAL: True})
-    result = await flow.async_step_import_credential(
-        {CONF_HERMES_CREDENTIAL: REPLACEMENT_CREDENTIAL.to_storage()}
-    )
+    form = await flow.async_step_pair()
+    assert form["step_id"] == "pair"
+    assert form.get("data_schema") is None
 
-    assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {"base": expected}
-    assert entry.data == ENTRY_DATA
-    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is not None
+    unchecked = await flow.async_step_pair({})
+    assert unchecked["type"] is FlowResultType.FORM
+    assert unchecked["step_id"] == "pair"
+    assert unchecked["errors"] == {"base": "bluetooth_unavailable"}

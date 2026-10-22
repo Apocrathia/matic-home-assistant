@@ -36,8 +36,11 @@ locally in Home Assistant. [Matic Cues](docs/privacy.md#matic-cues) uses Matic's
 
 ## Install
 
-Requires **Home Assistant 2026.10+** and a Bluetooth adapter built into or attached
-to the Home Assistant host for pairing. Bluetooth proxies cannot complete setup.
+Requires **Home Assistant 2026.10+**. Pairing needs a Bluetooth adapter built
+into or attached to the Home Assistant host; Bluetooth proxies cannot complete
+it. No adapter? [This community tool](https://github.com/Apocrathia/matic-home-assistant/blob/main/docs/matic-pair.md)
+pairs on any Bluetooth-capable computer, and the advanced-mode import step
+pastes the result here.
 
 1. In HACS, add [this repository](https://github.com/ProspectOre/matic-home-assistant) as a custom **Integration** repository.
 2. Download **Matic (Unofficial)** and restart Home Assistant.
