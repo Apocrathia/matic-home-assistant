@@ -52,9 +52,12 @@ from .const import (
     CONF_CERTIFICATE_FINGERPRINT,
     CONF_HERMES_CREDENTIAL,
     CONF_HOSTNAME,
+    CONF_PAIRING_METHOD,
     CONF_SERIAL_NUMBER,
     DEFAULT_PORT,
     DOMAIN,
+    PAIRING_METHOD_BLUETOOTH,
+    PAIRING_METHOD_IMPORT,
     SERVICE_TYPE,
 )
 from .entity import hostname_suffix
@@ -80,6 +83,12 @@ CONF_IMPORT_CREDENTIAL = "import_credential"
 BLUETOOTH_HELP_URL = (
     "https://github.com/ProspectOre/matic-home-assistant/"
     "blob/main/docs/hermes-pairing.md#home-assistant-container"
+)
+# The one place that links the community pairing tool, so the link can change
+# without a release.
+IMPORT_HELP_URL = (
+    "https://github.com/ProspectOre/matic-home-assistant/"
+    "blob/main/docs/hermes-pairing.md#pair-on-another-device"
 )
 _PAIRING_ERRORS = (
     BluetoothPairingIncompleteError,
@@ -337,6 +346,27 @@ def _bluetooth_address_data(grant: BluetoothCredentialGrant) -> dict[str, str]:
     return {} if grant.address is None else {CONF_BLUETOOTH_ADDRESS: grant.address}
 
 
+def _bluetooth_credential_data(grant: BluetoothCredentialGrant) -> dict[str, str]:
+    """Return the entry update saving a credential paired here over Bluetooth."""
+    return {
+        CONF_HERMES_CREDENTIAL: grant.credential.to_storage(),
+        CONF_PAIRING_METHOD: PAIRING_METHOD_BLUETOOTH,
+        **_bluetooth_address_data(grant),
+    }
+
+
+def _imported_credential_data(credential: HermesCredential) -> dict[str, str]:
+    """Return the entry update saving a credential paired on another device.
+
+    The import never learns which Bluetooth address issued the credential, so
+    any saved address is left as it was; reauth only uses it to prefer a bond.
+    """
+    return {
+        CONF_HERMES_CREDENTIAL: credential.to_storage(),
+        CONF_PAIRING_METHOD: PAIRING_METHOD_IMPORT,
+    }
+
+
 async def _async_verify_recovered_robot(
     host: str,
     port: int,
@@ -401,6 +431,7 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._pairing_stage = "wait_for_pairing"
         self._pairing_retry_note: str | None = None
         self._pairing_ui_progress = False
+        # Which flow the import step finishes: "setup", "reauth" or "recover".
         self._import_mode: str | None = None
 
     @callback
@@ -421,36 +452,55 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         step_id: str,
         errors: dict[str, str] | None = None,
     ) -> config_entries.ConfigFlowResult:
-        """Show the pairing steps; advanced mode offers the import.
+        """Show the pairing steps; without a local adapter, offer the import.
 
-        Submitting the unchecked form confirms Bluetooth pairing; checking
-        the box routes to the manual import step instead, so hosts without a
-        local adapter (for example ESPHome-proxy-only setups) can finish
-        with a credential minted elsewhere. The option stays out of the way
-        unless the user opted into advanced mode.
+        Submitting the form without the box checked confirms Bluetooth
+        pairing. A host with no local adapter (for example one that reaches
+        robots only through Bluetooth proxies) cannot pair here, so the form
+        also offers to paste a pairing made on another device. The offer
+        depends only on the host, never on how the flow was started, so the
+        reauth Home Assistant starts by itself offers it too.
         """
-        # Advanced mode gates the import (DataEntryFlow.show_advanced_options
-        # is deprecated to always-True until 2027.6; the UI still sets the
-        # context flag, so read it directly).
-        if self.context.get("show_advanced_options", False):
-            return self.async_show_form(
-                step_id=step_id,
-                errors=errors,
-                data_schema=probatio.Schema(
-                    {
-                        probatio.Optional(CONF_IMPORT_CREDENTIAL, default=False): (
-                            selector.BooleanSelector()
-                        )
-                    }
-                ),
-                description_placeholders={"help_url": BLUETOOTH_HELP_URL},
-            )
         return self.async_show_form(
             step_id=step_id,
             errors=errors,
-            data_schema=None,
+            data_schema=(
+                probatio.Schema(self._import_choice_schema())
+                if self._import_available()
+                else None
+            ),
             description_placeholders={"help_url": BLUETOOTH_HELP_URL},
         )
+
+    def _import_available(self) -> bool:
+        """Return whether this host must import a pairing made elsewhere."""
+        return not async_has_local_bluetooth_adapter(self.hass)
+
+    @staticmethod
+    def _import_choice_schema() -> dict[Any, Any]:
+        """Return the opt-in box that routes a pairing form to the import."""
+        return {
+            probatio.Optional(CONF_IMPORT_CREDENTIAL, default=False): (
+                selector.BooleanSelector()
+            )
+        }
+
+    async def _async_choose_import(
+        self, step_id: str, mode: str
+    ) -> config_entries.ConfigFlowResult:
+        """Open the import step, or the pairing form again if it is not offered.
+
+        The offer is checked again on submit: a client can send the field
+        without the form having shown it, and an adapter can appear between
+        showing the form and submitting it. Either way pairing here works,
+        so the form is shown again without the option.
+        """
+        if not self._import_available():
+            if step_id == "recover_identity":
+                return self._show_recovery_form()
+            return self._show_pairing_form(step_id)
+        self._import_mode = mode
+        return await self.async_step_import_credential()
 
     def _show_import_form(
         self, errors: dict[str, str] | None = None
@@ -468,6 +518,7 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 }
             ),
             errors=errors,
+            description_placeholders={"import_help_url": IMPORT_HELP_URL},
         )
 
     def _show_passkey_form(
@@ -722,8 +773,7 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             # The empty-form display returned above; a submit reached this far.
             assert user_input is not None
             if user_input.get(CONF_IMPORT_CREDENTIAL) is True:
-                self._import_mode = "setup"
-                return await self.async_step_import_credential()
+                return await self._async_choose_import("pair", "setup")
             if not async_has_local_bluetooth_adapter(self.hass):
                 return self._show_pairing_form(
                     "pair", {"base": "bluetooth_unavailable"}
@@ -854,8 +904,12 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         The credential has exactly the storage form the Bluetooth flow writes:
         a base64-encoded BotToken protobuf. Parsing and the live checks reuse
         HermesCredential and the pinned TLS client, so an entry built from an
-        import is byte-identical to a paired one, minus the Bluetooth address.
+        import matches a paired one, minus the Bluetooth address and with
+        ``pairing_method`` recording the import.
         """
+        if self._import_mode is None:
+            # Only a pairing form that offered the import opens this step.
+            return self.async_abort(reason="pairing_session_expired")
         if user_input is None:
             return self._show_import_form()
         value = str(user_input.get(CONF_HERMES_CREDENTIAL, "")).strip()
@@ -871,22 +925,29 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
         if self._import_mode == "reauth":
             return await self._async_import_reauth(credential)
+        if self._import_mode == "recover":
+            return await self._async_import_recover(credential)
         return await self._async_import_setup(credential)
 
     async def _async_import_setup(
         self, credential: HermesCredential
     ) -> config_entries.ConfigFlowResult:
         """Finish first setup with the imported credential, like a paired one."""
-        assert self._pairing_data is not None
+        if self._pairing_data is None:
+            return self.async_abort(reason="pairing_session_expired")
         result = await self._async_create_or_error(
-            {**self._pairing_data, CONF_HERMES_CREDENTIAL: credential.to_storage()},
+            {**self._pairing_data, **_imported_credential_data(credential)},
             error_step_id="import_credential",
         )
         if (
             result["type"] is FlowResultType.FORM
-            and (result.get("errors") or {}).get("base") == "invalid_credential"
+            and result.get("step_id") == "import_credential"
         ):
-            return self._show_import_form({"base": "import_rejected"})
+            # Every error keeps the paste field, so the user can try again.
+            errors = dict(result.get("errors") or {})
+            if errors.get("base") == "invalid_credential":
+                errors["base"] = "import_rejected"
+            return self._show_import_form(errors)
         return result
 
     async def _async_import_reauth(
@@ -919,9 +980,84 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._abort_if_unique_id_mismatch()
         return self.async_update_reload_and_abort(
             entry,
-            data_updates={CONF_HERMES_CREDENTIAL: credential.to_storage()},
+            data_updates=_imported_credential_data(credential),
             reason="reauth_successful",
         )
+
+    async def _async_import_recover(
+        self, credential: HermesCredential
+    ) -> config_entries.ConfigFlowResult:
+        """Re-pin a reset robot with a pairing made on another device.
+
+        The same checks as Bluetooth recovery run before anything is saved:
+        the endpoint presents a Matic-CA certificate for the stored serial and
+        hostname, and the pasted credential authenticates on that exact pinned
+        endpoint. A reset robot no longer accepts credentials issued before the
+        reset, so one it accepts was issued after it, through a passkey bond on
+        the other device.
+        """
+        entry = self._get_reconfigure_entry()
+        if self._recovery_address is None:
+            return self.async_abort(reason="pairing_session_expired")
+        host, port = self._recovery_address
+        try:
+            fingerprint = await _async_verify_recovered_robot(
+                host, port, entry.data, credential
+            )
+        except AuthenticationRequiredError:
+            return self._show_import_form({"base": "import_rejected"})
+        except DifferentRobotError:
+            error = "different_robot"
+        except CannotConnectError:
+            error = "recover_cannot_connect"
+        except CertificateMismatchError, InvalidRobotCertificateError:
+            error = "invalid_certificate"
+        except MaticError as err:
+            _LOGGER.warning(
+                "Matic identity recovery could not verify the robot: %s", err
+            )
+            error = "recover_cannot_connect"
+        else:
+            return self._async_finish_recovery(
+                entry,
+                host,
+                port,
+                fingerprint,
+                _imported_credential_data(credential),
+            )
+        # Only the robot's refusal is about the pasted pairing; every other
+        # failure is about the robot at this address, which the recovery form
+        # edits. It still offers the import, so the pairing can be pasted again.
+        self._import_mode = None
+        return self._show_recovery_form({"base": error})
+
+    @callback
+    def _async_finish_recovery(
+        self,
+        entry: config_entries.ConfigEntry,
+        host: str,
+        port: int,
+        fingerprint: str,
+        credential_data: Mapping[str, str],
+    ) -> config_entries.ConfigFlowResult:
+        """Save the verified pin and credential once, then clear the Repair."""
+        result = self.async_update_reload_and_abort(
+            entry,
+            data_updates={
+                CONF_HOST: host,
+                CONF_PORT: port,
+                CONF_CERTIFICATE_FINGERPRINT: fingerprint,
+                **credential_data,
+            },
+            reason="identity_recovered",
+        )
+        result["description_placeholders"] = {"name": entry.title}
+        # Core deletes a Repair only when its fix flow creates an entry, and
+        # the reloaded coordinator never raised this one: delete it here.
+        ir.async_delete_issue(
+            self.hass, DOMAIN, f"robot_identity_changed_{entry.entry_id}"
+        )
+        return result
 
     async def async_step_reauth(
         self, entry_data: dict[str, Any]
@@ -946,8 +1082,7 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             # The empty-form display returned above; a submit reached this far.
             assert user_input is not None
             if user_input.get(CONF_IMPORT_CREDENTIAL) is True:
-                self._import_mode = "reauth"
-                return await self.async_step_import_credential()
+                return await self._async_choose_import("reauth_confirm", "reauth")
             if not async_has_local_bluetooth_adapter(self.hass):
                 return self._show_pairing_form(
                     "reauth_confirm", {"base": "bluetooth_unavailable"}
@@ -1126,10 +1261,7 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._abort_if_unique_id_mismatch()
             self._pairing_result = self.async_update_reload_and_abort(
                 entry,
-                data_updates={
-                    CONF_HERMES_CREDENTIAL: grant.credential.to_storage(),
-                    **_bluetooth_address_data(grant),
-                },
+                data_updates=_bluetooth_credential_data(grant),
                 reason="reauth_successful",
             )
 
@@ -1220,21 +1352,22 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             entry.data[CONF_PORT],
         )
         address_suspect = (errors or {}).get("base") in _RECOVERY_ADDRESS_ERRORS
+        schema: dict[Any, Any] = {
+            probatio.Required(CONF_ROBOT_ADDRESS): section(
+                probatio.Schema(
+                    {
+                        probatio.Required(CONF_HOST, default=host): str,
+                        probatio.Required(CONF_PORT, default=port): int,
+                    }
+                ),
+                {"collapsed": not address_suspect},
+            )
+        }
+        if self._import_available():
+            schema.update(self._import_choice_schema())
         return self.async_show_form(
             step_id="recover_identity",
-            data_schema=probatio.Schema(
-                {
-                    probatio.Required(CONF_ROBOT_ADDRESS): section(
-                        probatio.Schema(
-                            {
-                                probatio.Required(CONF_HOST, default=host): str,
-                                probatio.Required(CONF_PORT, default=port): int,
-                            }
-                        ),
-                        {"collapsed": not address_suspect},
-                    ),
-                }
-            ),
+            data_schema=probatio.Schema(schema),
             errors=errors,
             description_placeholders={
                 "name": entry.title,
@@ -1272,6 +1405,8 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         except InvalidRobotCertificateError:
             error = "invalid_certificate"
         else:
+            if user_input.get(CONF_IMPORT_CREDENTIAL) is True:
+                return await self._async_choose_import("recover_identity", "recover")
             if not async_has_local_bluetooth_adapter(self.hass):
                 return self._show_recovery_form({"base": "bluetooth_unavailable"})
             self._async_start_pairing("matic_robot_recover_identity")
@@ -1333,24 +1468,9 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
             error = "recover_cannot_connect"
         else:
-            result = self.async_update_reload_and_abort(
-                entry,
-                data_updates={
-                    CONF_HOST: host,
-                    CONF_PORT: port,
-                    CONF_CERTIFICATE_FINGERPRINT: fingerprint,
-                    CONF_HERMES_CREDENTIAL: grant.credential.to_storage(),
-                    **_bluetooth_address_data(grant),
-                },
-                reason="identity_recovered",
+            self._pairing_result = self._async_finish_recovery(
+                entry, host, port, fingerprint, _bluetooth_credential_data(grant)
             )
-            result["description_placeholders"] = {"name": entry.title}
-            # Core deletes a Repair only when its fix flow creates an entry, and
-            # the reloaded coordinator never raised this one: delete it here.
-            ir.async_delete_issue(
-                self.hass, DOMAIN, f"robot_identity_changed_{entry.entry_id}"
-            )
-            self._pairing_result = result
             return
         self._pairing_result = self._show_recovery_form({"base": error})
 
@@ -1472,6 +1592,9 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         port = data[CONF_PORT]
         credential_value = data.get(CONF_HERMES_CREDENTIAL)
         bluetooth_address = data.get(CONF_BLUETOOTH_ADDRESS)
+        # A credential in ``data`` was imported or issued over Bluetooth by a
+        # retry below; each caller names which, and Bluetooth is the default.
+        pairing_method = data.get(CONF_PAIRING_METHOD, PAIRING_METHOD_BLUETOOTH)
         try:
             credential = (
                 HermesCredential.from_storage(credential_value)
@@ -1509,6 +1632,7 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 grant = await self._async_request_credential()
                 credential = grant.credential
                 bluetooth_address = grant.address
+                pairing_method = PAIRING_METHOD_BLUETOOTH
             if credential is not None:
                 async with MaticHermesClient(
                     host,
@@ -1528,11 +1652,7 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 grant = await self._async_request_credential()
             except MaticError as err:
                 return self._pairing_error_result(err, host, port, identity)
-            retry_data = {
-                **data,
-                CONF_HERMES_CREDENTIAL: grant.credential.to_storage(),
-                **_bluetooth_address_data(grant),
-            }
+            retry_data = {**data, **_bluetooth_credential_data(grant)}
             return await self._async_create_or_error(retry_data)
         except CannotConnectError:
             return self.async_show_form(
@@ -1566,6 +1686,7 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         configured_updates = {CONF_HOST: host, CONF_PORT: port}
         if credential is not None:
             configured_updates[CONF_HERMES_CREDENTIAL] = credential.to_storage()
+            configured_updates[CONF_PAIRING_METHOD] = pairing_method
         if bluetooth_address is not None:
             # Saved only after the credential this robot issued authenticated
             # above, so the address is bound to this robot's serial number.
@@ -1580,6 +1701,7 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         }
         if credential is not None:
             entry_data[CONF_HERMES_CREDENTIAL] = credential.to_storage()
+            entry_data[CONF_PAIRING_METHOD] = pairing_method
         if bluetooth_address is not None:
             entry_data[CONF_BLUETOOTH_ADDRESS] = bluetooth_address
         return self.async_create_entry(
