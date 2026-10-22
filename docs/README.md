@@ -17,6 +17,7 @@
 ## Setup and support
 
 [Install or update](../README.md#install) · [Pairing](hermes-pairing.md) ·
+[Pair from another computer](matic-pair.md) ·
 [Compatibility](acceptance-0.4.md) · [Privacy](privacy.md)
 
 For unexpected stops or docking, start with [activity diagnostics](activity-diagnostics.md).

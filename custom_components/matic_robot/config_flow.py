@@ -846,10 +846,10 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is None:
             return self._show_import_form()
         value = str(user_input.get(CONF_HERMES_CREDENTIAL, "")).strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-            value = value[1:-1].strip()
         if value[:7].lower() == "bearer:":
             value = value[7:].strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1].strip()
         try:
             credential = HermesCredential.from_storage(value)
         except ValueError:

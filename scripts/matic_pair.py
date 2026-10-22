@@ -22,7 +22,7 @@ otherwise it falls back to a hand-rolled protobuf codec for the two tiny
 messages, so bleak is the only hard dependency.
 
 Fleet safety: with more than one robot around, pass --name <substring>
-(e.g. --name matic-9ddr); the script then matches only advertisements whose
+(e.g. --name matic-a1b2); the script then matches only advertisements whose
 local name contains the substring. Without --name, it refuses to connect when
 more than one distinct robot name is advertising, and always prints the robot
 it is about to connect to. Connection targets must carry Matic's BLE service
@@ -57,12 +57,11 @@ import re
 import select as _stdlib_select  # noqa: F401  (preload before path insert)
 import sys
 import time
-from base64 import b64decode, b64encode
-from datetime import datetime, timezone
+from base64 import b64encode
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
-import bleak
 from bleak import BleakClient, BleakScanner
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
@@ -91,9 +90,9 @@ new_hermes_user_id = None
 decode_fields = None
 
 try:  # client/ is Home Assistant-agnostic (client/__init__.py)
-    from client.auth import HermesCredential as _HermesCredential  # noqa: E402
-    from client.auth import new_hermes_user_id as _new_hermes_user_id  # noqa: E402
-    from client.wire import decode_fields as _decode_fields  # noqa: E402
+    from client.auth import HermesCredential as _HermesCredential
+    from client.auth import new_hermes_user_id as _new_hermes_user_id
+    from client.wire import decode_fields as _decode_fields
 
     HermesCredential = _HermesCredential
     new_hermes_user_id = _new_hermes_user_id
@@ -210,7 +209,7 @@ if not _USING_INTEGRATION_CLIENT:
 
 
 def _utc_stamp() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    return datetime.now(UTC).isoformat(timespec="milliseconds")
 
 
 def is_matic(name: object, service_uuids) -> bool:
@@ -315,7 +314,9 @@ def eligible_candidates(candidates, name_filter):
     for address, entry in candidates.items():
         if carries_matic_uuid(entry):
             eligible[address] = entry
-        elif name_filter is not None and matches_name_filter(entry["name"], name_filter):
+        elif name_filter is not None and matches_name_filter(
+            entry["name"], name_filter
+        ):
             eligible[address] = entry
         else:
             name_only[address] = entry
@@ -357,7 +358,7 @@ def choose_candidate(candidates, name_filter) -> tuple | None:
             )
         print(
             "matic_pair: pass --name <substring> to select the intended robot "
-            "(e.g. --name matic-9ddr); nothing was contacted."
+            "(e.g. --name matic-a1b2); nothing was contacted."
         )
         return None
     # Rank like upstream: service-UUID carriers first, then RSSI
@@ -397,13 +398,15 @@ def _credential_from_response(response: bytes, user_id: str):
             user=fields.get(1, b""), hashed_token=fields.get(2, b"")
         )
     if credential.app_id != user_id:
-        raise RuntimeError(f"credential user mismatch: {credential.app_id} != {user_id}")
+        raise RuntimeError(
+            f"credential user mismatch: {credential.app_id} != {user_id}"
+        )
     return credential
 
 
 def _bot_token_from(response: bytes):
     """BotToken via the integration's generated module (protobuf present)."""
-    from client.proto.hermes_auth_pb2 import BotToken  # noqa: E402
+    from client.proto.hermes_auth_pb2 import BotToken
 
     return BotToken.FromString(response)
 
@@ -424,7 +427,7 @@ async def attempt_exchange(client: BleakClient, user_id: str):
 def _encode_request(user_id: str) -> bytes:
     """TokenRequest{user_id} bytes — generated module when available."""
     if _USING_INTEGRATION_CLIENT:
-        from client.proto.hermes_auth_pb2 import TokenRequest  # noqa: E402
+        from client.proto.hermes_auth_pb2 import TokenRequest
 
         return TokenRequest(user_id=user_id).SerializeToString()
     return _encode_token_request(user_id)
@@ -456,7 +459,9 @@ async def mint_over_ble(device: BLEDevice, user_id: str):
                 now = time.monotonic()
                 if hidden_since is None:
                     hidden_since = now
-                    print("matic_pair: token characteristic hidden — waiting for pairing…")
+                    print(
+                        "matic_pair: token characteristic hidden — waiting for pairing…"
+                    )
                 if now - last_beat >= 5.0:
                     last_beat = now
                     print(f"matic_pair: [{_utc_stamp()}] waiting for pairing/bond…")
@@ -523,12 +528,26 @@ async def mint_flow(args, user_id: str) -> int:
         "user": credential.user.hex(),
         "hashed_token": credential.hashed_token.hex(),
         "bearer": credential.to_storage(),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
     }
-    save_path = Path(args.save)
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    save_path.write_text(json.dumps(payload, indent=2) + "\n")
-    os.chmod(save_path, 0o600)
+
+    def _save_sync() -> Path:
+        save_path = Path(args.save)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        data = json.dumps(payload, indent=2) + "\n"
+        fd = os.open(save_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(fd, "w") as handle:
+                handle.write(data)
+        except BaseException:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            raise
+        return save_path
+
+    save_path = await asyncio.to_thread(_save_sync)
     print(f"matic_pair: wrote credential to {save_path} (mode 0600)")
     print("matic_pair: this bearer token authorizes this user_id against the robot;")
     print("matic_pair: treat it like a password; see docs/matic-pair.md.")
@@ -538,25 +557,41 @@ async def mint_flow(args, user_id: str) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--scan", nargs="?", const=20.0, type=float, default=None, metavar="N",
+        "--scan",
+        nargs="?",
+        const=20.0,
+        type=float,
+        default=None,
+        metavar="N",
         help="smoke/locate mode: scan N seconds (default 20), print matches, exit",
     )
     parser.add_argument(
-        "--name", default=None, metavar="SUBSTRING",
+        "--name",
+        default=None,
+        metavar="SUBSTRING",
         help="match only advertisements whose local name contains SUBSTRING "
-        "(required with multiple robots; e.g. --name matic-9ddr)",
+        "(required with multiple robots; e.g. --name matic-a1b2)",
     )
-    parser.add_argument("--user-id", default=None,
-                        help="Hermes user_id (UUIDv4); default fresh one")
-    parser.add_argument("--discover-timeout", type=float, default=120.0,
-                        help="seconds to wait for the advertisement (mint mode)")
-    parser.add_argument("--save", default=str(DEFAULT_SAVE),
-                        help="credential JSON path (written on success, mode 0600; "
-                        f"default {DEFAULT_SAVE})")
+    parser.add_argument(
+        "--user-id", default=None, help="Hermes user_id (UUIDv4); default fresh one"
+    )
+    parser.add_argument(
+        "--discover-timeout",
+        type=float,
+        default=120.0,
+        help="seconds to wait for the advertisement (mint mode)",
+    )
+    parser.add_argument(
+        "--save",
+        default=str(DEFAULT_SAVE),
+        help="credential JSON path (written on success, mode 0600; "
+        f"default {DEFAULT_SAVE})",
+    )
     args = parser.parse_args()
 
-    user_id = args.user_id or (new_hermes_user_id() if new_hermes_user_id
-                               else _fallback_new_hermes_user_id())
+    user_id = args.user_id or (
+        new_hermes_user_id() if new_hermes_user_id else _fallback_new_hermes_user_id()
+    )
     print(
         f"matic_pair: user_id={user_id} "
         f"client={'integration' if _USING_INTEGRATION_CLIENT else 'hand-rolled'}"
