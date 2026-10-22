@@ -46,7 +46,7 @@ It does not add automatic rebinding or coordinate transformations.
 The assembled PR #287 candidate passed **5,278 tests with 100.00% coverage**
 across 20,147 statements (`python -m pytest --cov=custom_components/matic_robot
 --cov-report=term-missing`). Exact-head PR CI and complete regular review must
-pass before merging. Installed RC35, RC36 and RC37 retesting is recorded below.
+pass before merging. Installed RC35, RC36 and RC37 retesting, including a supervised RC37 custom-area run, is recorded below.
 
 - Binding regressions cover partition churn, unrelated room changes,
   containing-room contour reshaping, fractional wall refinements, new overlaps,
@@ -97,6 +97,7 @@ included here.
 | RC35 installed room colors | Pass for colors: room fills are distinct. **Fail for labels:** later room fills clipped two adjacent room names and hid a third label. Fixed in PR #293 for RC36. |
 | RC36 installation and label recheck | Pass: installed through Home Assistant updates after a HACS refresh; `update.matic_unofficial_update` and the integration report 0.5.0rc36; after restart the saved area reports `current`, both shortcuts show, no stale marker is drawn, and previously clipped names show in full. One small room's 2D label was still hidden by label-collision suppression (present since before RC35); RC37 moves colliding labels aside. |
 | RC37 installation and label recheck | Pass: installed through Home Assistant updates after a HACS refresh; `update.matic_unofficial_update` reports 0.5.0rc37 and the integration entry is loaded after restart; the saved area reports `current`; both shortcuts show. In 2D with Room colors and with Photo, all twelve room names draw, including the small room that RC36 hid, with no overlapping labels. A map opened in a background browser tab showed "Map unavailable" until the tab was brought forward, after which the map loaded without a manual retry. |
+| RC37 supervised custom-area run | Pass: after a fresh owner preflight, the saved custom area was started from its Home shortcut with no confirmation, save or rebind; the robot cleaned for 331 s, returned to the dock and charged with no problem reported. Right after docking, and again after an idle integration reload, the same area reports `current`; on the same open page both shortcuts show, all twelve room names draw, and the robot marker is hidden once the docked pose stops updating (about three minutes old). |
 | Final physical/owner acceptance and stable publication | Open. |
 
 ## Reproduced release blockers
