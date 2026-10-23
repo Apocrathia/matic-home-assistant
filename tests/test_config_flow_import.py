@@ -250,8 +250,20 @@ async def test_import_creates_an_entry_like_a_paired_robot(hass, monkeypatch) ->
         TEST_CREDENTIAL.to_storage(),
         "Bearer: " + TEST_CREDENTIAL.to_storage(),
         '  "' + TEST_CREDENTIAL.to_storage() + '" ',
+        '  "Bearer: ' + TEST_CREDENTIAL.to_storage() + '" ',
+        "'Bearer: " + TEST_CREDENTIAL.to_storage() + "'",
+        'Bearer: "' + TEST_CREDENTIAL.to_storage() + '"',
+        "  'bEaReR:  " + TEST_CREDENTIAL.to_storage() + "  '  ",
     ],
-    ids=["bare", "bearer-prefixed", "quoted"],
+    ids=[
+        "bare",
+        "bearer-prefixed",
+        "quoted",
+        "double-quoted-header",
+        "single-quoted-header",
+        "quoted-bearer-value",
+        "quoted-mixed-case-spaced-header",
+    ],
 )
 async def test_import_accepts_bearer_and_quoted_pastes(
     hass, monkeypatch, pasted
