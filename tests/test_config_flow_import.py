@@ -475,6 +475,47 @@ async def test_import_step_needs_the_pairing_form_choice(hass, monkeypatch) -> N
     fetch.assert_not_awaited()
 
 
+async def test_import_setup_aborts_when_pairing_state_expired(
+    hass, monkeypatch
+) -> None:
+    """An import cannot proceed after its discovered pairing state is lost."""
+    fetch = AsyncMock()
+    create = AsyncMock()
+    monkeypatch.setattr(flow_module, "async_fetch_peer_certificate", fetch)
+    flow = _flow(hass)
+    flow._import_mode = "setup"
+    flow._async_create_or_error = create
+
+    result = await flow._async_import_setup(TEST_CREDENTIAL)
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "pairing_session_expired"
+    create.assert_not_awaited()
+    fetch.assert_not_awaited()
+
+
+async def test_import_recovery_aborts_when_recovery_address_expired(
+    hass, monkeypatch
+) -> None:
+    """Recovery stops before certificate or network checks without its address."""
+    verify = AsyncMock()
+    fetch = AsyncMock()
+    monkeypatch.setattr(flow_module, "_async_verify_recovered_robot", verify)
+    monkeypatch.setattr(flow_module, "async_fetch_peer_certificate", fetch)
+    flow = _entry_flow(
+        hass, _configured_entry(hass, monkeypatch), config_entries.SOURCE_RECONFIGURE
+    )
+    flow._import_mode = "recover"
+    flow._recovery_address = None
+
+    result = await flow._async_import_recover(TEST_CREDENTIAL)
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "pairing_session_expired"
+    verify.assert_not_awaited()
+    fetch.assert_not_awaited()
+
+
 async def test_reauth_started_by_home_assistant_offers_the_import(
     hass, monkeypatch
 ) -> None:
