@@ -605,6 +605,9 @@ export class RendererController {
     if (leftReview && this.#beforeReview) {
       const { camera, fit } = this.#beforeReview;
       this.#beforeReview = null;
+      // Leaving a forced top view reads preferences again below. Carry the
+      // restored camera into that read instead of the review's framed state.
+      rebasedPreferences = { ...rebasedPreferences, top: this.#preferenceOf(camera, fit) };
       if (topView(state) === "top") {
         this.#camera = camera;
         this.#fitActive = fit;
