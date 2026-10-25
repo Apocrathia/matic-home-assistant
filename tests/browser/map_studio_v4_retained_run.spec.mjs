@@ -58,7 +58,7 @@ test("retained outcomes are entry-scoped, invalidate on outcome-only changes, an
     malformed: null,
     reduced: null,
     invalidCounts: [null, null, null, null, null],
-    terminalOutcomes: { failed: "partial", stopped_docked: "partial", cancelled: "partial", unverified: "unverified", completed: null, recharge_suspended: null, running: null },
+    terminalOutcomes: { failed: "partial", stopped_docked: "partial", cancelled: "partial", unverified: "unverified", completed: null, recharge_suspended: "partial", running: null },
   });
 });
 
@@ -146,4 +146,34 @@ test("Home panel keeps a partial result after dock and refresh, hides it for a n
     panel.hass = { ...panel.hass, states };
   });
   await expect(refreshed.locator(".status-copy strong")).not.toHaveText("Last run did not finish");
+});
+
+test("low-charge suspension stays visible when settled and yields to live charging or cleaning", async ({ page }) => {
+  const { installPanelFixture } = await import("./map_studio_v4_panel_fixture.mjs");
+  const history = structuredClone(HISTORY_PAYLOAD);
+  history.last_run.outcome = "recharge_suspended";
+  const fixture = await installPanelFixture(page, { moduleSource: "packaged", initialRobotStates: {
+    "vacuum.synthetic": { state: "docked", attributes: { matic_entry_id: "synthetic-entry" } },
+    "sensor.synthetic_cleaning_history": { state: "ready", attributes: history },
+  } });
+  await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+  const status = page.locator(fixture.panelTag).locator(".status-copy");
+  const updateActivity = (state, charging = false) => page.evaluate(({ state, charging }) => {
+    const panel = document.querySelector(window.__panelFixture.panelTag);
+    const states = structuredClone(panel.hass.states);
+    states["vacuum.synthetic"].state = state;
+    states["vacuum.synthetic"].attributes.charging = charging;
+    states["vacuum.synthetic"].attributes.recharge_and_resume = charging;
+    panel.hass = { ...panel.hass, states };
+  }, { state, charging });
+  await expect(status.locator("strong")).toHaveText("Last run did not finish");
+  await expect(status.locator("small")).toHaveText("1 of 3 rooms completed");
+  await updateActivity("idle");
+  await expect(status.locator("strong")).toHaveText("Last run did not finish");
+  await updateActivity("docked", true);
+  await expect(status.locator("strong")).toHaveText("Charging to resume");
+  await updateActivity("cleaning");
+  await expect(status.locator("strong")).not.toHaveText("Last run did not finish");
+  await updateActivity("docked");
+  await expect(status.locator("strong")).toHaveText("Last run did not finish");
 });
