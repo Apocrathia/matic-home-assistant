@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from homeassistant import config_entries
-from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.data_entry_flow import AbortFlow, FlowResultType
 from homeassistant.helpers import issue_registry as ir
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -273,10 +273,12 @@ async def test_import_creates_an_entry_like_a_paired_robot(hass, monkeypatch) ->
     )
 
 
+@pytest.mark.parametrize("cancel_duplicate", [False, True])
+@pytest.mark.parametrize("terminal_abort", [False, True])
 async def test_duplicate_import_submits_share_validation_and_one_save(
-    hass, monkeypatch
+    hass, monkeypatch, cancel_duplicate, terminal_abort
 ) -> None:
-    """A repeated submit joins the pending request instead of saving twice."""
+    """Only the owning request delivers a terminal result to Core."""
     _mock_robot(monkeypatch)
     entered = asyncio.Event()
     release = asyncio.Event()
@@ -294,6 +296,10 @@ async def test_duplicate_import_submits_share_validation_and_one_save(
 
     monkeypatch.setattr(flow_module, "MaticHermesClient", client_factory)
     flow = _flow(hass)
+    if terminal_abort:
+        flow._abort_if_unique_id_configured.side_effect = AbortFlow(
+            "already_configured"
+        )
     flow._pairing_data = {"host": HOST, "port": PORT}
     flow._import_mode = "setup"
     value = {CONF_HERMES_CREDENTIAL: TEST_CREDENTIAL.to_storage()}
@@ -302,16 +308,132 @@ async def test_duplicate_import_submits_share_validation_and_one_save(
     second = asyncio.create_task(flow.async_step_import_credential(value))
     # Let the repeated request join while the authenticated read stays blocked.
     await asyncio.sleep(0)
+    if cancel_duplicate:
+        second.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await second
+        assert not first.done()
     release.set()
-    results = await asyncio.gather(first, second)
-
-    assert results[0] is results[1]
-    assert results[0]["type"] is FlowResultType.CREATE_ENTRY
+    if terminal_abort:
+        with pytest.raises(AbortFlow, match="already_configured"):
+            await first
+    else:
+        assert (await first)["type"] is FlowResultType.CREATE_ENTRY
+    assert flow._import_task is not None
+    if not cancel_duplicate:
+        assert not second.done()
+    flow.async_remove()
+    if not cancel_duplicate:
+        assert (await second)["type"] is FlowResultType.ABORT
     flow.async_set_unique_id.assert_awaited_once_with("synthetic")
     flow._abort_if_unique_id_configured.assert_called_once()
     assert len(clients) == 2  # Authentication and post-credential verification.
     assert all(client.exited for client in clients)
     assert flow._import_task is None
+
+
+async def test_duplicate_refused_imports_allow_a_fresh_retry(hass, monkeypatch) -> None:
+    """A shared nonterminal result releases ownership for another attempt."""
+    _mock_robot(monkeypatch, reject_credentials=True)
+    flow = _flow(hass)
+    flow._pairing_data = {"host": HOST, "port": PORT}
+    flow._import_mode = "setup"
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original = flow._async_import_setup
+
+    async def hold_validation(credential):
+        entered.set()
+        await release.wait()
+        return await original(credential)
+
+    monkeypatch.setattr(flow, "_async_import_setup", hold_validation)
+    value = {CONF_HERMES_CREDENTIAL: TEST_CREDENTIAL.to_storage()}
+    first = asyncio.create_task(flow.async_step_import_credential(value))
+    await entered.wait()
+    second = asyncio.create_task(flow.async_step_import_credential(value))
+    await asyncio.sleep(0)
+    release.set()
+    results = await asyncio.gather(first, second)
+    assert results[0] is results[1]
+    assert results[0]["type"] is FlowResultType.FORM
+    assert results[0]["errors"]["base"] == "import_rejected"
+    assert flow._import_task is None
+    _mock_robot(monkeypatch)
+    retried = await flow.async_step_import_credential(value)
+    assert retried["type"] is FlowResultType.CREATE_ENTRY
+    flow.async_remove()
+
+
+@pytest.mark.parametrize("duplicate_timing", ["validation", "entry_setup"])
+async def test_duplicate_manager_submits_add_and_set_up_one_entry(
+    hass, monkeypatch, duplicate_timing
+) -> None:
+    """Core must finish once, even while initial setup awaits its first refresh."""
+    _mock_robot(monkeypatch)
+
+    async def step_user(self, user_input=None):
+        self._pairing_data = {"host": HOST, "port": PORT}
+        return self._show_pairing_form("pair")
+
+    monkeypatch.setattr(MaticRobotConfigFlow, "async_step_user", step_user)
+    validation_entered = asyncio.Event()
+    release_validation = asyncio.Event()
+    original_setup = MaticRobotConfigFlow._async_import_setup
+
+    async def hold_validation(self, credential):
+        validation_entered.set()
+        await release_validation.wait()
+        return await original_setup(self, credential)
+
+    monkeypatch.setattr(MaticRobotConfigFlow, "_async_import_setup", hold_validation)
+    setup_entered = asyncio.Event()
+    release_setup = asyncio.Event()
+    setup_calls = []
+
+    async def block_setup(entry_id, *_args, **_kwargs):
+        setup_calls.append(entry_id)
+        setup_entered.set()
+        await release_setup.wait()
+        return True
+
+    monkeypatch.setattr(hass.config_entries, "async_setup", block_setup)
+    manager = hass.config_entries.flow
+    finish = AsyncMock(wraps=manager.async_finish_flow)
+    monkeypatch.setattr(manager, "async_finish_flow", finish)
+    started = await manager.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    flow_id = started["flow_id"]
+    await manager.async_configure(flow_id, {CONF_IMPORT_CREDENTIAL: True})
+    value = {CONF_HERMES_CREDENTIAL: TEST_CREDENTIAL.to_storage()}
+    first = asyncio.create_task(manager.async_configure(flow_id, value))
+    await validation_entered.wait()
+    second = None
+    try:
+        if duplicate_timing == "validation":
+            second = asyncio.create_task(manager.async_configure(flow_id, value))
+            await asyncio.sleep(0)
+        release_validation.set()
+        await setup_entered.wait()
+        if second is None:
+            second = asyncio.create_task(manager.async_configure(flow_id, value))
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(asyncio.shield(second), timeout=0.05)
+        assert finish.await_count == 1
+        assert len(setup_calls) == 1
+        assert len(hass.config_entries.async_entries(DOMAIN)) == 1
+    finally:
+        release_validation.set()
+        release_setup.set()
+        results = await asyncio.gather(first, second, return_exceptions=True)
+    assert results[0]["type"] is FlowResultType.CREATE_ENTRY
+    assert results[1]["type"] is FlowResultType.ABORT
+    assert results[1]["reason"] == "pairing_session_expired"
+    assert finish.await_count == 1
+    [entry] = hass.config_entries.async_entries(DOMAIN)
+    assert setup_calls == [entry.entry_id]
+    assert results[0]["result"] is entry
 
 
 @pytest.mark.parametrize(

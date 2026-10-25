@@ -16,7 +16,7 @@ from homeassistant import config_entries
 from homeassistant.components.zeroconf import async_get_async_instance
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.data_entry_flow import FlowResultType, section
+from homeassistant.data_entry_flow import AbortFlow, FlowResultType, section
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers import selector
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
@@ -425,6 +425,7 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._pairing_runner_name: str | None = None
         self._pairing_checkpoint_task: asyncio.Task[None] | None = None
         self._import_task: asyncio.Task[config_entries.ConfigFlowResult] | None = None
+        self._import_flow_removed = asyncio.Event()
         self._flow_removed = False
         self._passkey_exchange: BluetoothPasskeyExchange | None = None
         self._pairing_result: config_entries.ConfigFlowResult | None = None
@@ -440,6 +441,7 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def async_remove(self) -> None:
         """Cancel pending flow-owned work when Home Assistant removes it."""
         self._flow_removed = True
+        self._import_flow_removed.set()
         super().async_remove()
         for task in (
             self._pairing_checkpoint_task,
@@ -448,6 +450,7 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         ):
             if task is not None and not task.done():
                 task.cancel()
+        self._import_task = None
         if self._passkey_exchange is not None:
             self._passkey_exchange.cancel()
         self._bond_recovery_candidates.clear()
@@ -933,9 +936,19 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 {CONF_HERMES_CREDENTIAL: "malformed_credential"}
             )
         if self._import_task is not None:
-            result = await self._import_task
-            self._raise_if_flow_removed()
-            return result
+            # A duplicate request must not cancel the owning request's work or
+            # give Core a second terminal result while it is adding the entry.
+            task = self._import_task
+            await asyncio.wait((task,))
+            try:
+                result = task.result()
+            except AbortFlow:
+                pass
+            else:
+                if result["type"] is FlowResultType.FORM:
+                    return result
+            await self._import_flow_removed.wait()
+            return self.async_abort(reason="pairing_session_expired")
         if self._import_mode == "reauth":
             operation = self._async_import_reauth(credential)
         elif self._import_mode == "recover":
@@ -944,10 +957,17 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             operation = self._async_import_setup(credential)
         task = asyncio.create_task(operation)
         self._import_task = task
+        terminal = False
         try:
             result = await task
+            terminal = result["type"] is not FlowResultType.FORM
+        except AbortFlow:
+            terminal = True
+            raise
         finally:
-            if self._import_task is task:
+            # Retain terminal ownership through Core's awaited entry setup.
+            # A refused import releases it so the same form can retry.
+            if not terminal and self._import_task is task:
                 self._import_task = None
         # A transport may finish an in-flight read while handling cancellation.
         # Do not let that late result commit after the flow owner has removed us.
