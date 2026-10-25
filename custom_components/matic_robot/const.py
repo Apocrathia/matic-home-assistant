@@ -23,6 +23,7 @@ CONF_CLEANING_MODE: Final = "cleaning_mode"
 CONF_COVERAGE_SETTING: Final = "coverage_setting"
 CONF_HERMES_CREDENTIAL: Final = "hermes_credential"
 CONF_HOSTNAME: Final = "hostname"
+# Legacy saved preference; ignored while workspace push is withheld.
 CONF_LIVE_WORKSPACE_TRANSPORT: Final = "live_workspace_transport"
 CONF_SERIAL_NUMBER: Final = "serial_number"
 

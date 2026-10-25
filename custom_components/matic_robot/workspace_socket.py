@@ -558,7 +558,6 @@ class WorkspaceSocket:
                 entry_id,
                 runtime,
                 scene_view,
-                options=getattr(entry, "options", None),
             )
         if available:
             status = {"state": "ready", "reason": None, "retryable": False}

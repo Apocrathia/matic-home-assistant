@@ -658,7 +658,7 @@ export class MaticMapCanvasV4 extends LitElement {
         class="map-root"
         tabindex="0"
         aria-label=${this.#t("map_viewport_aria", "Interactive Matic 3D map")}
-        aria-describedby=${showDraw ? (state.draw.tool === "outline" ? "zone-keyboard-help" : "keyboard-draw-help") : nothing}
+        aria-describedby=${showDraw ? (state.draw.tool === "outline" ? "zone-keyboard-help" : state.draw.tool === "pan" ? "keyboard-draw-pan-help" : "keyboard-draw-help") : nothing}
         data-full-map=${String(state.fullMap)}
         data-workflow=${state.workflow}
         data-draw-tool=${state.draw.tool}

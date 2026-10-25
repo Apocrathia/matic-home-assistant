@@ -554,6 +554,8 @@ export class MaticMapShellV4 extends LitElement {
     });
     this.#resizeObserver.observe(this);
     document.addEventListener("fullscreenchange", this.#fullscreenChange);
+    document.addEventListener("click", this.#dismissHelpOutside);
+    document.addEventListener("pointerdown", this.#helpPointerDown, true);
     // Reads the box height, which a translateY drag does not change, so a
     // drag never relayouts the canvas. Only the committed detent does.
     this.#sheetResizeObserver = new ResizeObserver(([entry]) => {
@@ -612,6 +614,8 @@ export class MaticMapShellV4 extends LitElement {
     this.#unwatchTheme = null;
     this.#observedSheet = null;
     document.removeEventListener("fullscreenchange", this.#fullscreenChange);
+    document.removeEventListener("click", this.#dismissHelpOutside);
+    document.removeEventListener("pointerdown", this.#helpPointerDown, true);
     super.disconnectedCallback();
   }
 
@@ -1311,6 +1315,24 @@ export class MaticMapShellV4 extends LitElement {
   };
 
   // The rail "?" toggles; Escape in the canvas while help shows closes.
+  #helpPointerStart: { x: number; y: number } | null = null;
+  readonly #helpPointerDown = (event: PointerEvent): void => {
+    this.#helpPointerStart = this._helpOpen ? { x: event.clientX, y: event.clientY } : null;
+  };
+
+  readonly #dismissHelpOutside = (event: MouseEvent): void => {
+    if (!this._helpOpen || event.detail === 0) return;
+    const start = this.#helpPointerStart;
+    this.#helpPointerStart = null;
+    // A browser may emit click after a drag; that is not an outside tap.
+    if (start && Math.hypot(event.clientX - start.x, event.clientY - start.y) > 6) return;
+    const path = event.composedPath();
+    if ((this.#helpLauncher && path.includes(this.#helpLauncher))
+      || path.some((node) => node instanceof HTMLElement && node.id === "navigation-help")) return;
+    // Keep the new target's focus and action; this is a non-modal popover.
+    this.#closeHelp(false);
+  };
+
   readonly #mapHelp = (event: Event): void => {
     if (this._helpOpen) this.#closeHelp(true);
     else this.#openHelp(event.composedPath()[0] as HTMLElement);

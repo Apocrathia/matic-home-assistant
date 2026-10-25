@@ -94,8 +94,8 @@ The administrator-only v1 workspace contract contains a versioned snapshot and s
 - authenticated REST for large scenes, deltas, and history, with the REST adapter retained through 0.5.x.
   Polling fallback preserves authorization, generation admission, and command guards.
 
-Delivery is staged: (A) baseline/budgets, (B) snapshot contract, (C) reversible adapter with visible-state parity and v1 fallback. A default-off per-entry HA option permits
-administrator qualification; the shared authorized catalog projection is its sole frontend authority. (D) Default switchover requires reconnect/queue/resource evidence.
+Delivery is staged: (A) baseline/budgets, (B) snapshot contract, (C) reversible adapter with visible-state parity and v1 fallback. Workspace status/activity push is withheld pending installed reliability and resource qualification;
+no owner-facing option is exposed. Map deltas, pose updates and catalog polling remain available. (D) Default switchover requires reconnect/queue/resource evidence.
 Workflows and diagnostics are lazy-loaded. An unrelated HA state update must trigger no map fetch, workspace commit, or render work.
 
 ## Cadence and accounting contract

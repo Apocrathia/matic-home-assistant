@@ -1463,6 +1463,44 @@ test.describe("Map Studio v0.4 foundation", () => {
     }
   });
 
+  test("an area-blocked Run explains the affected area and opens Your areas", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-run-areas" });
+    await settleWorkspace(gallery);
+    await gallery.evaluate((element) => {
+      const state = element.getWorkspaceSnapshot();
+      const catalog = state.resources.plans.value;
+      const plans = catalog.plans.map((plan) => ({ ...plan,
+        nextRunPreview: { ...plan.nextRunPreview, blocker: "area_map_changed", rooms: [], steps: [] },
+      }));
+      const areas = state.resources.areas.value.areas.map((area) => ({ ...area,
+        status: area.id === "entryway" ? "review" : area.status,
+        canRebind: area.id === "entryway" ? true : area.canRebind,
+      }));
+      element.replaceWorkspaceState({ ...state, resources: { ...state.resources,
+        plans: { ...state.resources.plans, value: { ...catalog, plans } },
+        areas: { ...state.resources.areas, value: { ...state.resources.areas.value, areas } },
+      } });
+    });
+    const affected = gallery.locator(".run-row").filter({ hasText: "Entryway" });
+    await expect(affected).toContainText("Map changed · Check it before cleaning");
+    await expect(gallery.getByRole("button", { name: "Run plan Daily clean", exact: true })).toBeDisabled();
+    await expect(gallery.getByRole("button", { name: "Try again", exact: true })).toHaveCount(0);
+    const blockedState = await gallery.evaluate((element) => element.getWorkspaceSnapshot());
+    for (const phase of ["paused", "saving"]) {
+      await gallery.evaluate((element, { state, phase }) => element.replaceWorkspaceState({
+        ...state,
+        planDraft: { ...state.planDraft, enabled: phase !== "paused" },
+        command: phase === "saving" ? "pending" : "idle",
+        pendingAction: phase === "saving" ? "save-plan" : null,
+      }), { state: blockedState, phase });
+      await expect(gallery.locator(".run-row .problem"), phase).toHaveCount(0);
+    }
+    await gallery.evaluate((element, state) => element.replaceWorkspaceState(state), blockedState);
+    await expect(affected).toContainText("Map changed · Check it before cleaning");
+    await gallery.getByRole("button", { name: "Your areas", exact: true }).click();
+    await expect.poll(async () => (await snapshot(page)).workflow).toBe("areas");
+  });
+
   test("turning a paused plan on shows no problem while it saves, then retries the stale preview", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "plan-run-paused" });
     await settleWorkspace(gallery);
@@ -9213,6 +9251,7 @@ test.describe("plan primary action", () => {
       ["plan_has_no_rooms", "v4_preview_no_rooms", "Can't run this plan until it has at least one room."],
       ["plan_room_limit", "v4_preview_room_limit", "Can't run this plan until it has 100 rooms or fewer."],
       ["invalid_plan", "v4_preview_invalid", "Can't run this plan until you open Edit and save it again."],
+      ["area_map_changed", "v4_preview_area_changed", "Can't run this plan until you review its custom areas on the current map."],
       // An enabled draft with a preview still paused: the preview is stale, so it is retried.
       ["plan_disabled", "v4_reason_run_plan_preview"],
       ["preview_unavailable", "v4_reason_run_plan_preview"],
