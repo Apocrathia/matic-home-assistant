@@ -213,7 +213,7 @@ export class MaticPlanViewsV4 extends LitElement {
           <strong class="plan-title"><bdi>${plan.name}</bdi>${isDefault
             ? html`<span class="ms-chip chip-default" title=${hint}>${this.#t("v4_plan_default", "Default")}</span>`
             : nothing}${plan.enabled ? nothing : html`<span class="ms-chip">${this.#t("v4_paused", "Paused")}</span>`}</strong>
-          <small>${line2}</small>
+          <small><bdi dir="auto">${line2}</bdi></small>
           ${line3}
         </span>
         <span class="ms-row__trail">${icon(iconChevronRight)}</span>
@@ -354,7 +354,7 @@ export class MaticPlanViewsV4 extends LitElement {
       })
       : draft.returnToBase ? this.#t("v4_plan_summary_return", "Returns to the dock when finished") : null;
     return html`
-      <p class="summary">${summary}</p>
+      <p class="summary"><bdi dir="auto">${summary}</bdi></p>
       ${this.#lines(dueLines(this.#t, state.locale, previewRooms))}
       <h3 class="heading">${paused
         ? this.#t("v4_plan_rooms_heading", "In this plan")
@@ -814,12 +814,12 @@ export class MaticPlanViewsV4 extends LitElement {
         <h3 class="heading" id="edit-rooms">${areas
           ? this.#t("v4_plan_steps_heading", "Rooms and custom areas")
           : this.#t("v4_rooms_heading", "Rooms")}</h3>
-        <small>${areas
+        <small><bdi dir="auto">${areas
           ? roomsAndAreas(this.#t, state.locale, draft.rooms.length, areas)
           : this.#t("v4_plan_rooms_selected", "{selected} of {total} selected", {
             selected: this.#count(draft.rooms.length),
             total: this.#count(catalog.rooms.length),
-          })}</small>
+          })}</bdi></small>
       </div>
       ${atLimit ? html`<p class="reason" id="room-limit">${this.#t("v4_plan_room_limit", "Can't add more rooms until you remove one; a plan holds up to {limit}.", {
         limit: this.#count(MAX_ROOM_SEQUENCE_SIZE),

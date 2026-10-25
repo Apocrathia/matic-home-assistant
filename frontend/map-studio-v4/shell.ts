@@ -100,7 +100,7 @@ const statusCopy = (state: WorkspaceState, localize?: Localize, dates?: DateForm
     translate(localize, key, fallback, placeholders, dates);
   if (!state.host.connected) return { title: t("v4_reconnecting", "Reconnecting"), detail: t("v4_ha_offline", "Home Assistant is offline"), icon: iconOffline, notable: true };
   if (!state.host.administrator) return { title: t("v4_access_required", "Access required"), detail: t("v4_admin_only", "Administrator only"), icon: iconOffline, notable: true };
-  if (state.host.robotCount === 0) return { title: t("v4_no_robot_short", "No robot"), detail: t("v4_set_up_robot", "Set up a robot"), icon: iconOffline, notable: true };
+  if (state.host.robotCount === 0) return { title: t("v4_no_robot_short", "No robot"), detail: t("v4_set_up_robot", "Check the integration"), icon: iconOffline, notable: true };
   if (isSelectedRobotUnavailable(state)) return { title: t("v4_selected_robot_unavailable", "Selected robot unavailable"), detail: t("v4_choose_another_robot", "Choose another robot to open its map."), icon: iconOffline, notable: true };
   if (!state.host.robotConnected) return { title: t("v4_robot_offline", "Robot offline"), detail: t("v4_last_map_read_only", "Last known map · read only"), icon: iconOffline, notable: true };
   if (state.activity === "problem") return { title: t("v4_needs_attention", "Needs attention"), detail: t("v4_check_robot", "Check the robot"), icon: iconOffline, notable: true };
@@ -246,7 +246,7 @@ const homeCopy = (kind: HomeKind, state: WorkspaceState, t: (key: string, fallba
           : t("v4_saved_map_read_only_detail", "Return to the live map to choose rooms, run a plan, or draw a custom area."),
       };
     case "setup":
-      return { title: t("v4_setup_title", "Set up your robot"), description: t("v4_no_robot_body", "Add the Matic (Unofficial) integration to see a map here.") };
+      return { title: t("v4_setup_title", "No robot available"), description: t("v4_no_robot_body", "Check the Matic (Unofficial) integration, or add it if you haven't set up a robot.") };
   }
 };
 
@@ -2027,7 +2027,7 @@ export class MaticMapShellV4 extends LitElement {
               aria-describedby="dialog-detail"
               @keydown=${this.#dialogKeyboard}
             >
-              <h2 id="dialog-title">${dialog.title}</h2>
+              <h2 id="dialog-title">${discard ? html`<bdi dir="auto">${dialog.title}</bdi>` : dialog.title}</h2>
               <div id="dialog-detail">
                 <p>${dialog.detail}</p>
                 ${dialog.consequence ? html`<p>${dialog.consequence}</p>` : nothing}

@@ -29,7 +29,7 @@ A household administrator opens Matic Map to start a clean (some rooms now, a sa
 | H7 Problem | heading and body from `shell.md` row 6 (`v4_attention_title`, `v4_attention_body`); no cards; Maps | problem 930, no button (`shell.md`) | — | — |
 | H8 Map unavailable or unsupported | heading kept; the description is `shell.md`'s sheet sentence; cards `aria-disabled`; diagnostics row first | map-unavailable 942 | — | — |
 | H9 Robot offline · H11 HA offline, access, robot unavailable, saved map | host card (`shell.md`); offline adds Maps, as shell.ts:1078-1083 | 933 · 906, 915, 927, 850/859 | — | — |
-| H10 No robot | "Set up your robot" + `v4_no_robot_body`, stated once; no cards, no Maps, no map controls | Open integration (setup 924; D2 departs from "policy does not change") | — | — |
+| H10 No robot | "No robot available" + `v4_no_robot_body`, stated once; no cards, no Maps, no map controls | Open integration (setup 924; D2 departs from "policy does not change") | — | — |
 | R1 No rooms selected | header without a count; Cleaning settings row (D5); unchecked rows | `v4_action_clean_rooms`, disabled with `v4_reason_clean_rooms_empty` (clean-rooms 977-1002) | — | — |
 | R2 Selected, checking | rows tinted and checked; each selected row's second line reads `v4_room_preview_loading` | Clean {count} rooms, disabled (reason 1001) | Clear | — |
 | R3 Ready | each selected row shows its effective setting from the admitted preview; above the rows, the due lines, then `v4_room_parts` when `missionBoundaries` is non-empty; summary line | Clean {count} rooms, enabled (986) | Clear | — |
@@ -65,7 +65,7 @@ A household administrator opens Matic Map to start a clean (some rooms now, a sa
 | `v4_custom_areas` · `v4_areas_quick_detail` | Clean custom area · Draw or choose a custom area | – | glossary: custom area; the card is a button, so 3 words; the detail stays one line at 390 (§7) |
 | `v4_maps_heading` NEW · `v4_history_quick_detail` · `v4_diagnostics_quick_detail` NEW | Maps · Browse earlier floor maps. · Check the map and copy details for support. | – · – · N | replaces `v4_more`; distinct from the rail group `v4_map_tools` (map-canvas.ts:607); history drops "floor-scoped" (CP-0188) |
 | `v4_no_rooms_reason` | Can't clean rooms until you name them in the Matic app. | S N | CP-0220; one sentence |
-| `v4_setup_title` NEW · `v4_no_robot_body` · `v4_open_integration` | Set up your robot · Add the Matic (Unofficial) integration to see a map here. · Open integration | – · C N · N | H10, stated once (MS-HOME-03); the body names the integration as manifest.json:3 does, so the button needs only 2 words (D2) |
+| `v4_setup_title` NEW · `v4_no_robot_body` · `v4_open_integration` | No robot available · Check the Matic (Unofficial) integration, or add it if you haven't set up a robot. · Open integration | – · C N · N | H10, stated once (MS-HOME-03); the body names the integration as manifest.json:3 does, so the button needs only 2 words (D2) |
 | `v4_map_display` · `map_style_photo` · `v4_room_colours` · `v4_room_names` | Map display · Photo · Room colors · Room names | – | Map options rows and the wide rail (CP-0376); the rail's Room colors button (map-canvas.ts:593) is repointed from `map_style_room_colours` ("Floor plan") to `v4_room_colours`, so wide and narrow share one key and label |
 | `v4_choose_rooms_detail` | Choose rooms on the map or in the list. | N | `v4_room_selection_hint` retired |
 | `v4_rooms_selected` | {count} selected | S | header, grip, chip; passed through `translate`, not `.replace` (map-canvas.ts:690) |
@@ -125,7 +125,7 @@ None. The plan card uses the existing `selected_plan`; a "last run" plan field w
 | Audit ID | How this spec resolves it |
 |---|---|
 | MS-HOME-01, MS-STATUS-02, MS-ROOMS-05 | Notice slot directly under the home and Rooms headings. A rejected Stop shows in the slot and the toast (`shell.md`). |
-| MS-HOME-02, MS-HOME-03 | H10: one primary (D2), the heading "Set up your robot", the problem stated once. Strip and canvas wording: `shell.md`. |
+| MS-HOME-02, MS-HOME-03 | H10: one primary (D2), the heading "No robot available", the problem stated once. Strip and canvas wording: `shell.md`. |
 | MS-HOME-04 | Floor select, Fit, Room names and help render only when a map is shown. Today map-canvas.ts:561 is unconditional, :606 checks `!locating` and :622 `!locating && showExtras`; each must add `showScene`. |
 | MS-HOME-06, MS-HOME-07 | Three task cards; the Maps group holds only history and diagnostics; the §6 rewrites. |
 | MS-HOME-09, MS-RESP-07 | §8 multi-robot header (widths in `design-system.md`); the robot name in the strip is placed by `shell.md`. |
