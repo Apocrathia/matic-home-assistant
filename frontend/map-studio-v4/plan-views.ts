@@ -213,7 +213,7 @@ export class MaticPlanViewsV4 extends LitElement {
           <strong class="plan-title"><bdi>${plan.name}</bdi>${isDefault
             ? html`<span class="ms-chip chip-default" title=${hint}>${this.#t("v4_plan_default", "Default")}</span>`
             : nothing}${plan.enabled ? nothing : html`<span class="ms-chip">${this.#t("v4_paused", "Paused")}</span>`}</strong>
-          <small>${line2}</small>
+          <small><bdi dir="auto">${line2}</bdi></small>
           ${line3}
         </span>
         <span class="ms-row__trail">${icon(iconChevronRight)}</span>
@@ -286,13 +286,14 @@ export class MaticPlanViewsV4 extends LitElement {
   }
 
   /** One Run row: the position in Saved order, the name, its setting, and "Needs attention" on the blocking room. */
-  #runRow(name: string, setting: string, position: number | null, options: { readonly part?: number; readonly blocked?: boolean } = {}) {
+  #runRow(name: string, setting: string, position: number | null, options: { readonly part?: number; readonly blocked?: boolean; readonly problem?: string | null } = {}) {
     return html`<li class="run-row" ?data-break=${options.part !== undefined}>
       ${options.part === undefined ? nothing : html`<span class="sr-only">${this.#t("v4_part_break", "Part {number} starts here; the robot may stop at the dock first", { number: this.#count(options.part) })}</span>`}
       ${position === null ? nothing : html`<span class="pos-badge" aria-hidden="true">${this.#count(position)}</span>`}
       <span class="row-lines">
         <bdi>${name}</bdi>
         <small>${setting}</small>
+        ${options.problem ? html`<small class="problem">${options.problem}</small>` : nothing}
         ${options.blocked ? html`<span class="ms-chip chip-attention">${this.#t("v4_needs_attention", "Needs attention")}</span>` : nothing}
       </span>
     </li>`;
@@ -344,14 +345,16 @@ export class MaticPlanViewsV4 extends LitElement {
         settingLabel(this.#t, room),
         null,
         { blocked: room.roomId === blockedRoom },
-      )), (area) => this.#runRow(area.name, settingLabel(this.#t, area), null));
+      )), (area) => this.#runRow(area.name, settingLabel(this.#t, area), null, {
+        problem: problem && blocker === "area_map_changed" ? this.#areaProblem(area.areaId) : null,
+      }));
     const end = draft.finishCurrentRoom
       ? this.#t("v4_plan_summary_finish", "When you press Stop, the robot finishes the current room if it's at least {percent}% done.", {
         percent: this.#count(draft.finishCurrentRoomThreshold),
       })
       : draft.returnToBase ? this.#t("v4_plan_summary_return", "Returns to the dock when finished") : null;
     return html`
-      <p class="summary">${summary}</p>
+      <p class="summary"><bdi dir="auto">${summary}</bdi></p>
       ${this.#lines(dueLines(this.#t, state.locale, previewRooms))}
       <h3 class="heading">${paused
         ? this.#t("v4_plan_rooms_heading", "In this plan")
@@ -363,7 +366,9 @@ export class MaticPlanViewsV4 extends LitElement {
         count: this.#count(boundaries.length + 1),
       })}</p>` : nothing}
       ${problem ? html`<p class="problem">${this.#t(problem.reasonKey, problem.reason)}</p>
-        <button class="ms-btn ms-btn--secondary" type="button" @click=${() => this.#intent({ type: "open-workflow", workflow: "plan" })}>${this.#t("v4_retry", "Try again")}</button>` : nothing}
+        ${blocker === "area_map_changed"
+          ? html`<button class="ms-btn ms-btn--secondary" type="button" @click=${() => this.#intent({ type: "open-workflow", workflow: "areas" })}>${this.#t("v4_your_areas", "Your areas")}</button>`
+          : html`<button class="ms-btn ms-btn--secondary" type="button" @click=${() => this.#intent({ type: "open-workflow", workflow: "plan" })}>${this.#t("v4_retry", "Try again")}</button>`}` : nothing}
       ${ready && ordered ? html`<ol class="run-list" role="list">${rows}</ol>` : html`<ul class="run-list" role="list">${rows}</ul>`}
       ${this.#switch()}
       ${end ? html`<p class="quiet">${end}</p>` : nothing}
@@ -809,12 +814,12 @@ export class MaticPlanViewsV4 extends LitElement {
         <h3 class="heading" id="edit-rooms">${areas
           ? this.#t("v4_plan_steps_heading", "Rooms and custom areas")
           : this.#t("v4_rooms_heading", "Rooms")}</h3>
-        <small>${areas
+        <small><bdi dir="auto">${areas
           ? roomsAndAreas(this.#t, state.locale, draft.rooms.length, areas)
           : this.#t("v4_plan_rooms_selected", "{selected} of {total} selected", {
             selected: this.#count(draft.rooms.length),
             total: this.#count(catalog.rooms.length),
-          })}</small>
+          })}</bdi></small>
       </div>
       ${atLimit ? html`<p class="reason" id="room-limit">${this.#t("v4_plan_room_limit", "Can't add more rooms until you remove one; a plan holds up to {limit}.", {
         limit: this.#count(MAX_ROOM_SEQUENCE_SIZE),

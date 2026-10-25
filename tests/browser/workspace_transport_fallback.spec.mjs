@@ -51,7 +51,8 @@ async function setup(page, failureMode) {
       bootstrap_photo_seen: entry.bootstrapPhotoSeen, bootstrap_structure_seen: entry.bootstrapStructureSeen,
       bootstrap_failures: entry.bootstrapFailures,
     };
-    const stats = { hassFetchWithAuthCalls: 0, rawFetchCalls: 0, snapshotCalls: 0, subscribeCalls: 0,
+    let savedPlans = syntheticPlans();
+    const stats = { planCalls: 0, hassFetchWithAuthCalls: 0, rawFetchCalls: 0, snapshotCalls: 0, subscribeCalls: 0,
       activeSubscriptions: 0, unsubscribeCalls: 0 };
     window.fetch = (...args) => {
       stats.rawFetchCalls += 1;
@@ -72,7 +73,7 @@ async function setup(page, failureMode) {
       scene: async () => ({ scene: syntheticScene(), revision: 7, floorCoherent: true, notModified: false }),
       pose: async () => null,
       history: async () => syntheticHistory(),
-      plans: async () => syntheticPlans(),
+      plans: async () => { stats.planCalls += 1; return structuredClone(savedPlans); },
       areas: async () => syntheticAreas(),
       dispose: () => realBackend.dispose(),
     };
@@ -112,6 +113,16 @@ async function setup(page, failureMode) {
     const controller = new EffectController(store, backend, connection, true);
     controller.sync(projection);
     window.fallbackHarness = { controller, store, projection, stats, intervals, clearedIntervals,
+      updateSavedPlan: (name, cleaningMode) => {
+        savedPlans.plans[0].name = name;
+        savedPlans.plans[0].nextRunPreview.rooms[0].cleaningMode = cleaningMode;
+        const mopDue = cleaningMode === "vacuum_and_mop";
+        savedPlans.plans[0].rooms[0].cadenceProgress = {
+          mopProgress: mopDue ? 1 : 0, coverageProgress: 0, mopDue, coverageDue: false,
+          nextMopIn: mopDue ? 1 : 2, nextCoverageIn: null,
+          reasons: mopDue ? ["mop_due"] : [],
+        };
+      },
       invokeCatalogPoll: async () => {
         const interval = [...intervals.values()].find(item => item.delay === 5000);
         if (!interval) throw new Error("catalog polling interval was not registered");
@@ -174,5 +185,34 @@ for (const failureMode of ["snapshot-unsupported", "subscription-unsupported"]) 
     expect(disposed.clearedIntervals).toBe(2);
     expect(disposed.activeSubscriptions).toBe(0);
     expect(disposed.unsubscribeCalls).toBe(failureMode === "snapshot-unsupported" ? 1 : 0);
+  });
+}
+
+for (const failureMode of ["snapshot-unsupported", "subscription-unsupported"]) {
+  test(`${failureMode} polls saved plan cadence while preserving a dirty editor`, async ({ page }) => {
+    await setup(page, failureMode);
+    await expect.poll(() => page.evaluate(() => window.fallbackHarness.store.value.resources.plans.status)).toBe("ready");
+    await page.evaluate(() => {
+      const h = window.fallbackHarness;
+      h.controller.selectPlan("daily");
+      h.updateSavedPlan("Daily clean updated", "vacuum_and_mop");
+    });
+    const before = await page.evaluate(() => window.fallbackHarness.stats.planCalls);
+    await page.evaluate(() => window.fallbackHarness.invokeCatalogPoll());
+    await expect.poll(() => page.evaluate(() => window.fallbackHarness.store.value.planDraft.name)).toBe("Daily clean updated");
+    expect(await page.evaluate(() => window.fallbackHarness.stats.planCalls)).toBe(before + 1);
+    expect(await page.evaluate(() => window.fallbackHarness.store.value.resources.plans.value.plans[0].nextRunPreview.rooms[0].cleaningMode)).toBe("vacuum_and_mop");
+    expect(await page.evaluate(() => window.fallbackHarness.store.value.planDraft.rooms[0].cadenceProgress))
+      .toMatchObject({ mopProgress: 1, mopDue: true, nextMopIn: 1 });
+    await page.evaluate(() => {
+      const h = window.fallbackHarness;
+      h.store.patch({ planDraft: { ...h.store.value.planDraft, name: "My unsaved edit", dirty: true } });
+      h.updateSavedPlan("Changed elsewhere", "vacuum");
+    });
+    const draft = await page.evaluate(() => window.fallbackHarness.store.value.planDraft);
+    await page.evaluate(() => window.fallbackHarness.invokeCatalogPoll());
+    await expect.poll(() => page.evaluate(() => window.fallbackHarness.store.value.resources.plans.value.plans[0].name)).toBe("Changed elsewhere");
+    expect(await page.evaluate(() => window.fallbackHarness.store.value.planDraft)).toEqual(draft);
+    await page.evaluate(() => window.fallbackHarness.dispose());
   });
 }

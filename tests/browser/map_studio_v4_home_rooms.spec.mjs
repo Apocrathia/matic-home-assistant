@@ -440,7 +440,7 @@ test.describe("home by state", () => {
 
   for (const [scenario, title, body] of [
     ["access", "Administrator access required", "Ask a Home Assistant administrator to open this map."],
-    ["empty", "Set up your robot", "Add the Matic (Unofficial) integration to see a map here."],
+    ["empty", "No robot available", "Check the Matic (Unofficial) integration, or add it if you haven't set up a robot."],
   ]) {
     test(`${scenario} states the problem once, with no cards and no Maps (H10, H11)`, async ({ page }) => {
       const gallery = await loadGallery(page, { scenario });

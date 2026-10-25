@@ -10,6 +10,7 @@ import {
   type CoordinateEditCapture,
   type CoordinateEditTool,
   type CommandState,
+  type MapView,
   type NoButtonAction,
   type PlanOrigin,
   type PrimaryAction,
@@ -22,6 +23,11 @@ import {
 import type { AreaCircle, CadenceReason, NextRunPreviewBlocker, SavedPlan } from "./backend-contracts";
 import { entryFloorKey, entryMissionKey } from "./backend-contracts";
 import { notice, readWorkspaceNotice, type CameraPreference } from "./contracts";
+
+/** Draw and the area review look straight down; every other workflow keeps the user's view. */
+export const forcesTop = (state: WorkspaceState | null): boolean =>
+  state?.workflow === "draw" || state?.workflow === "areaReview";
+export const topView = (state: WorkspaceState): MapView => forcesTop(state) ? "top" : state.view;
 
 const emptyResource = <T>(): { status: "idle"; value: T | null; problem: null } => ({
   status: "idle",
@@ -38,7 +44,7 @@ const readOnlyWorkflows = new Set<WorkspaceState["workflow"]>([
   "areaReview",
 ]);
 
-const isReadOnlyWorkspace = (state: WorkspaceState): boolean =>
+export const isReadOnlyWorkspace = (state: WorkspaceState): boolean =>
   state.dataMode === "history" || state.floor.readOnly;
 
 const clamp = (value: number, minimum: number, maximum: number): number =>
@@ -1070,6 +1076,7 @@ const PLAN_IDENTITY: Reason = {
 };
 /** Run plan's reason for a preview blocker that names no room (plan.md R4); others retry the preview. */
 export const PLAN_BLOCKERS: Partial<Record<NextRunPreviewBlocker, Reason>> = {
+  area_map_changed: { reason: "Can't run this plan until you review its custom areas on the current map.", reasonKey: "v4_preview_area_changed" },
   cadence_identity_unavailable: PLAN_IDENTITY,
   cadence_identity_changed: PLAN_IDENTITY,
   plan_has_no_rooms: { reason: "Can't run this plan until it has at least one room.", reasonKey: "v4_preview_no_rooms" },

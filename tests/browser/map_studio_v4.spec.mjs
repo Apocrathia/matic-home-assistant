@@ -1140,7 +1140,7 @@ test.describe("Map Studio v0.4 foundation", () => {
         element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...state.resources.plans, value: { ...value, plans } } } });
       });
       const row = gallery.locator('[data-plan-row="daily"]');
-      await expect(row.locator("bdi")).toHaveText(/^A very long plan name/);
+      await expect(row.locator(".plan-title bdi")).toHaveText(/^A very long plan name/);
       const layout = await row.evaluate((button) => {
         const bdi = button.querySelector(".plan-title bdi");
         const chip = button.querySelector(".plan-title .ms-chip");
@@ -1461,6 +1461,44 @@ test.describe("Map Studio v0.4 foundation", () => {
       await expect(gallery.locator(".problem")).toHaveText("Can't run this plan until you retry its next-run preview.");
       await expect(gallery.getByRole("button", { name: "Try again", exact: true })).toBeVisible();
     }
+  });
+
+  test("an area-blocked Run explains the affected area and opens Your areas", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "plan-run-areas" });
+    await settleWorkspace(gallery);
+    await gallery.evaluate((element) => {
+      const state = element.getWorkspaceSnapshot();
+      const catalog = state.resources.plans.value;
+      const plans = catalog.plans.map((plan) => ({ ...plan,
+        nextRunPreview: { ...plan.nextRunPreview, blocker: "area_map_changed", rooms: [], steps: [] },
+      }));
+      const areas = state.resources.areas.value.areas.map((area) => ({ ...area,
+        status: area.id === "entryway" ? "review" : area.status,
+        canRebind: area.id === "entryway" ? true : area.canRebind,
+      }));
+      element.replaceWorkspaceState({ ...state, resources: { ...state.resources,
+        plans: { ...state.resources.plans, value: { ...catalog, plans } },
+        areas: { ...state.resources.areas, value: { ...state.resources.areas.value, areas } },
+      } });
+    });
+    const affected = gallery.locator(".run-row").filter({ hasText: "Entryway" });
+    await expect(affected).toContainText("Map changed · Check it before cleaning");
+    await expect(gallery.getByRole("button", { name: "Run plan Daily clean", exact: true })).toBeDisabled();
+    await expect(gallery.getByRole("button", { name: "Try again", exact: true })).toHaveCount(0);
+    const blockedState = await gallery.evaluate((element) => element.getWorkspaceSnapshot());
+    for (const phase of ["paused", "saving"]) {
+      await gallery.evaluate((element, { state, phase }) => element.replaceWorkspaceState({
+        ...state,
+        planDraft: { ...state.planDraft, enabled: phase !== "paused" },
+        command: phase === "saving" ? "pending" : "idle",
+        pendingAction: phase === "saving" ? "save-plan" : null,
+      }), { state: blockedState, phase });
+      await expect(gallery.locator(".run-row .problem"), phase).toHaveCount(0);
+    }
+    await gallery.evaluate((element, state) => element.replaceWorkspaceState(state), blockedState);
+    await expect(affected).toContainText("Map changed · Check it before cleaning");
+    await gallery.getByRole("button", { name: "Your areas", exact: true }).click();
+    await expect.poll(async () => (await snapshot(page)).workflow).toBe("areas");
   });
 
   test("turning a paused plan on shows no problem while it saves, then retries the stale preview", async ({ page }) => {
@@ -2298,7 +2336,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     // shell.md §2: these rows have no footer button; the strip says the state.
     const gallery = await loadGallery(page, { scenario: "empty" });
     await expect(gallery.locator(".status-copy strong")).toHaveText("No robot");
-    await expect(gallery.locator(".action-bar")).not.toContainText("Set up a robot");
+    await expect(gallery.locator(".action-bar")).not.toContainText("Check the integration");
     await page.evaluate((tag) => document.querySelector(tag).setScenario("problem"), GALLERY_TAG);
     await expect(gallery.locator(".status-copy strong")).toHaveText("Needs attention");
     // No footer button, so no footer at all (home-rooms.md §3: the bar is absent when idle).
@@ -6208,6 +6246,41 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(clean).toHaveAccessibleDescription("Elige al menos una habitación.");
   });
 
+  for (const translated of [false, true]) {
+    for (const [scenario, selector, dialog] of [
+      ["home-shortcuts", '[data-launcher^="run:plan:"] small'],
+      ["plans", "[data-plan-row] small"],
+      ["plan-saved-intelligent", ".summary"],
+      ["plan-edit-ordered", ".list-header small"],
+      ["plan-dirty", "#dialog-title", "discardDraft"],
+    ]) {
+      test(`RTL copy isolates ${scenario} with ${translated ? "Arabic translation" : "English fallback"}`, async ({ page }) => {
+        const gallery = await loadGallery(page, { scenario });
+        await settleWorkspace(gallery);
+        await gallery.evaluate((element, { translated, dialog }) => {
+          document.documentElement.dir = "rtl";
+          const state = element.getWorkspaceSnapshot();
+          element.replaceWorkspaceState({ ...state, locale: "ar", ...(dialog ? { dialog } : {}) });
+          if (translated) {
+            element.localize = (key) => {
+              const name = key.split(".").at(-1);
+              if (name === "v4_discard_title") return "تجاهل التغييرات؟";
+              if (name === "v4_plan_rooms_selected") return "٣ من ١٢ محددة";
+              if (name.startsWith("v4_plan_row_") || name.startsWith("v4_plan_summary_rooms")) return "٣ غرف · حوالي ٢٠ دقيقة";
+              return key;
+            };
+          }
+        }, { translated, dialog });
+        const phrase = gallery.locator(selector).first();
+        await expect(phrase).toBeVisible();
+        await expect.poll(() => phrase.evaluate((element) =>
+          getComputedStyle(element.querySelector("bdi") ?? element).direction,
+        )).toBe(translated ? "rtl" : "ltr");
+        if (translated) await expect(phrase).toContainText(/[غت٣]/u);
+      });
+    }
+  }
+
   test("keeps the mobile map usable in RTL", async ({ page }) => {
     await page.setViewportSize({ width: 320, height: 740 });
     await page.goto("/");
@@ -8002,6 +8075,10 @@ for (const width of [1024, 1100]) {
             await gallery.getByRole("button", { name: "Rotate right" }).click();
             await expect.poll(async () => (await snapshot(page)).cameras.three?.yaw ?? null).not.toBeNull();
           }
+          // Activating another map control dismisses this non-modal help.
+          await expect(help).toHaveCount(0);
+          await launcher.click();
+          await expect(help).toBeVisible();
           const close = help.getByRole("button", { name: "Close", exact: true });
           await close.scrollIntoViewIfNeeded();
           await close.click();
@@ -9213,6 +9290,7 @@ test.describe("plan primary action", () => {
       ["plan_has_no_rooms", "v4_preview_no_rooms", "Can't run this plan until it has at least one room."],
       ["plan_room_limit", "v4_preview_room_limit", "Can't run this plan until it has 100 rooms or fewer."],
       ["invalid_plan", "v4_preview_invalid", "Can't run this plan until you open Edit and save it again."],
+      ["area_map_changed", "v4_preview_area_changed", "Can't run this plan until you review its custom areas on the current map."],
       // An enabled draft with a preview still paused: the preview is stale, so it is retried.
       ["plan_disabled", "v4_reason_run_plan_preview"],
       ["preview_unavailable", "v4_reason_run_plan_preview"],

@@ -42,7 +42,7 @@ from .client.floor_plan import (
 )
 from .client.models import FloorPlan, HermesCollectionEntry, RobotPose
 from .client.slam_map import decode_slam_tile, encode_slam_scene
-from .const import CONF_LIVE_WORKSPACE_TRANSPORT, DOMAIN
+from .const import DOMAIN
 from .plans import (
     AreaFramePointLimitError,
     AreaInUseError,
@@ -158,8 +158,6 @@ def catalog_entry_projection(
     entry_id: str,
     runtime: MaticRuntimeData,
     scene_view: MaticSlamSceneView | None = None,
-    *,
-    options: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Project the bounded catalog row shared by REST and workspace snapshots."""
     health = runtime.slam_map.health
@@ -206,9 +204,9 @@ def catalog_entry_projection(
     telemetry = getattr(runtime.coordinator.data, "telemetry", None)
     return {
         "entry_id": entry_id,
-        "live_workspace_transport_enabled": (
-            options is not None and options.get(CONF_LIVE_WORKSPACE_TRANSPORT) is True
-        ),
+        # Workspace push is withheld pending installed reliability and resource
+        # qualification. Map deltas, pose updates and catalog polling remain live.
+        "live_workspace_transport_enabled": False,
         "scene_url": scene_api_url(entry_id),
         "delta_url": delta_api_url(entry_id),
         "pose_url": pose_api_url(entry_id),
@@ -1054,7 +1052,6 @@ class MaticSlamCatalogView(HomeAssistantView):
                 entry.entry_id,
                 runtime,
                 self._scene_view,
-                options=getattr(entry, "options", None),
             )
             entries.append(
                 {
@@ -1113,13 +1110,21 @@ class MaticAreasView(HomeAssistantView):
                 status=HTTPStatus.NOT_FOUND, headers=PRIVATE_NO_STORE_HEADERS
             )
         floor_plan = runtime.coordinator.data.floor_plan
-        if (
-            floor_plan is None
-            or not floor_plan.rooms
-            or not runtime.slam_map.floor_plan_is_current(floor_plan)
-        ):
+        if floor_plan is None or not runtime.slam_map.floor_plan_is_current(floor_plan):
             return web.Response(
-                status=HTTPStatus.CONFLICT, headers=PRIVATE_NO_STORE_HEADERS
+                status=HTTPStatus.CONFLICT,
+                headers={
+                    **PRIVATE_NO_STORE_HEADERS,
+                    "X-Matic-Areas-Conflict": "map-rechecking",
+                },
+            )
+        if not floor_plan.rooms:
+            return web.Response(
+                status=HTTPStatus.CONFLICT,
+                headers={
+                    **PRIVATE_NO_STORE_HEADERS,
+                    "X-Matic-Areas-Conflict": "no-rooms",
+                },
             )
         serial_number = str(runtime.coordinator.data.info.serial_number)
         areas = []

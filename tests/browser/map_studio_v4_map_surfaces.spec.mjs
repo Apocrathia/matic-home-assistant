@@ -55,6 +55,55 @@ const drag = async (page, from, to, options = {}) => {
 };
 
 test.describe("help (map-surfaces.md §5 Help, §11 MS-HELP-01/02)", () => {
+  test("Help dismissal detaches with its host and works after reconnect", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "ready" });
+    await helpButton(gallery).click();
+    await expect(helpDialog(gallery)).toBeVisible();
+    await gallery.evaluate((element) => {
+      window.__detachedHelpGallery = element;
+      element.remove();
+    });
+    await page.mouse.click(5, 5);
+    await page.evaluate(() => {
+      document.body.append(window.__detachedHelpGallery);
+      delete window.__detachedHelpGallery;
+    });
+    await expect(helpDialog(gallery)).toBeVisible();
+    await canvasOf(gallery).getByRole("button", { name: "Fit the whole map on screen" }).click();
+    await expect(helpDialog(gallery)).toHaveCount(0);
+  });
+
+  test("an outside touch dismisses Help and still selects the map view @mobile", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "ready", narrow: true });
+    await helpButton(gallery).tap();
+    await expect(helpDialog(gallery)).toBeVisible();
+    const topView = canvasOf(gallery).getByRole("button", { name: "2D", exact: true });
+    await topView.tap();
+    await expect(helpDialog(gallery)).toHaveCount(0);
+    await expect(topView).toHaveAttribute("aria-pressed", "true");
+  });
+
+  test("Help dismisses outside without stealing focus or toggling back open", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "ready" });
+    const launcher = helpButton(gallery);
+    const dialog = helpDialog(gallery);
+    await launcher.click();
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("heading").click();
+    await expect(dialog).toBeVisible();
+    const fit = canvasOf(gallery).getByRole("button", { name: "Fit the whole map on screen" });
+    await fit.click();
+    await expect(dialog).toHaveCount(0);
+    // Safari does not focus buttons on click; dismissal must not force focus
+    // back to Help in either engine.
+    await expect(launcher).not.toBeFocused();
+    await launcher.click();
+    await expect(dialog).toBeVisible();
+    await launcher.click();
+    await expect(dialog).toHaveCount(0);
+    await expect(launcher).toBeFocused();
+  });
+
   test("empty Home Map options stays styled when workflow downloads are blocked", async ({ page }) => {
     const workflowRequests = [];
     await page.route("**/chunks/workflow-panel-*", (route) => {
@@ -267,19 +316,39 @@ test.describe("help (map-surfaces.md §5 Help, §11 MS-HELP-01/02)", () => {
     expect(paint.Keyboard).toBe("Focus the map, use arrow keys to aim, then Enter to paint or erase at the crosshair. D selects Paint; E selects Erase.");
     await patchState(gallery, { draw: { ...(await snapshot(page)).draw, tool: "outline" } });
     await expect(dialog.locator("dd").last()).toContainText("press Enter to place points");
+    expect((await rows(dialog)).Mouse).toBe("Click to add points · right-drag or Space-drag to move · wheel to zoom");
+    await patchState(gallery, { draw: { ...(await snapshot(page)).draw, tool: "erase" } });
+    expect((await rows(dialog)).Mouse).toBe("Drag to erase · right-drag or Space-drag to move · wheel to zoom");
+    await expect(panelOf(gallery).getByText("Drag to erase · right-drag or Space-drag to move the map", { exact: true })).toBeVisible();
+    await patchState(gallery, { draw: { ...(await snapshot(page)).draw, tool: "pan" } });
+    const pan = await rows(dialog);
+    expect(pan.Mouse).toBe("Drag to move the map · wheel to zoom");
+    expect(pan.Keyboard).toBe("Arrow keys to move · +/− to zoom · 0 to fit. D selects Paint; E selects Erase.");
+    const canvas = canvasOf(gallery);
+    await expect(canvas.locator(".map-root")).toHaveAttribute("aria-describedby", "keyboard-draw-pan-help");
+    await expect(canvas.locator("#keyboard-draw-pan-help")).toHaveText(pan.Keyboard);
   });
 
   test("Draw on a phone reads the touch drawing row @mobile", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "draw", narrow: true });
     await helpButton(gallery).click();
     expect(await rows(helpDialog(gallery))).toEqual({ Touch: "Drag to paint · two fingers to move or zoom" });
+    for (const [tool, expected] of [
+      ["outline", "Tap to add points · two fingers to move or zoom"],
+      ["erase", "Drag to erase · two fingers to move or zoom"],
+      ["pan", "Drag to move the map · two fingers to move or zoom"],
+    ]) {
+      await patchState(gallery, { draw: { ...(await snapshot(page)).draw, tool } });
+      expect(await rows(helpDialog(gallery))).toEqual({ Touch: expected });
+    }
   });
 
   test("Escape closes Map options, then help, then the workflow (shell.md §5)", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "rooms" });
     await helpButton(gallery).click();
     await expect(helpDialog(gallery)).toBeVisible();
-    await optionsButton(gallery).click();
+    await optionsButton(gallery).focus();
+    await page.keyboard.press("Enter");
     await expect(optionsMenu(gallery)).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(optionsMenu(gallery)).toHaveCount(0);
@@ -633,7 +702,7 @@ test.describe("Draw tools", () => {
     const hint = panel.locator(".draw-hint");
     await expect(hint).toHaveText("Drag to paint · right-drag or Space-drag to move the map");
     await gallery.getByRole("button", { name: "Erase", exact: true }).click();
-    await expect(hint).toHaveText("Drag to paint · right-drag or Space-drag to move the map");
+    await expect(hint).toHaveText("Drag to erase · right-drag or Space-drag to move the map");
     await gallery.getByRole("button", { name: "Points", exact: true }).click();
     await expect(hint).toHaveText("Click to add points · right-drag to move the map");
     await gallery.getByRole("button", { name: "Move map", exact: true }).click();
@@ -1040,6 +1109,30 @@ test.describe("Area review", () => {
     expect((await snapshot(page)).areaDraft.id).toBeNull();
     expect((await snapshot(page)).draw.circles.length).toBeGreaterThan(0);
   });
+
+  for (const narrow of [false, true]) {
+    test(`discarding a new area review restores the rendered 2D camera through Home${narrow ? " @mobile" : ""}`, async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "draw", narrow, viewport: narrow ? null : { width: 1024, height: 768 } });
+      await patchState(gallery, { view: "top" });
+      const cameraZoom = () => canvasOf(gallery).evaluate(element => {
+        const diagnostics = element.rendererDiagnostics();
+        return diagnostics.fitDistance / diagnostics.cameraDistance;
+      });
+      await expect.poll(cameraZoom).toBeGreaterThan(0);
+      const before = await cameraZoom();
+      await gallery.locator(".action-bar").getByRole("button", { name: "Name and save", exact: true }).click();
+      await expect.poll(async () => (await snapshot(page)).workflow).toBe("areaReview");
+      await expect.poll(cameraZoom).toBeGreaterThan(before + 0.5);
+      await gallery.getByRole("button", { name: "Back to areas", exact: true }).click();
+      await gallery.getByRole("dialog", { name: "Discard changes?" })
+        .getByRole("button", { name: "Discard", exact: true }).click();
+      await expect.poll(async () => (await snapshot(page)).workflow).toBe("areas");
+      await expect.poll(cameraZoom).toBeCloseTo(before, 4);
+      await gallery.getByRole("button", { name: "Back to all tasks", exact: true }).click();
+      await expect.poll(async () => (await snapshot(page)).workflow).toBe("none");
+      await expect.poll(cameraZoom).toBeCloseTo(before, 4);
+    });
+  }
 
   test("reduced motion lands on the same framed camera", async ({ page }) => {
     await page.emulateMedia({ reducedMotion: "reduce" });
@@ -1479,6 +1572,33 @@ test.describe("Final review", () => {
     await expect(actions).toBeVisible();
     expect(intersects(await actions.boundingBox(), await help.boundingBox())).toBe(false);
   });
+
+  for (const direction of ["ltr", "rtl"]) {
+    test(`Help stays above overlapping draft point handles (${direction})`, async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "draw-points", viewport: { width: 1440, height: 900 } });
+      await page.evaluate((dir) => { document.documentElement.dir = dir; }, direction);
+      const outline = { closed: true, points: [{ x: 1, y: 1 }, { x: 3.5, y: 1 }, { x: 3.5, y: 2.5 }] };
+      await patchState(gallery, { draw: { ...(await snapshot(page)).draw, outline } });
+      await helpButton(gallery).click();
+      const dialog = helpDialog(gallery);
+      const close = dialog.getByRole("button", { name: "Close", exact: true });
+      await expect(close).toBeVisible();
+      const point = canvasOf(gallery).getByRole("button", { name: "Point 1", exact: true });
+      const box = await close.boundingBox();
+      // Stage a camera position where a real draft handle overlaps Help.
+      // The click must reach Help without moving or selecting that point.
+      await point.evaluate((element, target) => {
+        const overlay = element.parentElement.getBoundingClientRect();
+        element.style.left = `${target.x + target.width / 2 - overlay.x}px`;
+        element.style.top = `${target.y + target.height / 2 - overlay.y}px`;
+      }, box);
+      expect(intersects(await point.boundingBox(), box)).toBe(true);
+      await close.click({ timeout: 2_000 });
+      await expect(dialog).toHaveCount(0);
+      expect((await snapshot(page)).draw.outline).toEqual(outline);
+      await expect(helpButton(gallery)).toBeFocused();
+    });
+  }
 
   test("a toast in Full map sits above the Draw dock and the dock stays centred under RTL", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "draw", viewport: { width: 1024, height: 768 } });

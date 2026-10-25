@@ -185,6 +185,8 @@ _SCHEDULE_MAX_DEPTH = 4
 _CLEANING_SESSION_MAX_BYTES = 256 * 1024
 _CLEANING_SESSION_MAX_FIELDS = 1024
 _CLEANING_SESSION_MAX_ROOMS = 256
+# START readback includes undocking; mixed UPDATE readback begins once cleaning.
+_COVERAGE_START_READBACK_TIMEOUT = 30.0
 _MIXED_COVERAGE_READBACK_TIMEOUT = 8.0
 _MIXED_COVERAGE_READBACK_INTERVAL = 0.5
 _MIXED_READBACK_DELTA_LIMIT = 32
@@ -1831,7 +1833,7 @@ class MaticHermesClient(AbstractAsyncContextManager["MaticHermesClient"]):
         receipt alone cannot grant cadence credit: completion must match this
         session and the same retained vacuum goals must be observed again.
         """
-        deadline = monotonic() + _MIXED_COVERAGE_READBACK_TIMEOUT
+        deadline = monotonic() + _COVERAGE_START_READBACK_TIMEOUT
         observed_identity: bytes | None = None
         receipt: CoverageReceipt | None = None
 
@@ -1846,7 +1848,7 @@ class MaticHermesClient(AbstractAsyncContextManager["MaticHermesClient"]):
                     deep_mop_enabled=deep,
                 )
 
-        async with asyncio.timeout(_MIXED_COVERAGE_READBACK_TIMEOUT):
+        async with asyncio.timeout(_COVERAGE_START_READBACK_TIMEOUT):
             while True:
                 identity = await self.async_get_cleaning_session_identity()
                 if identity is None:
