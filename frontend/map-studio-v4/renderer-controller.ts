@@ -611,8 +611,8 @@ export class RendererController {
     // view's preference, as a view change does.
     const enteredTop = !forcesTop(previous) && forcesTop(state);
     const leftTop = forcesTop(previous) && !forcesTop(state);
-    if (!holdingScene && (!previous || previous.view !== state.view || enteredTop || leftTop
-      || cameraContextChanged || liveCameraChanged)) {
+    if (!previous || previous.view !== state.view || enteredTop || leftTop
+      || (!holdingScene && (cameraContextChanged || liveCameraChanged))) {
       this.#applyPreferredCamera(view, state, rebasedPreferences);
     }
     if (previous?.workflow !== "areaReview" && state.workflow === "areaReview" && state.draw.circles.length) {

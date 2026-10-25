@@ -200,3 +200,48 @@ test("history camera resets on a new selection and owner while live preferences 
   expect(result.ownerKey).toBeNull();
   expect(result.previousOwner.top).toEqual(result.saved.top);
 });
+
+test("@safety a held saved scene honors explicit view changes and keeps automatic updates still", async ({ page }) => {
+  await loadCamera(page);
+  const result = await page.evaluate(async () => {
+    const { RendererController, createGalleryState } = await import("/live-camera.js");
+    const base = createGalleryState("ready");
+    const saved = { ...base, view: "three", dataMode: "history", floor: { ...base.floor, readOnly: true },
+      selection: { ...base.selection, floorId: "saved", historyId: "saved-one" },
+      resources: { ...base.resources, scene: { ...base.resources.scene, value: { ...base.resources.scene.value, source: "history" } } } };
+    const canvases = Array.from({ length: 2 }, () => document.createElement("canvas"));
+    canvases.forEach((canvas) => { Object.assign(canvas.style, { width: "700px", height: "500px" }); document.body.append(canvas); });
+    const renderer = new RendererController(...canvases);
+    const frame = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    try {
+      renderer.setState(saved);
+      await frame();
+      renderer.zoomAt(1.5);
+      renderer.panBy(20, -15);
+      const before = renderer.camera;
+      const held = { ...saved, dataMode: "live", coherence: "verifying",
+        selection: { ...saved.selection, floorId: "current", historyId: null },
+        resources: { ...saved.resources, scene: { ...saved.resources.scene, status: "loading" } } };
+      renderer.setState(held);
+      await frame();
+      const automatic = renderer.camera;
+      renderer.setState({ ...held, view: "top" });
+      await frame();
+      const top = renderer.camera;
+      renderer.setState({ ...held, view: "top" });
+      await frame();
+      const topAutomatic = renderer.camera;
+      renderer.setState(held);
+      await frame();
+      const three = renderer.camera;
+      renderer.setState({ ...held });
+      await frame();
+      return { before, automatic, top, topAutomatic, three, threeAutomatic: renderer.camera };
+    } finally { renderer.dispose(); canvases.forEach((canvas) => canvas.remove()); }
+  });
+  expect(result.automatic).toEqual(result.before);
+  expect(result.top.orthographic).toBe(true);
+  expect(result.topAutomatic).toEqual(result.top);
+  expect(result.three.orthographic).toBe(false);
+  expect(result.threeAutomatic).toEqual(result.three);
+});
