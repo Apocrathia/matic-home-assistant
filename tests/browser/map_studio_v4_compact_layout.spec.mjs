@@ -242,6 +242,25 @@ test.describe("layout follows the host at once", () => {
 });
 
 test.describe("compact inspector (MS-RESP-04)", () => {
+  for (const rootFont of [14, 20]) {
+    test(`inspector widths keep their pixel contract at a ${rootFont}px root font`, async ({ page }) => {
+      for (const [viewport, expectedWidth] of [
+        [{ width: 768, height: 600 }, 320],
+        [{ width: 1024, height: 768 }, 360],
+      ]) {
+        const gallery = await stage(page, "rooms", viewport);
+        await page.evaluate((size) => { document.documentElement.style.fontSize = `${size}px`; }, rootFont);
+        await expect(gallery.locator(".mobile-sheet")).toHaveCount(0);
+        const width = await gallery.locator("#map-workspace").evaluate((panel) => panel.getBoundingClientRect().width);
+        expect(Math.round(width), `${viewport.width}px viewport at ${rootFont}px root`).toBe(expectedWidth);
+        for (const target of [".root", "#map-workspace"]) {
+          const overflow = await gallery.locator(target).evaluate((element) => element.scrollWidth - element.clientWidth);
+          expect(overflow, `${target} horizontal overflow at ${rootFont}px root`).toBeLessThanOrEqual(1);
+        }
+      }
+    });
+  }
+
   test("768×600 gets the 320 px inspector; portrait and narrower keep the sheet", async ({ page }) => {
     let gallery = await stage(page, "rooms", { width: 768, height: 600 });
     await expect(gallery.locator(".mobile-sheet")).toHaveCount(0);

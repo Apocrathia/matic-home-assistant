@@ -27,7 +27,7 @@ Tokens (tokens.ts:20-131; 58 today, 67 after this spec). HA variables are read, 
 | Radius | `--ms-radius-{xs,sm,md,lg,pill}` = 4 / 8 / 12 / 16 px / pill | keep |
 | Control | `--ms-control` 44 px (hit-box floor), `--ms-control-lg` 52, `--ms-control-sm` 36 (fine-pointer `--sm` visual and decorative boxes only) | keep; meaning narrowed |
 | Icon | `--ms-icon` 20 px, which is also the checkbox and radio glyph size | remove `--ms-icon-sm` and `.ms-icon--sm` (only tokens.ts:138 references them) |
-| Layout (NEW) | `--ms-bar` `var(--header-height, 3.5rem)`; `--ms-bar-compact` 3rem; `--ms-inspector` 22.5rem (min 19rem); `--ms-inspector-compact` 20rem | add; replaces the literals at shell-styles.ts:40, 101 and 256 |
+| Layout (NEW) | `--ms-bar` `var(--header-height, 3.5rem)`; `--ms-bar-compact` 3rem; inspector width 360px, compact 320px | Inspector widths are fixed layout dimensions at every root font size; the same width sets the grid column and toast offset. |
 | Type | `--ms-font` ← `--ha-font-family-body`; `--ms-t-xs` 12, `--ms-t-md` 14, `--ms-t-lg` 16, `--ms-t-xl` 20 px | remove `--ms-t-2xs` (0 uses) and `--ms-t-sm` (each 13 px use moves to `--ms-t-md`) |
 | Weight, leading | `--ms-w-regular` 400, `--ms-w-medium` 500, `--ms-w-bold` 700; `--ms-lh-tight` 1.2, `--ms-lh-snug` 1.35, `--ms-lh-normal` 1.5; `--ms-track-tight` | `--ms-w-semibold` is not added; its one use (workflow-panel.ts:75, computed 400) becomes `--ms-w-bold`, like its siblings |
 | Elevation, motion | `--ms-shadow-1` to `-3`; `--ms-fast` 120 ms, `--ms-base` 180 ms, `--ms-ease` | remove `--ms-slow` (0 uses) |

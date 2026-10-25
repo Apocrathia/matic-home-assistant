@@ -20,8 +20,8 @@ export const previewTokens = css`
 --ms-tint-success: light-dark(color-mix(in srgb, var(--ms-success) 12%, var(--ms-surface-card)), color-mix(in srgb, var(--ms-success) 20%, var(--ms-surface-card)));
 --ms-bar: var(--header-height, 3.5rem);
 --ms-bar-compact: 3rem;
---ms-inspector: 22.5rem;
---ms-inspector-compact: 20rem;
+--ms-inspector: 360px;
+--ms-inspector-compact: 320px;
 }
 @media (forced-colors: active) {
 :host {

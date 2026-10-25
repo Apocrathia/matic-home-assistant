@@ -15,10 +15,10 @@ export const shellStyles = [tokens, base, controls, css`
       container-type: size;
     }
 
-    /* The wide inspector's width, shared by its grid column and the toast's offset. */
-    .root { --ms-inspector: 22.5rem; position: relative; min-block-size: 0; block-size: 100%; }
+    /* Fixed layout widths also hold when HA uses a different root font size. */
+    .root { --ms-inspector: 360px; position: relative; min-block-size: 0; block-size: 100%; }
     /* The compact inspector, 768 to 1023 px landscape (design-system.md §7). */
-    @container (max-width: 1023px) { .root { --ms-inspector: 20rem; } }
+    @container (max-width: 1023px) { .root { --ms-inspector: 320px; } }
 
     .sr-only, .skip-link:not(:focus) {
       position: absolute;
@@ -91,7 +91,7 @@ export const shellStyles = [tokens, base, controls, css`
     .workspace {
       position: relative;
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(19rem, var(--ms-inspector));
+      grid-template-columns: minmax(0, 1fr) var(--ms-inspector);
       min-inline-size: 0;
       min-block-size: 0;
     }
