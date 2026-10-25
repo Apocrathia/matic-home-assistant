@@ -168,6 +168,10 @@ export async function installPanelFixture(page, {
     let deferredServices = 0;
     let deferredServiceResponses = 0;
     let failedPlanReads = 0;
+    let deferredPlanReads = 0;
+    const pendingPlanReads = [];
+    let deferredAreaReads = 0;
+    const pendingAreaReads = [];
     const pendingServices = [];
     let deferredAreaWrites = 0;
     const pendingAreaWrites = [];
@@ -261,12 +265,17 @@ export async function installPanelFixture(page, {
       });
       if (/areas\/synthetic(?:-b)?$/.test(path)) {
         areaRequests.push({ method: "GET" });
-        return json(areaCatalog ?? {
+        const result = json(areaCatalog ?? {
         scene_url: `/api/matic_robot/slam_scene/${entryB ? "synthetic-b" : "synthetic"}`,
         rooms: [],
         areas: [],
         selected_area: null,
         });
+        if (deferredAreaReads > 0) {
+          deferredAreaReads -= 1;
+          return new Promise((resolve) => pendingAreaReads.push(() => resolve(result)));
+        }
+        return result;
       }
       if (/plans\/synthetic(?:-b)?$/.test(path)) {
         planReads += 1;
@@ -274,7 +283,12 @@ export async function installPanelFixture(page, {
           failedPlanReads -= 1;
           return new Response(null, { status: 503 });
         }
-        return json(structuredClone(planCatalog));
+        const result = json(structuredClone(planCatalog));
+        if (deferredPlanReads > 0) {
+          deferredPlanReads -= 1;
+          return new Promise((resolve) => pendingPlanReads.push(() => resolve(result)));
+        }
+        return result;
       }
       if (/slam_scene\/history(?:-b)?$/.test(path)) {
         return new Promise((resolve) => pendingHistoryScenes.push(() => resolve(new Response(new Uint8Array(scenes), {
@@ -306,6 +320,8 @@ export async function installPanelFixture(page, {
     const userStore = userData ? structuredClone(userData) : null;
     const userDataCalls = [];
     const userDataFailures = [];
+    let deferredUserDataReads = 0;
+    const pendingUserDataReads = [];
     const connection = userStore ? {
       sendMessagePromise: async (message) => {
         userDataCalls.push(structuredClone(message));
@@ -314,7 +330,14 @@ export async function installPanelFixture(page, {
           userDataFailures.splice(failure, 1);
           throw new Error("synthetic user data failure");
         }
-        if (message.type === "frontend/get_user_data") return { value: structuredClone(userStore[message.key] ?? null) };
+        if (message.type === "frontend/get_user_data") {
+          const result = { value: structuredClone(userStore[message.key] ?? null) };
+          if (deferredUserDataReads > 0) {
+            deferredUserDataReads -= 1;
+            return new Promise((resolve) => pendingUserDataReads.push(() => resolve(result)));
+          }
+          return result;
+        }
         if (message.type === "frontend/set_user_data") {
           userStore[message.key] = structuredClone(message.value);
           return null;
@@ -402,6 +425,12 @@ export async function installPanelFixture(page, {
       deferNextService: () => { deferredServices += 1; },
       deferNextServiceResponse: () => { deferredServiceResponses += 1; },
       failNextPlansRead: () => { failedPlanReads += 1; },
+      deferNextPlansRead: () => { deferredPlanReads += 1; },
+      pendingPlanReadCount: () => pendingPlanReads.length,
+      releasePlansRead: () => { const release = pendingPlanReads.shift(); if (!release) throw new Error("no deferred plans read"); release(); },
+      deferNextAreasRead: () => { deferredAreaReads += 1; },
+      pendingAreasReadCount: () => pendingAreaReads.length,
+      releaseAreasRead: () => { const release = pendingAreaReads.shift(); if (!release) throw new Error("no deferred areas read"); release(); },
       pendingServiceCount: () => pendingServices.length,
       releaseService: (index = 0) => {
         const pending = pendingServices.splice(index, 1)[0];
@@ -437,6 +466,9 @@ export async function installPanelFixture(page, {
       userDataCalls,
       // Reject the next frontend user data message of `type` once.
       failNextUserData: (type) => { userDataFailures.push(type); },
+      deferNextUserDataRead: () => { deferredUserDataReads += 1; },
+      pendingUserDataReadCount: () => pendingUserDataReads.length,
+      releaseUserDataRead: () => { const release = pendingUserDataReads.shift(); if (!release) throw new Error("no deferred user data read"); release(); },
       stats: () => ({
         ...window.__panelFixtureResources,
         activePopstateListeners: window.__panelFixturePopstateCount(),
