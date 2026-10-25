@@ -32,7 +32,7 @@ test("Home waits for deferred pins and catalogs before publishing stable wrapped
   const longPlan = { ...dailyPlan, name: longName.slice(0, 128) };
   const fixtureOptions = { initialPlanCatalog: { ...PLAN_CATALOG, plans: [longPlan] }, initialAreasCatalog: AREA_CATALOG,
     userData: { [KEY]: { version: 2, pins: SAVED_PINS, excluded: [] } } };
-  const fixture = await installPanelFixture(page, { moduleSource: "typescript", ...fixtureOptions });
+  const fixture = await installPanelFixture(page, { moduleSource: "packaged", ...fixtureOptions });
   await page.setViewportSize({ width: 1024, height: 768 });
   await page.evaluate(() => {
     window.__panelFixture.deferNextUserDataRead();
@@ -86,6 +86,27 @@ test("failed optional pinned catalog leaves other Home choices usable with recov
   await panel.getByRole("button", { name: "Open Plans" }).click();
   await expect.poll(() => page.evaluate(() => window.__pinPanel.getWorkspaceSnapshot().resources.plans.status)).toBe("ready");
 });
+
+for (const kind of ["plan", "area"]) {
+  test(`a failed ${kind} catalog keeps recovery visible when no shortcut metadata survives`, async ({ page }) => {
+    const fixture = await installPanelFixture(page, { initialPlanCatalog: PLAN_CATALOG, initialAreasCatalog: AREA_CATALOG });
+    await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+    const panel = page.locator(fixture.panelTag), shell = panel.locator("matic-map-shell-v4");
+    await expect.poll(() => panel.evaluate(element => element.getWorkspaceSnapshot().coherence)).toBe("current");
+    await shell.evaluate((element, kind) => {
+      const state = element.state;
+      const resource = kind === "plan" ? "plans" : "areas";
+      element.state = { ...state,
+        homePins: { status: "ready", pins: [{ kind, id: "unavailable" }] },
+        resources: { ...state.resources, [resource]: { status: "error", value: null, problem: "synthetic" } },
+      };
+    }, kind);
+    await expect(shell.locator(".home-shortcuts .pins-error")).toContainText(
+      kind === "plan" ? "Saved plan shortcuts couldn't be loaded." : "Saved area shortcuts couldn't be loaded.");
+    await expect(shell.getByRole("button", { name: kind === "plan" ? "Open Plans" : "Open Areas", exact: true })).toBeVisible();
+    await expect(shell.getByRole("group", { name: "Cleaning choices" })).toBeVisible();
+  });
+}
 
 test("removed pin IDs are reconciled without disturbing surviving shortcut order", async ({ page }) => {
   const fixture = await installPanelFixture(page, { moduleSource: "typescript", initialPlanCatalog: PLAN_CATALOG,

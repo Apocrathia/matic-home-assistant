@@ -1,5 +1,8 @@
 import { expect, test } from "@playwright/test";
 import { build } from "esbuild";
+import { readFileSync } from "node:fs";
+
+const HISTORY_PAYLOAD = JSON.parse(readFileSync(new URL("./fixtures/matic_cleaning_history.json", import.meta.url), "utf8"));
 
 const HARNESS = "/retained-run-test.js";
 test("retained outcomes are entry-scoped, invalidate on outcome-only changes, and reject malformed or active records", async ({ page }) => {
@@ -16,8 +19,8 @@ test("retained outcomes are entry-scoped, invalidate on outcome-only changes, an
     const states = {
       "vacuum.one": { state: "docked", attributes: { matic_entry_id: "one" } },
       "vacuum.two": { state: "docked", attributes: { matic_entry_id: "two" } },
-      "sensor.one_history": { state: "ready", attributes: { matic_entry_id: "one", plans: [], last_run: run() } },
-      "sensor.two_history": { state: "ready", attributes: { matic_entry_id: "two", plans: [], last_run: run({ run_id: "other", outcome: "unverified", completed_room_count: 1 }) } },
+      "sensor.one_history": { state: "ready", attributes: { matic_entry_id: "one", plans: {}, last_run: run() } },
+      "sensor.two_history": { state: "ready", attributes: { matic_entry_id: "two", plans: {}, last_run: run({ run_id: "other", outcome: "unverified", completed_room_count: 1 }) } },
     };
     const hass = { connected: true, user: { is_admin: true }, states };
     const first = adapter.project(hass, undefined, "one");
@@ -35,10 +38,15 @@ test("retained outcomes are entry-scoped, invalidate on outcome-only changes, an
       states["sensor.one_history"].attributes.last_run = run(fields);
       invalidCounts.push(adapter.project(hass, undefined, "one").lastRun);
     }
+    const terminalOutcomes = {};
+    for (const outcome of ["failed", "stopped_docked", "cancelled", "unverified", "completed", "recharge_suspended", "running"]) {
+      states["sensor.one_history"].attributes.last_run = run({ outcome });
+      terminalOutcomes[outcome] = adapter.project(hass, undefined, "one").lastRun?.outcome ?? null;
+    }
     const store = new WorkspaceStore(initialWorkspaceState());
     return { first: first.lastRun, second: second.lastRun, changedIdentity: updated !== first,
       updated: updated.lastRun, unchangedIdentity: unchanged === updated, running: running.lastRun, malformed: malformed.lastRun,
-      reduced: store.value.lastRun, invalidCounts };
+      reduced: store.value.lastRun, invalidCounts, terminalOutcomes };
   }, HARNESS);
   expect(result).toEqual({
     first: { runId: "run-1", outcome: "partial", completedRoomCount: 2, roomCount: 4 },
@@ -50,18 +58,19 @@ test("retained outcomes are entry-scoped, invalidate on outcome-only changes, an
     malformed: null,
     reduced: null,
     invalidCounts: [null, null, null, null, null],
+    terminalOutcomes: { failed: "partial", stopped_docked: "partial", cancelled: "partial", unverified: "unverified", completed: null, recharge_suspended: null, running: null },
   });
 });
 
 test("selected robot changes its retained outcome without another HA state update", async ({ page }) => {
   const { installPanelFixture } = await import("./map_studio_v4_panel_fixture.mjs");
-  const fixture = await installPanelFixture(page, { initialRobotStates: {
+  const fixture = await installPanelFixture(page, { moduleSource: "packaged", initialRobotStates: {
     "vacuum.one": { state: "docked", attributes: { matic_entry_id: "synthetic-entry", friendly_name: "One" } },
     "vacuum.two": { state: "docked", attributes: { matic_entry_id: "other-entry", friendly_name: "Two" } },
-    "sensor.one_history": { state: "ready", attributes: { matic_entry_id: "synthetic-entry", plans: [], last_run: {
+    "sensor.one_history": { state: "ready", attributes: { matic_entry_id: "synthetic-entry", plans: {}, last_run: {
       run_id: "one-run", outcome: "failed", room_count: 3, completed_room_count: 1,
     } } },
-    "sensor.two_history": { state: "ready", attributes: { matic_entry_id: "other-entry", plans: [], last_run: {
+    "sensor.two_history": { state: "ready", attributes: { matic_entry_id: "other-entry", plans: {}, last_run: {
       run_id: "two-run", outcome: "unverified", room_count: 4, completed_room_count: 2,
     } } },
   } });
@@ -82,7 +91,7 @@ test("selected robot changes its retained outcome without another HA state updat
 
 test("a retained result preserves current map warning and active-run priority and omits zero-room counts", async ({ page }) => {
   const { installPanelFixture } = await import("./map_studio_v4_panel_fixture.mjs");
-  const fixture = await installPanelFixture(page);
+  const fixture = await installPanelFixture(page, { moduleSource: "packaged" });
   await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
   const panel = page.locator(fixture.panelTag);
   const shell = panel.locator("matic-map-shell-v4");
@@ -105,11 +114,9 @@ test("a retained result preserves current map warning and active-run priority an
 
 test("Home panel keeps a partial result after dock and refresh, hides it for a new run and successful completion", async ({ page }) => {
   const { installPanelFixture } = await import("./map_studio_v4_panel_fixture.mjs");
-  const fixture = await installPanelFixture(page, { initialRobotStates: {
+  const fixture = await installPanelFixture(page, { moduleSource: "packaged", initialRobotStates: {
     "vacuum.synthetic": { state: "docked", attributes: { matic_entry_id: "synthetic-entry" } },
-    "sensor.synthetic_cleaning_history": { state: "ready", attributes: { matic_entry_id: "synthetic-entry", plans: [], last_run: {
-      run_id: "partial-1", outcome: "failed", room_count: 3, completed_room_count: 1,
-    } } },
+    "sensor.synthetic_cleaning_history": { state: "ready", attributes: HISTORY_PAYLOAD },
   } });
   await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
   const panel = page.locator(fixture.panelTag);

@@ -94,7 +94,7 @@ export class HassAdapter {
     for (const [entityId, entity] of Object.entries(states)) {
       const entryKey = maticEntryKey(entity);
       if (!entryKey) continue;
-      if (entityId.startsWith("sensor.") && Array.isArray(entity.attributes?.plans)) {
+      if (entityId.startsWith("sensor.") && entity.attributes?.last_run !== undefined) {
         histories.set(entryKey, entity.attributes?.last_run);
       }
       if (!entityId.startsWith("vacuum.")) continue;
