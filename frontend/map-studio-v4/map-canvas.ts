@@ -275,7 +275,6 @@ export class MaticMapCanvasV4 extends LitElement {
   help: TemplateResult | typeof nothing | null = null;
   recipes: TemplateResult | null = null;
   scheme: ColorScheme = "";
-  #helpShown = false;
   #renderer: RendererController | null = null;
   #gestures: GestureController | null = null;
   #unwatchTheme: (() => void) | null = null;
@@ -389,10 +388,6 @@ export class MaticMapCanvasV4 extends LitElement {
   }
 
   protected override updated(changed: PropertyValues<this>): void {
-    // Help focuses its Close as it appears; the shell returns focus on close.
-    const help = this.renderRoot.querySelector<HTMLElement>(".navigation-help button");
-    if (help && !this.#helpShown) help.focus();
-    this.#helpShown = Boolean(help);
     if (changed.has("scheme") && changed.get("scheme") !== undefined) this.#schedulePalette();
     if (!changed.has("state")) return;
     this.#gestures?.observeState(this.state);
@@ -448,10 +443,6 @@ export class MaticMapCanvasV4 extends LitElement {
 
   #toggleHelp(event: Event): void {
     (event.currentTarget as HTMLElement).dispatchEvent(new CustomEvent(MAP_HELP_EVENT, { bubbles: true, composed: true }));
-  }
-
-  #clearSelection(): void {
-    this.#intent({ type: "clear-selection" });
   }
 
   #orbit(horizontal: number, vertical: number): void {
@@ -639,7 +630,7 @@ export class MaticMapCanvasV4 extends LitElement {
         <div class="map-dock ms-surface ms-surface--floating" data-map-control>
           <div class="selection-chip ms-surface ms-surface--floating" data-map-control>
             <span>${this.#t("v4_rooms_selected", "{count} selected", { count: new Intl.NumberFormat(state.locale).format(count) })}</span>
-            ${canSelectRooms(state) ? html`<button class="ms-btn ms-btn--sm" type="button" @click=${() => this.#clearSelection()}>${this.#t("v4_clear", "Clear")}</button>` : nothing}
+            ${canSelectRooms(state) ? html`<button class="ms-btn ms-btn--sm" type="button" @click=${() => this.#intent({ type: "clear-selection" })}>${this.#t("v4_clear", "Clear")}</button>` : nothing}
           </div>
         </div>
       `;
@@ -658,7 +649,7 @@ export class MaticMapCanvasV4 extends LitElement {
         class="map-root"
         tabindex="0"
         aria-label=${this.#t("map_viewport_aria", "Interactive Matic 3D map")}
-        aria-describedby=${showDraw ? (state.draw.tool === "outline" ? "zone-keyboard-help" : "keyboard-draw-help") : nothing}
+        aria-describedby=${showDraw ? (state.draw.tool === "outline" ? "zone-keyboard-help" : state.draw.tool === "pan" ? "keyboard-draw-pan-help" : "keyboard-draw-help") : nothing}
         data-full-map=${String(state.fullMap)}
         data-workflow=${state.workflow}
         data-draw-tool=${state.draw.tool}

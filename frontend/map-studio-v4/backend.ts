@@ -234,9 +234,11 @@ export class MaticBackend {
       },
     }, timeoutMs, signal, async (response, operationSignal) => {
       if (!response.ok) {
-        const conflict = response.headers.get("X-Matic-Plans-Conflict");
+        const conflict = operation === "areas"
+          ? response.headers.get("X-Matic-Areas-Conflict")
+          : operation === "plans" ? response.headers.get("X-Matic-Plans-Conflict") : null;
         throw new BackendError(
-          conflict === "map-rechecking" ? "map-rechecking" : "request-failed",
+          response.status === 409 && conflict === "map-rechecking" ? "map-rechecking" : "request-failed",
           response.status,
         );
       }

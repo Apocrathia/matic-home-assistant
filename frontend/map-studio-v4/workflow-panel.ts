@@ -55,6 +55,9 @@ export const drawHint = (t: Translate, state: WorkspaceState): string | null => 
       ? t("v4_points_hint_touch", "Tap to add points · two fingers to move the map")
       : t("v4_points_hint_pointer", "Click to add points · right-drag to move the map");
   }
+  if (tool === "erase") return coarse
+    ? t("v4_erase_hint_touch", "Drag to erase · two fingers to move the map")
+    : t("v4_erase_hint_pointer", "Drag to erase · right-drag or Space-drag to move the map");
   return coarse
     ? t("v4_draw_hint_touch", "Drag to paint · two fingers to move the map")
     : t("v4_draw_hint_pointer", "Drag to paint · right-drag or Space-drag to move the map");

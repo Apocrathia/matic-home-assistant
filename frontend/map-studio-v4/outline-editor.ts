@@ -59,7 +59,7 @@ export const outlineCircles = (
 // The handles, their actions, the guidance and the feedback line render in
 // the map canvas, which adopts these rules when the editor arrives.
 export const zoneStyles = css`
-    .zone-overlay { position: absolute; inset: 0; z-index: 4; pointer-events: none; overflow: hidden; }
+    .zone-overlay { position: absolute; inset: 0; z-index: 3; pointer-events: none; overflow: hidden; }
     .zone-overlay svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
     .zone-overlay path { stroke: var(--ms-resolved-indicator, var(--ms-accent)); stroke-width: 2; fill-opacity: .08; }
     .zone-overlay path.invalid { stroke: var(--error-color, #b3261e); }

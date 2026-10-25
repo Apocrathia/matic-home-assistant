@@ -601,8 +601,6 @@ def test_options_flow_directs_editing_to_the_single_map_workspace() -> None:
             "reset_history",
             "confirm_reset_history",
             "confirm_reset_all_history",
-            "advanced",
-            "workspace_transport",
         }
         assert "[Matic Map](/matic-map)" in steps["init"]["description"]
         assert "actions that do not name a plan" in steps["default_plan"]["description"]

@@ -407,18 +407,20 @@ async def test_checkpoint_writer_rejects_injection_and_preserves_only_same_leg_e
         assert "coverage_evidence" not in run["recovery_checkpoint"]
 
 
+@pytest.mark.parametrize("setting", [CoverageSetting.QUICK, CoverageSetting.HEAVY_DUTY])
 @pytest.mark.parametrize("scope", ["plan", "shared"])
 @pytest.mark.parametrize("interval", [1, 3])
 async def test_matching_confirmed_receipt_clears_due_periodic_coverage(
-    hass, scope, interval
+    hass, scope, interval, setting
 ):
+    room = replace(ROOM, coverage_setting=setting.value)
     manager = _manager(hass)
     robot = manager._robot("serial")
     identity = room_cadence_identity(FLOOR, ROOM_ID)
     cadence = {
         "scope": scope,
         "coverage_every_n": interval,
-        "periodic_coverage_setting": "quick",
+        "periodic_coverage_setting": setting.value,
         "do_coverage_next": True,
     }
     await manager.async_save_plan(
@@ -430,7 +432,7 @@ async def test_matching_confirmed_receipt_clears_due_periodic_coverage(
                 {
                     "room_id": ROOM_ID,
                     "cleaning_mode": "vacuum",
-                    "coverage_setting": "quick",
+                    "coverage_setting": setting.value,
                     "cadence": cadence,
                 }
             ],
@@ -441,7 +443,7 @@ async def test_matching_confirmed_receipt_clears_due_periodic_coverage(
     manager.resolve_cadence(
         "serial",
         "home",
-        [ROOM],
+        [room],
         floor_token=plan_floor_token(FLOOR),
         room_identities={ROOM_ID: identity},
     )
@@ -452,7 +454,7 @@ async def test_matching_confirmed_receipt_clears_due_periodic_coverage(
             "floor_token": plan_floor_token(FLOOR),
             "policy": {
                 "coverage_every_n": interval,
-                "periodic_coverage_setting": "quick",
+                "periodic_coverage_setting": setting.value,
                 "do_coverage_next": True,
             },
             "progress": {"mop": 0, "coverage": interval - 1},
@@ -466,23 +468,29 @@ async def test_matching_confirmed_receipt_clears_due_periodic_coverage(
     _effective, snapshots = manager.resolve_cadence(
         "serial",
         "home",
-        [ROOM],
+        [room],
         floor_token=plan_floor_token(FLOOR),
         room_identities={ROOM_ID: identity},
     )
     cadence_state = {**snapshots[ROOM_ID], "identity": identity}
-    await _begin_dispatch(manager, checkpoint=_dispatch_checkpoint(cadence_state))
+    checkpoint = _dispatch_checkpoint(cadence_state)
+    checkpoint["rooms"][0]["coverage_setting"] = setting.value
+    await _begin_dispatch(manager, checkpoint=checkpoint)
     assert await manager.async_checkpoint_coverage_receipt(
         "serial",
         "run-1",
-        _receipt(),
+        _receipt(setting),
         floor_plan=FLOOR,
         room_ids=[ROOM_ID],
         session_id=SESSION,
     )
 
     await manager.async_mark_completed(
-        "serial", "home", ROOM, run_id="run-1", verified_coverage_receipt=_receipt()
+        "serial",
+        "home",
+        room,
+        run_id="run-1",
+        verified_coverage_receipt=_receipt(setting),
     )
 
     assert table[ROOM_ID]["progress"]["coverage"] == 0

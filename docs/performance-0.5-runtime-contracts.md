@@ -49,6 +49,6 @@ Post-journey heap samples do not establish retention bounds.
 The synthetic run does not measure larger-scene parsing/decompression, physical
 presentation FPS, mobile interaction, live HA traffic or recovery. Sustained
 CPU/heap/GPU, installed behavior, device/accessibility, and live transport
-qualification remain open. Live transport remains default-OFF; proposed status,
+qualification remain open. Workspace push is withheld, with no owner-facing option; proposed status,
 resynchronization and request-reduction targets are unqualified. See the
 [acceptance matrix](acceptance-0.5.md) for release gates.

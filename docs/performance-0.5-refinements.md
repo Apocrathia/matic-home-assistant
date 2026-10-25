@@ -52,7 +52,7 @@ This run does not measure sustained CPU/GPU use, seeded large-scene rendering,
 desktop/mobile FPS, actual Android/iOS interaction, or live HA traffic/recovery.
 The older input outlier has not been causally explained by these passing runs.
 
-Workspace transport remains default-OFF. Installed fault/fallback parity and
+Workspace push is withheld, with no owner-facing option. Installed fault/fallback parity and
 final numerical latency, resynchronization and request/resource gates are
 required before switchover; 1 s / 3 s / 70% remain proposed targets.
 Raw receipts stay local. The release gate is [acceptance-0.5.md](acceptance-0.5.md).

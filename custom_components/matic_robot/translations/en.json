@@ -462,6 +462,7 @@
     "v4_reason_run_plan_preview": "Can't run this plan until you retry its next-run preview.",
     "v4_preview_identity_unavailable": "Can't run this plan until Home Assistant can match its rooms to the current map.",
     "v4_preview_no_rooms": "Can't run this plan until it has at least one room.",
+    "v4_preview_area_changed": "Can't run this plan until you review its custom areas on the current map.",
     "v4_preview_invalid": "Can't run this plan until you open Edit and save it again.",
     "v4_room_preview_loading": "Checking settings…",
     "v4_room_preview_unavailable": "Home Assistant couldn't check the room settings.",
@@ -609,7 +610,15 @@
     "v4_setting_busy": "Available when cleaning stops",
     "v4_saving": "Saving…",
     "v4_reason_delete_schedule_unsaved": "Save or cancel your changes before deleting this schedule.",
-    "v4_reason_delete_schedule_busy": "Wait until the robot is idle and the map is live before deleting this schedule."
+    "v4_reason_delete_schedule_busy": "Wait until the robot is idle and the map is live before deleting this schedule.",
+    "v4_erase_hint_pointer": "Drag to erase · right-drag or Space-drag to move the map",
+    "v4_erase_hint_touch": "Drag to erase · two fingers to move the map",
+    "v4_keyboard_draw_pan_help": "Arrow keys to move · +/− to zoom · 0 to fit. D selects Paint; E selects Erase.",
+    "v4_mouse_erase_help": "Drag to erase · right-drag or Space-drag to move · wheel to zoom",
+    "v4_mouse_points_help": "Click to add points · right-drag or Space-drag to move · wheel to zoom",
+    "v4_touch_draw_pan_help": "Drag to move the map · two fingers to move or zoom",
+    "v4_touch_erase_help": "Drag to erase · two fingers to move or zoom",
+    "v4_touch_points_help": "Tap to add points · two fingers to move or zoom"
   },
   "config": {
     "flow_title": "{name}",
@@ -740,12 +749,9 @@
       "entry_not_loaded": "The robot is not connected, so settings can't open. Check that it is on and on the same network, then reload Matic (Unofficial) under Settings > Devices & services.",
       "default_plan_set": "Default plan: {plan_name}",
       "history_reset": "Room cleaning history reset for {plan_name}",
-      "all_history_reset": "Room cleaning history reset for all plans",
-      "live_updates_on": "Live updates on the Matic Map page: on",
-      "live_updates_off": "Live updates on the Matic Map page: off"
+      "all_history_reset": "Room cleaning history reset for all plans"
     },
     "error": {
-      "invalid_workspace_transport": "Choose on or off for live updates on the Matic Map page.",
       "plan_unavailable": "That plan no longer exists. Choose another plan."
     },
     "step": {
@@ -756,7 +762,6 @@
           "default_plan": "Choose the default plan",
           "reset_history": "Reset room cleaning history for one plan",
           "confirm_reset_all_history": "Reset room cleaning history for all plans",
-          "advanced": "Advanced",
           "finish": "Done"
         }
       },
@@ -789,22 +794,6 @@
         "title": "Reset history for all plans?",
         "description": "Every plan starts again from its first room and each room's last-cleaned record is cleared, while plans and settings are kept. This can't be undone.",
         "submit": "Reset"
-      },
-      "advanced": {
-        "title": "Advanced",
-        "menu_options": {
-          "workspace_transport": "Live updates on the Matic Map page (experimental)"
-        }
-      },
-      "workspace_transport": {
-        "title": "Live updates on the Matic Map page (experimental)",
-        "description": "Let the Matic Map page receive live updates from Home Assistant. This is off by default, doesn't control the robot, and can be turned off at any time.",
-        "data": {
-          "live_workspace_transport": "Turn on live updates"
-        },
-        "data_description": {
-          "live_workspace_transport": "Only administrators can use the Matic Map page."
-        }
       }
     }
   },

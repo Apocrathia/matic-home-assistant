@@ -8,7 +8,6 @@ import probatio
 from homeassistant import config_entries
 from homeassistant.helpers import selector
 
-from .const import CONF_LIVE_WORKSPACE_TRANSPORT
 from .plans import CleaningPlanManager, MetadataAdmissionClosedError
 
 
@@ -59,7 +58,7 @@ class MaticRobotOptionsFlow(config_entries.OptionsFlow):
             options.extend(
                 ("default_plan", "reset_history", "confirm_reset_all_history")
             )
-        options.extend(("advanced", "finish"))
+        options.append("finish")
         return self.async_show_menu(
             step_id="init",
             menu_options=options,
@@ -228,50 +227,3 @@ class MaticRobotOptionsFlow(config_entries.OptionsFlow):
         if not self._is_loaded():
             return self._entry_unavailable()
         return self._done("all_history_reset")
-
-    async def async_step_advanced(
-        self, user_input: dict[str, Any] | None = None
-    ) -> config_entries.ConfigFlowResult:
-        """Group experimental settings away from everyday maintenance."""
-        if not self._is_loaded():
-            return self._entry_unavailable()
-        return self.async_show_menu(
-            step_id="advanced", menu_options=["workspace_transport"]
-        )
-
-    async def async_step_workspace_transport(
-        self, user_input: dict[str, Any] | None = None
-    ) -> config_entries.ConfigFlowResult:
-        """Configure reversible live updates for the administrator workspace."""
-        if not self._is_loaded():
-            return self._entry_unavailable()
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            enabled = user_input.get(CONF_LIVE_WORKSPACE_TRANSPORT)
-            if type(enabled) is not bool:
-                errors["base"] = "invalid_workspace_transport"
-            else:
-                self.hass.config_entries.async_update_entry(
-                    self.config_entry,
-                    options={
-                        **self.config_entry.options,
-                        CONF_LIVE_WORKSPACE_TRANSPORT: enabled,
-                    },
-                )
-                return self._done("live_updates_on" if enabled else "live_updates_off")
-
-        return self.async_show_form(
-            step_id="workspace_transport",
-            data_schema=probatio.Schema(
-                {
-                    probatio.Required(
-                        CONF_LIVE_WORKSPACE_TRANSPORT,
-                        default=(
-                            self.config_entry.options.get(CONF_LIVE_WORKSPACE_TRANSPORT)
-                            is True
-                        ),
-                    ): selector.BooleanSelector()
-                }
-            ),
-            errors=errors,
-        )

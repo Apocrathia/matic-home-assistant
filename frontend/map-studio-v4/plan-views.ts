@@ -286,13 +286,14 @@ export class MaticPlanViewsV4 extends LitElement {
   }
 
   /** One Run row: the position in Saved order, the name, its setting, and "Needs attention" on the blocking room. */
-  #runRow(name: string, setting: string, position: number | null, options: { readonly part?: number; readonly blocked?: boolean } = {}) {
+  #runRow(name: string, setting: string, position: number | null, options: { readonly part?: number; readonly blocked?: boolean; readonly problem?: string | null } = {}) {
     return html`<li class="run-row" ?data-break=${options.part !== undefined}>
       ${options.part === undefined ? nothing : html`<span class="sr-only">${this.#t("v4_part_break", "Part {number} starts here; the robot may stop at the dock first", { number: this.#count(options.part) })}</span>`}
       ${position === null ? nothing : html`<span class="pos-badge" aria-hidden="true">${this.#count(position)}</span>`}
       <span class="row-lines">
         <bdi>${name}</bdi>
         <small>${setting}</small>
+        ${options.problem ? html`<small class="problem">${options.problem}</small>` : nothing}
         ${options.blocked ? html`<span class="ms-chip chip-attention">${this.#t("v4_needs_attention", "Needs attention")}</span>` : nothing}
       </span>
     </li>`;
@@ -344,7 +345,9 @@ export class MaticPlanViewsV4 extends LitElement {
         settingLabel(this.#t, room),
         null,
         { blocked: room.roomId === blockedRoom },
-      )), (area) => this.#runRow(area.name, settingLabel(this.#t, area), null));
+      )), (area) => this.#runRow(area.name, settingLabel(this.#t, area), null, {
+        problem: problem && blocker === "area_map_changed" ? this.#areaProblem(area.areaId) : null,
+      }));
     const end = draft.finishCurrentRoom
       ? this.#t("v4_plan_summary_finish", "When you press Stop, the robot finishes the current room if it's at least {percent}% done.", {
         percent: this.#count(draft.finishCurrentRoomThreshold),
@@ -363,7 +366,9 @@ export class MaticPlanViewsV4 extends LitElement {
         count: this.#count(boundaries.length + 1),
       })}</p>` : nothing}
       ${problem ? html`<p class="problem">${this.#t(problem.reasonKey, problem.reason)}</p>
-        <button class="ms-btn ms-btn--secondary" type="button" @click=${() => this.#intent({ type: "open-workflow", workflow: "plan" })}>${this.#t("v4_retry", "Try again")}</button>` : nothing}
+        ${blocker === "area_map_changed"
+          ? html`<button class="ms-btn ms-btn--secondary" type="button" @click=${() => this.#intent({ type: "open-workflow", workflow: "areas" })}>${this.#t("v4_your_areas", "Your areas")}</button>`
+          : html`<button class="ms-btn ms-btn--secondary" type="button" @click=${() => this.#intent({ type: "open-workflow", workflow: "plan" })}>${this.#t("v4_retry", "Try again")}</button>`}` : nothing}
       ${ready && ordered ? html`<ol class="run-list" role="list">${rows}</ol>` : html`<ul class="run-list" role="list">${rows}</ul>`}
       ${this.#switch()}
       ${end ? html`<p class="quiet">${end}</p>` : nothing}

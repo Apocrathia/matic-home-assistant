@@ -1266,7 +1266,7 @@ async def test_scene_and_catalog_require_admin_and_loaded_catalog_entries() -> N
         "entries": [
             {
                 "entry_id": loaded.entry_id,
-                "live_workspace_transport_enabled": True,
+                "live_workspace_transport_enabled": False,
                 "scene_url": f"/api/matic_robot/slam_scene/{loaded.entry_id}",
                 "delta_url": f"/api/matic_robot/slam_delta/{loaded.entry_id}",
                 "pose_url": f"/api/matic_robot/slam_pose/{loaded.entry_id}",
@@ -1387,13 +1387,13 @@ async def test_scene_and_catalog_require_admin_and_loaded_catalog_entries() -> N
     ("options", "expected"),
     [
         ({}, False),
-        ({CONF_LIVE_WORKSPACE_TRANSPORT: True}, True),
+        ({CONF_LIVE_WORKSPACE_TRANSPORT: True}, False),
         ({CONF_LIVE_WORKSPACE_TRANSPORT: False}, False),
         ({CONF_LIVE_WORKSPACE_TRANSPORT: "true"}, False),
         ({CONF_LIVE_WORKSPACE_TRANSPORT: 1}, False),
     ],
 )
-async def test_admin_catalog_projects_only_strict_live_transport_boolean(
+async def test_admin_catalog_withholds_workspace_push_even_for_legacy_opt_ins(
     options: dict[str, object], expected: bool
 ) -> None:
     runtime = _runtime()
@@ -1402,6 +1402,8 @@ async def test_admin_catalog_projects_only_strict_live_transport_boolean(
 
     entry = json.loads(response.body)["entries"][0]
     assert entry["live_workspace_transport_enabled"] is expected
+    assert entry["delta_url"] == delta_api_url("entry")
+    assert entry["pose_url"] == pose_api_url("entry")
 
 
 async def test_area_workspace_lists_current_and_stale_private_areas() -> None:
@@ -2152,6 +2154,29 @@ async def test_plan_workspace_handles_missing_entry_and_floor_plan() -> None:
     response = await view.get(_request(_hass(_entry(runtime))), "entry")
     assert response.status == HTTPStatus.CONFLICT
     assert response.headers["X-Matic-Plans-Conflict"] == "no-rooms"
+
+
+async def test_area_workspace_distinguishes_revalidation_from_an_empty_floor() -> None:
+    runtime = _runtime()
+    hass = _hass(_entry(runtime))
+    view = MaticAreasView()
+    runtime.coordinator.data.floor_plan = None
+    response = await view.get(_request(hass), "entry")
+    assert response.status == HTTPStatus.CONFLICT
+    assert response.headers["X-Matic-Areas-Conflict"] == "map-rechecking"
+
+    runtime.coordinator.data.floor_plan = _floor_plan()
+    runtime.slam_map.floor_plan_is_current.side_effect = None
+    runtime.slam_map.floor_plan_is_current.return_value = False
+    response = await view.get(_request(hass), "entry")
+    assert response.status == HTTPStatus.CONFLICT
+    assert response.headers["X-Matic-Areas-Conflict"] == "map-rechecking"
+
+    runtime.coordinator.data.floor_plan = replace(_floor_plan(), rooms=())
+    runtime.slam_map.floor_plan_is_current.return_value = True
+    response = await view.get(_request(hass), "entry")
+    assert response.status == HTTPStatus.CONFLICT
+    assert response.headers["X-Matic-Areas-Conflict"] == "no-rooms"
 
 
 async def test_area_workspace_saves_updates_and_deletes_validated_areas() -> None:

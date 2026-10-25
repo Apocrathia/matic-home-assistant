@@ -207,6 +207,7 @@ export class EffectController {
   #spatialRecovery: SpatialReadRecoveryState | null = null;
   #deltaGeneration = 0;
   #activeDeltaOwner: { generation: number; stamp: ResourceStamp; entryId: string; coherenceIdentity: string; deltaUrl: string } | null = null;
+  #areasRecoveryAttempt: ResourceStamp | null = null;
   #preferenceUser = "";
   #disposed = false;
   #hostConnected = true;
@@ -895,6 +896,9 @@ export class EffectController {
     if (this.#catalogTimer === null) {
       this.#catalogTimer = window.setInterval(() => {
         void this.refreshCatalog();
+        // Catalog polling has no plan revision. Refresh saved cadence and
+        // external edits too; in-place reads preserve dirty drafts.
+        void this.loadPlans({ inPlace: true });
       }, 5_000);
     }
     if (this.#poseTimer === null) {
@@ -2182,11 +2186,29 @@ export class EffectController {
   }
 
   #resumeAreaCatalog(): void {
-    const state = this.#store.value;
+    let state = this.#store.value;
+    const readable = canReadFloorResources(state);
+    if (!readable) {
+      // A response begun before floor revalidation cannot restore old area
+      // geometry, even if its fetch wrapper ignores cancellation.
+      this.#areasRecoveryAttempt = null;
+      this.#controllers.get("areas")?.abort();
+      if (state.resources.areas.status === "loading") {
+        this.#store.patch({ resources: { ...state.resources, areas: cancelLoading(state.resources.areas) } });
+        state = this.#store.value;
+      }
+    }
+    const stamp = this.#coherence.current();
+    const retry = Boolean(readable && stamp && state.resources.areas.status === "error"
+      && state.resources.areas.problem === "map-rechecking"
+      && (!this.#areasRecoveryAttempt || !sameCoherenceGeneration(this.#areasRecoveryAttempt, stamp)));
     if ((state.workflow === "areas" || state.workflow === "draw" || state.workflow === "areaReview" || state.workflow === "plan"
       || state.homePins.status === "ready"
       || state.homePins.pins.some((pin) => pin.kind === "area"))
-      && state.resources.areas.status === "idle") {
+      && readable && (state.resources.areas.status === "idle" || retry)) {
+      // Bound automatic retries to one per verified recovery episode. Scene
+      // tile revisions alone must not create an endless conflict retry loop.
+      if (retry) this.#areasRecoveryAttempt = stamp;
       void this.loadAreas();
     }
     this.#syncPinsOwner();
@@ -2290,18 +2312,28 @@ export class EffectController {
       return null;
     }
     const entry = this.#store.value.resources.entry;
-    if (!entry || !this.#coherence.current() || !canReadFloorResources(this.#store.value)) return null;
+    const stamp = this.#coherence.current();
+    if (!entry || !stamp || !canReadFloorResources(this.#store.value)) return null;
     const boundary = entryBoundaryKey(entry);
     const controller = this.#controller("areas");
+    const readStillCurrent = (): boolean => {
+      const state = this.#store.value;
+      const currentEntry = state.resources.entry;
+      const currentStamp = this.#coherence.current();
+      return !controller.signal.aborted && !this.#disposed && Boolean(currentEntry && currentStamp
+        && entryBoundaryKey(currentEntry) === boundary && sameCoherenceGeneration(stamp, currentStamp)
+        && canReadFloorResources(state));
+    };
+    let discarded = false;
     this.#store.patch({
       resources: { ...this.#store.value.resources, areas: resource("loading", this.#store.value.resources.areas.value) },
     });
     try {
       const areas = await this.#backend.areas(entry.areasUrl, controller.signal);
       const currentEntry = this.#store.value.resources.entry;
-      if (controller.signal.aborted || this.#disposed || !currentEntry
-        || entryBoundaryKey(currentEntry) !== boundary) return null;
+      if (!readStillCurrent() || !currentEntry) { discarded = true; return null; }
       if (areas.sceneUrl !== currentEntry.sceneUrl) throw new BackendError("areas-unavailable");
+      this.#areasRecoveryAttempt = null;
       this.#store.patch({
         resources: { ...this.#store.value.resources, areas: resource("ready", areas) },
       });
@@ -2331,8 +2363,8 @@ export class EffectController {
       }
       return areas;
     } catch (error) {
-      const currentEntry = this.#store.value.resources.entry;
-      if (isAbort(error) || controller.signal.aborted || this.#disposed || !currentEntry || entryBoundaryKey(currentEntry) !== boundary) return null;
+      if (isAbort(error) || controller.signal.aborted || this.#disposed) return null;
+      if (!readStillCurrent()) { discarded = true; return null; }
       // Like plans, a failed read keeps the last catalog.
       this.#store.patch({
         resources: {
@@ -2342,7 +2374,13 @@ export class EffectController {
       });
       return null;
     } finally {
+      const stillOwner = this.#controllers.get("areas") === controller;
       this.#release("areas", controller);
+      if (discarded && stillOwner && this.#store.value.resources.areas.status === "loading") {
+        const resources = this.#store.value.resources;
+        this.#store.patch({ resources: { ...resources, areas: cancelLoading(resources.areas) } });
+        this.#resumeAreaCatalog();
+      }
     }
   }
 

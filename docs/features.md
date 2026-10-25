@@ -9,7 +9,7 @@ These are the integration's main additions:
 | --- | --- |
 | Intelligent rotation | Clean the rooms that have waited longest first on your next run. |
 | Per-room plans | Save a room order with individual cleaning modes and vacuum coverage; preview the next run. |
-| Live map updates (experimental) | In **Matic settings** (Settings > Devices & services > Matic (Unofficial) > Configure) > **Advanced**, turn on **Live updates on the Matic Map page** for this robot, or turn it off to return to periodic updates. Off by default. |
+| Live map | Map changes and robot position update automatically. Experimental status/activity push is withheld until reliability and resource testing is complete; no setting is needed. |
 | Room schedules | Mop every few cleans or run a vacuum rotation at a chosen level, counted in one plan or across all plans; one-time room cleans include work that's due. A vacuum rotation stays due until Home Assistant can confirm the robot used its setting. [Guide](room-schedules.md). |
 | Finish-current-room stopping | Stop immediately or finish the active room when its estimated progress reaches your chosen threshold. |
 | Home-driven cleaning | Combine presence, schedules, pet devices, and other Home Assistant triggers with plans or named areas. |

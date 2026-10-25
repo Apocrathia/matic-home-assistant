@@ -1128,8 +1128,6 @@ async def test_options_flow_aborts_when_entry_is_not_loaded(hass) -> None:
         ("reset_history", {"plan": "whole_home"}),
         ("confirm_reset_history", {}),
         ("confirm_reset_all_history", {}),
-        ("advanced", None),
-        ("workspace_transport", {CONF_LIVE_WORKSPACE_TRANSPORT: True}),
     ],
 )
 async def test_options_flow_guards_each_action_when_entry_unloads(
@@ -1164,7 +1162,6 @@ async def test_options_flow_keeps_only_native_settings_and_maintenance(hass) -> 
         "default_plan",
         "reset_history",
         "confirm_reset_all_history",
-        "advanced",
         "finish",
     ]
     assert result["description_placeholders"] == {"plan_count": "1"}
@@ -1181,62 +1178,23 @@ async def test_options_flow_finish_preserves_existing_preferences(hass) -> None:
     assert result["data"] == {"existing_option": "preserved"}
 
 
-async def test_live_workspace_transport_option_defaults_off_and_is_reversible(
-    hass,
-) -> None:
+async def test_options_flow_does_not_offer_experimental_transport(hass) -> None:
     entry, _manager = await _options_entry(
-        hass, options={"existing_option": "preserved"}
+        hass, options={CONF_LIVE_WORKSPACE_TRANSPORT: True, "keep": "value"}
     )
 
-    advanced = await _start_options_step(hass, entry, "advanced")
-    assert advanced["type"] is FlowResultType.MENU
-    assert advanced["menu_options"] == ["workspace_transport"]
-    form = await hass.config_entries.options.async_configure(
-        advanced["flow_id"], {"next_step_id": "workspace_transport"}
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    assert result["menu_options"] == [
+        "default_plan",
+        "reset_history",
+        "confirm_reset_all_history",
+        "finish",
+    ]
+    finished = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "finish"}
     )
-
-    assert form["step_id"] == "workspace_transport"
-    assert _form_defaults(form) == {CONF_LIVE_WORKSPACE_TRANSPORT: False}
-    enabled = await hass.config_entries.options.async_configure(
-        form["flow_id"], {CONF_LIVE_WORKSPACE_TRANSPORT: True}
-    )
-    assert enabled["type"] is FlowResultType.ABORT
-    assert enabled["reason"] == "live_updates_on"
-    assert dict(entry.options) == {
-        "existing_option": "preserved",
-        CONF_LIVE_WORKSPACE_TRANSPORT: True,
-    }
-
-    advanced = await _start_options_step(hass, entry, "advanced")
-    form = await hass.config_entries.options.async_configure(
-        advanced["flow_id"], {"next_step_id": "workspace_transport"}
-    )
-    assert _form_defaults(form) == {CONF_LIVE_WORKSPACE_TRANSPORT: True}
-    disabled = await hass.config_entries.options.async_configure(
-        form["flow_id"], {CONF_LIVE_WORKSPACE_TRANSPORT: False}
-    )
-    assert disabled["type"] is FlowResultType.ABORT
-    assert disabled["reason"] == "live_updates_off"
-    assert dict(entry.options) == {
-        "existing_option": "preserved",
-        CONF_LIVE_WORKSPACE_TRANSPORT: False,
-    }
-
-
-@pytest.mark.parametrize("malformed", ["true", 1, None])
-async def test_live_workspace_transport_rejects_malformed_values(
-    hass, malformed
-) -> None:
-    entry, _manager = await _options_entry(hass)
-    flow = _direct_options_flow(hass, entry)
-
-    result = await flow.async_step_workspace_transport(
-        {CONF_LIVE_WORKSPACE_TRANSPORT: malformed}
-    )
-
-    assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {"base": "invalid_workspace_transport"}
-    assert _form_defaults(result) == {CONF_LIVE_WORKSPACE_TRANSPORT: False}
+    assert finished["data"] == {CONF_LIVE_WORKSPACE_TRANSPORT: True, "keep": "value"}
 
 
 def _direct_options_flow(hass, entry) -> MaticRobotOptionsFlow:
@@ -1337,7 +1295,7 @@ async def test_options_flow_returns_to_settings_when_no_plans_exist(hass, step) 
 
     assert result["type"] is FlowResultType.MENU
     assert result["step_id"] == "init"
-    assert result["menu_options"] == ["advanced", "finish"]
+    assert result["menu_options"] == ["finish"]
     assert result["description_placeholders"]["plan_count"] == "0"
     assert dict(entry.options) == {"keep": "value"}
 
@@ -1454,7 +1412,7 @@ async def test_options_flow_returns_to_settings_if_raced_plan_was_last(
 
     assert result["type"] is FlowResultType.MENU
     assert result["step_id"] == "init"
-    assert result["menu_options"] == ["advanced", "finish"]
+    assert result["menu_options"] == ["finish"]
     assert result["description_placeholders"]["plan_count"] == "0"
     assert flow._reset_plan_id is None
     assert dict(entry.options) == {"keep": "value"}
@@ -1472,7 +1430,7 @@ async def test_options_flow_returns_to_settings_when_reset_plan_disappears(
 
     assert result["type"] is FlowResultType.MENU
     assert result["step_id"] == "init"
-    assert result["menu_options"] == ["advanced", "finish"]
+    assert result["menu_options"] == ["finish"]
     assert flow._reset_plan_id is None
 
 

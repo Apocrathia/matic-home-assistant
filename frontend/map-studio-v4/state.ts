@@ -38,7 +38,7 @@ const readOnlyWorkflows = new Set<WorkspaceState["workflow"]>([
   "areaReview",
 ]);
 
-const isReadOnlyWorkspace = (state: WorkspaceState): boolean =>
+export const isReadOnlyWorkspace = (state: WorkspaceState): boolean =>
   state.dataMode === "history" || state.floor.readOnly;
 
 const clamp = (value: number, minimum: number, maximum: number): number =>
@@ -1070,6 +1070,7 @@ const PLAN_IDENTITY: Reason = {
 };
 /** Run plan's reason for a preview blocker that names no room (plan.md R4); others retry the preview. */
 export const PLAN_BLOCKERS: Partial<Record<NextRunPreviewBlocker, Reason>> = {
+  area_map_changed: { reason: "Can't run this plan until you review its custom areas on the current map.", reasonKey: "v4_preview_area_changed" },
   cadence_identity_unavailable: PLAN_IDENTITY,
   cadence_identity_changed: PLAN_IDENTITY,
   plan_has_no_rooms: { reason: "Can't run this plan until it has at least one room.", reasonKey: "v4_preview_no_rooms" },
