@@ -143,9 +143,13 @@ const statusCopy = (state: WorkspaceState, localize?: Localize, dates?: DateForm
     // Row 11: the room the robot reports, when it is a room on this floor.
     const area = roomKey(state.currentArea);
     const room = area && state.resources.scene.value?.metadata.rooms.find((candidate) => roomKey(candidate.name) === area || roomKey(candidate.id) === area)?.name;
+    const progress = state.lastRun?.outcome === "running" ? state.lastRun : null;
     return {
       title: t("v4_cleaning", "Cleaning"),
-      detail: mapUnavailable ? t("v4_active_map_unavailable", "Live map unavailable") : room ? t("v4_cleaning_room", "In {room}", { room }) : battery,
+      detail: mapUnavailable ? t("v4_active_map_unavailable", "Live map unavailable") : progress
+        ? t("v4_last_run_rooms", "{completed} of {total} rooms completed", { completed: progress.completedRoomCount, total: progress.roomCount })
+          + (room ? ` · ${t("v4_cleaning_room", "In {room}", { room })}` : "")
+        : room ? t("v4_cleaning_room", "In {room}", { room }) : battery,
       icon: iconCleaning,
       notable: true,
     };
@@ -170,7 +174,7 @@ const statusCopy = (state: WorkspaceState, localize?: Localize, dates?: DateForm
     notable: true,
     recheck: true,
   };
-  if (state.lastRun && (state.activity === "docked" || state.activity === "idle")) {
+  if (state.lastRun && state.lastRun.outcome !== "running" && (state.activity === "docked" || state.activity === "idle")) {
     const run = state.lastRun;
     return {
       title: run.outcome === "unverified" ? t("v4_last_run_unverified", "Last run unverified") : t("v4_last_run_partial", "Last run did not finish"),

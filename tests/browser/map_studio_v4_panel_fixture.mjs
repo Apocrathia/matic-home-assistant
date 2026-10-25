@@ -2,13 +2,13 @@ import { build } from "esbuild";
 
 const PANEL_MODULE = "/panel-fixture-test.js";
 
-function sceneBytes(scenePoint) {
+function sceneBytes(scenePoint, rooms) {
   const metadata = Buffer.from(JSON.stringify({
     meters_per_cell: 0.015,
     span_cells: [100, 80],
     origin_cells: [10, 10],
     sample_step: 1,
-    rooms: [],
+    rooms,
   }));
   const bytes = Buffer.alloc(24 + metadata.length + 8);
   bytes.write("MATIC3D\0", 0, "binary");
@@ -45,6 +45,7 @@ export async function installPanelFixture(page, {
   sceneDeltaPayload = null,
   posePosition = [1, 1],
   scenePoint = null,
+  sceneRooms = [],
   initialCatalogEntries = null,
   initialRobotStates = null,
   // Home Assistant's per-user frontend data (frontend/get_user_data), keyed by
@@ -480,7 +481,7 @@ export async function installPanelFixture(page, {
     };
   }, {
     module: modulePath,
-    scenes: sceneBytes(scenePoint),
+    scenes: sceneBytes(scenePoint, sceneRooms),
     plans: initialPlanCatalog,
     areas: initialAreasCatalog,
     sceneDeltaPayload,
