@@ -3,7 +3,7 @@ import { html, type ReactiveControllerHost } from "lit";
 import { ref } from "lit/directives/ref.js";
 
 import type { DrawTool, WorkspaceState } from "./contracts";
-import { topView } from "./renderer-controller";
+import { topView } from "./state";
 
 // Focus once when the Close button enters the document, after Lit commits.
 // A stable ref avoids stealing focus when live map state rerenders Help.
