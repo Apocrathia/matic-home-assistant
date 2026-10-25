@@ -896,6 +896,9 @@ export class EffectController {
     if (this.#catalogTimer === null) {
       this.#catalogTimer = window.setInterval(() => {
         void this.refreshCatalog();
+        // Catalog polling has no plan revision. Refresh saved cadence and
+        // external edits too; in-place reads preserve dirty drafts.
+        void this.loadPlans({ inPlace: true });
       }, 5_000);
     }
     if (this.#poseTimer === null) {
