@@ -153,8 +153,8 @@
     "v4_needs_attention": "Needs attention",
     "v4_no": "No",
     "v4_no_plans_hint": "Save a plan to repeat a set of rooms.",
-    "v4_no_robot": "No robot set up",
-    "v4_no_robot_body": "Add the Matic (Unofficial) integration to see a map here.",
+    "v4_no_robot": "No robot available",
+    "v4_no_robot_body": "Check the Matic (Unofficial) integration, or add it if you haven't set up a robot.",
     "v4_no_robot_short": "No robot",
     "v4_no_rooms_reason": "Can't clean rooms until you name them in the Matic app.",
     "v4_no_map_history": "No saved map snapshots yet.",
@@ -176,7 +176,7 @@
     "v4_move_shortcut_down": "Move {shortcut} down",
     "v4_history_quick_detail": "Browse earlier floor maps.",
     "v4_diagnostics_quick_detail": "Check the map and copy details for support.",
-    "v4_setup_title": "Set up your robot",
+    "v4_setup_title": "No robot available",
     "v4_open_diagnostics": "Open map diagnostics",
     "v4_paused": "Paused",
     "v4_task_in_progress": "Run in progress",
@@ -285,7 +285,7 @@
     "v4_saved_map_unavailable_description": "This saved map is unavailable.",
     "v4_seen": "Seen",
     "v4_session_verified": "Map ready",
-    "v4_set_up_robot": "Set up a robot",
+    "v4_set_up_robot": "Check the integration",
     "v4_show_less": "Collapse panel",
     "v4_show_more": "Expand panel",
     "v4_startup_failures": "Startup failures",
@@ -724,7 +724,7 @@
       },
       "recover_identity": {
         "title": "Pair {name} again",
-        "description": "Use this only if {name} was reset: a replacement robot is added as a new robot, and plans do not move to it. Put the adapter within a few feet of the robot, then:\n\n1. In the Matic app, go to Settings > Connectivity > Add another user.\n2. Turn on Pairing mode.\n3. Come back here and choose Start pairing.",
+        "description": "Use this only if {name} was reset: a replacement robot is added as a new robot, and plans do not move to it. When you pair this same robot again, its saved plans, custom areas and history remain on this Home Assistant entry. Put the adapter within a few feet of the robot, then:\n\n1. In the Matic app, go to Settings > Connectivity > Add another user.\n2. Turn on Pairing mode.\n3. Come back here and choose Start pairing.",
         "sections": {
           "robot_address": {
             "name": "Robot address (only if it changed)",

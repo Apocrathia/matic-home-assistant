@@ -2336,7 +2336,7 @@ test.describe("Map Studio v0.4 foundation", () => {
     // shell.md §2: these rows have no footer button; the strip says the state.
     const gallery = await loadGallery(page, { scenario: "empty" });
     await expect(gallery.locator(".status-copy strong")).toHaveText("No robot");
-    await expect(gallery.locator(".action-bar")).not.toContainText("Set up a robot");
+    await expect(gallery.locator(".action-bar")).not.toContainText("Check the integration");
     await page.evaluate((tag) => document.querySelector(tag).setScenario("problem"), GALLERY_TAG);
     await expect(gallery.locator(".status-copy strong")).toHaveText("Needs attention");
     // No footer button, so no footer at all (home-rooms.md §3: the bar is absent when idle).
@@ -6245,6 +6245,41 @@ test.describe("Map Studio v0.4 foundation", () => {
     await expect(clean).toHaveAttribute("aria-disabled", "true");
     await expect(clean).toHaveAccessibleDescription("Elige al menos una habitación.");
   });
+
+  for (const translated of [false, true]) {
+    for (const [scenario, selector, dialog] of [
+      ["home-shortcuts", '[data-launcher^="run:plan:"] small'],
+      ["plans", "[data-plan-row] small"],
+      ["plan-saved-intelligent", ".summary"],
+      ["plan-edit-ordered", ".list-header small"],
+      ["plan-dirty", "#dialog-title", "discardDraft"],
+    ]) {
+      test(`RTL copy isolates ${scenario} with ${translated ? "Arabic translation" : "English fallback"}`, async ({ page }) => {
+        const gallery = await loadGallery(page, { scenario });
+        await settleWorkspace(gallery);
+        await gallery.evaluate((element, { translated, dialog }) => {
+          document.documentElement.dir = "rtl";
+          const state = element.getWorkspaceSnapshot();
+          element.replaceWorkspaceState({ ...state, locale: "ar", ...(dialog ? { dialog } : {}) });
+          if (translated) {
+            element.localize = (key) => {
+              const name = key.split(".").at(-1);
+              if (name === "v4_discard_title") return "تجاهل التغييرات؟";
+              if (name === "v4_plan_rooms_selected") return "٣ من ١٢ محددة";
+              if (name.startsWith("v4_plan_row_") || name.startsWith("v4_plan_summary_rooms")) return "٣ غرف · حوالي ٢٠ دقيقة";
+              return key;
+            };
+          }
+        }, { translated, dialog });
+        const phrase = gallery.locator(selector).first();
+        await expect(phrase).toBeVisible();
+        await expect.poll(() => phrase.evaluate((element) =>
+          getComputedStyle(element.querySelector("bdi") ?? element).direction,
+        )).toBe(translated ? "rtl" : "ltr");
+        if (translated) await expect(phrase).toContainText(/[غت٣]/u);
+      });
+    }
+  }
 
   test("keeps the mobile map usable in RTL", async ({ page }) => {
     await page.setViewportSize({ width: 320, height: 740 });

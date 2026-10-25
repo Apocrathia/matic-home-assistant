@@ -480,7 +480,7 @@ export class MaticMapCanvasV4 extends LitElement {
     const state = this.state;
     if (!state.host.connected && !showScene) return this.#t("v4_reconnecting", "Reconnecting");
     if (!state.host.administrator) return this.#t("v4_admin_required", "Administrator access required");
-    if (state.host.robotCount === 0) return this.#t("v4_no_robot", "No robot set up");
+    if (state.host.robotCount === 0) return this.#t("v4_no_robot", "No robot available");
     if (showScene && state.activity !== "problem") return null;
     if (state.dataMode === "history") {
       return state.map.available ? null : state.resources.scene.status === "loading"
