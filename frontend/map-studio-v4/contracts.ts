@@ -336,6 +336,9 @@ export interface WorkspaceState {
   readonly labelsVisible: boolean;
   readonly quality: MapQuality;
   readonly cameras: Readonly<Partial<Record<MapView, CameraPreference>>>;
+  /** Only preferences belonging to the verified live map can be restored. */
+  readonly cameraKey: string | null;
+  readonly historyCameras: Readonly<Partial<Record<MapView, CameraPreference>>>;
   readonly managedLock: boolean;
   readonly batteryPercent: number | null;
   /** The vacuum's `current_area`: the room phrase the robot reports, if any. */

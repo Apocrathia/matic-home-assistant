@@ -4054,6 +4054,8 @@ test.describe("Map Studio v0.4 foundation", () => {
       });
       renderer.setState(store.value);
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      // Initial ready-camera publication is separate from the measured rebase.
+      notices.length = 0;
       const scene = state.resources.scene.value;
       store.replace({ ...store.value, workflow: "draw", resources: { ...state.resources,
         scene: { ...state.resources.scene, value: { ...scene, revision: scene.revision + 1,

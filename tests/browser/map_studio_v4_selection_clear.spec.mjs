@@ -69,9 +69,13 @@ test("clears 100 rooms atomically without starting intermediate previews", async
   });
   expect(before).toEqual({ roomCount: 100, actionEnabled: true });
 
-  await page.evaluate(() => window.__selectionHarness.canvas.shadowRoot.querySelector(".selection-chip button").click());
   const cleared = await page.evaluate(() => {
-    const { api, store, metrics } = window.__selectionHarness;
+    const { api, canvas, store, metrics } = window.__selectionHarness;
+    // Measure the clear action in one task, excluding initial camera publication.
+    metrics.commits = 0;
+    metrics.nonemptyPreviewKeys = 0;
+    metrics.previousKey = api.manualRoomPreviewKey(store.value);
+    canvas.shadowRoot.querySelector(".selection-chip button").click();
     return {
       roomCount: store.value.selection.roomIds.length,
       settingsCount: store.value.selection.roomSettings.length,

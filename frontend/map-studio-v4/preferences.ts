@@ -1,3 +1,4 @@
+import { normalizeCamera } from "./camera-preferences";
 import type { CameraPreference, MapAppearance, MapQuality, MapView } from "./contracts";
 
 export type { CameraPreference, MapAppearance, MapQuality, MapView } from "./contracts";
@@ -9,6 +10,7 @@ export interface MapPreferences {
   readonly labels: boolean;
   readonly quality: MapQuality;
   readonly cameras: Readonly<Partial<Record<MapView, CameraPreference>>>;
+  readonly cameraKey: string | null;
 }
 
 const defaults = (): MapPreferences => ({
@@ -18,10 +20,8 @@ const defaults = (): MapPreferences => ({
   labels: true,
   quality: "auto",
   cameras: {},
+  cameraKey: null,
 });
-
-const clamp = (value: number, minimum: number, maximum: number): number =>
-  Math.max(minimum, Math.min(maximum, value));
 
 const identityFor = (userKey: string): string => {
   const safe = userKey.replaceAll(/[^a-zA-Z0-9_-]/g, "").slice(0, 128);
@@ -38,13 +38,7 @@ const cameraPreference = (value: unknown): CameraPreference | null => {
   if (!keys.every((key) => typeof raw[key] === "number" && Number.isFinite(raw[key]))) {
     return null;
   }
-  return {
-    yaw: clamp(raw.yaw as number, -Math.PI, Math.PI),
-    pitch: clamp(raw.pitch as number, 0.18, Math.PI / 2 - 0.018),
-    zoom: clamp(raw.zoom as number, 0.01, 100),
-    targetX: clamp(raw.targetX as number, -10_000, 10_000),
-    targetZ: clamp(raw.targetZ as number, -10_000, 10_000),
-  };
+  return normalizeCamera(raw as unknown as CameraPreference);
 };
 
 export const parsePreferences = (value: unknown): MapPreferences => {
@@ -78,6 +72,7 @@ export const parsePreferences = (value: unknown): MapPreferences => {
     labels: typeof raw.labels === "boolean" ? raw.labels : fallback.labels,
     quality,
     cameras,
+    cameraKey: typeof raw.cameraKey === "string" && raw.cameraKey.length <= 1024 ? raw.cameraKey : null,
   };
 };
 
