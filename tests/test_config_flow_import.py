@@ -273,6 +273,47 @@ async def test_import_creates_an_entry_like_a_paired_robot(hass, monkeypatch) ->
     )
 
 
+async def test_duplicate_import_submits_share_validation_and_one_save(
+    hass, monkeypatch
+) -> None:
+    """A repeated submit joins the pending request instead of saving twice."""
+    _mock_robot(monkeypatch)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    clients = []
+
+    async def get_info():
+        entered.set()
+        await release.wait()
+        return _info()
+
+    def client_factory(*args, **kwargs):
+        client = _Client(AsyncMock(side_effect=get_info))
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr(flow_module, "MaticHermesClient", client_factory)
+    flow = _flow(hass)
+    flow._pairing_data = {"host": HOST, "port": PORT}
+    flow._import_mode = "setup"
+    value = {CONF_HERMES_CREDENTIAL: TEST_CREDENTIAL.to_storage()}
+    first = asyncio.create_task(flow.async_step_import_credential(value))
+    await entered.wait()
+    second = asyncio.create_task(flow.async_step_import_credential(value))
+    # Let the repeated request join while the authenticated read stays blocked.
+    await asyncio.sleep(0)
+    release.set()
+    results = await asyncio.gather(first, second)
+
+    assert results[0] is results[1]
+    assert results[0]["type"] is FlowResultType.CREATE_ENTRY
+    flow.async_set_unique_id.assert_awaited_once_with("synthetic")
+    flow._abort_if_unique_id_configured.assert_called_once()
+    assert len(clients) == 2  # Authentication and post-credential verification.
+    assert all(client.exited for client in clients)
+    assert flow._import_task is None
+
+
 @pytest.mark.parametrize(
     "pasted",
     [
@@ -596,9 +637,12 @@ async def test_removing_flow_during_import_validation_cannot_commit(
         assert entry is not None
         assert entry.data == ENTRY_DATA
         if mode == "recover":
-            assert ir.async_get(hass).async_get_issue(
-                DOMAIN, f"robot_identity_changed_{entry.entry_id}"
-            ) is not None
+            assert (
+                ir.async_get(hass).async_get_issue(
+                    DOMAIN, f"robot_identity_changed_{entry.entry_id}"
+                )
+                is not None
+            )
 
 
 async def test_removed_setup_flow_cannot_update_matching_entry_after_unique_id(
@@ -625,13 +669,9 @@ async def test_removed_setup_flow_cannot_update_matching_entry_after_unique_id(
     flow.async_set_unique_id = AsyncMock(side_effect=set_unique_id)
 
     def update_matching_entry(*, updates) -> None:
-        hass.config_entries.async_update_entry(
-            entry, data={**entry.data, **updates}
-        )
+        hass.config_entries.async_update_entry(entry, data={**entry.data, **updates})
 
-    flow._abort_if_unique_id_configured = MagicMock(
-        side_effect=update_matching_entry
-    )
+    flow._abort_if_unique_id_configured = MagicMock(side_effect=update_matching_entry)
     operation = asyncio.create_task(
         flow.async_step_import_credential(
             {CONF_HERMES_CREDENTIAL: REPLACEMENT_CREDENTIAL.to_storage()}
