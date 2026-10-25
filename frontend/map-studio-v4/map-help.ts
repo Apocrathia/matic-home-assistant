@@ -1,4 +1,4 @@
-import { html } from "lit";
+import { html, type ReactiveControllerHost } from "lit";
 
 import type { DrawTool, WorkspaceState } from "./contracts";
 import { topView } from "./renderer-controller";
@@ -10,6 +10,43 @@ export interface MapHelpContext {
   readonly t: (key: string, fallback: string) => string;
   readonly close: () => void;
 }
+
+/** Attach dismissal only once the Help chunk is requested, with host lifecycle cleanup. */
+export const watchHelpDismissal = (
+  host: HTMLElement & ReactiveControllerHost,
+  open: () => boolean,
+  launcher: () => HTMLElement | null,
+  close: () => void,
+): void => {
+  let start: { x: number; y: number } | null = null;
+  const down = (event: PointerEvent): void => {
+    start = open() ? { x: event.clientX, y: event.clientY } : null;
+  };
+  const click = (event: MouseEvent): void => {
+    if (!open() || event.detail === 0) return;
+    const origin = start;
+    start = null;
+    // A browser may emit click after a drag; that is not an outside tap.
+    if (origin && Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > 6) return;
+    const path = event.composedPath();
+    const button = launcher();
+    if ((button && path.includes(button))
+      || path.some((node) => node instanceof HTMLElement && node.id === "navigation-help")) return;
+    // Keep the new target's focus and action; this is a non-modal popover.
+    close();
+  };
+  host.addController({
+    hostConnected() {
+      host.ownerDocument.addEventListener("pointerdown", down, true);
+      host.ownerDocument.addEventListener("click", click);
+    },
+    hostDisconnected() {
+      host.ownerDocument.removeEventListener("pointerdown", down, true);
+      host.ownerDocument.removeEventListener("click", click);
+      start = null;
+    },
+  });
+};
 
 const drawPointerHelp = (tool: DrawTool, coarse: boolean, t: MapHelpContext["t"]): string => {
   if (tool === "outline") return coarse

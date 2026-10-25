@@ -55,6 +55,24 @@ const drag = async (page, from, to, options = {}) => {
 };
 
 test.describe("help (map-surfaces.md §5 Help, §11 MS-HELP-01/02)", () => {
+  test("Help dismissal detaches with its host and works after reconnect", async ({ page }) => {
+    const gallery = await loadGallery(page, { scenario: "ready" });
+    await helpButton(gallery).click();
+    await expect(helpDialog(gallery)).toBeVisible();
+    await gallery.evaluate((element) => {
+      window.__detachedHelpGallery = element;
+      element.remove();
+    });
+    await page.mouse.click(5, 5);
+    await page.evaluate(() => {
+      document.body.append(window.__detachedHelpGallery);
+      delete window.__detachedHelpGallery;
+    });
+    await expect(helpDialog(gallery)).toBeVisible();
+    await canvasOf(gallery).getByRole("button", { name: "Fit the whole map on screen" }).click();
+    await expect(helpDialog(gallery)).toHaveCount(0);
+  });
+
   test("an outside touch dismisses Help and still selects the map view @mobile", async ({ page }) => {
     const gallery = await loadGallery(page, { scenario: "ready", narrow: true });
     await helpButton(gallery).tap();
