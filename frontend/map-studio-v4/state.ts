@@ -38,7 +38,7 @@ const readOnlyWorkflows = new Set<WorkspaceState["workflow"]>([
   "areaReview",
 ]);
 
-const isReadOnlyWorkspace = (state: WorkspaceState): boolean =>
+export const isReadOnlyWorkspace = (state: WorkspaceState): boolean =>
   state.dataMode === "history" || state.floor.readOnly;
 
 const clamp = (value: number, minimum: number, maximum: number): number =>

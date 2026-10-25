@@ -1,7 +1,17 @@
 import { html, type ReactiveControllerHost } from "lit";
 
+import { ref } from "lit/directives/ref.js";
+
 import type { DrawTool, WorkspaceState } from "./contracts";
 import { topView } from "./renderer-controller";
+
+// Focus once when the Close button enters the document, after Lit commits.
+// A stable ref avoids stealing focus when live map state rerenders Help.
+const focusClose = (element: Element | undefined): void => {
+  if (element instanceof HTMLElement) queueMicrotask(() => {
+    if (element.isConnected) element.focus();
+  });
+};
 
 export interface MapHelpContext {
   readonly state: WorkspaceState;
@@ -117,7 +127,7 @@ export const renderMapHelp = ({ state, coarse, t, close }: MapHelpContext) => {
     <div id="navigation-help" class="navigation-help ms-surface ms-surface--floating" role="dialog" aria-modal="false" aria-label=${title}>
       <header>
         <h2>${title}</h2>
-        <button class="ms-btn ms-btn--sm" type="button" @click=${close}>${t("v4_close", "Close")}</button>
+        <button ${ref(focusClose)} class="ms-btn ms-btn--sm" type="button" @click=${close}>${t("v4_close", "Close")}</button>
       </header>
       <dl>${rows.map(([term, detail]) => html`<dt>${term}</dt><dd>${detail}</dd>`)}</dl>
     </div>

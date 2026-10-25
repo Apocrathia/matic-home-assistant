@@ -8040,6 +8040,10 @@ for (const width of [1024, 1100]) {
             await gallery.getByRole("button", { name: "Rotate right" }).click();
             await expect.poll(async () => (await snapshot(page)).cameras.three?.yaw ?? null).not.toBeNull();
           }
+          // Activating another map control dismisses this non-modal help.
+          await expect(help).toHaveCount(0);
+          await launcher.click();
+          await expect(help).toBeVisible();
           const close = help.getByRole("button", { name: "Close", exact: true });
           await close.scrollIntoViewIfNeeded();
           await close.click();
