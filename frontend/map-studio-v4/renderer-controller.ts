@@ -1,3 +1,5 @@
+import { clamp } from "./numeric";
+import { liveCameraKey, cameraPreferences, mapCameraIdentity } from "./camera-preferences";
 import type { AreaCircle, SceneModel, SceneRoom } from "./backend-contracts";
 import { SCENE_DELTA_DIRTY_BLOCK_BYTES } from "./backend-contracts";
 import type { CameraPreference, CoordinateEditCapture, MapQuality, MapView, WorkspaceState } from "./contracts";
@@ -56,9 +58,6 @@ interface RendererCallbacks {
   readonly onViewport?: () => void;
   readonly onProblem?: (problem: string) => void;
 }
-
-const clamp = (value: number, minimum: number, maximum: number): number =>
-  Math.max(minimum, Math.min(maximum, value));
 
 const angle = (value: number): number => {
   let result = value;
@@ -160,15 +159,12 @@ const rebaseCameraPreferences = (
 ) as Partial<Record<MapView, CameraPreference>>;
 
 const sceneContext = (state: WorkspaceState): string => {
-  const entry = state.resources.entry;
   return [
     state.dataMode,
     state.selection.entryId ?? "none",
     state.selection.floorId,
-    entry?.entryId ?? "none",
-    entry?.selectedFloorOrdinal ?? "none",
-    entry?.mapFloorOrdinal ?? "none",
-    entry?.mapSessionKey ?? "none",
+    state.selection.historyId ?? "none",
+    mapCameraIdentity(state),
   ].join("|");
 };
 
@@ -238,7 +234,6 @@ interface GpuUpload {
   seed: "scene" | "copy";
   readonly previousScene: SceneModel | null;
   readonly preserveCamera: boolean;
-  readonly preferenceView: MapView | null;
   frontierBytes: number;
   readonly dirtyBlocks: Set<number>;
   readonly transitionBlocks: Set<number>;
@@ -501,16 +496,23 @@ export class RendererController {
       this.#frame = null;
     }
     const scene = state.resources.scene.value;
-    const context = scene ? sceneContext(state) : null;
+    const holdingScene = state.dataMode === "live" && state.floor.readOnly && scene !== null && scene === this.#scene
+      && state.owner?.userKey === previous?.owner?.userKey && state.selection.entryId === previous?.selection.entryId;
+    const context = holdingScene ? this.#sceneContext : scene ? sceneContext(state) : null;
+    const cameraContextChanged = !holdingScene && context !== this.#sceneContext;
+    const liveKey = liveCameraKey(state);
+    const liveCameraChanged = liveKey !== null && liveKey !== liveCameraKey(previous);
     this.#admittedScene = scene;
     this.#admittedContext = context;
     let rebasedPreferences: Partial<Record<MapView, CameraPreference>> | null = null;
-    const uploadMatches = Boolean(this.#upload && this.#upload.scene === scene
-      && this.#upload.context === context && this.#upload.generation === state.generation
-      && this.#upload.contextGeneration === this.#contextGeneration);
+    const uploadMatches = Boolean(this.#upload && this.#uploadIsCurrent(this.#upload));
     if (!state.pageActive) {
       this.#cancelGpuUpload(true);
       this.#cancelFallback();
+    } else if (holdingScene) {
+      // Show live keeps the saved geometry visible until its replacement is
+      // admitted. Keep its framing too; it is not the new live camera's scene.
+      this.#cancelGpuUpload(false);
     } else if (scene !== null) {
       // Capture the context inside the non-null scene branch. The nullable
       // outer value also represents the intentionally empty-scene state.
@@ -613,9 +615,9 @@ export class RendererController {
     // view's preference, as a view change does.
     const enteredTop = !forcesTop(previous) && forcesTop(state);
     const leftTop = forcesTop(previous) && !forcesTop(state);
-    if (!previous || previous.view !== state.view || enteredTop || leftTop) {
-      this.#camera = this.#preferredCamera(view, state, rebasedPreferences);
-      this.#fitActive = this.#preferenceIsFit(view, state, rebasedPreferences);
+    if (!holdingScene && (!previous || previous.view !== state.view || enteredTop || leftTop
+      || cameraContextChanged || liveCameraChanged)) {
+      this.#applyPreferredCamera(view, state, rebasedPreferences);
     }
     if (previous?.workflow !== "areaReview" && state.workflow === "areaReview" && state.draw.circles.length) {
       this.#beforeReview = { camera: this.#camera, fit: this.#fitActive };
@@ -638,7 +640,7 @@ export class RendererController {
     }
     // Publish only the final effective camera. Its percentage also updates the
     // draw control; echoing that rounded percentage must not move the camera.
-    if (!published && (rebasedPreferences || enteredTop)) this.#notifyCamera();
+    if (!published && (rebasedPreferences || enteredTop || liveCameraChanged)) this.#notifyCamera();
     this.requestRender();
   }
 
@@ -687,20 +689,20 @@ export class RendererController {
     this.requestRender();
   }
 
-  #preferredCamera(
+  #applyPreferredCamera(
     view: MapView,
     state: WorkspaceState,
     rebasedPreferences: Partial<Record<MapView, CameraPreference>> | null = null,
-  ): CameraState {
+  ): void {
     const top = view === "top";
     const home = top ? this.#homeTop : this.#homeThree;
-    const preference = rebasedPreferences?.[view] ?? state.cameras[view];
+    const preference = rebasedPreferences?.[view] ?? cameraPreferences(state)[view];
     if (!preference) {
-      return top
-        ? { yaw: 0, pitch: Math.PI / 2 - 0.018, distance: home, targetX: 0, targetZ: 0, orthographic: true }
-        : { yaw: -Math.PI / 4, pitch: 0.82, distance: home, targetX: 0, targetZ: 0, orthographic: false };
+      this.fit(false, view);
+      return;
     }
-    return {
+    this.#fitActive = cameraPreferenceIsFit(view, preference);
+    this.#camera = {
       yaw: preference.yaw,
       pitch: top ? Math.PI / 2 - 0.018 : preference.pitch,
       distance: clamp(
@@ -712,15 +714,6 @@ export class RendererController {
       targetZ: clamp(preference.targetZ, -this.#radius, this.#radius),
       orthographic: top,
     };
-  }
-
-  #preferenceIsFit(
-    view: MapView,
-    state: WorkspaceState,
-    rebasedPreferences: Partial<Record<MapView, CameraPreference>> | null = null,
-  ): boolean {
-    const preference = rebasedPreferences?.[view] ?? state.cameras[view];
-    return cameraPreferenceIsFit(view, preference);
   }
 
   #compile(type: number, source: string): WebGLShader {
@@ -843,7 +836,7 @@ export class RendererController {
     if (rebasePreferences && previousScene && state) {
       const nextHome = { three: this.#homeThree, top: this.#homeTop } as const;
       const preferences = rebaseCameraPreferences(
-        state.cameras,
+        cameraPreferences(state),
         previousScene,
         scene,
         previousHome,
@@ -953,7 +946,6 @@ export class RendererController {
       seed,
       previousScene,
       preserveCamera,
-      preferenceView: topView(state),
       frontierBytes: 0,
       dirtyBlocks: new Set(dirtyBlocks),
       transitionBlocks: new Set(dirtyBlocks),
@@ -1097,22 +1089,14 @@ export class RendererController {
   #uploadGpuChunk(): void {
     const upload = this.#upload;
     const gl = this.#gl;
-    const state = this.#state;
-    if (!upload || !gl || !state) return;
-    if (this.#disposed || !state.pageActive || upload.scene !== this.#admittedScene
-      || upload.revision !== upload.scene.revision
-      || upload.context !== this.#admittedContext || upload.generation !== state.generation
-      || sceneContext(state) !== upload.context || state.resources.scene.value !== upload.scene
-      || upload.contextGeneration !== this.#contextGeneration
-      || (upload.staging && this.#stagingBuffer !== upload.buffer)
-      || (!upload.staging && this.#buffer !== upload.buffer)) {
+    if (!upload || !gl) return;
+    if (!this.#uploadIsCurrent(upload)) {
       this.#cancelGpuUpload(true);
       return;
     }
     const byteLength = upload.scene.total * 8;
     const pendingFrontier = upload.frontierBytes < byteLength;
     let remainingBudget = GPU_UPLOAD_CHUNK_BYTES;
-    let used = 0;
     try {
       const frontierLimit = pendingFrontier && upload.dirtyBlocks.size > 0
         ? GPU_UPLOAD_FAIR_SHARE_BYTES
@@ -1120,7 +1104,6 @@ export class RendererController {
       const frontierBytes = this.#uploadFrontier(upload, Math.min(frontierLimit, remainingBudget));
       if (frontierBytes < 0) throw new Error("gpu-frontier-upload-failed");
       remainingBudget -= frontierBytes;
-      used += frontierBytes;
 
       const canPatch = [...upload.dirtyBlocks].some((block) =>
         Math.min(byteLength, (block + 1) * GPU_DELTA_BLOCK_BYTES) <= upload.frontierBytes);
@@ -1130,22 +1113,18 @@ export class RendererController {
       const patchBytes = this.#uploadDirtyBlocks(upload, patchLimit);
       if (patchBytes < 0) throw new Error("gpu-dirty-upload-failed");
       remainingBudget -= patchBytes;
-      used += patchBytes;
 
       const hasEligiblePatch = [...upload.dirtyBlocks].some((block) =>
         Math.min(byteLength, (block + 1) * GPU_DELTA_BLOCK_BYTES) <= upload.frontierBytes);
       if (pendingFrontier && remainingBudget > 0 && !hasEligiblePatch) {
-        const extraFrontier = this.#uploadFrontier(upload, remainingBudget);
-        if (extraFrontier < 0) throw new Error("gpu-frontier-upload-failed");
-        remainingBudget -= extraFrontier;
-        used += extraFrontier;
+        if (this.#uploadFrontier(upload, remainingBudget) < 0) throw new Error("gpu-frontier-upload-failed");
       }
     } catch {
       this.#transitionToFallback();
       return;
     }
 
-    if (used > 0 && !this.#uploadIsCurrent(upload)) {
+    if (!this.#uploadIsCurrent(upload)) {
       this.#cancelGpuUpload(true);
       return;
     }
@@ -1153,15 +1132,10 @@ export class RendererController {
       this.requestRender();
       return;
     }
-    if (!this.#uploadIsCurrent(upload)) {
-      this.#cancelGpuUpload(true);
-      return;
-    }
     if (upload.staging) {
       const currentState = this.#state;
-      const currentView = currentState
-        ? topView(currentState)
-        : upload.preferenceView;
+      if (!currentState) return;
+      const currentView = topView(currentState);
       const previousBuffer = this.#buffer;
       this.#buffer = upload.buffer;
       this.#stagingBuffer = previousBuffer;
@@ -1178,10 +1152,8 @@ export class RendererController {
         true,
         currentView,
       );
-      if (currentState && rebased) {
-        const view = topView(currentState);
-        this.#camera = this.#preferredCamera(view, currentState, rebased);
-        this.#fitActive = this.#preferenceIsFit(view, currentState, rebased);
+      if (rebased) {
+        this.#applyPreferredCamera(currentView, currentState, rebased);
         this.#notifyCamera();
       }
     } else {
@@ -1201,7 +1173,6 @@ export class RendererController {
       && upload.revision === upload.scene.revision
       && upload.context === this.#admittedContext
       && upload.generation === state.generation
-      && sceneContext(state) === upload.context
       && state.resources.scene.value === upload.scene
       && upload.contextGeneration === this.#contextGeneration
       && (upload.staging ? this.#stagingBuffer === upload.buffer : this.#buffer === upload.buffer);
@@ -1786,9 +1757,14 @@ export class RendererController {
     view: MapView = this.#state ? topView(this.#state) : "three",
   ): void {
     const top = view === "top";
-    this.#camera = top
-      ? { yaw: 0, pitch: Math.PI / 2 - 0.018, distance: this.#homeTop, targetX: 0, targetZ: 0, orthographic: true }
-      : { yaw: -Math.PI / 4, pitch: 0.82, distance: this.#homeThree, targetX: 0, targetZ: 0, orthographic: false };
+    this.#camera = {
+      yaw: top ? 0 : -Math.PI / 4,
+      pitch: top ? Math.PI / 2 - 0.018 : 0.82,
+      distance: top ? this.#homeTop : this.#homeThree,
+      targetX: 0,
+      targetZ: 0,
+      orthographic: top,
+    };
     this.#fitActive = true;
     this.requestRender();
     if (notify) this.#notifyCamera();
@@ -1910,8 +1886,7 @@ export class RendererController {
       this.#startGpuUpload(scene, context, state, false, previousScene, sameContext && !this.#fitActive);
       if (rebased) {
         const view = topView(state);
-        this.#camera = this.#preferredCamera(view, state, rebased);
-        this.#fitActive = this.#preferenceIsFit(view, state, rebased);
+        this.#applyPreferredCamera(view, state, rebased);
         this.#notifyCamera();
       }
     }

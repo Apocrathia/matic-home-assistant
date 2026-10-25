@@ -1,3 +1,4 @@
+import { clamp } from "./numeric";
 import type { AreaCircle } from "./backend-contracts";
 import type { CoordinateEditCapture, WorkspaceIntent, WorkspaceState } from "./contracts";
 import { canEditCoordinates, captureCoordinateEdit, hasCoordinateEditAdmission } from "./state";
@@ -50,9 +51,6 @@ const angleDelta = (value: number): number => {
   while (delta < -Math.PI) delta += Math.PI * 2;
   return delta;
 };
-
-const clamp = (value: number, minimum: number, maximum: number): number =>
-  Math.max(minimum, Math.min(maximum, value));
 
 interface SafariGestureEvent extends Event {
   readonly scale: number;

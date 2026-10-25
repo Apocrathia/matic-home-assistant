@@ -1,3 +1,4 @@
+import { liveCameraKey } from "./camera-preferences";
 import type {
   AreasCatalog,
   CadenceReason,
@@ -321,7 +322,8 @@ const patchFirstRoom = (plan: SavedPlan, patch: Partial<PlanRoom>): SavedPlan =>
 };
 
 export const createGalleryState = (scenario: GalleryScenario): WorkspaceState => {
-  const state = verified();
+  const base = verified();
+  const state = { ...base, cameraKey: liveCameraKey(base) };
   switch (scenario) {
     case "ready":
       return state;

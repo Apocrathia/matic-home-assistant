@@ -328,12 +328,13 @@ export class EffectController {
       labels: state.labelsVisible,
       quality: state.quality,
       cameras: state.cameras,
+      cameraKey: state.cameraKey,
     };
     const previous = this.#preferenceSnapshot;
     this.#preferenceSnapshot = next;
     if (!previous || (previous.view === next.view && previous.appearance === next.appearance
       && previous.labels === next.labels && previous.quality === next.quality
-      && previous.cameras === next.cameras)) return;
+      && previous.cameras === next.cameras && previous.cameraKey === next.cameraKey)) return;
     this.#preferences.schedule(next);
   }
 
@@ -491,6 +492,7 @@ export class EffectController {
         labelsVisible: loadedPreferences.labels,
         quality: loadedPreferences.quality,
         cameras: loadedPreferences.cameras,
+        cameraKey: loadedPreferences.cameraKey,
       } : {}),
     });
     // A new user or robot owns its own home shortcuts from this moment: the
@@ -1119,6 +1121,7 @@ export class EffectController {
     const empty = initialWorkspaceState();
     this.#store.patch({
       command: "idle",
+      ...(problem === "context-changed" ? { historyCameras: {} } : {}),
       dataMode: empty.dataMode,
       deepMop: null,
       floor: empty.floor,
@@ -1951,6 +1954,8 @@ export class EffectController {
       generation: stamp.generation,
       coherence: "current",
       dataMode: "history",
+      ...(currentState.selection.floorId !== floor.id || currentState.selection.historyId !== snapshot?.id
+        ? { historyCameras: {} } : {}),
       floor: {
         classifiedCount: history.floors.length,
         displayName: safeFloorName(floor, history.floors.indexOf(floor) + 1),
@@ -1999,6 +2004,7 @@ export class EffectController {
     this.#store.patch({
       generation: stamp.generation,
       dataMode: "history",
+      ...(this.#store.value.selection.historyId !== snapshot.id ? { historyCameras: {} } : {}),
       floor: {
         classifiedCount: history.floors.length,
         displayName: safeFloorName(floor, history.floors.indexOf(floor) + 1),

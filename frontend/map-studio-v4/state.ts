@@ -1,3 +1,5 @@
+import { clamp } from "./numeric";
+import { normalizeCamera, liveCameraKey, cameraPreferences } from "./camera-preferences";
 import { needsDraftConfirmation } from "./draft-navigation";
 import {
   DRAW_BRUSH_MAX_METERS,
@@ -22,7 +24,7 @@ import {
 } from "./contracts";
 import type { AreaCircle, CadenceReason, NextRunPreviewBlocker, SavedPlan } from "./backend-contracts";
 import { entryFloorKey, entryMissionKey } from "./backend-contracts";
-import { notice, readWorkspaceNotice, type CameraPreference } from "./contracts";
+import { notice, readWorkspaceNotice } from "./contracts";
 
 /** Draw and the area review look straight down; every other workflow keeps the user's view. */
 export const forcesTop = (state: WorkspaceState | null): boolean =>
@@ -46,21 +48,6 @@ const readOnlyWorkflows = new Set<WorkspaceState["workflow"]>([
 
 export const isReadOnlyWorkspace = (state: WorkspaceState): boolean =>
   state.dataMode === "history" || state.floor.readOnly;
-
-const clamp = (value: number, minimum: number, maximum: number): number =>
-  Math.max(minimum, Math.min(maximum, value));
-
-const normalizeCamera = (camera: CameraPreference): CameraPreference => ({
-  yaw: clamp(Number.isFinite(camera.yaw) ? camera.yaw : 0, -Math.PI, Math.PI),
-  pitch: clamp(
-    Number.isFinite(camera.pitch) ? camera.pitch : Math.PI / 2 - 0.018,
-    0.18,
-    Math.PI / 2 - 0.018,
-  ),
-  zoom: clamp(Number.isFinite(camera.zoom) ? camera.zoom : 1, 0.01, 100),
-  targetX: clamp(Number.isFinite(camera.targetX) ? camera.targetX : 0, -10_000, 10_000),
-  targetZ: clamp(Number.isFinite(camera.targetZ) ? camera.targetZ : 0, -10_000, 10_000),
-});
 
 export const normalizeZoom = (value: number): number =>
   Math.round(clamp(Number.isFinite(value) ? value : MAP_ZOOM_MIN, MAP_ZOOM_MIN, MAP_ZOOM_MAX));
@@ -98,6 +85,8 @@ export const initialWorkspaceState = (): WorkspaceState => ({
   labelsVisible: true,
   quality: "auto",
   cameras: {},
+  cameraKey: null,
+  historyCameras: {},
   managedLock: false,
   batteryPercent: null,
   deepMop: null,
@@ -361,11 +350,20 @@ export const reduceWorkspace = (
       return { ...state, appearance: intent.appearance };
     case "set-quality":
       return { ...state, quality: intent.quality };
-    case "set-camera":
+    case "set-camera": {
+      const camera = normalizeCamera(intent.camera);
+      if (state.dataMode === "history") return {
+        ...state,
+        historyCameras: { ...state.historyCameras, [intent.view]: camera },
+      };
+      const cameraKey = liveCameraKey(state);
+      if (!cameraKey) return state;
       return {
         ...state,
-        cameras: { ...state.cameras, [intent.view]: normalizeCamera(intent.camera) },
+        cameraKey,
+        cameras: { ...cameraPreferences(state), [intent.view]: camera },
       };
+    }
     case "toggle-labels":
       return { ...state, labelsVisible: !state.labelsVisible };
     case "open-workflow":
@@ -975,14 +973,7 @@ export const canChangeRobotSetting = (state: WorkspaceState): boolean =>
   && !state.managedLock && !hasStoppableWork(state);
 
 export const canEditCoordinates = (state: WorkspaceState): boolean =>
-  !state.planWriteBlock && state.pageActive && canShowLiveMap(state)
-  && state.coherence === "current"
-  && state.map.complete
-  && state.map.floorCoherent
-  && state.map.sessionVerified
-  && state.host.connected
-  && state.host.robotConnected
-  && !state.floor.readOnly;
+  !state.planWriteBlock && state.map.complete && canReadFloorResources(state);
 
 const coordinateEditAllowed = (state: WorkspaceState, tool: CoordinateEditTool): boolean =>
   state.workflow === "draw"
