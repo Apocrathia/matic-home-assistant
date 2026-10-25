@@ -1140,7 +1140,7 @@ test.describe("Map Studio v0.4 foundation", () => {
         element.replaceWorkspaceState({ ...state, resources: { ...state.resources, plans: { ...state.resources.plans, value: { ...value, plans } } } });
       });
       const row = gallery.locator('[data-plan-row="daily"]');
-      await expect(row.locator("bdi")).toHaveText(/^A very long plan name/);
+      await expect(row.locator(".plan-title bdi")).toHaveText(/^A very long plan name/);
       const layout = await row.evaluate((button) => {
         const bdi = button.querySelector(".plan-title bdi");
         const chip = button.querySelector(".plan-title .ms-chip");
