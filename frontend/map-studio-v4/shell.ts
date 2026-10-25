@@ -170,6 +170,15 @@ const statusCopy = (state: WorkspaceState, localize?: Localize, dates?: DateForm
     notable: true,
     recheck: true,
   };
+  if (state.lastRun && (state.activity === "docked" || state.activity === "idle")) {
+    const run = state.lastRun;
+    return {
+      title: t(run.outcome === "unverified" ? "v4_last_run_unverified" : "v4_last_run_partial", run.outcome === "unverified" ? "Last run unverified" : "Last run did not finish"),
+      detail: run.roomCount ? t("v4_last_run_rooms", "{completed} of {total} rooms completed", { completed: run.completedRoomCount, total: run.roomCount }) : "",
+      icon: iconPlan,
+      notable: true,
+    };
+  }
   return {
     title: state.activity === "docked" ? t("v4_docked", "Docked") : t("v4_ready", "Ready"),
     detail: battery,
@@ -1594,6 +1603,12 @@ export class MaticMapShellV4 extends LitElement {
         break;
     }
     const held = kind !== "ready";
+    const pins = state.homePins.pins;
+    const waiting = (status: string) => status === "idle" || status === "loading";
+    if (waiting(state.homePins.status) || state.homePins.status === "ready" && (
+      pins.some((pin) => pin.kind === "plan") && waiting(state.resources.plans.status)
+      || pins.some((pin) => pin.kind === "area") && waiting(state.resources.areas.status))) return html`
+      <div class="home-actions" role="status"><p>${t("v4_shortcuts_loading_catalogs", "Loading your saved home choices…")}</p></div>`;
     const plans = readyPlans(state);
     const noRooms = plans !== null && plans.rooms.length === 0;
     const roomsDisabled = held || noRooms;

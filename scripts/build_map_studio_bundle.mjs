@@ -91,6 +91,7 @@ for (const output of result.outputFiles) {
 // harness can refuse a bundle that no longer matches the working tree.
 const inputs = [...new Set([...Object.keys(result.metafile.inputs),
   "scripts/build_map_studio_bundle.mjs", "scripts/compact_html_templates.mjs",
+  "scripts/compact_javascript.mjs",
   "scripts/normalize_map_studio_bundle.mjs", "scripts/source_stamp.mjs",
   "package.json", "package-lock.json",
 ])].sort();

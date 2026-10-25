@@ -30,12 +30,21 @@ async function mount(page, { visual = true, top = 0, embedded = false, moduleSou
 }
 
 async function expectHeight(panel, height) {
-  await expect.poll(async () => Math.round((await panel.boundingBox()).height)).toBe(height);
   const action = panel.locator(".action-bar").getByRole("button", { name: "Clean rooms", exact: true });
   await expect(action).toBeVisible();
-  const bounds = await action.boundingBox();
-  const host = await panel.boundingBox();
-  expect(bounds.y + bounds.height).toBeLessThanOrEqual(host.y + host.height + 1);
+  const panelTag = await panel.evaluate(element => element.localName);
+  // A responsive rerender can replace the action between separate awaits.
+  // Read visibility and both rectangles in one task, retrying until settled.
+  await expect.poll(() => action.evaluateAll((buttons, tag) => {
+    if (buttons.length !== 1) return null;
+    const bounds = buttons[0].getBoundingClientRect();
+    const host = document.querySelector(tag)?.getBoundingClientRect();
+    return host ? {
+      height: Math.round(host.height),
+      visible: bounds.width > 0 && bounds.height > 0,
+      contained: bounds.bottom <= host.bottom + 1,
+    } : null;
+  }, panelTag)).toEqual({ height, visible: true, contained: true });
 }
 
 test("visible viewport bounds the primary and recovers after toolbar and keyboard changes", async ({ page }) => {
