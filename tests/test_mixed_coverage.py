@@ -663,7 +663,7 @@ async def test_normal_coverage_readback_mismatch_times_out(monkeypatch):
     )
     client.async_get_active_cleaning_session_state = AsyncMock(return_value=True)
     client.async_get_property = AsyncMock(return_value=b"malformed")
-    clock = iter((0.0, 9.0))
+    clock = iter((0.0, 31.0))
     monkeypatch.setattr(
         "custom_components.matic_robot.client.api.monotonic", lambda: next(clock)
     )
@@ -688,7 +688,7 @@ async def test_normal_readback_cannot_accept_retained_plan_for_prior_identity(
     client.async_get_property = AsyncMock(
         return_value=coverage_plan_from_command(payload)
     )
-    clock = iter((0.0, 9.0))
+    clock = iter((0.0, 31.0))
     monkeypatch.setattr(
         "custom_components.matic_robot.client.api.monotonic", lambda: next(clock)
     )
