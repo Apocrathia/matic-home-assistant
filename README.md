@@ -36,8 +36,9 @@ locally in Home Assistant. [Matic Cues](docs/privacy.md#matic-cues) uses Matic's
 
 ## Install
 
-Requires **Home Assistant 2026.10+** and a Bluetooth adapter built into or attached
-to the Home Assistant host for pairing. Bluetooth proxies cannot complete setup.
+Requires **Home Assistant 2026.10+**. Pair through a Bluetooth adapter built into
+or attached to the host; Bluetooth proxies cannot complete pairing. Hosts without
+an adapter can use [experimental pairing import](docs/hermes-pairing.md#pair-on-another-device).
 Without an adapter, you can [paste a pairing made on another
 device](docs/hermes-pairing.md#pair-on-another-device) (experimental).
 
