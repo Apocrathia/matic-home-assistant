@@ -3,6 +3,7 @@ import { build } from "esbuild";
 import { readFileSync } from "node:fs";
 
 const HISTORY_PAYLOAD = JSON.parse(readFileSync(new URL("./fixtures/matic_cleaning_history.json", import.meta.url), "utf8"));
+const ACTIVE_HISTORY_PAYLOAD = JSON.parse(readFileSync(new URL("./fixtures/matic_active_cleaning_history.json", import.meta.url), "utf8"));
 
 const HARNESS = "/retained-run-test.js";
 test("retained outcomes are entry-scoped, invalidate on outcome-only changes, and reject malformed or active records", async ({ page }) => {
@@ -43,10 +44,17 @@ test("retained outcomes are entry-scoped, invalidate on outcome-only changes, an
       states["sensor.one_history"].attributes.last_run = run({ outcome });
       terminalOutcomes[outcome] = adapter.project(hass, undefined, "one").lastRun?.outcome ?? null;
     }
+    const activeResults = [];
+    for (const activePlan of [null, false, [], {}, "run-1", { run_id: "older" }, { run_id: "run-1" }]) {
+      states["sensor.one_history"].attributes.active_plan = activePlan;
+      activeResults.push(adapter.project(hass, undefined, "one").lastRun);
+    }
+    states["sensor.one_history"].attributes.last_run = run({ outcome: "running", room_count: 0, completed_room_count: 0 });
+    const areaOnly = adapter.project(hass, undefined, "one").lastRun;
     const store = new WorkspaceStore(initialWorkspaceState());
     return { first: first.lastRun, second: second.lastRun, changedIdentity: updated !== first,
       updated: updated.lastRun, unchangedIdentity: unchanged === updated, running: running.lastRun, malformed: malformed.lastRun,
-      reduced: store.value.lastRun, invalidCounts, terminalOutcomes };
+      reduced: store.value.lastRun, invalidCounts, terminalOutcomes, activeResults, areaOnly };
   }, HARNESS);
   expect(result).toEqual({
     first: { runId: "run-1", outcome: "partial", completedRoomCount: 2, roomCount: 4 },
@@ -59,8 +67,61 @@ test("retained outcomes are entry-scoped, invalidate on outcome-only changes, an
     reduced: null,
     invalidCounts: [null, null, null, null, null],
     terminalOutcomes: { failed: "partial", stopped_docked: "partial", cancelled: "partial", unverified: "unverified", completed: null, recharge_suspended: "partial", running: null },
+    activeResults: [null, null, null, null, null, null, { runId: "run-1", outcome: "running", completedRoomCount: 2, roomCount: 4 }],
+    areaOnly: null,
   });
 });
+
+for (const narrow of [false, true]) {
+  test(`verified room counts update only for the selected active run${narrow ? " in a narrow panel" : ""}`, async ({ page }) => {
+    if (narrow) await page.setViewportSize({ width: 390, height: 844 });
+    const { installPanelFixture } = await import("./map_studio_v4_panel_fixture.mjs");
+    const fixture = await installPanelFixture(page, { moduleSource: "packaged", sceneRooms: [
+      { id: "kitchen", name: "Kitchen", center: [0.5, 0.5], boundary: [[0, 0], [1, 0], [1, 1], [0, 1]] },
+    ], initialRobotStates: {
+      "vacuum.synthetic": { state: "cleaning", attributes: { matic_entry_id: "synthetic-entry", battery_level: 70 } },
+      "sensor.synthetic_cleaning_history": { state: "ready", attributes: ACTIVE_HISTORY_PAYLOAD },
+    } });
+    await page.evaluate(() => document.body.append(window.__panelFixture.createPanel()));
+    const panel = page.locator(fixture.panelTag);
+    const shell = panel.locator("matic-map-shell-v4");
+    const expectStatus = async (title, detail) => {
+      if (narrow) {
+        await expect(shell.locator(".sheet-status")).toHaveText(detail ? `${title} · ${detail}` : title);
+      } else {
+        await expect(shell.locator(".status-copy strong")).toHaveText(title);
+        if (detail) await expect(shell.locator(".status-copy small")).toHaveText(detail);
+      }
+    };
+    await expectStatus("Cleaning", "0 of 3 rooms completed");
+    await expect(shell.getByRole("button", { name: "Stop cleaning", exact: true })).toBeVisible();
+    const update = (fields) => page.evaluate((fields) => {
+      const panel = document.querySelector(window.__panelFixture.panelTag);
+      const states = structuredClone(panel.hass.states);
+      Object.assign(states["sensor.synthetic_cleaning_history"].attributes.last_run, fields.lastRun ?? {});
+      if (Object.hasOwn(fields, "activeRunId")) states["sensor.synthetic_cleaning_history"].attributes.active_plan.run_id = fields.activeRunId;
+      if (fields.activity) states["vacuum.synthetic"].state = fields.activity;
+      if (Object.hasOwn(fields, "currentArea")) states["vacuum.synthetic"].attributes.current_area = fields.currentArea;
+      panel.hass = { ...panel.hass, states };
+    }, fields);
+    await update({ lastRun: { completed_room_count: 1 } });
+    await expectStatus("Cleaning", "1 of 3 rooms completed");
+    await update({ activeRunId: "replacement" });
+    await expectStatus("Cleaning", "70% battery");
+    await expect.poll(() => panel.evaluate(element => element.getWorkspaceSnapshot().lastRun)).toBeNull();
+    await update({ lastRun: { run_id: "replacement", completed_room_count: 2 } });
+    await expectStatus("Cleaning", "2 of 3 rooms completed");
+    await expect.poll(() => panel.evaluate(element => element.getWorkspaceSnapshot().coherence)).toBe("current");
+    await update({ currentArea: "Kitchen" });
+    await expectStatus("Cleaning", "2 of 3 rooms completed · In Kitchen");
+    await update({ activity: "docked", currentArea: null });
+    await expectStatus("Docked", "70% battery");
+    await update({ activity: "cleaning", lastRun: { outcome: "failed" } });
+    await expectStatus("Cleaning", "70% battery");
+    await update({ activity: "docked", lastRun: { outcome: "completed", completed_room_count: 3 } });
+    await expectStatus("Docked", "70% battery");
+  });
+}
 
 test("selected robot changes its retained outcome without another HA state update", async ({ page }) => {
   const { installPanelFixture } = await import("./map_studio_v4_panel_fixture.mjs");
