@@ -1110,6 +1110,30 @@ test.describe("Area review", () => {
     expect((await snapshot(page)).draw.circles.length).toBeGreaterThan(0);
   });
 
+  for (const narrow of [false, true]) {
+    test(`discarding a new area review restores the rendered 2D camera through Home${narrow ? " @mobile" : ""}`, async ({ page }) => {
+      const gallery = await loadGallery(page, { scenario: "draw", narrow, viewport: narrow ? null : { width: 1024, height: 768 } });
+      await patchState(gallery, { view: "top" });
+      const cameraZoom = () => canvasOf(gallery).evaluate(element => {
+        const diagnostics = element.rendererDiagnostics();
+        return diagnostics.fitDistance / diagnostics.cameraDistance;
+      });
+      await expect.poll(cameraZoom).toBeGreaterThan(0);
+      const before = await cameraZoom();
+      await gallery.locator(".action-bar").getByRole("button", { name: "Name and save", exact: true }).click();
+      await expect.poll(async () => (await snapshot(page)).workflow).toBe("areaReview");
+      await expect.poll(cameraZoom).toBeGreaterThan(before + 0.5);
+      await gallery.getByRole("button", { name: "Back to areas", exact: true }).click();
+      await gallery.getByRole("dialog", { name: "Discard changes?" })
+        .getByRole("button", { name: "Discard", exact: true }).click();
+      await expect.poll(async () => (await snapshot(page)).workflow).toBe("areas");
+      await expect.poll(cameraZoom).toBeCloseTo(before, 4);
+      await gallery.getByRole("button", { name: "Back to all tasks", exact: true }).click();
+      await expect.poll(async () => (await snapshot(page)).workflow).toBe("none");
+      await expect.poll(cameraZoom).toBeCloseTo(before, 4);
+    });
+  }
+
   test("reduced motion lands on the same framed camera", async ({ page }) => {
     await page.emulateMedia({ reducedMotion: "reduce" });
     const gallery = await loadGallery(page, { scenario: "draw", viewport: { width: 1024, height: 768 } });
