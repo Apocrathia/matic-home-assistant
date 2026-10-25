@@ -1,7 +1,7 @@
 import type { AreaCircle, SceneModel, SceneRoom } from "./backend-contracts";
 import { SCENE_DELTA_DIRTY_BLOCK_BYTES } from "./backend-contracts";
 import type { CameraPreference, CoordinateEditCapture, MapQuality, MapView, WorkspaceState } from "./contracts";
-import { canShowExactPose, hasCoordinateEditAdmission } from "./state";
+import { canShowExactPose, hasCoordinateEditAdmission, forcesTop, topView } from "./state";
 import { rgba, type CanvasPalette, type Channel } from "./theme-probe";
 
 export interface MapPoint {
@@ -67,14 +67,8 @@ const angle = (value: number): number => {
   return result;
 };
 
-const qualityScale = (quality: MapQuality): number => {
-  switch (quality) {
-    case "efficient": return 0.35;
-    case "balanced": return 0.65;
-    case "maximum":
-    case "auto": return 1;
-  }
-};
+const qualityScale = (quality: MapQuality): number =>
+  quality === "efficient" ? .35 : quality === "balanced" ? .65 : 1;
 
 const sceneCenter = (scene: SceneModel): readonly [number, number] => {
   const meters = scene.metadata.metersPerCell;
@@ -113,10 +107,7 @@ const rebaseCameraTarget = (
   };
 };
 
-/** Draw and the area review look straight down; every other workflow keeps the user's view. */
-const forcesTop = (state: WorkspaceState | null): boolean =>
-  state?.workflow === "draw" || state?.workflow === "areaReview";
-export const topView = (state: WorkspaceState): MapView => forcesTop(state) ? "top" : state.view;
+export { topView } from "./state";
 /** Room colors replace the photo wherever the map shows the top view. */
 const roomColours = (state: WorkspaceState | null): boolean =>
   !!state && topView(state) === "top" && state.appearance === "rooms";
@@ -1488,8 +1479,9 @@ export class RendererController {
     context.clearRect(0, 0, bounds.width, bounds.height);
     if (!scene || !state) return;
     const palette = this.#palette;
+    const colours = roomColours(state);
     if (this.#mode === "canvas2d" && this.#fallbackCanvas
-      && !roomColours(state)) {
+      && !colours) {
       // A WebGL canvas cannot acquire a 2D context after context loss.
       context.drawImage(this.#fallbackCanvas, 0, 0, bounds.width, bounds.height);
     }
@@ -1505,7 +1497,7 @@ export class RendererController {
       : null;
     // Every room draws with Room names on or in Room colors; otherwise only
     // the selected ones (home-rooms.md §5 Parity, R9).
-    const allRooms = state.labelsVisible || roomColours(state);
+    const allRooms = state.labelsVisible || colours;
     if (allRooms || selectedNames.size) {
       // IDs keep each room's hue stable when scene metadata is reordered.
       const roomIndexes = new Map(scene.metadata.rooms.map((room) => room.id).sort()
@@ -1514,14 +1506,15 @@ export class RendererController {
       context.font = "600 12px system-ui, sans-serif";
       context.textAlign = "center";
       context.textBaseline = "middle";
-      const occupied: DOMRect[] = [];
+      const occupied: (readonly [number, number, number])[] = [];
+      const labels: (() => void)[] = [];
       for (const room of scene.metadata.rooms) {
         const selected = selectedNames.has(room.name.toLocaleLowerCase());
         if (!allRooms && !selected) continue;
-        context.lineWidth = selected ? 3 : roomColours(state) ? 2 : 1.5;
+        context.lineWidth = selected ? 3 : colours ? 2 : 1.5;
         context.strokeStyle = selected ? rgba(palette.accent, 1)
-          : roomColours(state) || palette.forced ? rgba(palette.text, 1) : rgba(palette.quiet, .7);
-        context.fillStyle = roomColours(state)
+          : colours || palette.forced ? rgba(palette.text, 1) : rgba(palette.quiet, .7);
+        context.fillStyle = colours
           ? rgba(roomColor(roomIndexes.get(room.id) ?? 0, palette), .94)
           : selected ? rgba(palette.accent, .26) : rgba(palette.plate, .04);
         context.beginPath();
@@ -1545,46 +1538,66 @@ export class RendererController {
           context.stroke();
         }
       }
-      // Labels draw after every fill so a later, overlapping room cannot paint
-      // over an earlier room's name. Room names on draws every room.
-      if (state.labelsVisible) for (const room of scene.metadata.rooms) {
+      // Labels draw after all fills. Place selected/current rooms first so a
+      // crowded viewport keeps the names that explain the user's current work.
+      const currentName = state.currentArea?.toLocaleLowerCase();
+      const priority = (room: SceneRoom): number => {
+        const name = room.name.toLocaleLowerCase();
+        return +selectedNames.has(name) * 2 + +(name === currentName);
+      };
+      if (state.labelsVisible) for (const room of [...scene.metadata.rooms].sort((a, b) => priority(b) - priority(a))) {
         const center = this.#projectCell(room.center[0], room.center[1], 1);
         if (!center) continue;
         const position = selectedPositions?.get(room.id);
-        const positionWidth = position ? context.measureText(position).width : 0;
-        const badgeWidth = position ? Math.max(16, positionWidth + 10) : 0;
-        const badgeGap = position ? 4 : 0;
-        const textWidth = context.measureText(room.name).width;
-        const contentWidth = badgeWidth + badgeGap + textWidth;
-        // Every room keeps its name: a label that would cover another moves to
-        // the nearest free slot above or below its room centre.
-        const labelBounds = new DOMRect(center.x - contentWidth / 2 - 6, center.y - 10, contentWidth + 12, 20);
-        // Steps visit the centre, 24 px below, 24 px above, 48 px below and
-        // 48 px above on the canvas, and return to the centre when none fits.
-        for (const step of [24, -48, 72, -96, 48]) {
-          if (labelBounds.top >= 0 && labelBounds.bottom <= bounds.height
-            && !occupied.some((other) => labelBounds.left < other.right + 8
-            && labelBounds.right + 8 > other.left
-            && labelBounds.top < other.bottom + 4
-            && labelBounds.bottom + 4 > other.top)) break;
-          labelBounds.y += step;
+        const badgeWidth = position ? Math.max(16, context.measureText(position).width + 10) : 0;
+        const badgeSpace = position ? badgeWidth + 4 : 0;
+        // Search nearby slots in both axes, keeping each complete plate on
+        // screen. Never paint a colliding fallback when the viewport is full.
+        const width = badgeSpace + context.measureText(room.name).width + 12;
+        if (width > bounds.width || bounds.height < 20) continue;
+        let placement: readonly [number, number] | undefined;
+        let nearest = Infinity;
+        for (let row = -4; row <= 4; row++) for (let column = -2; column <= 2; column++) {
+          const x = clamp(center.x - width / 2 + column * (width + 8), 0, bounds.width - width);
+          const y = clamp((Math.round((center.y - 10) / 24) + row) * 24, 0, Math.floor((bounds.height - 20) / 24) * 24);
+          const distance = Math.hypot(x + width / 2 - center.x, y + 10 - center.y);
+          if (distance >= nearest || occupied.some(([left, top, otherWidth]) => x < left + otherWidth + 8
+            && x + width + 8 > left && y < top + 24 && y + 24 > top)) continue;
+          placement = [x, y];
+          nearest = distance;
         }
-        const y = labelBounds.y + 10;
-        occupied.push(labelBounds);
-        context.fillStyle = rgba(palette.plate, .88);
-        context.fillRect(labelBounds.x, labelBounds.y, labelBounds.width, labelBounds.height);
-        if (position) {
-          const badgeX = center.x - contentWidth / 2 + badgeWidth / 2;
+        if (!placement) continue;
+        const [left, top] = placement;
+        occupied.push([left, top, width]);
+        const edgeX = clamp(center.x, left, left + width);
+        const edgeY = clamp(center.y, top, top + 20);
+        if (edgeX !== center.x || edgeY !== center.y) {
           context.beginPath();
-          context.roundRect(badgeX - badgeWidth / 2, y - 8, badgeWidth, 16, 8);
-          context.fillStyle = rgba(palette.accent, 1);
-          context.fill();
-          context.fillStyle = rgba(palette.onAccent, 1);
-          context.fillText(position, badgeX, y);
+          context.moveTo(center.x, center.y);
+          context.lineTo(edgeX, edgeY);
+          context.lineWidth = 1;
+          context.strokeStyle = rgba(palette.text, .7);
+          context.stroke();
         }
-        context.fillStyle = rgba(palette.text, 1);
-        context.fillText(room.name, center.x + (badgeWidth + badgeGap) / 2, y);
+        // Queue every plate above all connectors, including later labels'.
+        labels.push(() => {
+          const y = top + 10;
+          context.fillStyle = rgba(palette.plate, .88);
+          context.fillRect(left, top, width, 20);
+          if (position) {
+            const badgeX = left + 6 + badgeWidth / 2;
+            context.beginPath();
+            context.roundRect(badgeX - badgeWidth / 2, y - 8, badgeWidth, 16, 8);
+            context.fillStyle = rgba(palette.accent, 1);
+            context.fill();
+            context.fillStyle = rgba(palette.onAccent, 1);
+            context.fillText(position, badgeX, y);
+          }
+          context.fillStyle = rgba(palette.text, 1);
+          context.fillText(room.name, left + width / 2 + badgeSpace / 2, y);
+        });
       }
+      for (const paint of labels) paint();
     }
     const preview = this.#circlePreview;
     const circles = preview && hasCoordinateEditAdmission(state, preview.capture)

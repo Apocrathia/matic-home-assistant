@@ -1,4 +1,4 @@
-import{a as u}from"./chunk-CEDW6BZF.js";import{a as d}from"./chunk-U4MRRE4M.js";import{h as c}from"./chunk-LZVS2VT2.js";import{Q as m,x as p}from"./chunk-SQBYHHYS.js";import{qa as t,ua as r}from"./chunk-QX674AG7.js";var v=class{constructor(a){this.menu=new u(a,".overflow-wrap",".overflow")}render({state:a,narrow:b,t:e,intent:n,diagnostics:y}){let i=(o,l,g)=>t` <button class="ms-row ms-row--menu" type="button" role="menuitemradio" aria-checked=${String(o)} data-selected=${o?"true":r} tabindex="-1" @click=${g}><span>${l}</span>${o?m(p):r}</button> `,s=(o,l)=>i(a.quality===o,l,()=>n({type:"set-quality",quality:o}));return t`
+import{a as u}from"./chunk-CEDW6BZF.js";import{a as d}from"./chunk-WD64G4JK.js";import{Q as c,x as m}from"./chunk-K3IGJTLE.js";import{F as p,sa as t,wa as r}from"./chunk-RK7XMGS2.js";var v=class{constructor(a){this.menu=new u(a,".overflow-wrap",".overflow")}render({state:a,narrow:b,t:e,intent:n,diagnostics:y}){let i=(o,l,g)=>t` <button class="ms-row ms-row--menu" type="button" role="menuitemradio" aria-checked=${String(o)} data-selected=${o?"true":r} tabindex="-1" @click=${g}><span>${l}</span>${o?c(m):r}</button> `,s=(o,l)=>i(a.quality===o,l,()=>n({type:"set-quality",quality:o}));return t`
 <style>
 ${d.cssText}
 .overflow-menu {
@@ -22,7 +22,7 @@ padding: var(--ms-space-1);
 ${b?t`
 <div role="group" aria-labelledby="menu-display">
 <p class="menu-heading" id="menu-display" role="presentation">${e("v4_map_display","Map display")}</p>
-${c(a)==="top"?t`
+${p(a)==="top"?t`
 ${i(a.appearance==="photo",e("map_style_photo","Photo"),()=>n({type:"set-appearance",appearance:"photo"}))}
 ${i(a.appearance==="rooms",e("v4_room_colours","Room colors"),()=>n({type:"set-appearance",appearance:"rooms"}))}
 `:r}

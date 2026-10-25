@@ -10,6 +10,7 @@ import {
   type CoordinateEditCapture,
   type CoordinateEditTool,
   type CommandState,
+  type MapView,
   type NoButtonAction,
   type PlanOrigin,
   type PrimaryAction,
@@ -22,6 +23,11 @@ import {
 import type { AreaCircle, CadenceReason, NextRunPreviewBlocker, SavedPlan } from "./backend-contracts";
 import { entryFloorKey, entryMissionKey } from "./backend-contracts";
 import { notice, readWorkspaceNotice, type CameraPreference } from "./contracts";
+
+/** Draw and the area review look straight down; every other workflow keeps the user's view. */
+export const forcesTop = (state: WorkspaceState | null): boolean =>
+  state?.workflow === "draw" || state?.workflow === "areaReview";
+export const topView = (state: WorkspaceState): MapView => forcesTop(state) ? "top" : state.view;
 
 const emptyResource = <T>(): { status: "idle"; value: T | null; problem: null } => ({
   status: "idle",

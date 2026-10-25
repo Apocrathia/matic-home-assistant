@@ -2,7 +2,7 @@ import { html, nothing, type ReactiveControllerHost } from "lit";
 import type { WorkspaceIntent, WorkspaceState } from "./contracts";
 import { icon, iconDone } from "./icons";
 import { MenuController } from "./menu-controller";
-import { topView } from "./renderer-controller";
+import { topView } from "./state";
 import { switchStyles } from "./switch-styles";
 
 type Host = ReactiveControllerHost & HTMLElement & { readonly renderRoot: ParentNode };
