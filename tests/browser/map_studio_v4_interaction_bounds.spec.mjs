@@ -134,6 +134,7 @@ test("flushes a previous user's pending camera before loading the next user", as
   await page.addInitScript(() => {
     localStorage.setItem("matic-map-studio:v4:synthetic-next", JSON.stringify({
       version: 4, view: "top", appearance: "photo", labels: true, quality: "auto",
+      cameraKey: JSON.stringify(["synthetic-next", "synthetic-entry", 1, 1, "a".repeat(64)]),
       cameras: { top: { yaw: -0.44, pitch: 1.1, zoom: 1.7, targetX: -0.8, targetZ: 0.6 } },
     }));
   });

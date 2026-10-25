@@ -4,7 +4,7 @@ import { build } from "esbuild";
 async function loadRenderer(page) {
   const bundle = await build({
     stdin: {
-      contents: 'export { RendererController } from "./frontend/map-studio-v4/renderer-controller"; export { createGalleryState } from "./frontend/map-studio-v4/gallery-state";',
+      contents: 'export { RendererController } from "./frontend/map-studio-v4/renderer-controller"; export { WorkspaceStore, topView } from "./frontend/map-studio-v4/state"; export { createGalleryState } from "./frontend/map-studio-v4/gallery-state";',
       resolveDir: process.cwd(),
     },
     bundle: true,
@@ -150,8 +150,8 @@ async function loadRenderer(page) {
       contexts.push(gl);
       return gl;
     };
-    const { RendererController, createGalleryState } = await import("/map-studio-v4-gpu-upload.js");
-    window.__gpuUploadHarness = { RendererController, createGalleryState, contexts };
+    const { RendererController, createGalleryState, WorkspaceStore, topView } = await import("/map-studio-v4-gpu-upload.js");
+    window.__gpuUploadHarness = { RendererController, createGalleryState, WorkspaceStore, topView, contexts };
   });
 }
 
@@ -613,6 +613,178 @@ test("@safety a staged scene persists camera preferences for the active view at 
   expect(outcome.complete).toBe(true);
   expect(outcome.savedTopYaw).toBeCloseTo(outcome.expectedTopYaw, 5);
   expect(outcome.savedThreeYaw).toBeCloseTo(outcome.cameraBeforePublish.yaw, 5);
+});
+
+test("@safety live camera survives history and rejects a replaced session during staged publication", async ({ page }) => {
+  await loadRenderer(page);
+  const outcome = await page.evaluate(async () => {
+    const { RendererController, createGalleryState, WorkspaceStore, topView, contexts } = window.__gpuUploadHarness;
+    const base = createGalleryState("ready");
+    const store = new WorkspaceStore(base);
+    const makeScene = (revision, source = base.resources.scene.value) => ({
+      ...source, buffer: new ArrayBuffer(source.pointOffset + 1_000_000 * 8),
+      total: 1_000_000, floorCount: 800_000, surfaceCount: 200_000, revision,
+    });
+    const canvases = Array.from({ length: 2 }, () => document.createElement("canvas"));
+    canvases.forEach((canvas) => {
+      Object.assign(canvas.style, { width: "700px", height: "500px" });
+      document.body.append(canvas);
+    });
+    const renderer = new RendererController(...canvases, {
+      onCamera: (camera, zoomPercent) => store.dispatch({ type: "set-camera", view: topView(store.value),
+        camera: { ...camera, zoom: zoomPercent / 100 } }),
+      onCameraPreferences: (cameras) => {
+        for (const [view, camera] of Object.entries(cameras)) store.dispatch({ type: "set-camera", view, camera });
+      },
+    });
+    const nextFrame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+    const waitFor = async (predicate) => {
+      for (let attempt = 0; attempt < 240; attempt += 1) {
+        if (predicate()) return true;
+        await nextFrame();
+      }
+      return predicate();
+    };
+    const sync = (patch) => { store.patch(patch); renderer.setState(store.value); };
+    const scenePatch = (scene) => ({ resources: { ...store.value.resources,
+      scene: { status: "ready", value: scene, problem: null } } });
+    const complete = (scene) => waitFor(() => renderer.diagnostics().sceneRevision === scene.revision
+      && renderer.diagnostics().renderedPoints === scene.total);
+    const camera = () => ({ ...renderer.camera,
+      zoom: renderer.diagnostics().fitDistance / renderer.diagnostics().cameraDistance });
+    try {
+      const initial = makeScene(130);
+      sync(scenePatch(initial));
+      const initialComplete = await complete(initial);
+      renderer.zoomAt(2);
+      renderer.panBy(35, -24);
+      sync({});
+      const liveCamera = camera();
+      const livePreferences = structuredClone(store.value.cameras);
+      const saved = makeScene(131, { ...initial, source: "history", metadata: { ...initial.metadata, span: [100, 90] } });
+      sync({ ...scenePatch(saved), dataMode: "history", floor: { ...store.value.floor, readOnly: true },
+        selection: { ...store.value.selection, floorId: "saved", historyId: "saved-one" } });
+      const savedComplete = await complete(saved);
+      renderer.zoomAt(1.4);
+      renderer.panBy(-50, 12);
+      sync({});
+      const savedCamera = camera();
+      const afterHistory = structuredClone(store.value.cameras);
+      sync({ dataMode: "live", coherence: "verifying",
+        selection: { ...store.value.selection, floorId: "current", historyId: null },
+        resources: { ...store.value.resources, scene: { status: "loading", value: saved, problem: null } } });
+      await nextFrame();
+      const loadingCamera = camera();
+      canvases[0].dispatchEvent(new Event("webglcontextlost", { cancelable: true }));
+      const lostCamera = camera();
+      canvases[0].dispatchEvent(new Event("webglcontextrestored"));
+      const heldRestoreComplete = await complete(saved);
+      const heldRestoredCamera = camera();
+      const returned = makeScene(132, initial);
+      sync({ ...scenePatch(returned), coherence: "current", floor: { ...store.value.floor, readOnly: false } });
+      const returnComplete = await complete(returned);
+      const restoredCamera = camera();
+      // A same-session successor stages behind the published front. Replace
+      // its owner mid-upload; its late camera publication must be discarded.
+      const successor = { ...makeScene(133, returned),
+        deltaHint: { baseRevision: returned.revision, blockBytes: 65_536, dirtyBlocks: [0] } };
+      sync(scenePatch(successor));
+      const context = contexts.at(-1);
+      const stagingStarted = await waitFor(() => context.calls.some((call) => call.type === "copy"));
+      const revisionDuringStaging = renderer.diagnostics().sceneRevision;
+      const replacement = makeScene(134, returned);
+      sync({ ...scenePatch(replacement), generation: store.value.generation + 1,
+        resources: { ...scenePatch(replacement).resources,
+          entry: { ...store.value.resources.entry, mapSessionKey: "b".repeat(64) } } });
+      const replacementComplete = await complete(replacement);
+      await nextFrame();
+      return { initialComplete, savedComplete, returnComplete, replacementComplete,
+        liveCamera, livePreferences, afterHistory, savedCamera, loadingCamera, lostCamera, heldRestoredCamera,
+        heldRestoreComplete, restoredCamera,
+        stagingStarted, revisionDuringStaging, finalRevision: renderer.diagnostics().sceneRevision,
+        replacementCamera: camera(), validDraws: context.calls.filter((call) => call.type === "draw").every((call) => call.valid) };
+    } finally {
+      renderer.dispose();
+      canvases.forEach((canvas) => canvas.remove());
+    }
+  });
+  for (const key of ["initialComplete", "savedComplete", "returnComplete", "replacementComplete", "stagingStarted", "validDraws", "heldRestoreComplete"]) {
+    expect(outcome[key], key).toBe(true);
+  }
+  expect(outcome.afterHistory).toEqual(outcome.livePreferences);
+  expect(outcome.loadingCamera).toEqual(outcome.savedCamera);
+  expect(outcome.lostCamera).toEqual(outcome.savedCamera);
+  expect(outcome.heldRestoredCamera).toEqual(outcome.savedCamera);
+  expect(outcome.restoredCamera).toEqual(outcome.liveCamera);
+  expect(outcome.revisionDuringStaging).toBe(132);
+  expect(outcome.finalRevision).toBe(134);
+  expect(outcome.replacementCamera.zoom).toBeCloseTo(1, 5);
+  expect(outcome.replacementCamera.targetX).toBe(0);
+  expect(outcome.replacementCamera.targetZ).toBe(0);
+});
+
+test("@safety held saved maps finish front uploads across status updates and GPU restoration", async ({ page }) => {
+  await loadRenderer(page);
+  const outcome = await page.evaluate(async () => {
+    const { RendererController, createGalleryState, contexts } = window.__gpuUploadHarness;
+    const base = createGalleryState("ready");
+    const source = base.resources.scene.value;
+    const saved = { ...source, source: "history", revision: 140,
+      buffer: new ArrayBuffer(source.pointOffset + 1_000_000 * 8),
+      total: 1_000_000, floorCount: 800_000, surfaceCount: 200_000 };
+    const canvases = Array.from({ length: 2 }, () => document.createElement("canvas"));
+    canvases.forEach((canvas) => {
+      Object.assign(canvas.style, { width: "700px", height: "500px" });
+      document.body.append(canvas);
+    });
+    const renderer = new RendererController(...canvases);
+    const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+    const history = { ...base, dataMode: "history", floor: { ...base.floor, readOnly: true },
+      selection: { ...base.selection, floorId: "saved", historyId: "saved-one" },
+      resources: { ...base.resources, scene: { status: "ready", value: saved, problem: null } } };
+    const held = { ...history, dataMode: "live", coherence: "verifying", generation: history.generation + 1,
+      selection: { ...history.selection, floorId: "current", historyId: null },
+      resources: { ...history.resources, scene: { status: "loading", value: saved, problem: null } } };
+    const materialize = async () => {
+      for (let i = 0; i < 80; i += 1) {
+        // Real status and catalog updates continue while the live read waits.
+        renderer.setState({ ...held });
+        await frame();
+        if (renderer.diagnostics().renderedPoints === saved.total) return true;
+      }
+      return false;
+    };
+    try {
+      renderer.setState(history);
+      await frame();
+      const earlyPoints = renderer.diagnostics().renderedPoints;
+      const camera = renderer.camera;
+      const initialComplete = await materialize();
+      const afterInitial = renderer.camera;
+      canvases[0].dispatchEvent(new Event("webglcontextlost", { cancelable: true }));
+      canvases[0].dispatchEvent(new Event("webglcontextrestored"));
+      await frame();
+      const restoredEarlyPoints = renderer.diagnostics().renderedPoints;
+      const restoredComplete = await materialize();
+      const context = contexts.at(-1);
+      return { earlyPoints, restoredEarlyPoints, initialComplete, restoredComplete,
+        camera, afterInitial, afterRestore: renderer.camera, revision: renderer.diagnostics().sceneRevision,
+        validDraws: context.calls.filter((call) => call.type === "draw").every((call) => call.valid) };
+    } finally {
+      renderer.dispose();
+      canvases.forEach((canvas) => canvas.remove());
+    }
+  });
+  expect(outcome.earlyPoints).toBeGreaterThan(0);
+  expect(outcome.earlyPoints).toBeLessThan(1_000_000);
+  expect(outcome.initialComplete).toBe(true);
+  expect(outcome.restoredEarlyPoints).toBeGreaterThan(0);
+  expect(outcome.restoredEarlyPoints).toBeLessThan(1_000_000);
+  expect(outcome.restoredComplete).toBe(true);
+  expect(outcome.afterInitial).toEqual(outcome.camera);
+  expect(outcome.afterRestore).toEqual(outcome.camera);
+  expect(outcome.revision).toBe(140);
+  expect(outcome.validDraws).toBe(true);
 });
 
 test("@safety upload owner cancels on floor replacement and suspension, then restoration uploads only the latest frame", async ({ page }) => {
