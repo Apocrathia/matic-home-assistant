@@ -509,14 +509,10 @@ export class RendererController {
     if (!state.pageActive) {
       this.#cancelGpuUpload(true);
       this.#cancelFallback();
-    } else if (holdingScene) {
-      // Show live keeps the saved geometry visible until its replacement is
-      // admitted. Keep its framing too; it is not the new live camera's scene.
-      this.#cancelGpuUpload(false);
-    } else if (scene !== null) {
-      // Capture the context inside the non-null scene branch. The nullable
-      // outer value also represents the intentionally empty-scene state.
-      const sceneContextKey = sceneContext(state);
+    } else if (scene !== null && context !== null) {
+      // A held scene keeps its admitted context. Let its upload finish (or
+      // materialize it again) while verification waits for live geometry.
+      const sceneContextKey = context;
       const targetChanged = scene !== admittedBefore || sceneContextKey !== admittedContextBefore;
       const currentUpload = this.#upload;
       const frontNeedsMaterialization = this.#mode === "webgl2" && !currentUpload
