@@ -10,6 +10,7 @@ adapter can confirm, and marked ``pairing_method: import``.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import logging
@@ -20,6 +21,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import issue_registry as ir
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.matic_robot import config_flow as flow_module
@@ -116,6 +118,33 @@ class _Client:
 
     async def __aexit__(self, *args) -> None:
         self.exited = True
+
+
+class _BlockedClient:
+    """Hold an authenticated read so cancellation can race with validation."""
+
+    def __init__(self, entered, release, cancelled, exited) -> None:
+        self.entered = entered
+        self.release = release
+        self.cancelled = cancelled
+        self.exited = exited
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args) -> None:
+        self.exited.set()
+
+    async def async_get_info(self):
+        self.entered.set()
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            # Model a transport that finishes its in-flight read after close is
+            # requested. The flow must still stop before committing its result.
+            self.cancelled.set()
+            await self.release.wait()
+        return _info()
 
 
 class _Recorder:
@@ -492,6 +521,134 @@ async def test_import_setup_aborts_when_pairing_state_expired(
     assert result["reason"] == "pairing_session_expired"
     create.assert_not_awaited()
     fetch.assert_not_awaited()
+
+
+@pytest.mark.parametrize("mode", ["setup", "reauth", "recover"])
+async def test_removing_flow_during_import_validation_cannot_commit(
+    hass, monkeypatch, mode
+) -> None:
+    """Closing an import flow fences off late validation results."""
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    cancelled = asyncio.Event()
+    exited = asyncio.Event()
+    monkeypatch.setattr(
+        flow_module, "async_fetch_peer_certificate", AsyncMock(return_value=b"c")
+    )
+    monkeypatch.setattr(
+        flow_module, "validate_certificate", MagicMock(return_value=IDENTITY)
+    )
+    clients = 0
+
+    def client_factory(*args, **kwargs):
+        nonlocal clients
+        clients += 1
+        if clients == 1:
+            return _BlockedClient(entered, release, cancelled, exited)
+        return _Client(AsyncMock(return_value=_info()))
+
+    monkeypatch.setattr(flow_module, "MaticHermesClient", client_factory)
+    flow = _flow(hass)
+    entry = None
+    if mode == "setup":
+        flow._pairing_data = {"host": HOST, "port": PORT}
+        flow._import_mode = "setup"
+    else:
+        entry = _configured_entry(hass, monkeypatch)
+        flow = _entry_flow(
+            hass,
+            entry,
+            config_entries.SOURCE_REAUTH
+            if mode == "reauth"
+            else config_entries.SOURCE_RECONFIGURE,
+        )
+        flow._import_mode = mode
+        if mode == "recover":
+            flow._recovery_address = (HOST, PORT)
+            ir.async_create_issue(
+                hass,
+                DOMAIN,
+                f"robot_identity_changed_{entry.entry_id}",
+                data={"entry_id": entry.entry_id},
+                is_fixable=True,
+                severity=ir.IssueSeverity.ERROR,
+                translation_key="robot_identity_changed",
+            )
+
+    operation = asyncio.create_task(
+        flow.async_step_import_credential(
+            {CONF_HERMES_CREDENTIAL: REPLACEMENT_CREDENTIAL.to_storage()}
+        )
+    )
+    await entered.wait()
+    flow.async_remove()
+    release.set()
+    try:
+        result = await operation
+    except asyncio.CancelledError:
+        result = None
+
+    assert exited.is_set()
+    assert cancelled.is_set()
+    assert result is None
+    assert flow._import_task is None
+    if mode != "setup":
+        assert entry is not None
+        assert entry.data == ENTRY_DATA
+        if mode == "recover":
+            assert ir.async_get(hass).async_get_issue(
+                DOMAIN, f"robot_identity_changed_{entry.entry_id}"
+            ) is not None
+
+
+async def test_removed_setup_flow_cannot_update_matching_entry_after_unique_id(
+    hass, monkeypatch
+) -> None:
+    """Cancellation during unique-ID setup precedes Core's duplicate update."""
+    _mock_robot(monkeypatch)
+    entry = _configured_entry(hass, monkeypatch)
+    flow = _flow(hass)
+    flow._pairing_data = {"host": HOST, "port": PORT}
+    flow._import_mode = "setup"
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def set_unique_id(_unique_id: str) -> None:
+        entered.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            await release.wait()
+
+    flow.async_set_unique_id = AsyncMock(side_effect=set_unique_id)
+
+    def update_matching_entry(*, updates) -> None:
+        hass.config_entries.async_update_entry(
+            entry, data={**entry.data, **updates}
+        )
+
+    flow._abort_if_unique_id_configured = MagicMock(
+        side_effect=update_matching_entry
+    )
+    operation = asyncio.create_task(
+        flow.async_step_import_credential(
+            {CONF_HERMES_CREDENTIAL: REPLACEMENT_CREDENTIAL.to_storage()}
+        )
+    )
+    await entered.wait()
+    flow.async_remove()
+    release.set()
+    try:
+        result = await operation
+    except asyncio.CancelledError:
+        result = None
+
+    assert cancelled.is_set()
+    assert result is None
+    assert entry.data == ENTRY_DATA
+    flow._abort_if_unique_id_configured.assert_not_called()
 
 
 async def test_import_recovery_aborts_when_recovery_address_expired(

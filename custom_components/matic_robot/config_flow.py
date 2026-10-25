@@ -424,6 +424,8 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._pairing_task: asyncio.Task[None] | None = None
         self._pairing_runner_name: str | None = None
         self._pairing_checkpoint_task: asyncio.Task[None] | None = None
+        self._import_task: asyncio.Task[config_entries.ConfigFlowResult] | None = None
+        self._flow_removed = False
         self._passkey_exchange: BluetoothPasskeyExchange | None = None
         self._pairing_result: config_entries.ConfigFlowResult | None = None
         self._pairing_diagnostic: str | None = None
@@ -436,9 +438,14 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     @callback
     def async_remove(self) -> None:
-        """Cancel pairing work when Home Assistant removes the flow."""
+        """Cancel pending flow-owned work when Home Assistant removes it."""
+        self._flow_removed = True
         super().async_remove()
-        for task in (self._pairing_checkpoint_task, self._pairing_task):
+        for task in (
+            self._pairing_checkpoint_task,
+            self._pairing_task,
+            self._import_task,
+        ):
             if task is not None and not task.done():
                 task.cancel()
         if self._passkey_exchange is not None:
@@ -907,7 +914,7 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         import matches a paired one, minus the Bluetooth address and with
         ``pairing_method`` recording the import.
         """
-        if self._import_mode is None:
+        if self._flow_removed or self._import_mode is None:
             # Only a pairing form that offered the import opens this step.
             return self.async_abort(reason="pairing_session_expired")
         if user_input is None:
@@ -925,11 +932,32 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self._show_import_form(
                 {CONF_HERMES_CREDENTIAL: "malformed_credential"}
             )
+        if self._import_task is not None:
+            result = await self._import_task
+            self._raise_if_flow_removed()
+            return result
         if self._import_mode == "reauth":
-            return await self._async_import_reauth(credential)
-        if self._import_mode == "recover":
-            return await self._async_import_recover(credential)
-        return await self._async_import_setup(credential)
+            operation = self._async_import_reauth(credential)
+        elif self._import_mode == "recover":
+            operation = self._async_import_recover(credential)
+        else:
+            operation = self._async_import_setup(credential)
+        task = asyncio.create_task(operation)
+        self._import_task = task
+        try:
+            result = await task
+        finally:
+            if self._import_task is task:
+                self._import_task = None
+        # A transport may finish an in-flight read while handling cancellation.
+        # Do not let that late result commit after the flow owner has removed us.
+        self._raise_if_flow_removed()
+        return result
+
+    def _raise_if_flow_removed(self) -> None:
+        """Fence synchronous commits after flow cancellation or removal."""
+        if self._flow_removed:
+            raise asyncio.CancelledError
 
     async def _async_import_setup(
         self, credential: HermesCredential
@@ -978,7 +1006,9 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "Matic credential import could not verify the robot: %s", err
             )
             return self._show_import_form({"base": "cannot_connect"})
+        self._raise_if_flow_removed()
         await self.async_set_unique_id(entry.unique_id)
+        self._raise_if_flow_removed()
         self._abort_if_unique_id_mismatch()
         return self.async_update_reload_and_abort(
             entry,
@@ -1020,6 +1050,7 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
             error = "recover_cannot_connect"
         else:
+            self._raise_if_flow_removed()
             return self._async_finish_recovery(
                 entry,
                 host,
@@ -1043,6 +1074,7 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         credential_data: Mapping[str, str],
     ) -> config_entries.ConfigFlowResult:
         """Save the verified pin and credential once, then clear the Repair."""
+        self._raise_if_flow_removed()
         result = self.async_update_reload_and_abort(
             entry,
             data_updates={
@@ -1683,8 +1715,10 @@ class MaticRobotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_show_form(
                 step_id=error_step_id, errors={"base": "invalid_certificate"}
             )
+        self._raise_if_flow_removed()
         if not self._discovered_serial:
             await self.async_set_unique_id(info.serial_number)
+        self._raise_if_flow_removed()
         configured_updates = {CONF_HOST: host, CONF_PORT: port}
         if credential is not None:
             configured_updates[CONF_HERMES_CREDENTIAL] = credential.to_storage()
