@@ -45,7 +45,7 @@ const retainedRun = (value: unknown) => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const run = value as Record<string, unknown>;
   if (typeof run.run_id !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/u.test(run.run_id)) return null;
-  if (run.outcome !== "unverified" && run.outcome !== "stopped_docked" && run.outcome !== "failed" && run.outcome !== "cancelled") return null;
+  if (run.outcome !== "unverified" && run.outcome !== "stopped_docked" && run.outcome !== "failed" && run.outcome !== "cancelled" && run.outcome !== "recharge_suspended") return null;
   const roomCount = run.room_count;
   const completedRoomCount = run.completed_room_count;
   if (!Number.isSafeInteger(roomCount) || !Number.isSafeInteger(completedRoomCount)
