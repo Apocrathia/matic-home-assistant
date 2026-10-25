@@ -28,6 +28,7 @@ import { notice, readWorkspaceNotice, type CameraPreference } from "./contracts"
 export const forcesTop = (state: WorkspaceState | null): boolean =>
   state?.workflow === "draw" || state?.workflow === "areaReview";
 export const topView = (state: WorkspaceState): MapView => forcesTop(state) ? "top" : state.view;
+
 const emptyResource = <T>(): { status: "idle"; value: T | null; problem: null } => ({
   status: "idle",
   value: null,

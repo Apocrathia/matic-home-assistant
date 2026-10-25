@@ -1556,13 +1556,15 @@ export class RendererController {
         const width = badgeSpace + context.measureText(room.name).width + 12;
         if (width > bounds.width || bounds.height < 20) continue;
         let placement: readonly [number, number] | undefined;
-        slots: for (const column of [0, -1, 1, -2, 2]) for (const row of [0, 1, -1, 2, -2, 3, -3, 4, -4]) {
+        let nearest = Infinity;
+        for (let row = -4; row <= 4; row++) for (let column = -2; column <= 2; column++) {
           const x = clamp(center.x - width / 2 + column * (width + 8), 0, bounds.width - width);
           const y = clamp((Math.round((center.y - 10) / 24) + row) * 24, 0, Math.floor((bounds.height - 20) / 24) * 24);
-          if (occupied.some(([left, top, otherWidth]) => x < left + otherWidth + 8
+          const distance = Math.hypot(x + width / 2 - center.x, y + 10 - center.y);
+          if (distance >= nearest || occupied.some(([left, top, otherWidth]) => x < left + otherWidth + 8
             && x + width + 8 > left && y < top + 24 && y + 24 > top)) continue;
           placement = [x, y];
-          break slots;
+          nearest = distance;
         }
         if (!placement) continue;
         const [left, top] = placement;
